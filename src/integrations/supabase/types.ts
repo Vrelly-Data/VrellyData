@@ -150,30 +150,54 @@ export type Database = {
       }
       profiles: {
         Row: {
+          billing_period_end: string | null
+          billing_period_start: string | null
           created_at: string
           credits: number
+          credits_used_this_month: number | null
           id: string
+          monthly_credit_limit: number | null
           name: string | null
           plan: string | null
           role: Database["public"]["Enums"]["user_role"]
+          stripe_customer_id: string | null
+          stripe_subscription_id: string | null
+          subscription_status: string | null
+          subscription_tier: string | null
           updated_at: string
         }
         Insert: {
+          billing_period_end?: string | null
+          billing_period_start?: string | null
           created_at?: string
           credits?: number
+          credits_used_this_month?: number | null
           id: string
+          monthly_credit_limit?: number | null
           name?: string | null
           plan?: string | null
           role?: Database["public"]["Enums"]["user_role"]
+          stripe_customer_id?: string | null
+          stripe_subscription_id?: string | null
+          subscription_status?: string | null
+          subscription_tier?: string | null
           updated_at?: string
         }
         Update: {
+          billing_period_end?: string | null
+          billing_period_start?: string | null
           created_at?: string
           credits?: number
+          credits_used_this_month?: number | null
           id?: string
+          monthly_credit_limit?: number | null
           name?: string | null
           plan?: string | null
           role?: Database["public"]["Enums"]["user_role"]
+          stripe_customer_id?: string | null
+          stripe_subscription_id?: string | null
+          subscription_status?: string | null
+          subscription_tier?: string | null
           updated_at?: string
         }
         Relationships: []
@@ -361,7 +385,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      reset_monthly_credits: {
+        Args: Record<PropertyKey, never>
+        Returns: undefined
+      }
     }
     Enums: {
       entity_type: "person" | "company"
