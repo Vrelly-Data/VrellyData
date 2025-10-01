@@ -1,119 +1,5 @@
-import { FilterDSL, PersonEntity, CompanyEntity, EntityType } from '@/types/audience';
-
-// Mock data for demo
-const MOCK_PEOPLE: PersonEntity[] = [
-  {
-    id: 'p1',
-    name: 'Sarah Johnson',
-    title: 'VP of Sales',
-    seniority: 'VP',
-    department: 'Sales',
-    location: 'San Francisco, CA',
-    company: 'TechCorp Inc',
-    companySize: '501-1000',
-    industry: 'Software',
-    technologies: ['Salesforce', 'HubSpot', 'Outreach'],
-  },
-  {
-    id: 'p2',
-    name: 'Michael Chen',
-    title: 'Director of Marketing',
-    seniority: 'Director',
-    department: 'Marketing',
-    location: 'New York, NY',
-    company: 'DataFlow Solutions',
-    companySize: '201-500',
-    industry: 'SaaS',
-    technologies: ['Marketo', 'Google Analytics', 'Salesforce'],
-  },
-  {
-    id: 'p3',
-    name: 'Emily Rodriguez',
-    title: 'CTO',
-    seniority: 'Exec',
-    department: 'Engineering',
-    location: 'Austin, TX',
-    company: 'CloudScale Systems',
-    companySize: '101-200',
-    industry: 'Cloud Services',
-    technologies: ['AWS', 'Kubernetes', 'Datadog'],
-  },
-  {
-    id: 'p4',
-    name: 'David Kim',
-    title: 'Head of Revenue Operations',
-    seniority: 'VP',
-    department: 'RevOps',
-    location: 'Seattle, WA',
-    company: 'GrowthMetrics',
-    companySize: '51-100',
-    industry: 'Analytics',
-    technologies: ['Salesforce', 'Tableau', 'dbt'],
-  },
-  {
-    id: 'p5',
-    name: 'Lisa Thompson',
-    title: 'Senior Sales Manager',
-    seniority: 'Manager',
-    department: 'Sales',
-    location: 'Boston, MA',
-    company: 'Enterprise Software Co',
-    companySize: '1001+',
-    industry: 'Enterprise Software',
-    technologies: ['Microsoft Dynamics', 'LinkedIn Sales Navigator'],
-  },
-];
-
-const MOCK_COMPANIES: CompanyEntity[] = [
-  {
-    id: 'c1',
-    name: 'TechCorp Inc',
-    domain: 'techcorp.com',
-    industry: 'Software',
-    employeeCount: 750,
-    revenue: '$50M-$100M',
-    location: 'San Francisco, CA',
-    technologies: ['Salesforce', 'AWS', 'HubSpot'],
-    fundingStage: 'Series C',
-    description: 'Leading B2B SaaS platform',
-  },
-  {
-    id: 'c2',
-    name: 'DataFlow Solutions',
-    domain: 'dataflow.io',
-    industry: 'SaaS',
-    employeeCount: 320,
-    revenue: '$20M-$50M',
-    location: 'New York, NY',
-    technologies: ['Google Cloud', 'Snowflake', 'dbt'],
-    fundingStage: 'Series B',
-    description: 'Data integration platform',
-  },
-  {
-    id: 'c3',
-    name: 'CloudScale Systems',
-    domain: 'cloudscale.com',
-    industry: 'Cloud Services',
-    employeeCount: 180,
-    revenue: '$10M-$20M',
-    location: 'Austin, TX',
-    technologies: ['AWS', 'Kubernetes', 'Terraform'],
-    fundingStage: 'Series A',
-    description: 'Cloud infrastructure automation',
-  },
-  {
-    id: 'c4',
-    name: 'GrowthMetrics',
-    domain: 'growthmetrics.com',
-    industry: 'Analytics',
-    employeeCount: 85,
-    revenue: '$5M-$10M',
-    location: 'Seattle, WA',
-    technologies: ['BigQuery', 'Looker', 'Segment'],
-    fundingStage: 'Seed',
-    description: 'Revenue analytics platform',
-  },
-];
+import { FilterDSL, PersonEntity, CompanyEntity, EntityType, AudienceLabFilters, CreateAudienceRequest } from '@/types/audience';
+import { supabase } from '@/integrations/supabase/client';
 
 export interface SearchParams {
   filters: FilterDSL;
@@ -139,41 +25,174 @@ export interface UnlockResponse {
 }
 
 class AudienceLabClient {
-  private baseUrl = 'https://api.audiencelab.example'; // Mock URL
-  private apiKey = 'mock-api-key'; // Will be replaced with real key
+  private tempAudienceIds: string[] = [];
+
+  private convertFiltersToAudienceLabFormat(filters: FilterDSL): AudienceLabFilters {
+    // Convert our FilterDSL to AudienceLab's format
+    const labFilters: AudienceLabFilters = {};
+    
+    // Extract filters from the where clause
+    if ('and' in filters.where) {
+      filters.where.and?.forEach(operand => {
+        if (operand.field === 'age' && operand.op === 'range' && Array.isArray(operand.value)) {
+          labFilters.age = { minAge: operand.value[0], maxAge: operand.value[1] };
+        }
+        if (operand.field === 'location' && operand.op === 'in') {
+          labFilters.city = Array.isArray(operand.value) ? operand.value : [operand.value];
+        }
+        if (operand.field === 'gender' && operand.op === 'in') {
+          labFilters.gender = Array.isArray(operand.value) ? operand.value : [operand.value];
+        }
+        if (operand.field === 'industry' && operand.op === 'in') {
+          labFilters.businessProfile = {
+            industry: Array.isArray(operand.value) ? operand.value : [operand.value]
+          };
+        }
+        if (operand.field === 'title' && operand.op === 'in') {
+          labFilters.jobTitle = Array.isArray(operand.value) ? operand.value : [operand.value];
+        }
+      });
+    }
+    
+    return labFilters;
+  }
+
+  private mapAudienceDataToEntities(data: any[], type: EntityType): (PersonEntity | CompanyEntity)[] {
+    return data.map((item, index) => {
+      if (type === 'person') {
+        return {
+          id: item.id || `person-${index}`,
+          name: item.name || item.fullName || 'Unknown',
+          title: item.title || item.jobTitle,
+          seniority: item.seniority,
+          department: item.department,
+          location: item.location || item.city,
+          company: item.company || item.companyName,
+          companySize: item.companySize,
+          industry: item.industry,
+          technologies: item.technologies || [],
+          email: item.email,
+          phone: item.phone,
+          linkedin: item.linkedin,
+          age: item.age,
+          gender: item.gender,
+        } as PersonEntity;
+      } else {
+        return {
+          id: item.id || `company-${index}`,
+          name: item.name || item.companyName || 'Unknown',
+          domain: item.domain || item.website,
+          industry: item.industry,
+          employeeCount: item.employeeCount || item.employees,
+          revenue: item.revenue,
+          location: item.location || item.headquarters,
+          technologies: item.technologies || [],
+          fundingStage: item.fundingStage,
+          description: item.description,
+        } as CompanyEntity;
+      }
+    });
+  }
 
   async searchPeople(params: SearchParams): Promise<SearchResponse<PersonEntity>> {
-    // Mock implementation - in production, this would call the real API
-    await this.delay(500); // Simulate network delay
-    
-    return {
-      items: MOCK_PEOPLE,
-      totalEstimate: MOCK_PEOPLE.length,
-      facets: {
-        seniority: { VP: 2, Director: 1, Exec: 1, Manager: 1 },
-        department: { Sales: 2, Marketing: 1, Engineering: 1, RevOps: 1 },
-      },
-    };
+    try {
+      // Create a temporary audience
+      const filters = this.convertFiltersToAudienceLabFormat(params.filters);
+      const audienceName = `temp-search-${Date.now()}`;
+      
+      // Create audience (using a default segment - you may need to adjust this)
+      const createResponse = await supabase.functions.invoke('audiencelab-api', {
+        body: {
+          action: 'createAudience',
+          name: audienceName,
+          filters,
+          segment: ['default'], // This needs to be replaced with actual segment IDs
+          days_back: 30,
+        },
+      });
+
+      if (createResponse.error) throw createResponse.error;
+      
+      const audienceId = createResponse.data?.id || createResponse.data?.audience_id;
+      if (!audienceId) throw new Error('No audience ID returned');
+      
+      this.tempAudienceIds.push(audienceId);
+
+      // Fetch audience data
+      const getResponse = await supabase.functions.invoke('audiencelab-api', {
+        body: {
+          action: 'getAudience',
+          audience_id: audienceId,
+          page: 1,
+          per_page: params.limit || 100,
+        },
+      });
+
+      if (getResponse.error) throw getResponse.error;
+
+      const data = getResponse.data?.data || [];
+      const pagination = getResponse.data?.pagination || {};
+
+      return {
+        items: this.mapAudienceDataToEntities(data, 'person') as PersonEntity[],
+        totalEstimate: data.length,
+        facets: {},
+      };
+    } catch (error) {
+      console.error('Error searching people:', error);
+      throw error;
+    }
   }
 
   async searchCompanies(params: SearchParams): Promise<SearchResponse<CompanyEntity>> {
-    // Mock implementation
-    await this.delay(500);
-    
-    return {
-      items: MOCK_COMPANIES,
-      totalEstimate: MOCK_COMPANIES.length,
-      facets: {
-        industry: { Software: 1, SaaS: 1, 'Cloud Services': 1, Analytics: 1 },
-        employeeCount: { '51-100': 1, '101-200': 1, '201-500': 1, '501-1000': 1 },
-      },
-    };
+    try {
+      const filters = this.convertFiltersToAudienceLabFormat(params.filters);
+      const audienceName = `temp-company-search-${Date.now()}`;
+      
+      const createResponse = await supabase.functions.invoke('audiencelab-api', {
+        body: {
+          action: 'createAudience',
+          name: audienceName,
+          filters,
+          segment: ['default'],
+          days_back: 30,
+        },
+      });
+
+      if (createResponse.error) throw createResponse.error;
+      
+      const audienceId = createResponse.data?.id || createResponse.data?.audience_id;
+      if (!audienceId) throw new Error('No audience ID returned');
+      
+      this.tempAudienceIds.push(audienceId);
+
+      const getResponse = await supabase.functions.invoke('audiencelab-api', {
+        body: {
+          action: 'getAudience',
+          audience_id: audienceId,
+          page: 1,
+          per_page: params.limit || 100,
+        },
+      });
+
+      if (getResponse.error) throw getResponse.error;
+
+      const data = getResponse.data?.data || [];
+
+      return {
+        items: this.mapAudienceDataToEntities(data, 'company') as CompanyEntity[],
+        totalEstimate: data.length,
+        facets: {},
+      };
+    } catch (error) {
+      console.error('Error searching companies:', error);
+      throw error;
+    }
   }
 
   async unlockContact(entityId: string, entityType: EntityType): Promise<UnlockResponse> {
-    // Mock implementation
-    await this.delay(300);
-    
+    // This functionality may not be supported by AudienceLab API
+    // Returning mock data for now
     return {
       unlocked: true,
       cost: 1,
@@ -185,8 +204,38 @@ class AudienceLabClient {
     };
   }
 
-  private delay(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
+  async getAttributes(attribute: string): Promise<any> {
+    try {
+      const response = await supabase.functions.invoke('audiencelab-api', {
+        body: {
+          action: 'getAttributes',
+          attribute,
+        },
+      });
+
+      if (response.error) throw response.error;
+      return response.data;
+    } catch (error) {
+      console.error(`Error getting ${attribute} attributes:`, error);
+      throw error;
+    }
+  }
+
+  async cleanupTempAudiences(): Promise<void> {
+    // Clean up temporary audiences
+    for (const audienceId of this.tempAudienceIds) {
+      try {
+        await supabase.functions.invoke('audiencelab-api', {
+          body: {
+            action: 'deleteAudience',
+            audience_id: audienceId,
+          },
+        });
+      } catch (error) {
+        console.error(`Error deleting temp audience ${audienceId}:`, error);
+      }
+    }
+    this.tempAudienceIds = [];
   }
 }
 

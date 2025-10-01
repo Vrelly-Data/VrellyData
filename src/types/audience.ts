@@ -26,30 +26,63 @@ export interface FilterDSL {
 export interface PersonEntity {
   id: string;
   name: string;
-  title: string;
-  seniority: string;
-  department: string;
-  location: string;
-  company: string;
-  companySize: string;
-  industry: string;
-  technologies: string[];
+  title?: string;
+  seniority?: string;
+  department?: string;
+  location?: string;
+  company?: string;
+  companySize?: string;
+  industry?: string;
+  technologies?: string[];
   email?: string;
   phone?: string;
   linkedin?: string;
+  age?: number;
+  gender?: string;
+  city?: string;
+  jobTitle?: string;
 }
 
 export interface CompanyEntity {
   id: string;
   name: string;
-  domain: string;
-  industry: string;
-  employeeCount: number;
+  domain?: string;
+  industry?: string;
+  employeeCount?: number;
   revenue?: string;
-  location: string;
-  technologies: string[];
+  location?: string;
+  technologies?: string[];
   fundingStage?: string;
   description?: string;
+}
+
+export interface AudienceLabFilters {
+  age?: {
+    minAge?: number;
+    maxAge?: number;
+  };
+  city?: string[];
+  gender?: string[];
+  businessProfile?: {
+    industry?: string[];
+  };
+  jobTitle?: string[];
+}
+
+export interface AudienceLabResponse {
+  pagination: {
+    page: number;
+    per_page: number;
+    total_pages: number;
+  };
+  data: any[];
+}
+
+export interface CreateAudienceRequest {
+  name: string;
+  filters?: AudienceLabFilters;
+  segment: string[];
+  days_back: number;
 }
 
 export interface Audience {
