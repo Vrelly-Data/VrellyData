@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useLocation } from "react-router-dom";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -15,9 +16,13 @@ import { Badge } from "@/components/ui/badge";
 import { Check } from "lucide-react";
 
 export default function Settings() {
+  const location = useLocation();
   const { profile, user, fetchProfile } = useAuthStore();
   const { toast } = useToast();
   const [loading, setLoading] = useState(false);
+  
+  // Determine default tab based on route
+  const defaultTab = location.pathname === '/billing' ? 'billing' : 'profile';
   
   // Profile form state
   const [name, setName] = useState(profile?.name || "");
@@ -128,7 +133,7 @@ export default function Settings() {
         <p className="text-muted-foreground">Manage your account settings and preferences.</p>
       </div>
 
-      <Tabs defaultValue="profile" className="space-y-6">
+      <Tabs defaultValue={defaultTab} className="space-y-6">
         <TabsList>
           <TabsTrigger value="profile">Profile</TabsTrigger>
           <TabsTrigger value="security">Security</TabsTrigger>
