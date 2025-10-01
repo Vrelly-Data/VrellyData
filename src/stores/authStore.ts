@@ -8,6 +8,14 @@ interface Profile {
   role: 'admin' | 'member';
   credits: number;
   plan: string;
+  subscription_tier: string;
+  subscription_status: string | null;
+  monthly_credit_limit: number;
+  credits_used_this_month: number;
+  billing_period_start: string | null;
+  billing_period_end: string | null;
+  stripe_customer_id: string | null;
+  stripe_subscription_id: string | null;
 }
 
 interface AuthState {

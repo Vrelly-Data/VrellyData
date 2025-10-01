@@ -1,1 +1,13 @@
 project_id = "srartzeqcbxbytfixeiv"
+
+[functions.create-stripe-products]
+verify_jwt = false
+
+[functions.manage-subscription]
+verify_jwt = true
+
+[functions.stripe-webhook]
+verify_jwt = false
+
+[functions.reset-monthly-credits]
+verify_jwt = false
