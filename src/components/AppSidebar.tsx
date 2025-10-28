@@ -4,7 +4,6 @@ import {
   SidebarContent,
   SidebarGroup,
   SidebarGroupContent,
-  SidebarGroupLabel,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -12,6 +11,7 @@ import {
 } from '@/components/ui/sidebar';
 import { Home, Users, Building2, Settings, CreditCard, LogOut } from 'lucide-react';
 import { useAuthStore } from '@/stores/authStore';
+import vrellyLogo from '@/assets/vrelly-logo.png';
 
 const navItems = [
   { title: 'Dashboard', url: '/', icon: Home },
@@ -30,7 +30,9 @@ export function AppSidebar() {
     <Sidebar collapsible="icon"  className={isCollapsed ? 'w-14' : 'w-60'}>
       <SidebarContent>
         <SidebarGroup>
-          <SidebarGroupLabel>Vrelly Data</SidebarGroupLabel>
+          <div className={isCollapsed ? 'flex justify-center py-4' : 'px-3 py-4'}>
+            <img src={vrellyLogo} alt="Vrelly Data" className={isCollapsed ? 'h-8 w-8 object-contain' : 'h-8'} />
+          </div>
           <SidebarGroupContent>
             <SidebarMenu>
               {navItems.map((item) => (
