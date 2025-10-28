@@ -30,7 +30,7 @@ export function AppSidebar() {
     <Sidebar collapsible="icon"  className={isCollapsed ? 'w-14' : 'w-60'}>
       <SidebarContent>
         <SidebarGroup>
-          <SidebarGroupLabel>Audience Lab</SidebarGroupLabel>
+          <SidebarGroupLabel>Vrelly Data</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               {navItems.map((item) => (

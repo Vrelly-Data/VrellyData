@@ -81,8 +81,8 @@ export default function Auth() {
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-background via-background to-muted p-4">
       <Card className="w-full max-w-md">
         <CardHeader>
-          <CardTitle className="text-2xl">Audience Lab</CardTitle>
-          <CardDescription>Sign in to access your B2B audience platform</CardDescription>
+          <CardTitle className="text-2xl">Vrelly Data</CardTitle>
+          <CardDescription>Sign in to access your B2B audience intelligence platform</CardDescription>
         </CardHeader>
         <CardContent>
           <Tabs defaultValue="signin">
