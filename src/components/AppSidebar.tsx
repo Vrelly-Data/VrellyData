@@ -27,11 +27,11 @@ export function AppSidebar() {
   const isCollapsed = state === 'collapsed';
 
   return (
-    <Sidebar collapsible="icon"  className={isCollapsed ? 'w-14' : 'w-60'}>
+    <Sidebar collapsible="icon"  className={isCollapsed ? 'w-28' : 'w-60'}>
       <SidebarContent>
         <SidebarGroup>
           <div className={isCollapsed ? 'flex justify-center py-4' : 'px-3 py-4'}>
-            <img src={vrellyLogo} alt="Vrelly Data" className={isCollapsed ? 'h-8 w-8 object-contain' : 'h-8'} />
+            <img src={vrellyLogo} alt="Vrelly Data" className={isCollapsed ? 'h-16 w-16 object-contain' : 'h-24'} />
           </div>
           <SidebarGroupContent>
             <SidebarMenu>

@@ -11,7 +11,7 @@ const Index = () => {
         <div className="flex-1 flex flex-col">
           <header className="h-12 flex items-center gap-3 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 px-4">
             <SidebarTrigger />
-            <img src={vrellyLogo} alt="Vrelly Data" className="h-6" />
+            <img src={vrellyLogo} alt="Vrelly Data" className="h-[4.5rem]" />
           </header>
           <main className="flex-1 overflow-hidden">
             <AudienceBuilder />
