@@ -5,6 +5,8 @@ import { Search, Save, Download, Users, Building2 } from 'lucide-react';
 import { useAudienceStore } from '@/stores/audienceStore';
 import { audienceLabClient } from '@/lib/audienceLabClient';
 import { useToast } from '@/hooks/use-toast';
+import { exportPeopleToCSV, exportCompaniesToCSV } from '@/lib/csvExport';
+import { PersonEntity, CompanyEntity } from '@/types/audience';
 
 export default function AudienceBuilder() {
   const { toast } = useToast();
@@ -46,6 +48,36 @@ export default function AudienceBuilder() {
     }
   };
 
+  const handleExport = () => {
+    if (results.length === 0) {
+      toast({
+        title: 'No data to export',
+        description: 'Please run a search first',
+        variant: 'destructive',
+      });
+      return;
+    }
+    
+    try {
+      if (currentType === 'person') {
+        exportPeopleToCSV(results as PersonEntity[]);
+      } else {
+        exportCompaniesToCSV(results as CompanyEntity[]);
+      }
+      
+      toast({
+        title: 'Export successful',
+        description: `Exported ${results.length} ${currentType === 'person' ? 'people' : 'companies'}`,
+      });
+    } catch (error) {
+      toast({
+        title: 'Export failed',
+        description: 'Failed to export data. Please try again.',
+        variant: 'destructive',
+      });
+    }
+  };
+
   return (
     <div className="flex flex-col h-full">
       <div className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
@@ -56,7 +88,7 @@ export default function AudienceBuilder() {
               <Save className="h-4 w-4 mr-2" />
               Save Audience
             </Button>
-            <Button variant="outline" size="sm">
+            <Button variant="outline" size="sm" onClick={handleExport} disabled={results.length === 0}>
               <Download className="h-4 w-4 mr-2" />
               Export
             </Button>
