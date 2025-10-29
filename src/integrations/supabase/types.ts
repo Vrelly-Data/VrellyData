@@ -186,6 +186,74 @@ export type Database = {
           },
         ]
       }
+      list_items: {
+        Row: {
+          added_at: string
+          added_by: string
+          entity_data: Json
+          entity_external_id: string
+          id: string
+          list_id: string
+        }
+        Insert: {
+          added_at?: string
+          added_by: string
+          entity_data: Json
+          entity_external_id: string
+          id?: string
+          list_id: string
+        }
+        Update: {
+          added_at?: string
+          added_by?: string
+          entity_data?: Json
+          entity_external_id?: string
+          id?: string
+          list_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "list_items_list_id_fkey"
+            columns: ["list_id"]
+            isOneToOne: false
+            referencedRelation: "lists"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      lists: {
+        Row: {
+          created_at: string
+          created_by: string
+          description: string | null
+          entity_type: Database["public"]["Enums"]["entity_type"]
+          id: string
+          name: string
+          team_id: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          created_by: string
+          description?: string | null
+          entity_type: Database["public"]["Enums"]["entity_type"]
+          id?: string
+          name: string
+          team_id: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string
+          description?: string | null
+          entity_type?: Database["public"]["Enums"]["entity_type"]
+          id?: string
+          name?: string
+          team_id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           billing_period_end: string | null
