@@ -4,7 +4,7 @@ import { Plus, Download } from 'lucide-react';
 import { generateMockCompanies } from '@/lib/mockData';
 import { CompanyEntity } from '@/types/audience';
 import { RecordsTable } from './RecordsTable';
-import { RecordsFilters } from './RecordsFilters';
+import { RecordsFilterDropdown } from './RecordsFilterDropdown';
 
 export function CompanyRecords() {
   const [records] = useState<CompanyEntity[]>(generateMockCompanies(100));
@@ -15,31 +15,28 @@ export function CompanyRecords() {
   };
 
   return (
-    <div className="flex h-full">
-      <RecordsFilters entityType="company" />
-      
-      <div className="flex-1 flex flex-col overflow-hidden">
-        <div className="border-b p-4 flex items-center justify-between bg-background">
-          <h2 className="text-lg font-semibold">Company Records</h2>
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={handleExport}>
-              <Download className="h-4 w-4 mr-2" />
-              Export
-            </Button>
-            <Button size="sm">
-              <Plus className="h-4 w-4 mr-2" />
-              New List
-            </Button>
-          </div>
+    <div className="flex flex-col h-full overflow-hidden">
+      <div className="border-b p-4 flex items-center justify-between bg-background">
+        <h2 className="text-lg font-semibold">Company Records</h2>
+        <div className="flex gap-2">
+          <RecordsFilterDropdown entityType="company" />
+          <Button variant="outline" size="sm" onClick={handleExport}>
+            <Download className="h-4 w-4 mr-2" />
+            Export
+          </Button>
+          <Button size="sm">
+            <Plus className="h-4 w-4 mr-2" />
+            New List
+          </Button>
         </div>
-        
-        <RecordsTable
-          records={records}
-          entityType="company"
-          selectedRecords={selectedRecords}
-          onSelectionChange={setSelectedRecords}
-        />
       </div>
+      
+      <RecordsTable
+        records={records}
+        entityType="company"
+        selectedRecords={selectedRecords}
+        onSelectionChange={setSelectedRecords}
+      />
     </div>
   );
 }
