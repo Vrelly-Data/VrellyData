@@ -65,6 +65,44 @@ export type Database = {
           },
         ]
       }
+      credit_transactions: {
+        Row: {
+          audience_id: string | null
+          created_at: string
+          credits_deducted: number
+          entity_type: string
+          id: string
+          records_returned: number
+          user_id: string
+        }
+        Insert: {
+          audience_id?: string | null
+          created_at?: string
+          credits_deducted?: number
+          entity_type: string
+          id?: string
+          records_returned?: number
+          user_id: string
+        }
+        Update: {
+          audience_id?: string | null
+          created_at?: string
+          credits_deducted?: number
+          entity_type?: string
+          id?: string
+          records_returned?: number
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "credit_transactions_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       export_jobs: {
         Row: {
           audience_id: string
@@ -385,10 +423,11 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      reset_monthly_credits: {
-        Args: Record<PropertyKey, never>
+      deduct_credits: {
+        Args: { p_amount: number; p_user_id: string }
         Returns: undefined
       }
+      reset_monthly_credits: { Args: never; Returns: undefined }
     }
     Enums: {
       entity_type: "person" | "company"

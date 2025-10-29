@@ -67,6 +67,12 @@ export interface AudienceLabFilters {
     industry?: string[];
   };
   jobTitle?: string[];
+  segment?: string[];
+  days_back?: number;
+  seniority?: string[];
+  department?: string[];
+  companySize?: string[];
+  fundingStage?: string[];
 }
 
 export interface AudienceLabResponse {

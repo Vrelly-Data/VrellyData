@@ -1,5 +1,9 @@
 import { FilterDSL, PersonEntity, CompanyEntity, EntityType, AudienceLabFilters, CreateAudienceRequest } from '@/types/audience';
 import { supabase } from '@/integrations/supabase/client';
+import { FilterBuilderState, filterMockPeople, filterMockCompanies } from '@/lib/filterConversion';
+import { generateMockPeople, generateMockCompanies, MOCK_ATTRIBUTES } from '@/lib/mockData';
+
+const MOCK_MODE = true;
 
 export interface SearchParams {
   filters: FilterDSL;
@@ -11,6 +15,11 @@ export interface SearchResponse<T> {
   items: T[];
   totalEstimate: number;
   nextCursor?: string;
+  pagination?: {
+    page: number;
+    per_page: number;
+    total_pages: number;
+  };
   facets?: any;
 }
 
@@ -94,96 +103,169 @@ class AudienceLabClient {
     });
   }
 
-  async searchPeople(params: SearchParams): Promise<SearchResponse<PersonEntity>> {
+  async searchPeople(params: SearchParams & { filterState?: FilterBuilderState; page?: number; perPage?: number }): Promise<SearchResponse<PersonEntity>> {
     try {
-      // Create a temporary audience
-      const filters = this.convertFiltersToAudienceLabFormat(params.filters);
-      const audienceName = `temp-search-${Date.now()}`;
-      
-      // Create audience (using a default segment - you may need to adjust this)
-      const createResponse = await supabase.functions.invoke('audiencelab-api', {
-        body: {
-          action: 'createAudience',
-          name: audienceName,
-          filters,
-          segment: ['default'], // This needs to be replaced with actual segment IDs
-          days_back: 30,
-        },
-      });
+      if (MOCK_MODE) {
+        // Mock mode: Generate and filter mock data
+        console.log('[MOCK] Searching people with filters:', params.filterState);
+        
+        // Simulate API delay
+        await new Promise(resolve => setTimeout(resolve, 800));
+        
+        // Generate mock data
+        let mockPeople = generateMockPeople(1500);
+        
+        // Apply filters if provided
+        if (params.filterState) {
+          mockPeople = filterMockPeople(mockPeople, params.filterState);
+        }
+        
+        // Apply pagination
+        const page = params.page || 1;
+        const perPage = params.perPage || params.limit || 100;
+        const start = (page - 1) * perPage;
+        const end = start + perPage;
+        const paginated = mockPeople.slice(start, end);
+        
+        return {
+          items: paginated,
+          totalEstimate: mockPeople.length,
+          pagination: {
+            page,
+            per_page: perPage,
+            total_pages: Math.ceil(mockPeople.length / perPage),
+          },
+          facets: {},
+        };
+      } else {
+        // Real API mode
+        if (!params.filterState?.segments || params.filterState.segments.length === 0) {
+          throw new Error('At least one segment must be selected');
+        }
+        
+        const filters = this.convertFiltersToAudienceLabFormat(params.filters);
+        const audienceName = `temp-search-${Date.now()}`;
+        
+        const createResponse = await supabase.functions.invoke('audiencelab-api', {
+          body: {
+            action: 'createAudience',
+            name: audienceName,
+            filters,
+            segment: params.filterState.segments,
+            days_back: params.filterState.daysBack || 30,
+          },
+        });
 
-      if (createResponse.error) throw createResponse.error;
-      
-      const audienceId = createResponse.data?.id || createResponse.data?.audience_id;
-      if (!audienceId) throw new Error('No audience ID returned');
-      
-      this.tempAudienceIds.push(audienceId);
+        if (createResponse.error) throw createResponse.error;
+        
+        const audienceId = createResponse.data?.id || createResponse.data?.audience_id;
+        if (!audienceId) throw new Error('No audience ID returned');
+        
+        this.tempAudienceIds.push(audienceId);
 
-      // Fetch audience data
-      const getResponse = await supabase.functions.invoke('audiencelab-api', {
-        body: {
-          action: 'getAudience',
-          audience_id: audienceId,
-          page: 1,
-          per_page: params.limit || 100,
-        },
-      });
+        const getResponse = await supabase.functions.invoke('audiencelab-api', {
+          body: {
+            action: 'getAudience',
+            audience_id: audienceId,
+            page: params.page || 1,
+            per_page: params.perPage || params.limit || 100,
+          },
+        });
 
-      if (getResponse.error) throw getResponse.error;
+        if (getResponse.error) throw getResponse.error;
 
-      const data = getResponse.data?.data || [];
-      const pagination = getResponse.data?.pagination || {};
+        const data = getResponse.data?.data || [];
+        const pagination = getResponse.data?.pagination || {};
 
-      return {
-        items: this.mapAudienceDataToEntities(data, 'person') as PersonEntity[],
-        totalEstimate: data.length,
-        facets: {},
-      };
+        return {
+          items: this.mapAudienceDataToEntities(data, 'person') as PersonEntity[],
+          totalEstimate: data.length,
+          pagination,
+          facets: {},
+        };
+      }
     } catch (error) {
       console.error('Error searching people:', error);
       throw error;
     }
   }
 
-  async searchCompanies(params: SearchParams): Promise<SearchResponse<CompanyEntity>> {
+  async searchCompanies(params: SearchParams & { filterState?: FilterBuilderState; page?: number; perPage?: number }): Promise<SearchResponse<CompanyEntity>> {
     try {
-      const filters = this.convertFiltersToAudienceLabFormat(params.filters);
-      const audienceName = `temp-company-search-${Date.now()}`;
-      
-      const createResponse = await supabase.functions.invoke('audiencelab-api', {
-        body: {
-          action: 'createAudience',
-          name: audienceName,
-          filters,
-          segment: ['default'],
-          days_back: 30,
-        },
-      });
+      if (MOCK_MODE) {
+        // Mock mode: Generate and filter mock data
+        console.log('[MOCK] Searching companies with filters:', params.filterState);
+        
+        await new Promise(resolve => setTimeout(resolve, 800));
+        
+        let mockCompanies = generateMockCompanies(800);
+        
+        if (params.filterState) {
+          mockCompanies = filterMockCompanies(mockCompanies, params.filterState);
+        }
+        
+        const page = params.page || 1;
+        const perPage = params.perPage || params.limit || 100;
+        const start = (page - 1) * perPage;
+        const end = start + perPage;
+        const paginated = mockCompanies.slice(start, end);
+        
+        return {
+          items: paginated,
+          totalEstimate: mockCompanies.length,
+          pagination: {
+            page,
+            per_page: perPage,
+            total_pages: Math.ceil(mockCompanies.length / perPage),
+          },
+          facets: {},
+        };
+      } else {
+        // Real API mode
+        if (!params.filterState?.segments || params.filterState.segments.length === 0) {
+          throw new Error('At least one segment must be selected');
+        }
+        
+        const filters = this.convertFiltersToAudienceLabFormat(params.filters);
+        const audienceName = `temp-company-search-${Date.now()}`;
+        
+        const createResponse = await supabase.functions.invoke('audiencelab-api', {
+          body: {
+            action: 'createAudience',
+            name: audienceName,
+            filters,
+            segment: params.filterState.segments,
+            days_back: params.filterState.daysBack || 30,
+          },
+        });
 
-      if (createResponse.error) throw createResponse.error;
-      
-      const audienceId = createResponse.data?.id || createResponse.data?.audience_id;
-      if (!audienceId) throw new Error('No audience ID returned');
-      
-      this.tempAudienceIds.push(audienceId);
+        if (createResponse.error) throw createResponse.error;
+        
+        const audienceId = createResponse.data?.id || createResponse.data?.audience_id;
+        if (!audienceId) throw new Error('No audience ID returned');
+        
+        this.tempAudienceIds.push(audienceId);
 
-      const getResponse = await supabase.functions.invoke('audiencelab-api', {
-        body: {
-          action: 'getAudience',
-          audience_id: audienceId,
-          page: 1,
-          per_page: params.limit || 100,
-        },
-      });
+        const getResponse = await supabase.functions.invoke('audiencelab-api', {
+          body: {
+            action: 'getAudience',
+            audience_id: audienceId,
+            page: params.page || 1,
+            per_page: params.perPage || params.limit || 100,
+          },
+        });
 
-      if (getResponse.error) throw getResponse.error;
+        if (getResponse.error) throw getResponse.error;
 
-      const data = getResponse.data?.data || [];
+        const data = getResponse.data?.data || [];
 
-      return {
-        items: this.mapAudienceDataToEntities(data, 'company') as CompanyEntity[],
-        totalEstimate: data.length,
-        facets: {},
-      };
+        return {
+          items: this.mapAudienceDataToEntities(data, 'company') as CompanyEntity[],
+          totalEstimate: data.length,
+          pagination: getResponse.data?.pagination,
+          facets: {},
+        };
+      }
     } catch (error) {
       console.error('Error searching companies:', error);
       throw error;
@@ -206,17 +288,55 @@ class AudienceLabClient {
 
   async getAttributes(attribute: string): Promise<any> {
     try {
-      const response = await supabase.functions.invoke('audiencelab-api', {
-        body: {
-          action: 'getAttributes',
-          attribute,
-        },
-      });
+      if (MOCK_MODE) {
+        console.log(`[MOCK] Getting ${attribute} attributes`);
+        await new Promise(resolve => setTimeout(resolve, 200));
+        return MOCK_ATTRIBUTES[attribute as keyof typeof MOCK_ATTRIBUTES] || [];
+      } else {
+        const response = await supabase.functions.invoke('audiencelab-api', {
+          body: {
+            action: 'getAttributes',
+            attribute,
+          },
+        });
 
-      if (response.error) throw response.error;
-      return response.data;
+        if (response.error) throw response.error;
+        return response.data;
+      }
     } catch (error) {
       console.error(`Error getting ${attribute} attributes:`, error);
+      throw error;
+    }
+  }
+
+  async estimateSearchCost(filterState: FilterBuilderState, entityType: EntityType): Promise<{ estimatedResults: number; cost: number }> {
+    try {
+      if (MOCK_MODE) {
+        console.log('[MOCK] Estimating search cost');
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        const mockData = entityType === 'person' 
+          ? generateMockPeople(1500)
+          : generateMockCompanies(800);
+        
+        const filtered = entityType === 'person'
+          ? filterMockPeople(mockData as PersonEntity[], filterState)
+          : filterMockCompanies(mockData as CompanyEntity[], filterState);
+        
+        return {
+          estimatedResults: filtered.length,
+          cost: filtered.length,
+        };
+      } else {
+        // Real API: Would create temp audience, get count, delete audience
+        // For now, return a placeholder
+        return {
+          estimatedResults: 0,
+          cost: 0,
+        };
+      }
+    } catch (error) {
+      console.error('Error estimating search cost:', error);
       throw error;
     }
   }

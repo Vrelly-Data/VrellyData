@@ -1,18 +1,48 @@
 import { useState } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
-import { Search, Save, Download, Users, Building2 } from 'lucide-react';
+import { Save, Download, Users, Building2 } from 'lucide-react';
 import { useAudienceStore } from '@/stores/audienceStore';
 import { audienceLabClient } from '@/lib/audienceLabClient';
 import { useToast } from '@/hooks/use-toast';
 import { exportPeopleToCSV, exportCompaniesToCSV } from '@/lib/csvExport';
 import { PersonEntity, CompanyEntity } from '@/types/audience';
+import { FilterBuilder } from '@/components/search/FilterBuilder';
+import { CreditBalance } from '@/components/search/CreditBalance';
+import { SearchCostEstimator } from '@/components/search/SearchCostEstimator';
+import { PaginationControls } from '@/components/search/PaginationControls';
+import { FilterBuilderState } from '@/lib/filterConversion';
+import { useCreditCheck } from '@/hooks/useCreditCheck';
 
 export default function AudienceBuilder() {
   const { toast } = useToast();
-  const { currentType, setCurrentType, setResults, setTotalEstimate, setLoading, loading, results, totalEstimate } = useAudienceStore();
+  const { 
+    currentType, 
+    setCurrentType, 
+    setResults, 
+    setTotalEstimate, 
+    setLoading, 
+    loading, 
+    results, 
+    totalEstimate,
+    currentPage,
+    perPage,
+    totalPages,
+    setCurrentPage,
+    setPerPage,
+    setTotalPages,
+    estimatedCost,
+    estimatedResults,
+    setEstimatedCost,
+    setEstimatedResults,
+  } = useAudienceStore();
   
-  const handleSearch = async () => {
+  const { hasEnoughCredits, getCurrentCredits } = useCreditCheck();
+  const [showCostEstimator, setShowCostEstimator] = useState(false);
+  const [currentCredits, setCurrentCredits] = useState(0);
+  const [pendingSearch, setPendingSearch] = useState<FilterBuilderState | null>(null);
+  
+  const handleSearch = async (filterState: FilterBuilderState) => {
     setLoading(true);
     
     try {
@@ -21,30 +51,69 @@ export default function AudienceBuilder() {
           type: currentType,
           where: { field: 'all', op: 'exists' as const },
         },
+        filterState,
+        page: currentPage,
+        perPage,
       };
       
       if (currentType === 'person') {
         const response = await audienceLabClient.searchPeople(params);
         setResults(response.items);
         setTotalEstimate(response.totalEstimate);
+        if (response.pagination) {
+          setTotalPages(response.pagination.total_pages);
+        }
       } else {
         const response = await audienceLabClient.searchCompanies(params);
         setResults(response.items);
         setTotalEstimate(response.totalEstimate);
+        if (response.pagination) {
+          setTotalPages(response.pagination.total_pages);
+        }
       }
       
       toast({
         title: 'Search complete',
         description: `Found ${totalEstimate} results`,
       });
-    } catch (error) {
+    } catch (error: any) {
       toast({
         title: 'Error',
-        description: 'Failed to search. Please try again.',
+        description: error.message || 'Failed to search. Please try again.',
         variant: 'destructive',
       });
     } finally {
       setLoading(false);
+    }
+  };
+  
+  const handleEstimate = async (filterState: FilterBuilderState) => {
+    try {
+      setLoading(true);
+      const credits = await getCurrentCredits();
+      setCurrentCredits(credits);
+      
+      const estimate = await audienceLabClient.estimateSearchCost(filterState, currentType);
+      setEstimatedCost(estimate.cost);
+      setEstimatedResults(estimate.estimatedResults);
+      setPendingSearch(filterState);
+      setShowCostEstimator(true);
+    } catch (error: any) {
+      toast({
+        title: 'Error',
+        description: error.message || 'Failed to estimate cost',
+        variant: 'destructive',
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+  
+  const handleProceedWithSearch = () => {
+    setShowCostEstimator(false);
+    if (pendingSearch) {
+      handleSearch(pendingSearch);
+      setPendingSearch(null);
     }
   };
 
@@ -115,95 +184,177 @@ export default function AudienceBuilder() {
             </TabsList>
           </div>
 
-          <div className="flex-1 overflow-auto p-4">
+          <div className="flex-1 overflow-auto">
             <TabsContent value="person" className="mt-0 h-full">
-              <div className="space-y-4">
-                <div className="flex items-center gap-4">
-                  <Button onClick={handleSearch} disabled={loading}>
-                    <Search className="h-4 w-4 mr-2" />
-                    {loading ? 'Searching...' : 'Search People'}
-                  </Button>
-                  <span className="text-sm text-muted-foreground">
-                    {totalEstimate > 0 && `${totalEstimate} results found`}
-                  </span>
+              <div className="grid grid-cols-[380px_1fr] gap-4 h-full p-4">
+                {/* Left: Filter Builder */}
+                <div className="h-full overflow-hidden">
+                  <FilterBuilder 
+                    entityType="person" 
+                    onSearch={handleSearch}
+                    onEstimate={handleEstimate}
+                  />
                 </div>
-
-                {results.length > 0 && (
-                  <div className="border rounded-lg overflow-hidden">
-                    <div className="bg-muted px-4 py-3 font-medium grid grid-cols-7 gap-4 text-sm">
-                      <div>Name</div>
-                      <div>Title</div>
-                      <div>Seniority</div>
-                      <div>Department</div>
-                      <div>Company</div>
-                      <div>Location</div>
-                      <div>Actions</div>
+                
+                {/* Right: Results */}
+                <div className="space-y-4 h-full flex flex-col">
+                  <div className="flex items-center justify-between">
+                    <div className="text-sm text-muted-foreground">
+                      {totalEstimate > 0 && `${totalEstimate} results found`}
                     </div>
-                    <div className="divide-y">
-                      {results.map((person: any) => (
-                        <div key={person.id} className="px-4 py-3 grid grid-cols-7 gap-4 text-sm hover:bg-muted/50">
-                          <div className="font-medium">{person.name}</div>
-                          <div>{person.title}</div>
-                          <div>{person.seniority}</div>
-                          <div>{person.department}</div>
-                          <div>{person.company}</div>
-                          <div>{person.location}</div>
-                          <div>
-                            <Button variant="ghost" size="sm">
-                              View
-                            </Button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
+                    <CreditBalance />
                   </div>
-                )}
+
+                  {loading && (
+                    <div className="flex items-center justify-center h-64">
+                      <div className="text-muted-foreground">Searching...</div>
+                    </div>
+                  )}
+
+                  {!loading && results.length > 0 && (
+                    <>
+                      <div className="border rounded-lg overflow-hidden flex-1">
+                        <div className="bg-muted px-4 py-3 font-medium grid grid-cols-7 gap-4 text-sm">
+                          <div>Name</div>
+                          <div>Title</div>
+                          <div>Seniority</div>
+                          <div>Department</div>
+                          <div>Company</div>
+                          <div>Location</div>
+                          <div>Actions</div>
+                        </div>
+                        <div className="divide-y overflow-auto max-h-[calc(100vh-400px)]">
+                          {results.map((person: any) => (
+                            <div key={person.id} className="px-4 py-3 grid grid-cols-7 gap-4 text-sm hover:bg-muted/50">
+                              <div className="font-medium">{person.name}</div>
+                              <div className="truncate">{person.title}</div>
+                              <div>{person.seniority}</div>
+                              <div>{person.department}</div>
+                              <div>{person.company}</div>
+                              <div>{person.location}</div>
+                              <div>
+                                <Button variant="ghost" size="sm">
+                                  View
+                                </Button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                      
+                      {totalPages > 1 && (
+                        <PaginationControls
+                          currentPage={currentPage}
+                          totalPages={totalPages}
+                          perPage={perPage}
+                          totalResults={totalEstimate}
+                          onPageChange={setCurrentPage}
+                          onPerPageChange={setPerPage}
+                        />
+                      )}
+                    </>
+                  )}
+                  
+                  {!loading && results.length === 0 && totalEstimate === 0 && (
+                    <div className="flex items-center justify-center h-64 text-muted-foreground">
+                      Build your filters and click Search to find people
+                    </div>
+                  )}
+                </div>
               </div>
             </TabsContent>
 
             <TabsContent value="company" className="mt-0 h-full">
-              <div className="space-y-4">
-                <div className="flex items-center gap-4">
-                  <Button onClick={handleSearch} disabled={loading}>
-                    <Search className="h-4 w-4 mr-2" />
-                    {loading ? 'Searching...' : 'Search Companies'}
-                  </Button>
-                  <span className="text-sm text-muted-foreground">
-                    {totalEstimate > 0 && `${totalEstimate} results found`}
-                  </span>
+              <div className="grid grid-cols-[380px_1fr] gap-4 h-full p-4">
+                {/* Left: Filter Builder */}
+                <div className="h-full overflow-hidden">
+                  <FilterBuilder 
+                    entityType="company"
+                    onSearch={handleSearch}
+                    onEstimate={handleEstimate}
+                  />
                 </div>
-
-                {results.length > 0 && (
-                  <div className="border rounded-lg overflow-hidden">
-                    <div className="bg-muted px-4 py-3 font-medium grid grid-cols-6 gap-4 text-sm">
-                      <div>Company</div>
-                      <div>Domain</div>
-                      <div>Industry</div>
-                      <div>Employees</div>
-                      <div>Location</div>
-                      <div>Actions</div>
+                
+                {/* Right: Results */}
+                <div className="space-y-4 h-full flex flex-col">
+                  <div className="flex items-center justify-between">
+                    <div className="text-sm text-muted-foreground">
+                      {totalEstimate > 0 && `${totalEstimate} results found`}
                     </div>
-                    <div className="divide-y">
-                      {results.map((company: any) => (
-                        <div key={company.id} className="px-4 py-3 grid grid-cols-6 gap-4 text-sm hover:bg-muted/50">
-                          <div className="font-medium">{company.name}</div>
-                          <div>{company.domain}</div>
-                          <div>{company.industry}</div>
-                          <div>{company.employeeCount}</div>
-                          <div>{company.location}</div>
-                          <div>
-                            <Button variant="ghost" size="sm">
-                              View
-                            </Button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
+                    <CreditBalance />
                   </div>
-                )}
+
+                  {loading && (
+                    <div className="flex items-center justify-center h-64">
+                      <div className="text-muted-foreground">Searching...</div>
+                    </div>
+                  )}
+
+                  {!loading && results.length > 0 && (
+                    <>
+                      <div className="border rounded-lg overflow-hidden flex-1">
+                        <div className="bg-muted px-4 py-3 font-medium grid grid-cols-6 gap-4 text-sm">
+                          <div>Company</div>
+                          <div>Domain</div>
+                          <div>Industry</div>
+                          <div>Employees</div>
+                          <div>Location</div>
+                          <div>Actions</div>
+                        </div>
+                        <div className="divide-y overflow-auto max-h-[calc(100vh-400px)]">
+                          {results.map((company: any) => (
+                            <div key={company.id} className="px-4 py-3 grid grid-cols-6 gap-4 text-sm hover:bg-muted/50">
+                              <div className="font-medium">{company.name}</div>
+                              <div className="truncate">{company.domain}</div>
+                              <div>{company.industry}</div>
+                              <div>{company.employeeCount}</div>
+                              <div>{company.location}</div>
+                              <div>
+                                <Button variant="ghost" size="sm">
+                                  View
+                                </Button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                      
+                      {totalPages > 1 && (
+                        <PaginationControls
+                          currentPage={currentPage}
+                          totalPages={totalPages}
+                          perPage={perPage}
+                          totalResults={totalEstimate}
+                          onPageChange={setCurrentPage}
+                          onPerPageChange={setPerPage}
+                        />
+                      )}
+                    </>
+                  )}
+                  
+                  {!loading && results.length === 0 && totalEstimate === 0 && (
+                    <div className="flex items-center justify-center h-64 text-muted-foreground">
+                      Build your filters and click Search to find companies
+                    </div>
+                  )}
+                </div>
               </div>
             </TabsContent>
           </div>
+          
+          {/* Cost Estimator Modal */}
+          <SearchCostEstimator
+            open={showCostEstimator}
+            onOpenChange={setShowCostEstimator}
+            estimatedResults={estimatedResults}
+            estimatedCost={estimatedCost}
+            currentCredits={currentCredits}
+            onProceed={handleProceedWithSearch}
+            onCancel={() => {
+              setShowCostEstimator(false);
+              setPendingSearch(null);
+            }}
+          />
         </Tabs>
       </div>
     </div>
