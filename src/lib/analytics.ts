@@ -23,8 +23,8 @@ export class AnalyticsService {
     return {
       total: people.length,
       industryDistribution: this.groupByField(people, 'industry'),
-      locationDistribution: this.groupByField(people, 'city'),
-      titleDistribution: this.groupByField(people, 'jobTitle'),
+      locationDistribution: this.groupByField(people, 'location'),
+      titleDistribution: this.groupByField(people, 'title'),
       seniorityDistribution: this.groupByField(people, 'seniority'),
       departmentDistribution: this.groupByField(people, 'department'),
       genderDistribution: this.groupByField(people, 'gender'),
