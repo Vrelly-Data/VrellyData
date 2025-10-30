@@ -1,16 +1,17 @@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { PersonEntity, CompanyEntity, EntityType } from '@/types/audience';
+import { PersonEntity, CompanyEntity } from '@/types/audience';
+import { ColumnConfig } from '@/types/tableColumns';
 
 interface RecordsTableProps {
   records: (PersonEntity | CompanyEntity)[];
-  entityType: EntityType;
+  columns: ColumnConfig<PersonEntity | CompanyEntity>[];
   selectedRecords: Set<string>;
   onSelectionChange: (selected: Set<string>) => void;
 }
 
-export function RecordsTable({ records, entityType, selectedRecords, onSelectionChange }: RecordsTableProps) {
+export function RecordsTable({ records, columns, selectedRecords, onSelectionChange }: RecordsTableProps) {
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
       onSelectionChange(new Set(records.map(r => r.id)));
@@ -42,23 +43,11 @@ export function RecordsTable({ records, entityType, selectedRecords, onSelection
                 onCheckedChange={handleSelectAll}
               />
             </TableHead>
-            {entityType === 'person' ? (
-              <>
-                <TableHead>Name</TableHead>
-                <TableHead>Title</TableHead>
-                <TableHead>Company</TableHead>
-                <TableHead>Location</TableHead>
-                <TableHead>Email</TableHead>
-              </>
-            ) : (
-              <>
-                <TableHead>Company</TableHead>
-                <TableHead>Industry</TableHead>
-                <TableHead>Employees</TableHead>
-                <TableHead>Location</TableHead>
-                <TableHead>Domain</TableHead>
-              </>
-            )}
+            {columns.map((column) => (
+              <TableHead key={column.id} className={column.width}>
+                {column.label}
+              </TableHead>
+            ))}
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -70,23 +59,14 @@ export function RecordsTable({ records, entityType, selectedRecords, onSelection
                   onCheckedChange={(checked) => handleSelectOne(record.id, checked as boolean)}
                 />
               </TableCell>
-              {entityType === 'person' ? (
-                <>
-                  <TableCell className="font-medium">{(record as PersonEntity).name}</TableCell>
-                  <TableCell>{(record as PersonEntity).jobTitle || (record as PersonEntity).title}</TableCell>
-                  <TableCell>{(record as PersonEntity).company}</TableCell>
-                  <TableCell>{(record as PersonEntity).city || (record as PersonEntity).location}</TableCell>
-                  <TableCell>{(record as PersonEntity).email || '-'}</TableCell>
-                </>
-              ) : (
-                <>
-                  <TableCell className="font-medium">{(record as CompanyEntity).name}</TableCell>
-                  <TableCell>{(record as CompanyEntity).industry}</TableCell>
-                  <TableCell>{(record as CompanyEntity).employeeCount?.toLocaleString()}</TableCell>
-                  <TableCell>{(record as CompanyEntity).location}</TableCell>
-                  <TableCell>{(record as CompanyEntity).domain}</TableCell>
-                </>
-              )}
+              {columns.map((column) => (
+                <TableCell key={column.id} className={column.id === 'name' ? 'font-medium' : ''}>
+                  {column.renderCell 
+                    ? column.renderCell(record[column.field], record)
+                    : record[column.field] || '-'
+                  }
+                </TableCell>
+              ))}
             </TableRow>
           ))}
         </TableBody>

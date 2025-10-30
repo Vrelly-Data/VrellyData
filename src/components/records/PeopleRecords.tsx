@@ -5,10 +5,20 @@ import { generateMockPeople } from '@/lib/mockData';
 import { PersonEntity } from '@/types/audience';
 import { RecordsTable } from './RecordsTable';
 import { RecordsFilterDropdown } from './RecordsFilterDropdown';
+import { ColumnCustomizer } from './ColumnCustomizer';
+import { useTableColumns } from '@/hooks/useTableColumns';
+import { PERSON_COLUMNS } from '@/config/personTableColumns';
 
 export function PeopleRecords() {
   const [records] = useState<PersonEntity[]>(generateMockPeople(100));
   const [selectedRecords, setSelectedRecords] = useState<Set<string>>(new Set());
+  
+  const {
+    columns,
+    visibleColumns,
+    toggleColumn,
+    resetToDefaults
+  } = useTableColumns('person', PERSON_COLUMNS);
 
   const handleExport = () => {
     console.log('Export selected records:', selectedRecords);
@@ -20,6 +30,11 @@ export function PeopleRecords() {
         <h2 className="text-lg font-semibold">People Records</h2>
         <div className="flex gap-2">
           <RecordsFilterDropdown entityType="person" />
+          <ColumnCustomizer
+            columns={columns}
+            onToggleColumn={toggleColumn}
+            onResetToDefaults={resetToDefaults}
+          />
           <Button variant="outline" size="sm" onClick={handleExport}>
             <Download className="h-4 w-4 mr-2" />
             Export
@@ -33,7 +48,7 @@ export function PeopleRecords() {
       
       <RecordsTable
         records={records}
-        entityType="person"
+        columns={visibleColumns}
         selectedRecords={selectedRecords}
         onSelectionChange={setSelectedRecords}
       />
