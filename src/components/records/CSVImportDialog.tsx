@@ -234,12 +234,12 @@ export function CSVImportDialog({ open, onOpenChange, entityType, onImportComple
             </div>
 
             <div className="border rounded-lg max-h-96 overflow-y-auto">
-              <table className="w-full">
+              <table className="w-full table-fixed">
                 <thead className="bg-muted sticky top-0">
                   <tr>
-                    <th className="text-left p-3 font-medium">CSV Column</th>
-                    <th className="text-left p-3 font-medium">Maps To</th>
-                    <th className="text-left p-3 font-medium">Preview</th>
+                    <th className="text-left p-3 font-medium w-1/4">CSV Column</th>
+                    <th className="text-left p-3 font-medium w-1/3">Maps To</th>
+                    <th className="text-left p-3 font-medium w-5/12">Preview</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -249,17 +249,17 @@ export function CSVImportDialog({ open, onOpenChange, entityType, onImportComple
                     
                     return (
                       <tr key={mapping.csvHeader} className="border-t">
-                        <td className="p-3">
-                          <div className="flex items-center gap-2">
+                        <td className="p-3 w-1/4">
+                          <div className="flex items-center gap-2 min-w-0">
                             {isMapped ? (
-                              <CheckCircle2 className="h-4 w-4 text-green-500" />
+                              <CheckCircle2 className="h-4 w-4 text-green-500 flex-shrink-0" />
                             ) : (
-                              <AlertCircle className="h-4 w-4 text-muted-foreground" />
+                              <AlertCircle className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                             )}
-                            <span className="font-medium">{mapping.csvHeader}</span>
+                            <span className="font-medium truncate">{mapping.csvHeader}</span>
                           </div>
                         </td>
-                        <td className="p-3">
+                        <td className="p-3 w-1/3">
                           <Select
                             value={mapping.systemField || 'none'}
                             onValueChange={(value) => handleMappingChange(mapping.csvHeader, value === 'none' ? null : value)}
@@ -278,8 +278,10 @@ export function CSVImportDialog({ open, onOpenChange, entityType, onImportComple
                             </SelectContent>
                           </Select>
                         </td>
-                        <td className="p-3 text-sm text-muted-foreground">
-                          {mapping.preview.slice(0, 2).join(', ')}
+                        <td className="p-3 text-sm text-muted-foreground w-5/12">
+                          <div className="truncate">
+                            {mapping.preview.slice(0, 2).join(', ')}
+                          </div>
                         </td>
                       </tr>
                     );
