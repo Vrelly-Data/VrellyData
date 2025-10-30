@@ -17,11 +17,14 @@ import { ColumnCustomizer } from './ColumnCustomizer';
 import { ListManagementDialog } from './ListManagementDialog';
 import { useTableColumns } from '@/hooks/useTableColumns';
 import { PERSON_COLUMNS } from '@/config/personTableColumns';
+import { exportPeopleToCSV } from '@/lib/csvExport';
+import { useToast } from '@/hooks/use-toast';
 
 export function PeopleRecords() {
   const [records] = useState<PersonEntity[]>(generateMockPeople(100));
   const [selectedRecords, setSelectedRecords] = useState<Set<string>>(new Set());
   const [isListDialogOpen, setIsListDialogOpen] = useState(false);
+  const { toast } = useToast();
   
   const {
     columns,
@@ -32,7 +35,14 @@ export function PeopleRecords() {
   } = useTableColumns('person', PERSON_COLUMNS);
 
   const handleExport = () => {
-    console.log('Export selected records:', selectedRecords);
+    const selectedData = records.filter(record => 
+      selectedRecords.has(record.id)
+    );
+    exportPeopleToCSV(selectedData);
+    toast({
+      title: "Export successful",
+      description: `Exported ${selectedData.length} people records to CSV`,
+    });
   };
 
   return (

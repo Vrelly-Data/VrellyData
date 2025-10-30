@@ -17,11 +17,14 @@ import { ColumnCustomizer } from './ColumnCustomizer';
 import { ListManagementDialog } from './ListManagementDialog';
 import { useTableColumns } from '@/hooks/useTableColumns';
 import { COMPANY_COLUMNS } from '@/config/companyTableColumns';
+import { exportCompaniesToCSV } from '@/lib/csvExport';
+import { useToast } from '@/hooks/use-toast';
 
 export function CompanyRecords() {
   const [records] = useState<CompanyEntity[]>(generateMockCompanies(100));
   const [selectedRecords, setSelectedRecords] = useState<Set<string>>(new Set());
   const [isListDialogOpen, setIsListDialogOpen] = useState(false);
+  const { toast } = useToast();
   
   const {
     columns,
@@ -32,7 +35,14 @@ export function CompanyRecords() {
   } = useTableColumns('company', COMPANY_COLUMNS);
 
   const handleExport = () => {
-    console.log('Export selected records:', selectedRecords);
+    const selectedData = records.filter(record => 
+      selectedRecords.has(record.id)
+    );
+    exportCompaniesToCSV(selectedData);
+    toast({
+      title: "Export successful",
+      description: `Exported ${selectedData.length} company records to CSV`,
+    });
   };
 
   return (
