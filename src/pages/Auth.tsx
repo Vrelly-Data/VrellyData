@@ -83,7 +83,12 @@ export default function Auth() {
       <Card className="w-full max-w-md">
         <CardHeader className="space-y-4">
           <div className="flex justify-center">
-            <img src={vrellyLogo} alt="Vrelly Data" className="h-36" />
+            <img 
+              src={vrellyLogo} 
+              alt="Vrelly Data" 
+              className="h-36 cursor-pointer" 
+              onClick={() => navigate('/')}
+            />
           </div>
           <div className="space-y-2">
             <CardTitle className="text-2xl text-center">Welcome to Vrelly Data</CardTitle>

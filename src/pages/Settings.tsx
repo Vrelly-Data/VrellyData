@@ -1,6 +1,9 @@
 import { useState } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
+import { SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
+import { AppSidebar } from '@/components/AppSidebar';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import vrellyLogo from '@/assets/vrelly-logo.png';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -17,6 +20,7 @@ import { Check } from "lucide-react";
 
 export default function Settings() {
   const location = useLocation();
+  const navigate = useNavigate();
   const { profile, user, fetchProfile } = useAuthStore();
   const { toast } = useToast();
   const [loading, setLoading] = useState(false);
@@ -127,13 +131,28 @@ export default function Settings() {
   };
 
   return (
-    <div className="container max-w-4xl py-8">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold">Settings</h1>
-        <p className="text-muted-foreground">Manage your account settings and preferences.</p>
-      </div>
+    <SidebarProvider>
+      <div className="min-h-screen flex w-full">
+        <AppSidebar />
+        <div className="flex-1 flex flex-col">
+          <header className="h-12 flex items-center gap-3 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 px-4">
+            <SidebarTrigger />
+            <img 
+              src={vrellyLogo} 
+              alt="Vrelly Data" 
+              className="h-[4.5rem] cursor-pointer" 
+              onClick={() => navigate('/')}
+            />
+            <h1 className="text-lg font-semibold ml-4">Settings</h1>
+          </header>
+          <main className="flex-1 overflow-auto">
+            <div className="container max-w-4xl py-8">
+              <div className="mb-8">
+                <h1 className="text-3xl font-bold">Settings</h1>
+                <p className="text-muted-foreground">Manage your account settings and preferences.</p>
+              </div>
 
-      <Tabs defaultValue={defaultTab} className="space-y-6">
+              <Tabs defaultValue={defaultTab} className="space-y-6">
         <TabsList>
           <TabsTrigger value="profile">Profile</TabsTrigger>
           <TabsTrigger value="security">Security</TabsTrigger>
@@ -451,6 +470,10 @@ export default function Settings() {
           </div>
         </TabsContent>
       </Tabs>
-    </div>
+            </div>
+          </main>
+        </div>
+      </div>
+    </SidebarProvider>
   );
 }

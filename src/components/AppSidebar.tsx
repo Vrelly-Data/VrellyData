@@ -1,4 +1,4 @@
-import { NavLink } from 'react-router-dom';
+import { NavLink, useNavigate } from 'react-router-dom';
 import {
   Sidebar,
   SidebarContent,
@@ -24,6 +24,7 @@ const navItems = [
 export function AppSidebar() {
   const { state } = useSidebar();
   const { signOut, profile } = useAuthStore();
+  const navigate = useNavigate();
   const isCollapsed = state === 'collapsed';
 
   return (
@@ -31,7 +32,12 @@ export function AppSidebar() {
       <SidebarContent>
         <SidebarGroup>
           <div className={isCollapsed ? 'flex justify-center py-4' : 'px-3 py-4'}>
-            <img src={vrellyLogo} alt="Vrelly Data" className={isCollapsed ? 'h-16 w-16 object-contain' : 'h-24'} />
+            <img 
+              src={vrellyLogo} 
+              alt="Vrelly Data" 
+              className={`${isCollapsed ? 'h-16 w-16 object-contain' : 'h-24'} cursor-pointer`}
+              onClick={() => navigate('/')}
+            />
           </div>
           <SidebarGroupContent>
             <SidebarMenu>
