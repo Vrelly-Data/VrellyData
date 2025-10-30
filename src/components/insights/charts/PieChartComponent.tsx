@@ -12,16 +12,16 @@ export function PieChartComponent({ title, data }: PieChartComponentProps) {
   const chartData = Object.entries(data).map(([name, value]) => ({ name, value }));
 
   const content = (
-    <ResponsiveContainer width="100%" height={400}>
-      <PieChart>
+    <ResponsiveContainer width="100%" height={450}>
+      <PieChart margin={{ top: 20, right: 80, bottom: 20, left: 80 }}>
         <Pie
           data={chartData}
           cx="50%"
-          cy="50%"
+          cy="45%"
           labelLine={true}
           label={({ name, percent, cx, cy, midAngle, outerRadius }) => {
             const RADIAN = Math.PI / 180;
-            const radius = outerRadius + 30;
+            const radius = outerRadius + 25;
             const x = cx + radius * Math.cos(-midAngle * RADIAN);
             const y = cy + radius * Math.sin(-midAngle * RADIAN);
             
@@ -34,13 +34,13 @@ export function PieChartComponent({ title, data }: PieChartComponentProps) {
                 fill="hsl(var(--foreground))"
                 textAnchor={x > cx ? 'start' : 'end'} 
                 dominantBaseline="central"
-                className="text-sm font-medium"
+                className="text-xs font-medium"
               >
                 {`${name}: ${(percent * 100).toFixed(0)}%`}
               </text>
             );
           }}
-          outerRadius={90}
+          outerRadius={85}
           fill="#8884d8"
           dataKey="value"
         >
