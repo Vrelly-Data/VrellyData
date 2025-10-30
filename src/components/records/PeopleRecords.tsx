@@ -1,7 +1,14 @@
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Plus, Download, FolderPlus } from 'lucide-react';
+import { Plus, Download, FolderPlus, ChevronDown } from 'lucide-react';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { generateMockPeople } from '@/lib/mockData';
 import { PersonEntity } from '@/types/audience';
 import { RecordsTable } from './RecordsTable';
@@ -47,20 +54,35 @@ export function PeopleRecords() {
             onResetToDefaults={resetToDefaults}
             onClearPreferences={clearPreferences}
           />
-          {selectedRecords.size > 0 && (
-            <Button variant="secondary" size="sm" onClick={() => setIsListDialogOpen(true)}>
-              <FolderPlus className="h-4 w-4 mr-2" />
-              Add to List
-            </Button>
-          )}
-          <Button variant="outline" size="sm" onClick={handleExport}>
-            <Download className="h-4 w-4 mr-2" />
-            Export
-          </Button>
-          <Button size="sm" onClick={() => setIsListDialogOpen(true)}>
-            <Plus className="h-4 w-4 mr-2" />
-            New List
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="sm">
+                Actions
+                <ChevronDown className="h-4 w-4 ml-2" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem 
+                disabled={selectedRecords.size === 0}
+                onClick={handleExport}
+              >
+                <Download className="h-4 w-4 mr-2" />
+                Export {selectedRecords.size > 0 && `(${selectedRecords.size})`}
+              </DropdownMenuItem>
+              <DropdownMenuItem 
+                disabled={selectedRecords.size === 0}
+                onClick={() => setIsListDialogOpen(true)}
+              >
+                <FolderPlus className="h-4 w-4 mr-2" />
+                Add to List {selectedRecords.size > 0 && `(${selectedRecords.size})`}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => setIsListDialogOpen(true)}>
+                <Plus className="h-4 w-4 mr-2" />
+                New List
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
       
