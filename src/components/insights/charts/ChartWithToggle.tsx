@@ -9,9 +9,10 @@ interface ChartWithToggleProps {
   title: string;
   data: Record<string, number>;
   defaultType?: 'pie' | 'bar';
+  othersBreakdown?: Array<{ name: string; count: number; percentage: number }>;
 }
 
-export function ChartWithToggle({ title, data, defaultType = 'pie' }: ChartWithToggleProps) {
+export function ChartWithToggle({ title, data, defaultType = 'pie', othersBreakdown }: ChartWithToggleProps) {
   const [chartType, setChartType] = useState<'pie' | 'bar'>(defaultType);
 
   return (
@@ -35,9 +36,9 @@ export function ChartWithToggle({ title, data, defaultType = 'pie' }: ChartWithT
       </CardHeader>
       <CardContent>
         {chartType === 'pie' ? (
-          <PieChartComponent title="" data={data} />
+          <PieChartComponent title="" data={data} othersBreakdown={othersBreakdown} />
         ) : (
-          <BarChartComponent title="" data={data} />
+          <BarChartComponent title="" data={data} othersBreakdown={othersBreakdown} />
         )}
       </CardContent>
     </Card>

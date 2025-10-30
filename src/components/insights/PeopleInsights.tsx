@@ -20,10 +20,10 @@ export function PeopleInsights() {
     return <div className="p-6">Loading insights...</div>;
   }
 
-  const topIndustries = AnalyticsService.getTopN(insights.industryDistribution, 5);
-  const topSeniority = AnalyticsService.getTopN(insights.seniorityDistribution, 5);
-  const topTitles = AnalyticsService.getTopN(insights.titleDistribution, 5);
-  const topLocations = AnalyticsService.getTopN(insights.locationDistribution, 5);
+  const { data: topIndustries, othersBreakdown: industryOthers } = AnalyticsService.getTopN(insights.industryDistribution, 5);
+  const { data: topSeniority, othersBreakdown: seniorityOthers } = AnalyticsService.getTopN(insights.seniorityDistribution, 5);
+  const { data: topTitles, othersBreakdown: titlesOthers } = AnalyticsService.getTopN(insights.titleDistribution, 5);
+  const { data: topLocations, othersBreakdown: locationsOthers } = AnalyticsService.getTopN(insights.locationDistribution, 5);
 
   return (
     <div className="p-6 space-y-6 overflow-auto h-full">
@@ -32,11 +32,13 @@ export function PeopleInsights() {
           title="Industry Breakdown"
           data={topIndustries}
           defaultType="pie"
+          othersBreakdown={industryOthers}
         />
         <ChartWithToggle
           title="Seniority Breakdown"
           data={topSeniority}
           defaultType="pie"
+          othersBreakdown={seniorityOthers}
         />
       </div>
       
@@ -45,11 +47,13 @@ export function PeopleInsights() {
           title="Job Title Breakdown"
           data={topTitles}
           defaultType="bar"
+          othersBreakdown={titlesOthers}
         />
         <ChartWithToggle
           title="Geography Breakdown"
           data={topLocations}
           defaultType="bar"
+          othersBreakdown={locationsOthers}
         />
       </div>
     </div>

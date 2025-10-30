@@ -81,7 +81,10 @@ export class AnalyticsService {
     return groups;
   }
 
-  static getTopN(distribution: Record<string, number>, n: number): Record<string, number> {
+  static getTopN(distribution: Record<string, number>, n: number): {
+    data: Record<string, number>;
+    othersBreakdown?: Array<{ name: string; count: number; percentage: number }>;
+  } {
     const entries = Object.entries(distribution);
     entries.sort((a, b) => b[1] - a[1]);
     
@@ -92,13 +95,20 @@ export class AnalyticsService {
       result[key] = value;
     });
     
+    let othersBreakdown;
     if (entries.length > n) {
-      const othersCount = entries.slice(n).reduce((sum, [, count]) => sum + count, 0);
+      const othersEntries = entries.slice(n);
+      const othersCount = othersEntries.reduce((sum, [, count]) => sum + count, 0);
       if (othersCount > 0) {
         result['Others'] = othersCount;
+        othersBreakdown = othersEntries.map(([name, count]) => ({
+          name,
+          count,
+          percentage: (count / othersCount) * 100
+        })).sort((a, b) => b.count - a.count);
       }
     }
     
-    return result;
+    return { data: result, othersBreakdown };
   }
 }
