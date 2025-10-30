@@ -13,9 +13,9 @@ export function BarChartComponent({ title, data, xAxisLabel, yAxisLabel }: BarCh
 
   const content = (
     <ResponsiveContainer width="100%" height={350}>
-      <BarChart data={chartData}>
+      <BarChart data={chartData} margin={{ top: 20, right: 24, bottom: 24, left: 24 }}>
         <CartesianGrid strokeDasharray="3 3" />
-        <XAxis dataKey="name" label={{ value: xAxisLabel, position: 'insideBottom', offset: -5 }} />
+        <XAxis dataKey="name" label={{ value: xAxisLabel, position: 'insideBottom', offset: -5 }} interval="preserveStartEnd" tickLine={false} />
         <YAxis label={{ value: yAxisLabel, angle: -90, position: 'insideLeft' }} />
         <Tooltip />
         <Bar dataKey="value" fill="hsl(var(--primary))" />
