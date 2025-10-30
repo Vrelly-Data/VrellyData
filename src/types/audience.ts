@@ -26,6 +26,8 @@ export interface FilterDSL {
 export interface PersonEntity {
   id: string;
   name: string;
+  firstName?: string;
+  lastName?: string;
   title?: string;
   seniority?: string;
   department?: string;
@@ -37,9 +39,14 @@ export interface PersonEntity {
   email?: string;
   phone?: string;
   linkedin?: string;
+  website?: string;
+  companyLinkedin?: string;
+  companyPhone?: string;
   age?: number;
   gender?: string;
   city?: string;
+  state?: string;
+  country?: string;
   jobTitle?: string;
 }
 
@@ -54,6 +61,11 @@ export interface CompanyEntity {
   technologies?: string[];
   fundingStage?: string;
   description?: string;
+  linkedin?: string;
+  phone?: string;
+  city?: string;
+  state?: string;
+  country?: string;
 }
 
 export interface AudienceLabFilters {

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Plus, Download, FolderPlus, ChevronDown } from 'lucide-react';
+import { Plus, Download, FolderPlus, ChevronDown, Upload } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -15,15 +15,17 @@ import { RecordsTable } from './RecordsTable';
 import { RecordsFilterDropdown } from './RecordsFilterDropdown';
 import { ColumnCustomizer } from './ColumnCustomizer';
 import { ListManagementDialog } from './ListManagementDialog';
+import { CSVImportDialog } from './CSVImportDialog';
 import { useTableColumns } from '@/hooks/useTableColumns';
 import { COMPANY_COLUMNS } from '@/config/companyTableColumns';
 import { exportCompaniesToCSV } from '@/lib/csvExport';
 import { useToast } from '@/hooks/use-toast';
 
 export function CompanyRecords() {
-  const [records] = useState<CompanyEntity[]>(generateMockCompanies(100));
+  const [records, setRecords] = useState<CompanyEntity[]>(generateMockCompanies(100));
   const [selectedRecords, setSelectedRecords] = useState<Set<string>>(new Set());
   const [isListDialogOpen, setIsListDialogOpen] = useState(false);
+  const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
   const { toast } = useToast();
   
   const {
@@ -43,6 +45,11 @@ export function CompanyRecords() {
       title: "Export successful",
       description: `Exported ${selectedData.length} company records to CSV`,
     });
+  };
+
+  const handleImportComplete = (importedRecords: CompanyEntity[]) => {
+    setRecords(prev => [...importedRecords, ...prev]);
+    setSelectedRecords(new Set());
   };
 
   return (
@@ -72,6 +79,10 @@ export function CompanyRecords() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => setIsImportDialogOpen(true)}>
+                <Upload className="h-4 w-4 mr-2" />
+                Import from CSV
+              </DropdownMenuItem>
               <DropdownMenuItem 
                 disabled={selectedRecords.size === 0}
                 onClick={handleExport}
@@ -79,6 +90,7 @@ export function CompanyRecords() {
                 <Download className="h-4 w-4 mr-2" />
                 Export {selectedRecords.size > 0 && `(${selectedRecords.size})`}
               </DropdownMenuItem>
+              <DropdownMenuSeparator />
               <DropdownMenuItem 
                 disabled={selectedRecords.size === 0}
                 onClick={() => setIsListDialogOpen(true)}
@@ -86,7 +98,6 @@ export function CompanyRecords() {
                 <FolderPlus className="h-4 w-4 mr-2" />
                 Add to List {selectedRecords.size > 0 && `(${selectedRecords.size})`}
               </DropdownMenuItem>
-              <DropdownMenuSeparator />
               <DropdownMenuItem onClick={() => setIsListDialogOpen(true)}>
                 <Plus className="h-4 w-4 mr-2" />
                 New List
@@ -113,6 +124,13 @@ export function CompanyRecords() {
           setSelectedRecords(new Set());
           setIsListDialogOpen(false);
         }}
+      />
+
+      <CSVImportDialog
+        open={isImportDialogOpen}
+        onOpenChange={setIsImportDialogOpen}
+        entityType="company"
+        onImportComplete={handleImportComplete}
       />
     </div>
   );
