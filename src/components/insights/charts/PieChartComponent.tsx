@@ -6,7 +6,7 @@ interface PieChartComponentProps {
   data: Record<string, number>;
 }
 
-const COLORS = ['hsl(var(--chart-1))', 'hsl(var(--chart-2))', 'hsl(var(--chart-3))', 'hsl(var(--chart-4))', 'hsl(var(--chart-5))'];
+const COLORS = ['hsl(var(--chart-1))', 'hsl(var(--chart-2))', 'hsl(var(--chart-3))', 'hsl(var(--chart-4))', 'hsl(var(--chart-5))', 'hsl(var(--chart-6))'];
 
 export function PieChartComponent({ title, data }: PieChartComponentProps) {
   const chartData = Object.entries(data).map(([name, value]) => ({ name, value }));
