@@ -55,7 +55,11 @@ export function PieChartComponent({ title, data }: PieChartComponentProps) {
         />
         <Legend 
           verticalAlign="bottom" 
-          height={36}
+          height={50}
+          align="left"
+          layout="horizontal"
+          iconSize={12}
+          wrapperStyle={{ paddingTop: '20px', display: 'flex', justifyContent: 'space-evenly', gap: '16px' }}
           formatter={(value) => <span className="text-sm">{value}</span>}
         />
       </PieChart>
