@@ -54,18 +54,24 @@ export function autoMapFields(
     let bestMatch: { fieldId: string; score: number } | null = null;
     
     for (const field of systemFields) {
-      // Skip if field already mapped
-      if (usedSystemFields.has(field.id)) continue;
+      // Skip if field already mapped or is custom field option
+      if (usedSystemFields.has(field.id) || field.id === 'custom') continue;
       
       const normalizedHeader = csvHeader.toLowerCase().trim();
       
-      // Check exact match
+      // Check exact match with field ID
       if (normalizedHeader === field.id.toLowerCase()) {
         bestMatch = { fieldId: field.id, score: 1.0 };
         break;
       }
       
-      // Check aliases
+      // Check exact match with field label
+      if (normalizedHeader === field.label.toLowerCase()) {
+        bestMatch = { fieldId: field.id, score: 1.0 };
+        break;
+      }
+      
+      // Check aliases - EXACT MATCH ONLY
       if (field.aliases) {
         for (const alias of field.aliases) {
           const normalizedAlias = alias.toLowerCase().trim();
@@ -76,25 +82,10 @@ export function autoMapFields(
         }
         if (bestMatch?.score === 0.95) break;
       }
-      
-      // Fuzzy matching
-      const similarity = calculateSimilarity(normalizedHeader, field.label);
-      if (similarity >= 0.7 && (!bestMatch || similarity > bestMatch.score)) {
-        bestMatch = { fieldId: field.id, score: similarity };
-      }
-      
-      // Check partial matches
-      if (normalizedHeader.includes(field.id.toLowerCase()) || 
-          field.label.toLowerCase().includes(normalizedHeader)) {
-        const score = 0.75;
-        if (!bestMatch || score > bestMatch.score) {
-          bestMatch = { fieldId: field.id, score };
-        }
-      }
     }
     
-    // Only map if confidence is high enough
-    if (bestMatch && bestMatch.score >= 0.7) {
+    // Only add if we found an exact or alias match
+    if (bestMatch) {
       mappings.set(csvHeader, bestMatch.fieldId);
       usedSystemFields.add(bestMatch.fieldId);
     }
@@ -165,6 +156,15 @@ export function transformImportData(
         if (!value) return;
         
         const trimmedValue = String(value).trim();
+        
+        // Handle custom fields
+        if (mapping.systemField === 'custom') {
+          if (!entity.customFields) {
+            entity.customFields = {};
+          }
+          entity.customFields[mapping.csvHeader] = trimmedValue;
+          return;
+        }
         
         switch (mapping.systemField) {
           case 'firstName':
@@ -237,6 +237,15 @@ export function transformImportData(
         if (!value) return;
         
         const trimmedValue = String(value).trim();
+        
+        // Handle custom fields
+        if (mapping.systemField === 'custom') {
+          if (!entity.customFields) {
+            entity.customFields = {};
+          }
+          entity.customFields[mapping.csvHeader] = trimmedValue;
+          return;
+        }
         
         switch (mapping.systemField) {
           case 'name':

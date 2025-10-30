@@ -78,6 +78,12 @@ export const PERSON_IMPORT_FIELDS: SystemField[] = [
     id: 'companySize',
     label: 'Company Size',
     aliases: ['company size', 'employees', 'employee count', 'size', 'headcount', 'number of employees', '# employees', 'no of employees']
+  },
+  {
+    id: 'custom',
+    label: 'Custom Field (Keep Original Name)',
+    required: false,
+    aliases: []
   }
 ];
 
@@ -132,5 +138,11 @@ export const COMPANY_IMPORT_FIELDS: SystemField[] = [
     id: 'country',
     label: 'Country',
     aliases: ['country', 'nation']
+  },
+  {
+    id: 'custom',
+    label: 'Custom Field (Keep Original Name)',
+    required: false,
+    aliases: []
   }
 ];

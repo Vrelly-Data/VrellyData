@@ -1,6 +1,7 @@
 export interface CSVFieldMapping {
   csvHeader: string;
   systemField: string | null;
+  customFieldName?: string; // For user-defined custom fields
   preview: string[]; // First 3 values for preview
 }
 

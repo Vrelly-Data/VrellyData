@@ -271,7 +271,7 @@ export function CSVImportDialog({ open, onOpenChange, entityType, onImportComple
                             <SelectTrigger className="w-full">
                               <SelectValue placeholder="Select field..." />
                             </SelectTrigger>
-                            <SelectContent>
+                            <SelectContent className="bg-background z-50">
                               <SelectItem value="none">Don't import</SelectItem>
                               {systemFields.map(field => (
                                 <SelectItem key={field.id} value={field.id}>
@@ -322,8 +322,11 @@ export function CSVImportDialog({ open, onOpenChange, entityType, onImportComple
                 <thead className="bg-muted sticky top-0">
                   <tr>
                     {mappings.filter(m => m.systemField).map(m => (
-                      <th key={m.systemField} className="text-left p-2 font-medium whitespace-nowrap">
-                        {systemFields.find(f => f.id === m.systemField)?.label}
+                      <th key={m.csvHeader} className="text-left p-2 font-medium whitespace-nowrap">
+                        {m.systemField === 'custom' 
+                          ? m.csvHeader 
+                          : systemFields.find(f => f.id === m.systemField)?.label
+                        }
                       </th>
                     ))}
                   </tr>
@@ -331,11 +334,19 @@ export function CSVImportDialog({ open, onOpenChange, entityType, onImportComple
                 <tbody>
                   {previewData.map((record, i) => (
                     <tr key={i} className="border-t">
-                      {mappings.filter(m => m.systemField).map(m => (
-                        <td key={m.systemField} className="p-2">
-                          {String((record as any)[m.systemField!] || '-')}
-                        </td>
-                      ))}
+                      {mappings.filter(m => m.systemField).map(m => {
+                        let cellValue = '-';
+                        if (m.systemField === 'custom') {
+                          cellValue = String((record as any).customFields?.[m.csvHeader] || '-');
+                        } else {
+                          cellValue = String((record as any)[m.systemField!] || '-');
+                        }
+                        return (
+                          <td key={m.csvHeader} className="p-2">
+                            {cellValue}
+                          </td>
+                        );
+                      })}
                     </tr>
                   ))}
                 </tbody>

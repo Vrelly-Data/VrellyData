@@ -48,6 +48,7 @@ export interface PersonEntity {
   state?: string;
   country?: string;
   jobTitle?: string;
+  customFields?: Record<string, string>; // For unmapped CSV columns
 }
 
 export interface CompanyEntity {
@@ -66,6 +67,7 @@ export interface CompanyEntity {
   city?: string;
   state?: string;
   country?: string;
+  customFields?: Record<string, string>; // For unmapped CSV columns
 }
 
 export interface AudienceLabFilters {

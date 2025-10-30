@@ -70,7 +70,7 @@ export function RecordsTable({ records, columns, selectedRecords, onSelectionCha
                   <TableCell key={column.id} className={column.id === 'name' ? 'font-medium' : ''}>
                     {column.renderCell 
                       ? column.renderCell(record[column.field], record)
-                      : record[column.field] || '-'
+                      : String(record[column.field] || '-')
                     }
                   </TableCell>
                 ))}
