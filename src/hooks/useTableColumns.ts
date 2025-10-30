@@ -24,9 +24,12 @@ export function useTableColumns<T>(
         setColumns(updatedColumns);
       } catch (e) {
         console.error('Failed to parse column preferences:', e);
+        setColumns(availableColumns);
       }
+    } else {
+      setColumns(availableColumns);
     }
-  }, [entityType, availableColumns]);
+  }, [entityType]);
 
   const savePreferences = (updatedColumns: ColumnConfig<T>[]) => {
     const storageKey = `${STORAGE_KEY_PREFIX}${entityType}`;
