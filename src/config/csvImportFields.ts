@@ -14,6 +14,12 @@ export const PERSON_IMPORT_FIELDS: SystemField[] = [
     aliases: ['last name', 'lastname', 'last_name', 'lname', 'surname', 'family name']
   },
   {
+    id: 'email',
+    label: 'Email',
+    required: false,
+    aliases: ['email', 'email address', 'e-mail', 'mail', 'primary email', 'work email']
+  },
+  {
     id: 'title',
     label: 'Title',
     aliases: ['title', 'job title', 'jobtitle', 'job_title', 'position', 'role']
@@ -36,7 +42,7 @@ export const PERSON_IMPORT_FIELDS: SystemField[] = [
   {
     id: 'linkedin',
     label: 'Person LinkedIn Profile',
-    aliases: ['linkedin', 'linkedin url', 'linkedin profile', 'li url', 'person linkedin', 'personal linkedin']
+    aliases: ['linkedin', 'linkedin url', 'linkedin profile', 'li url', 'person linkedin', 'personal linkedin', 'person linkedin url']
   },
   {
     id: 'companyLinkedin',
@@ -71,7 +77,7 @@ export const PERSON_IMPORT_FIELDS: SystemField[] = [
   {
     id: 'companySize',
     label: 'Company Size',
-    aliases: ['company size', 'employees', 'employee count', 'size', 'headcount', 'number of employees']
+    aliases: ['company size', 'employees', 'employee count', 'size', 'headcount', 'number of employees', '# employees', 'no of employees']
   }
 ];
 

@@ -118,9 +118,11 @@ export function parseCSVFile(file: File): Promise<{ headers: string[], data: any
         }
         
         const headers = results.meta.fields || [];
+        const data = results.data;
+        
         resolve({
           headers,
-          data: results.data
+          data
         });
       },
       error: (error) => {
@@ -170,6 +172,9 @@ export function transformImportData(
             break;
           case 'lastName':
             lastName = trimmedValue;
+            break;
+          case 'email':
+            entity.email = trimmedValue;
             break;
           case 'title':
             entity.title = trimmedValue;

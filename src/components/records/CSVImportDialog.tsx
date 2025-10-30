@@ -65,7 +65,11 @@ export function CSVImportDialog({ open, onOpenChange, entityType, onImportComple
       const initialMappings: CSVFieldMapping[] = headers.map(header => ({
         csvHeader: header,
         systemField: autoMapped.get(header) || null,
-        preview: data.slice(0, 3).map(row => row[header] || '')
+        preview: data.slice(0, 3).map(row => {
+          const value = row[header] || '';
+          // Truncate long values for preview (max 100 chars)
+          return String(value).length > 100 ? String(value).substring(0, 100) + '...' : String(value);
+        })
       }));
 
       setMappings(initialMappings);
