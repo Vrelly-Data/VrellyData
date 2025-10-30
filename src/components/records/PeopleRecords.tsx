@@ -17,7 +17,8 @@ export function PeopleRecords() {
     columns,
     visibleColumns,
     toggleColumn,
-    resetToDefaults
+    resetToDefaults,
+    clearPreferences
   } = useTableColumns('person', PERSON_COLUMNS);
 
   const handleExport = () => {
@@ -34,6 +35,7 @@ export function PeopleRecords() {
             columns={columns}
             onToggleColumn={toggleColumn}
             onResetToDefaults={resetToDefaults}
+            onClearPreferences={clearPreferences}
           />
           <Button variant="outline" size="sm" onClick={handleExport}>
             <Download className="h-4 w-4 mr-2" />

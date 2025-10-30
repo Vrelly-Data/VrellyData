@@ -40,7 +40,7 @@ export function RecordsTable({ records, columns, selectedRecords, onSelectionCha
             <TableHead className="w-12">
               <Checkbox
                 checked={allSelected}
-                onCheckedChange={handleSelectAll}
+                onCheckedChange={(v) => handleSelectAll(v === true)}
               />
             </TableHead>
             {columns.map((column) => (
@@ -51,24 +51,32 @@ export function RecordsTable({ records, columns, selectedRecords, onSelectionCha
           </TableRow>
         </TableHeader>
         <TableBody>
-          {records.map((record) => (
-            <TableRow key={record.id}>
-              <TableCell>
-                <Checkbox
-                  checked={selectedRecords.has(record.id)}
-                  onCheckedChange={(checked) => handleSelectOne(record.id, checked as boolean)}
-                />
+          {columns.length === 0 ? (
+            <TableRow>
+              <TableCell colSpan={1} className="text-center text-muted-foreground py-8">
+                No columns selected. Use the "Columns" button to add some.
               </TableCell>
-              {columns.map((column) => (
-                <TableCell key={column.id} className={column.id === 'name' ? 'font-medium' : ''}>
-                  {column.renderCell 
-                    ? column.renderCell(record[column.field], record)
-                    : record[column.field] || '-'
-                  }
-                </TableCell>
-              ))}
             </TableRow>
-          ))}
+          ) : (
+            records.map((record) => (
+              <TableRow key={record.id}>
+                <TableCell>
+                  <Checkbox
+                    checked={selectedRecords.has(record.id)}
+                    onCheckedChange={(v) => handleSelectOne(record.id, v === true)}
+                  />
+                </TableCell>
+                {columns.map((column) => (
+                  <TableCell key={column.id} className={column.id === 'name' ? 'font-medium' : ''}>
+                    {column.renderCell 
+                      ? column.renderCell(record[column.field], record)
+                      : record[column.field] || '-'
+                    }
+                  </TableCell>
+                ))}
+              </TableRow>
+            ))
+          )}
         </TableBody>
       </Table>
     </ScrollArea>

@@ -17,7 +17,8 @@ export function CompanyRecords() {
     columns,
     visibleColumns,
     toggleColumn,
-    resetToDefaults
+    resetToDefaults,
+    clearPreferences
   } = useTableColumns('company', COMPANY_COLUMNS);
 
   const handleExport = () => {
@@ -34,6 +35,7 @@ export function CompanyRecords() {
             columns={columns}
             onToggleColumn={toggleColumn}
             onResetToDefaults={resetToDefaults}
+            onClearPreferences={clearPreferences}
           />
           <Button variant="outline" size="sm" onClick={handleExport}>
             <Download className="h-4 w-4 mr-2" />

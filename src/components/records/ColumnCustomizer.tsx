@@ -15,12 +15,14 @@ interface ColumnCustomizerProps<T> {
   columns: ColumnConfig<T>[];
   onToggleColumn: (columnId: string) => void;
   onResetToDefaults: () => void;
+  onClearPreferences: () => void;
 }
 
 export function ColumnCustomizer<T>({
   columns,
   onToggleColumn,
   onResetToDefaults,
+  onClearPreferences,
 }: ColumnCustomizerProps<T>) {
   const visibleCount = columns.filter(col => col.visible).length;
 
@@ -59,6 +61,10 @@ export function ColumnCustomizer<T>({
         <DropdownMenuItem onClick={onResetToDefaults}>
           <RotateCcw className="h-4 w-4 mr-2" />
           Reset to Default
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={onClearPreferences}>
+          <RotateCcw className="h-4 w-4 mr-2" />
+          Clear Saved Preferences
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
