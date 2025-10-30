@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { Plus, Download } from 'lucide-react';
 import { generateMockCompanies } from '@/lib/mockData';
 import { CompanyEntity } from '@/types/audience';
@@ -28,7 +29,14 @@ export function CompanyRecords() {
   return (
     <div className="flex flex-col h-full overflow-hidden">
       <div className="border-b p-4 flex items-center justify-between bg-background">
-        <h2 className="text-lg font-semibold">Company Records</h2>
+        <div className="flex items-center gap-3">
+          <h2 className="text-lg font-semibold">Company Records</h2>
+          {selectedRecords.size > 0 && (
+            <Badge variant="secondary">
+              {selectedRecords.size} of {records.length} selected
+            </Badge>
+          )}
+        </div>
         <div className="flex gap-2">
           <RecordsFilterDropdown entityType="company" />
           <ColumnCustomizer
