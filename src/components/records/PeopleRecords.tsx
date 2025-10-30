@@ -1,18 +1,20 @@
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Plus, Download } from 'lucide-react';
+import { Plus, Download, FolderPlus } from 'lucide-react';
 import { generateMockPeople } from '@/lib/mockData';
 import { PersonEntity } from '@/types/audience';
 import { RecordsTable } from './RecordsTable';
 import { RecordsFilterDropdown } from './RecordsFilterDropdown';
 import { ColumnCustomizer } from './ColumnCustomizer';
+import { ListManagementDialog } from './ListManagementDialog';
 import { useTableColumns } from '@/hooks/useTableColumns';
 import { PERSON_COLUMNS } from '@/config/personTableColumns';
 
 export function PeopleRecords() {
   const [records] = useState<PersonEntity[]>(generateMockPeople(100));
   const [selectedRecords, setSelectedRecords] = useState<Set<string>>(new Set());
+  const [isListDialogOpen, setIsListDialogOpen] = useState(false);
   
   const {
     columns,
@@ -45,11 +47,17 @@ export function PeopleRecords() {
             onResetToDefaults={resetToDefaults}
             onClearPreferences={clearPreferences}
           />
+          {selectedRecords.size > 0 && (
+            <Button variant="secondary" size="sm" onClick={() => setIsListDialogOpen(true)}>
+              <FolderPlus className="h-4 w-4 mr-2" />
+              Add to List
+            </Button>
+          )}
           <Button variant="outline" size="sm" onClick={handleExport}>
             <Download className="h-4 w-4 mr-2" />
             Export
           </Button>
-          <Button size="sm">
+          <Button size="sm" onClick={() => setIsListDialogOpen(true)}>
             <Plus className="h-4 w-4 mr-2" />
             New List
           </Button>
@@ -61,6 +69,18 @@ export function PeopleRecords() {
         columns={visibleColumns}
         selectedRecords={selectedRecords}
         onSelectionChange={setSelectedRecords}
+      />
+      
+      <ListManagementDialog
+        open={isListDialogOpen}
+        onOpenChange={setIsListDialogOpen}
+        entityType="person"
+        selectedRecords={Array.from(selectedRecords)}
+        records={records}
+        onSuccess={() => {
+          setSelectedRecords(new Set());
+          setIsListDialogOpen(false);
+        }}
       />
     </div>
   );
