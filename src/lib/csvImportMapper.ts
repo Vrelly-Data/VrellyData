@@ -149,7 +149,7 @@ export function transformImportData(
   if (entityType === 'person') {
     return rawData.map((row, index) => {
       const entity: PersonEntity = {
-        id: `imported-${Date.now()}-${index}`,
+        id: `imported-${Date.now()}-${Math.random().toString(36).substr(2, 9)}-${index}`,
         name: ''
       };
       
@@ -221,7 +221,7 @@ export function transformImportData(
   } else {
     return rawData.map((row, index) => {
       const entity: CompanyEntity = {
-        id: `imported-${Date.now()}-${index}`,
+        id: `imported-${Date.now()}-${Math.random().toString(36).substr(2, 9)}-${index}`,
         name: ''
       };
       

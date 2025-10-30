@@ -67,8 +67,29 @@ export function CompanyRecords() {
   };
 
   const handleImportComplete = (importedRecords: CompanyEntity[]) => {
-    setRecords(prev => [...importedRecords, ...prev]);
+    // Create a set of existing record identifiers for quick lookup
+    const existingIdentifiers = new Set(
+      records.map(r => `${r.name?.toLowerCase()}-${r.domain?.toLowerCase() || ''}`)
+    );
+    
+    // Filter out duplicates based on name+domain combination
+    const newRecords = importedRecords.filter(record => {
+      const identifier = `${record.name?.toLowerCase()}-${record.domain?.toLowerCase() || ''}`;
+      return !existingIdentifiers.has(identifier);
+    });
+    
+    const duplicateCount = importedRecords.length - newRecords.length;
+    
+    setRecords(prev => [...newRecords, ...prev]);
     setSelectedRecords(new Set());
+    
+    // Show appropriate feedback
+    if (duplicateCount > 0) {
+      toast({
+        title: "Import completed with duplicates",
+        description: `Imported ${newRecords.length} new records. Skipped ${duplicateCount} duplicate${duplicateCount > 1 ? 's' : ''}.`,
+      });
+    }
   };
 
   const handleDelete = () => {
