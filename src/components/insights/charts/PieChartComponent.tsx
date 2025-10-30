@@ -12,15 +12,35 @@ export function PieChartComponent({ title, data }: PieChartComponentProps) {
   const chartData = Object.entries(data).map(([name, value]) => ({ name, value }));
 
   const content = (
-    <ResponsiveContainer width="100%" height={350}>
+    <ResponsiveContainer width="100%" height={400}>
       <PieChart>
         <Pie
           data={chartData}
           cx="50%"
           cy="50%"
-          labelLine={false}
-          label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
-          outerRadius={100}
+          labelLine={true}
+          label={({ name, percent, cx, cy, midAngle, outerRadius }) => {
+            const RADIAN = Math.PI / 180;
+            const radius = outerRadius + 30;
+            const x = cx + radius * Math.cos(-midAngle * RADIAN);
+            const y = cy + radius * Math.sin(-midAngle * RADIAN);
+            
+            if (percent < 0.05) return null;
+            
+            return (
+              <text 
+                x={x} 
+                y={y} 
+                fill="hsl(var(--foreground))"
+                textAnchor={x > cx ? 'start' : 'end'} 
+                dominantBaseline="central"
+                className="text-sm font-medium"
+              >
+                {`${name}: ${(percent * 100).toFixed(0)}%`}
+              </text>
+            );
+          }}
+          outerRadius={90}
           fill="#8884d8"
           dataKey="value"
         >
@@ -28,8 +48,16 @@ export function PieChartComponent({ title, data }: PieChartComponentProps) {
             <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
           ))}
         </Pie>
-        <Tooltip />
-        <Legend />
+        <Tooltip 
+          formatter={(value: number) => [
+            `${value} (${((value / chartData.reduce((sum, item) => sum + item.value, 0)) * 100).toFixed(1)}%)`,
+          ]}
+        />
+        <Legend 
+          verticalAlign="bottom" 
+          height={36}
+          formatter={(value) => <span className="text-sm">{value}</span>}
+        />
       </PieChart>
     </ResponsiveContainer>
   );
