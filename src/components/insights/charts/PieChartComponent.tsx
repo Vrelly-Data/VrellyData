@@ -55,12 +55,12 @@ export function PieChartComponent({ title, data }: PieChartComponentProps) {
         />
         <Legend 
           verticalAlign="bottom" 
-          height={50}
+          height={60}
           align="center"
           layout="horizontal"
-          iconSize={12}
-          wrapperStyle={{ paddingTop: '20px', paddingLeft: '40px', paddingRight: '40px', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}
-          formatter={(value) => <span className="text-sm">{value}</span>}
+          iconSize={10}
+          wrapperStyle={{ paddingTop: '20px', display: 'flex', justifyContent: 'center', flexWrap: 'wrap', gap: '8px 16px', maxWidth: '100%' }}
+          formatter={(value) => <span className="text-xs whitespace-nowrap">{value}</span>}
         />
       </PieChart>
     </ResponsiveContainer>
