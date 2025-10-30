@@ -284,7 +284,7 @@ export function CSVImportDialog({ open, onOpenChange, entityType, onImportComple
                         </td>
                         <td className="p-3 text-sm text-muted-foreground w-5/12">
                           <div className="truncate">
-                            {mapping.preview.slice(0, 2).join(', ')}
+                            {mapping.preview[0] || '-'}
                           </div>
                         </td>
                       </tr>
