@@ -10,8 +10,21 @@ interface BarChartComponentProps {
   othersBreakdown?: Array<{ name: string; count: number; percentage: number }>;
 }
 
+const COLORS = [
+  'hsl(var(--chart-1))',
+  'hsl(var(--chart-2))',
+  'hsl(var(--chart-3))',
+  'hsl(var(--chart-4))',
+  'hsl(var(--chart-5))',
+  'hsl(var(--chart-6))',
+];
+
 export function BarChartComponent({ title, data, xAxisLabel, yAxisLabel, othersBreakdown }: BarChartComponentProps) {
-  const chartData = Object.entries(data).map(([name, value]) => ({ name, value }));
+  const chartData = Object.entries(data).map(([name, value], index) => ({ 
+    name, 
+    value,
+    fill: COLORS[index % COLORS.length]
+  }));
 
   const CustomTooltip = ({ active, payload }: TooltipProps<number, string>) => {
     if (!active || !payload || !payload.length) return null;
@@ -46,13 +59,20 @@ export function BarChartComponent({ title, data, xAxisLabel, yAxisLabel, othersB
   };
 
   const content = (
-    <ResponsiveContainer width="100%" height={350}>
+    <ResponsiveContainer width="100%" height={400}>
       <BarChart data={chartData}>
         <CartesianGrid strokeDasharray="3 3" />
-        <XAxis dataKey="name" label={{ value: xAxisLabel, position: 'insideBottom', offset: -5 }} />
+        <XAxis 
+          dataKey="name" 
+          angle={-45}
+          textAnchor="end"
+          height={80}
+          interval={0}
+          tick={{ fontSize: 11 }}
+        />
         <YAxis label={{ value: yAxisLabel, angle: -90, position: 'insideLeft' }} />
         <Tooltip content={<CustomTooltip />} />
-        <Bar dataKey="value" fill="hsl(var(--primary))" />
+        <Bar dataKey="value" />
       </BarChart>
     </ResponsiveContainer>
   );
