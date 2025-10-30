@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Plus, Download, FolderPlus, ChevronDown, Upload, Trash2 } from 'lucide-react';
@@ -30,6 +30,8 @@ import { useTableColumns } from '@/hooks/useTableColumns';
 import { PERSON_COLUMNS } from '@/config/personTableColumns';
 import { exportPeopleToCSV } from '@/lib/csvExport';
 import { useToast } from '@/hooks/use-toast';
+import { SmartFilter } from '@/types/filterProperties';
+import { evaluateSmartFilter } from '@/lib/smartFilterEvaluator';
 
 export function PeopleRecords() {
   const [records, setRecords] = useState<PersonEntity[]>(generateMockPeople(100));
@@ -37,7 +39,13 @@ export function PeopleRecords() {
   const [isListDialogOpen, setIsListDialogOpen] = useState(false);
   const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [appliedFilter, setAppliedFilter] = useState<SmartFilter | null>(null);
   const { toast } = useToast();
+
+  const filteredRecords = useMemo(() => {
+    if (!appliedFilter) return records;
+    return evaluateSmartFilter(records, appliedFilter);
+  }, [records, appliedFilter]);
   
   const {
     columns,
@@ -48,7 +56,7 @@ export function PeopleRecords() {
   } = useTableColumns('person', PERSON_COLUMNS);
 
   const handleExport = () => {
-    const selectedData = records.filter(record => 
+    const selectedData = filteredRecords.filter(record => 
       selectedRecords.has(record.id)
     );
     exportPeopleToCSV(selectedData);
@@ -82,12 +90,15 @@ export function PeopleRecords() {
           <h2 className="text-lg font-semibold">People Records</h2>
           {selectedRecords.size > 0 && (
             <Badge variant="secondary">
-              {selectedRecords.size} of {records.length} selected
+              {selectedRecords.size} of {filteredRecords.length} selected
             </Badge>
           )}
         </div>
         <div className="flex gap-2">
-          <RecordsFilterDropdown entityType="person" />
+          <RecordsFilterDropdown 
+            entityType="person" 
+            onFilterApply={setAppliedFilter}
+          />
           <ColumnCustomizer
             columns={columns}
             onToggleColumn={toggleColumn}
@@ -139,7 +150,7 @@ export function PeopleRecords() {
       </div>
       
       <RecordsTable
-        records={records}
+        records={filteredRecords}
         columns={visibleColumns}
         selectedRecords={selectedRecords}
         onSelectionChange={setSelectedRecords}
