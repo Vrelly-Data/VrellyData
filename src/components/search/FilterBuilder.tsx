@@ -7,7 +7,7 @@ import { Slider } from '@/components/ui/slider';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Filter, X, Search, DollarSign } from 'lucide-react';
+import { Filter, X, Search } from 'lucide-react';
 import { useAudienceAttributes } from '@/hooks/useAudienceAttributes';
 import { useAudienceStore } from '@/stores/audienceStore';
 import { FilterBuilderState } from '@/lib/filterConversion';
@@ -17,10 +17,9 @@ import { MultiSelectDropdown } from './MultiSelectDropdown';
 interface FilterBuilderProps {
   entityType: EntityType;
   onSearch: (filters: FilterBuilderState) => void;
-  onEstimate: (filters: FilterBuilderState) => void;
 }
 
-export function FilterBuilder({ entityType, onSearch, onEstimate }: FilterBuilderProps) {
+export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
   const { attributes, loading } = useAudienceAttributes();
   const [filterState, setFilterState] = useState<FilterBuilderState>({
     segments: [],
@@ -337,7 +336,7 @@ export function FilterBuilder({ entityType, onSearch, onEstimate }: FilterBuilde
         )}
       </CardContent>
 
-      <div className="p-4 border-t space-y-2">
+      <div className="p-4 border-t">
         <Button
           className="w-full"
           size="lg"
@@ -346,16 +345,6 @@ export function FilterBuilder({ entityType, onSearch, onEstimate }: FilterBuilde
         >
           <Search className="h-4 w-4 mr-2" />
           Search
-        </Button>
-        <Button
-          className="w-full"
-          variant="outline"
-          size="lg"
-          onClick={() => onEstimate(filterState)}
-          disabled={!isValidSearch}
-        >
-          <DollarSign className="h-4 w-4 mr-2" />
-          Estimate Cost
         </Button>
       </div>
     </Card>

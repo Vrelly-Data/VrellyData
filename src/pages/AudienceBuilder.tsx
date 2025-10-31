@@ -9,10 +9,8 @@ import { exportPeopleToCSV, exportCompaniesToCSV } from '@/lib/csvExport';
 import { PersonEntity, CompanyEntity } from '@/types/audience';
 import { FilterBuilder } from '@/components/search/FilterBuilder';
 import { CreditBalance } from '@/components/search/CreditBalance';
-import { SearchCostEstimator } from '@/components/search/SearchCostEstimator';
 import { PaginationControls } from '@/components/search/PaginationControls';
 import { FilterBuilderState } from '@/lib/filterConversion';
-import { useCreditCheck } from '@/hooks/useCreditCheck';
 
 export default function AudienceBuilder() {
   const { toast } = useToast();
@@ -31,16 +29,7 @@ export default function AudienceBuilder() {
     setCurrentPage,
     setPerPage,
     setTotalPages,
-    estimatedCost,
-    estimatedResults,
-    setEstimatedCost,
-    setEstimatedResults,
   } = useAudienceStore();
-  
-  const { hasEnoughCredits, getCurrentCredits } = useCreditCheck();
-  const [showCostEstimator, setShowCostEstimator] = useState(false);
-  const [currentCredits, setCurrentCredits] = useState(0);
-  const [pendingSearch, setPendingSearch] = useState<FilterBuilderState | null>(null);
   
   const handleSearch = async (filterState: FilterBuilderState) => {
     setLoading(true);
@@ -87,35 +76,6 @@ export default function AudienceBuilder() {
     }
   };
   
-  const handleEstimate = async (filterState: FilterBuilderState) => {
-    try {
-      setLoading(true);
-      const credits = await getCurrentCredits();
-      setCurrentCredits(credits);
-      
-      const estimate = await audienceLabClient.estimateSearchCost(filterState, currentType);
-      setEstimatedCost(estimate.cost);
-      setEstimatedResults(estimate.estimatedResults);
-      setPendingSearch(filterState);
-      setShowCostEstimator(true);
-    } catch (error: any) {
-      toast({
-        title: 'Error',
-        description: error.message || 'Failed to estimate cost',
-        variant: 'destructive',
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-  
-  const handleProceedWithSearch = () => {
-    setShowCostEstimator(false);
-    if (pendingSearch) {
-      handleSearch(pendingSearch);
-      setPendingSearch(null);
-    }
-  };
 
   const handleExport = () => {
     if (results.length === 0) {
@@ -192,7 +152,6 @@ export default function AudienceBuilder() {
                   <FilterBuilder 
                     entityType="person" 
                     onSearch={handleSearch}
-                    onEstimate={handleEstimate}
                   />
                 </div>
                 
@@ -271,7 +230,6 @@ export default function AudienceBuilder() {
                   <FilterBuilder 
                     entityType="company"
                     onSearch={handleSearch}
-                    onEstimate={handleEstimate}
                   />
                 </div>
                 
@@ -341,20 +299,6 @@ export default function AudienceBuilder() {
               </div>
             </TabsContent>
           </div>
-          
-          {/* Cost Estimator Modal */}
-          <SearchCostEstimator
-            open={showCostEstimator}
-            onOpenChange={setShowCostEstimator}
-            estimatedResults={estimatedResults}
-            estimatedCost={estimatedCost}
-            currentCredits={currentCredits}
-            onProceed={handleProceedWithSearch}
-            onCancel={() => {
-              setShowCostEstimator(false);
-              setPendingSearch(null);
-            }}
-          />
         </Tabs>
       </div>
     </div>
