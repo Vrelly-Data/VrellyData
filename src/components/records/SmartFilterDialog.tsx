@@ -46,14 +46,8 @@ export function SmartFilterDialog({
       if (prop.id === 'industry' && attributes.industries) {
         return { ...prop, options: attributes.industries.map(i => ({ label: i, value: i })) };
       }
-      if (prop.id === 'seniority' && attributes.seniority) {
-        return { ...prop, options: attributes.seniority.map(s => ({ label: s, value: s })) };
-      }
-      if (prop.id === 'department' && attributes.departments) {
-        return { ...prop, options: attributes.departments.map(d => ({ label: d, value: d })) };
-      }
-      if (prop.id === 'company_size' && attributes.companySize) {
-        return { ...prop, options: attributes.companySize.map(c => ({ label: c, value: c })) };
+      if (prop.id === 'company_size' && attributes.companySizeRanges) {
+        return { ...prop, options: attributes.companySizeRanges.map(c => ({ label: c, value: c })) };
       }
       if (prop.id === 'technologies') {
         return { ...prop, options: [

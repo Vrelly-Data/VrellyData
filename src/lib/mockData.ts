@@ -12,27 +12,21 @@ const MOCK_GENDERS = ['male', 'female', 'other'];
 const MOCK_SEGMENTS = ['Tech', 'Healthcare', 'Finance', 'Retail', 'Manufacturing'];
 
 export interface MockAttributeOptions {
-  segments: string[];
   industries: string[];
-  departments: string[];
-  seniority: string[];
   cities: string[];
-  gender: string[];
   jobTitles: string[];
-  companySize: string[];
-  fundingStage: string[];
+  companySizeRanges: string[];
+  netWorthRanges: string[];
+  incomeRanges: string[];
 }
 
 export const MOCK_ATTRIBUTES: MockAttributeOptions = {
-  segments: MOCK_SEGMENTS,
   industries: MOCK_INDUSTRIES,
-  departments: MOCK_DEPARTMENTS,
-  seniority: MOCK_SENIORITY,
   cities: MOCK_CITIES,
-  gender: MOCK_GENDERS,
   jobTitles: MOCK_JOB_TITLES,
-  companySize: ['1-10', '11-50', '51-200', '201-500', '501-1000', '1000+'],
-  fundingStage: ['Seed', 'Series A', 'Series B', 'Series C', 'IPO', 'Acquired'],
+  companySizeRanges: ['1-10', '11-50', '51-200', '201-500', '501-1000', '1001-5000', '5000+'],
+  netWorthRanges: ['Under $100K', '$100K - $500K', '$500K - $1M', '$1M - $5M', '$5M - $10M', '$10M - $50M', '$50M+'],
+  incomeRanges: ['Under $50K', '$50K - $100K', '$100K - $200K', '$200K - $500K', '$500K - $1M', '$1M+'],
 };
 
 function randomElement<T>(arr: T[]): T {

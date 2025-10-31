@@ -1,32 +1,24 @@
 import { FilterDSL, AudienceLabFilters, PersonEntity, CompanyEntity } from '@/types/audience';
 
 export interface FilterBuilderState {
-  segments: string[];
-  age: { min: number; max: number } | null;
-  cities: string[];
-  gender: string[];
   industries: string[];
+  cities: string[];
+  gender: 'male' | 'female' | null;
   jobTitles: string[];
-  seniority: string[];
-  departments: string[];
-  daysBack: number;
-  companySize?: string[];
-  fundingStage?: string[];
+  companySize: string | null;
+  netWorth: string | null;
+  income: string | null;
 }
 
 export function convertFilterStateToAudienceLabFormat(state: FilterBuilderState): AudienceLabFilters {
   const filters: AudienceLabFilters = {};
   
-  if (state.age) {
-    filters.age = { minAge: state.age.min, maxAge: state.age.max };
-  }
-  
   if (state.cities.length > 0) {
     filters.city = state.cities;
   }
   
-  if (state.gender.length > 0) {
-    filters.gender = state.gender;
+  if (state.gender) {
+    filters.gender = [state.gender];
   }
   
   if (state.industries.length > 0) {
@@ -37,20 +29,8 @@ export function convertFilterStateToAudienceLabFormat(state: FilterBuilderState)
     filters.jobTitle = state.jobTitles;
   }
   
-  if (state.seniority && state.seniority.length > 0) {
-    filters.seniority = state.seniority;
-  }
-  
-  if (state.departments && state.departments.length > 0) {
-    filters.department = state.departments;
-  }
-  
-  if (state.companySize && state.companySize.length > 0) {
-    filters.companySize = state.companySize;
-  }
-  
-  if (state.fundingStage && state.fundingStage.length > 0) {
-    filters.fundingStage = state.fundingStage;
+  if (state.companySize) {
+    filters.companySize = [state.companySize];
   }
   
   return filters;
@@ -58,20 +38,14 @@ export function convertFilterStateToAudienceLabFormat(state: FilterBuilderState)
 
 export function filterMockPeople(people: PersonEntity[], state: FilterBuilderState): PersonEntity[] {
   return people.filter(person => {
-    // Age filter
-    if (state.age) {
-      const age = person.age || 0;
-      if (age < state.age.min || age > state.age.max) return false;
-    }
-    
     // City filter
     if (state.cities.length > 0) {
       if (!person.location || !state.cities.includes(person.location)) return false;
     }
     
     // Gender filter
-    if (state.gender.length > 0) {
-      if (!person.gender || !state.gender.includes(person.gender)) return false;
+    if (state.gender) {
+      if (!person.gender || person.gender !== state.gender) return false;
     }
     
     // Industry filter
@@ -86,14 +60,9 @@ export function filterMockPeople(people: PersonEntity[], state: FilterBuilderSta
       }
     }
     
-    // Seniority filter
-    if (state.seniority.length > 0) {
-      if (!person.seniority || !state.seniority.includes(person.seniority)) return false;
-    }
-    
-    // Department filter
-    if (state.departments.length > 0) {
-      if (!person.department || !state.departments.includes(person.department)) return false;
+    // Company size filter
+    if (state.companySize && person.companySize) {
+      if (person.companySize !== state.companySize) return false;
     }
     
     return true;
@@ -112,15 +81,19 @@ export function filterMockCompanies(companies: CompanyEntity[], state: FilterBui
       if (!company.location || !state.cities.includes(company.location)) return false;
     }
     
-    // Company size filter
-    if (state.companySize && state.companySize.length > 0) {
-      // Mock filtering - in real implementation would match employee count ranges
-      return true;
-    }
-    
-    // Funding stage filter
-    if (state.fundingStage && state.fundingStage.length > 0) {
-      if (!company.fundingStage || !state.fundingStage.includes(company.fundingStage)) return false;
+    // Company size filter - match employee count to ranges
+    if (state.companySize && company.employeeCount) {
+      const rangeMap: Record<string, [number, number]> = {
+        '1-10': [1, 10],
+        '11-50': [11, 50],
+        '51-200': [51, 200],
+        '201-500': [201, 500],
+        '501-1000': [501, 1000],
+        '1001-5000': [1001, 5000],
+        '5000+': [5000, Infinity],
+      };
+      const [min, max] = rangeMap[state.companySize] || [0, Infinity];
+      if (company.employeeCount < min || company.employeeCount > max) return false;
     }
     
     return true;

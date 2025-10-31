@@ -49,17 +49,13 @@ export const useAudienceStore = create<AudienceState>((set) => ({
   selectedEntity: null,
   
   filterBuilderState: {
-    segments: [],
-    age: null,
-    cities: [],
-    gender: [],
     industries: [],
+    cities: [],
+    gender: null,
     jobTitles: [],
-    seniority: [],
-    departments: [],
-    daysBack: 30,
-    companySize: [],
-    fundingStage: [],
+    companySize: null,
+    netWorth: null,
+    income: null,
   },
   availableAttributes: MOCK_ATTRIBUTES,
   

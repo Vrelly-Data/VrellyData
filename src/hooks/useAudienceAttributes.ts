@@ -32,15 +32,12 @@ export function useAudienceAttributes() {
         ]);
         
         setAttributes({
-          segments: segments || MOCK_ATTRIBUTES.segments,
           industries: industries || MOCK_ATTRIBUTES.industries,
-          departments: departments || MOCK_ATTRIBUTES.departments,
-          seniority: seniority || MOCK_ATTRIBUTES.seniority,
           cities: MOCK_ATTRIBUTES.cities,
-          gender: MOCK_ATTRIBUTES.gender,
           jobTitles: MOCK_ATTRIBUTES.jobTitles,
-          companySize: MOCK_ATTRIBUTES.companySize,
-          fundingStage: MOCK_ATTRIBUTES.fundingStage,
+          companySizeRanges: MOCK_ATTRIBUTES.companySizeRanges,
+          netWorthRanges: MOCK_ATTRIBUTES.netWorthRanges,
+          incomeRanges: MOCK_ATTRIBUTES.incomeRanges,
         });
       }
     } catch (err) {

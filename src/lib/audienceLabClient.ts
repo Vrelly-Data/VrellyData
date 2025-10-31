@@ -142,10 +142,6 @@ class AudienceLabClient {
         };
       } else {
         // Real API mode
-        if (!params.filterState?.segments || params.filterState.segments.length === 0) {
-          throw new Error('At least one segment must be selected');
-        }
-        
         const filters = this.convertFiltersToAudienceLabFormat(params.filters);
         const audienceName = `temp-search-${Date.now()}`;
         
@@ -154,8 +150,7 @@ class AudienceLabClient {
             action: 'createAudience',
             name: audienceName,
             filters,
-            segment: params.filterState.segments,
-            days_back: params.filterState.daysBack || 30,
+            days_back: 30,
           },
         });
 
@@ -225,10 +220,6 @@ class AudienceLabClient {
         };
       } else {
         // Real API mode
-        if (!params.filterState?.segments || params.filterState.segments.length === 0) {
-          throw new Error('At least one segment must be selected');
-        }
-        
         const filters = this.convertFiltersToAudienceLabFormat(params.filters);
         const audienceName = `temp-company-search-${Date.now()}`;
         
@@ -237,8 +228,7 @@ class AudienceLabClient {
             action: 'createAudience',
             name: audienceName,
             filters,
-            segment: params.filterState.segments,
-            days_back: params.filterState.daysBack || 30,
+            days_back: 30,
           },
         });
 
