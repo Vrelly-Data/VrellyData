@@ -3,6 +3,9 @@ import { supabase } from '@/integrations/supabase/client';
 import { FilterBuilderState, filterMockPeople, filterMockCompanies } from '@/lib/filterConversion';
 import { generateMockPeople, generateMockCompanies, MOCK_ATTRIBUTES } from '@/lib/mockData';
 
+// Set to false to use real AudienceLab API (requires credits)
+// API Configuration: https://api.audiencelab.io
+// API Key stored in: AUDIENCELAB_API_KEY secret
 const MOCK_MODE = true;
 
 export interface SearchParams {
@@ -168,7 +171,7 @@ class AudienceLabClient {
             action: 'getAudience',
             audience_id: audienceId,
             page: params.page || 1,
-            per_page: params.perPage || params.limit || 100,
+            page_size: params.perPage || params.limit || 100,
           },
         });
 
@@ -251,7 +254,7 @@ class AudienceLabClient {
             action: 'getAudience',
             audience_id: audienceId,
             page: params.page || 1,
-            per_page: params.perPage || params.limit || 100,
+            page_size: params.perPage || params.limit || 100,
           },
         });
 

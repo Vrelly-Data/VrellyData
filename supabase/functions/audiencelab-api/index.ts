@@ -5,7 +5,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-const AUDIENCELAB_BASE_URL = 'https://v3-api-job-72802495918.us-east1.run.app';
+const AUDIENCELAB_BASE_URL = 'https://api.audiencelab.io';
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -38,9 +38,9 @@ serve(async (req) => {
       }
 
       case 'getAudience': {
-        const { audience_id, page = 1, per_page = 100 } = params;
+        const { audience_id, page = 1, page_size = 100 } = params;
         response = await fetch(
-          `${AUDIENCELAB_BASE_URL}/audiences/${audience_id}?page=${page}&per_page=${per_page}`,
+          `${AUDIENCELAB_BASE_URL}/audiences/${audience_id}?page=${page}&page_size=${page_size}`,
           {
             headers: { 'X-Api-Key': apiKey },
           }
