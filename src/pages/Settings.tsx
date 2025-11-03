@@ -310,111 +310,117 @@ export default function Settings() {
               <CardContent>
                 <div className="grid md:grid-cols-3 gap-6">
                   {/* Starter Plan */}
-                  <div className="border rounded-lg p-6 space-y-4">
-                    <div>
-                      <h3 className="text-xl font-bold">Starter</h3>
-                      <div className="mt-2">
-                        <span className="text-3xl font-bold">$75</span>
-                        <span className="text-muted-foreground">/month</span>
+                  <div className="border rounded-lg p-6 flex flex-col h-full">
+                    <div className="space-y-4 flex-1">
+                      <div>
+                        <h3 className="text-xl font-bold">Starter</h3>
+                        <div className="mt-2">
+                          <span className="text-3xl font-bold">$75</span>
+                          <span className="text-muted-foreground">/month</span>
+                        </div>
                       </div>
+                      <ul className="space-y-2 text-sm">
+                        <li className="flex items-center gap-2">
+                          <Check className="h-4 w-4 text-primary" />
+                          10,000 credits/month
+                        </li>
+                        <li className="flex items-center gap-2">
+                          <Check className="h-4 w-4 text-primary" />
+                          Email support
+                        </li>
+                        <li className="flex items-center gap-2">
+                          <Check className="h-4 w-4 text-primary" />
+                          Standard features
+                        </li>
+                      </ul>
                     </div>
-                    <ul className="space-y-2 text-sm">
-                      <li className="flex items-center gap-2">
-                        <Check className="h-4 w-4 text-primary" />
-                        10,000 credits/month
-                      </li>
-                      <li className="flex items-center gap-2">
-                        <Check className="h-4 w-4 text-primary" />
-                        Email support
-                      </li>
-                      <li className="flex items-center gap-2">
-                        <Check className="h-4 w-4 text-primary" />
-                        Standard features
-                      </li>
-                    </ul>
                     <Button 
-                      className="w-full" 
+                      className="w-full mt-4" 
                       variant={profile?.subscription_tier === 'starter' ? 'outline' : 'default'}
                       disabled={profile?.subscription_tier === 'starter'}
                     >
-                      {profile?.subscription_tier === 'starter' ? 'Current Plan' : 'Upgrade to Starter'}
+                      {profile?.subscription_tier === 'starter' ? 'Current Plan' : 'Upgrade'}
                     </Button>
                   </div>
 
                   {/* Professional Plan */}
-                  <div className="border-2 border-primary rounded-lg p-6 space-y-4 relative">
+                  <div className="border-2 border-primary rounded-lg p-6 flex flex-col h-full relative">
                     <Badge className="absolute -top-3 left-1/2 -translate-x-1/2">Popular</Badge>
-                    <div>
-                      <h3 className="text-xl font-bold">Professional</h3>
-                      <div className="mt-2">
-                        <span className="text-3xl font-bold">$150</span>
-                        <span className="text-muted-foreground">/month</span>
+                    <div className="space-y-4 flex-1">
+                      <div>
+                        <h3 className="text-xl font-bold">Professional</h3>
+                        <div className="mt-2">
+                          <span className="text-3xl font-bold">$150</span>
+                          <span className="text-muted-foreground">/month</span>
+                        </div>
                       </div>
+                      <ul className="space-y-2 text-sm">
+                        <li className="flex items-center gap-2">
+                          <Check className="h-4 w-4 text-primary" />
+                          25,000 credits/month
+                        </li>
+                        <li className="flex items-center gap-2">
+                          <Check className="h-4 w-4 text-primary" />
+                          Priority email support
+                        </li>
+                        <li className="flex items-center gap-2">
+                          <Check className="h-4 w-4 text-primary" />
+                          Advanced features
+                        </li>
+                        <li className="flex items-center gap-2">
+                          <Check className="h-4 w-4 text-primary" />
+                          API access
+                        </li>
+                      </ul>
                     </div>
-                    <ul className="space-y-2 text-sm">
-                      <li className="flex items-center gap-2">
-                        <Check className="h-4 w-4 text-primary" />
-                        25,000 credits/month
-                      </li>
-                      <li className="flex items-center gap-2">
-                        <Check className="h-4 w-4 text-primary" />
-                        Priority email support
-                      </li>
-                      <li className="flex items-center gap-2">
-                        <Check className="h-4 w-4 text-primary" />
-                        Advanced features
-                      </li>
-                      <li className="flex items-center gap-2">
-                        <Check className="h-4 w-4 text-primary" />
-                        API access
-                      </li>
-                    </ul>
                     <Button 
-                      className="w-full" 
+                      className="w-full mt-4" 
                       variant={profile?.subscription_tier === 'professional' ? 'outline' : 'default'}
                       disabled={profile?.subscription_tier === 'professional'}
                     >
-                      {profile?.subscription_tier === 'professional' ? 'Current Plan' : 'Upgrade to Professional'}
+                      {profile?.subscription_tier === 'professional' ? 'Current Plan' : 'Upgrade'}
                     </Button>
                   </div>
 
                   {/* Enterprise Plan */}
-                  <div className="border rounded-lg p-6 space-y-4">
-                    <div>
-                      <h3 className="text-xl font-bold">Enterprise</h3>
-                      <div className="mt-2">
-                        <span className="text-3xl font-bold">$350</span>
-                        <span className="text-muted-foreground">/month</span>
+                  <div className="border rounded-lg p-6 flex flex-col h-full">
+                    <div className="space-y-4 flex-1">
+                      <div>
+                        <h3 className="text-xl font-bold">Enterprise</h3>
+                        <div className="mt-2">
+                          <span className="text-3xl font-bold">$350</span>
+                          <span className="text-muted-foreground">/month</span>
+                        </div>
                       </div>
+                      <ul className="space-y-2 text-sm">
+                        <li className="flex items-center gap-2">
+                          <Check className="h-4 w-4 text-primary" />
+                          75,000 credits/month
+                        </li>
+                        <li className="flex items-center gap-2">
+                          <Check className="h-4 w-4 text-primary" />
+                          24/7 priority support
+                        </li>
+                        <li className="flex items-center gap-2">
+                          <Check className="h-4 w-4 text-primary" />
+                          All features
+                        </li>
+                        <li className="flex items-center gap-2">
+                          <Check className="h-4 w-4 text-primary" />
+                          Dedicated account manager
+                        </li>
+                        <li className="flex items-center gap-2">
+                          <Check className="h-4 w-4 text-primary" />
+                          Custom integrations
+                        </li>
+                      </ul>
                     </div>
-                    <ul className="space-y-2 text-sm">
-                      <li className="flex items-center gap-2">
-                        <Check className="h-4 w-4 text-primary" />
-                        75,000 credits/month
-                      </li>
-                      <li className="flex items-center gap-2">
-                        <Check className="h-4 w-4 text-primary" />
-                        24/7 priority support
-                      </li>
-                      <li className="flex items-center gap-2">
-                        <Check className="h-4 w-4 text-primary" />
-                        All features
-                      </li>
-                      <li className="flex items-center gap-2">
-                        <Check className="h-4 w-4 text-primary" />
-                        Dedicated account manager
-                      </li>
-                      <li className="flex items-center gap-2">
-                        <Check className="h-4 w-4 text-primary" />
-                        Custom integrations
-                      </li>
-                    </ul>
                     <Button 
-                      className="w-full" 
+                      className="w-full mt-4" 
                       variant={profile?.subscription_tier === 'enterprise' ? 'outline' : 'default'}
                       disabled={profile?.subscription_tier === 'enterprise'}
                     >
-                      {profile?.subscription_tier === 'enterprise' ? 'Current Plan' : 'Upgrade to Enterprise'}
+                      {profile?.subscription_tier === 'enterprise' ? 'Current Plan' : 'Upgrade'}
                     </Button>
                   </div>
                 </div>
