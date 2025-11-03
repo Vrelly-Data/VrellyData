@@ -2,6 +2,7 @@ import { useState, FormEvent } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
+import { Input } from '@/components/ui/input';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Filter, Search } from 'lucide-react';
@@ -25,6 +26,7 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
     companySize: null,
     netWorth: null,
     income: null,
+    keywords: '',
   });
 
   const updateFilter = <K extends keyof FilterBuilderState>(
@@ -54,6 +56,22 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
       
       <CardContent className="flex-1 overflow-auto">
         <form onSubmit={handleSubmit} className="space-y-6">
+          {/* Keywords */}
+          <div className="space-y-2">
+            <Label htmlFor="keywords">Keywords</Label>
+            <Input
+              id="keywords"
+              type="text"
+              placeholder="Search company descriptions, titles, industries..."
+              value={filterState.keywords}
+              onChange={(e) => updateFilter('keywords', e.target.value)}
+              className="w-full"
+            />
+            <p className="text-xs text-muted-foreground">
+              Search for keywords in company descriptions, job titles, and other text fields
+            </p>
+          </div>
+
           {/* Industry */}
           <div className="space-y-2">
             <Label>Industry</Label>

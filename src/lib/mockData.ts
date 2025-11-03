@@ -11,6 +11,27 @@ const MOCK_DEPARTMENTS = ['Engineering', 'Sales', 'Marketing', 'Operations', 'Fi
 const MOCK_GENDERS = ['male', 'female', 'other'];
 const MOCK_SEGMENTS = ['Tech', 'Healthcare', 'Finance', 'Retail', 'Manufacturing'];
 
+const MOCK_COMPANY_DESCRIPTIONS = [
+  'Innovative software development company specializing in cloud solutions and enterprise applications',
+  'Leading e-commerce platform providing sustainable products for conscious consumers',
+  'Enterprise consulting firm focused on digital transformation and business optimization',
+  'Marketing technology company helping brands grow their online presence',
+  'Financial services provider with cutting-edge analytics and investment tools',
+  'Healthcare technology improving patient outcomes through data-driven insights',
+  'Manufacturing automation and robotics solutions for modern factories',
+  'Retail management software for multi-location businesses and franchises',
+  'Educational technology platform enabling remote learning and collaboration',
+  'Data analytics company powered by artificial intelligence and machine learning',
+  'Cybersecurity solutions protecting enterprise infrastructure and sensitive data',
+  'Supply chain optimization software for logistics and distribution networks',
+  'Cloud infrastructure provider for scalable web applications',
+  'Mobile app development agency creating innovative user experiences',
+  'Business intelligence platform for real-time decision making',
+  'Human resources software streamlining talent acquisition and management',
+  'Marketing automation tools for customer engagement and retention',
+  'Payment processing solutions for online and offline transactions',
+];
+
 export interface MockAttributeOptions {
   industries: string[];
   cities: string[];
@@ -83,7 +104,7 @@ export function generateMockCompanies(count: number): CompanyEntity[] {
       location: randomElement(MOCK_CITIES),
       technologies: [],
       fundingStage: randomElement(['Seed', 'Series A', 'Series B', 'Series C', 'IPO', 'Acquired']),
-      description: `Leading ${randomElement(MOCK_INDUSTRIES)} company`,
+      description: randomElement(MOCK_COMPANY_DESCRIPTIONS),
     });
   }
   

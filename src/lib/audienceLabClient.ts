@@ -63,6 +63,9 @@ class AudienceLabClient {
         if (operand.field === 'title' && operand.op === 'in') {
           labFilters.jobTitle = Array.isArray(operand.value) ? operand.value : [operand.value];
         }
+        if (operand.field === 'keywords' && operand.value) {
+          labFilters.keywords = operand.value;
+        }
       });
     }
     

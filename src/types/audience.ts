@@ -81,6 +81,7 @@ export interface AudienceLabFilters {
     industry?: string[];
   };
   jobTitle?: string[];
+  keywords?: string;
   segment?: string[];
   days_back?: number;
   seniority?: string[];

@@ -8,6 +8,7 @@ export interface FilterBuilderState {
   companySize: string | null;
   netWorth: string | null;
   income: string | null;
+  keywords: string;
 }
 
 export function convertFilterStateToAudienceLabFormat(state: FilterBuilderState): AudienceLabFilters {
@@ -31,6 +32,10 @@ export function convertFilterStateToAudienceLabFormat(state: FilterBuilderState)
   
   if (state.companySize) {
     filters.companySize = [state.companySize];
+  }
+  
+  if (state.keywords && state.keywords.trim()) {
+    filters.keywords = state.keywords.trim();
   }
   
   return filters;
@@ -65,6 +70,18 @@ export function filterMockPeople(people: PersonEntity[], state: FilterBuilderSta
       if (person.companySize !== state.companySize) return false;
     }
     
+    // Keyword search
+    if (state.keywords && state.keywords.trim()) {
+      const keyword = state.keywords.toLowerCase();
+      const companyMatch = person.company?.toLowerCase().includes(keyword);
+      const titleMatch = person.title?.toLowerCase().includes(keyword);
+      const industryMatch = person.industry?.toLowerCase().includes(keyword);
+      
+      if (!companyMatch && !titleMatch && !industryMatch) {
+        return false;
+      }
+    }
+    
     return true;
   });
 }
@@ -94,6 +111,18 @@ export function filterMockCompanies(companies: CompanyEntity[], state: FilterBui
       };
       const [min, max] = rangeMap[state.companySize] || [0, Infinity];
       if (company.employeeCount < min || company.employeeCount > max) return false;
+    }
+    
+    // Keyword search
+    if (state.keywords && state.keywords.trim()) {
+      const keyword = state.keywords.toLowerCase();
+      const nameMatch = company.name?.toLowerCase().includes(keyword);
+      const descMatch = company.description?.toLowerCase().includes(keyword);
+      const industryMatch = company.industry?.toLowerCase().includes(keyword);
+      
+      if (!nameMatch && !descMatch && !industryMatch) {
+        return false;
+      }
     }
     
     return true;
