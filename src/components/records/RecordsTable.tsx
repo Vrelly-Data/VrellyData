@@ -66,7 +66,7 @@ export function RecordsTable({ records, columns, selectedRecords, onSelectionCha
             <TableHead className="w-12 pl-3">
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+                  <Button variant="ghost" size="sm" className="h-8 w-8 p-0 -ml-1">
                     <Checkbox
                       checked={allSelected}
                       className="pointer-events-none"
