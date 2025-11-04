@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
-import { Save, Download, Users, Building2 } from 'lucide-react';
+import { Save, Download, Users, Building2, Info } from 'lucide-react';
 import { useAudienceStore } from '@/stores/audienceStore';
 import { audienceLabClient } from '@/lib/audienceLabClient';
 import { useToast } from '@/hooks/use-toast';
@@ -11,6 +11,12 @@ import { FilterBuilder } from '@/components/search/FilterBuilder';
 import { CreditBalance } from '@/components/search/CreditBalance';
 import { PaginationControls } from '@/components/search/PaginationControls';
 import { FilterBuilderState } from '@/lib/filterConversion';
+import { BlurredField } from '@/components/search/BlurredField';
+import { UnlockConfirmDialog } from '@/components/search/UnlockConfirmDialog';
+import { useUnlockedRecords } from '@/hooks/useUnlockedRecords';
+import { useCreditCheck } from '@/hooks/useCreditCheck';
+import { usePersistRecords } from '@/hooks/usePersistRecords';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 
 export default function AudienceBuilder() {
   const { toast } = useToast();
@@ -30,6 +36,19 @@ export default function AudienceBuilder() {
     setPerPage,
     setTotalPages,
   } = useAudienceStore();
+
+  const { isUnlocked, markAsUnlocked } = useUnlockedRecords(currentType);
+  const { hasEnoughCredits, deductCredits, getCurrentCredits } = useCreditCheck();
+  const { saveRecords } = usePersistRecords();
+  
+  const [showUnlockDialog, setShowUnlockDialog] = useState(false);
+  const [unlockDialogConfig, setUnlockDialogConfig] = useState<{
+    totalRecords: number;
+    alreadyUnlocked: number;
+    needUnlock: number;
+    action: 'export' | 'list' | 'send';
+    currentCredits: number;
+  } | null>(null);
   
   const handleSearch = async (filterState: FilterBuilderState) => {
     setLoading(true);
@@ -77,7 +96,7 @@ export default function AudienceBuilder() {
   };
   
 
-  const handleExport = () => {
+  const handleExport = async () => {
     if (results.length === 0) {
       toast({
         title: 'No data to export',
@@ -86,13 +105,38 @@ export default function AudienceBuilder() {
       });
       return;
     }
-    
+
+    // Calculate unlock cost
+    const alreadyUnlocked = results.filter(r => isUnlocked(r.id)).length;
+    const needUnlock = results.length - alreadyUnlocked;
+
+    if (needUnlock > 0) {
+      // Fetch current credits before showing dialog
+      const credits = await getCurrentCredits();
+      setUnlockDialogConfig({
+        totalRecords: results.length,
+        alreadyUnlocked,
+        needUnlock,
+        action: 'export',
+        currentCredits: credits,
+      });
+      setShowUnlockDialog(true);
+    } else {
+      // All already unlocked, export directly
+      await performExport();
+    }
+  };
+
+  const performExport = async () => {
     try {
       if (currentType === 'person') {
         exportPeopleToCSV(results as PersonEntity[]);
       } else {
         exportCompaniesToCSV(results as CompanyEntity[]);
       }
+
+      // Save to people/company records
+      await saveRecords(results, currentType, 'export');
       
       toast({
         title: 'Export successful',
@@ -105,6 +149,46 @@ export default function AudienceBuilder() {
         variant: 'destructive',
       });
     }
+  };
+
+  const handleUnlockAndExport = async () => {
+    if (!unlockDialogConfig) return;
+
+    const lockedRecords = results.filter(r => !isUnlocked(r.id));
+    const { needUnlock } = unlockDialogConfig;
+
+    // Check credits
+    const enoughCredits = await hasEnoughCredits(needUnlock);
+    if (!enoughCredits) {
+      toast({
+        title: 'Insufficient credits',
+        description: `You need ${needUnlock} credits but don't have enough.`,
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    // Deduct credits
+    const result = await deductCredits(needUnlock);
+    if (!result.success) {
+      toast({
+        title: 'Error',
+        description: 'Failed to deduct credits',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    // Mark as unlocked
+    await markAsUnlocked(
+      lockedRecords.map(r => r.id),
+      lockedRecords
+    );
+
+    setShowUnlockDialog(false);
+    
+    // Perform export
+    await performExport();
   };
 
   return (
@@ -156,13 +240,22 @@ export default function AudienceBuilder() {
                 </div>
                 
                 {/* Right: Results */}
-                <div className="space-y-4 h-full flex flex-col">
-                  <div className="flex items-center justify-between">
-                    <div className="text-sm text-muted-foreground">
-                      {totalEstimate > 0 && `${totalEstimate} results found`}
+                  <div className="space-y-4 h-full flex flex-col">
+                    <div className="flex items-center justify-between">
+                      <div className="text-sm text-muted-foreground">
+                        {totalEstimate > 0 && `${totalEstimate} results found`}
+                      </div>
+                      <CreditBalance />
                     </div>
-                    <CreditBalance />
-                  </div>
+
+                    {results.length > 0 && (
+                      <Alert>
+                        <Info className="h-4 w-4" />
+                        <AlertDescription>
+                          Preview Mode: Email and LinkedIn are blurred. Export, Save to List, or Send to unlock and use credits.
+                        </AlertDescription>
+                      </Alert>
+                    )}
 
                   {loading && (
                     <div className="flex items-center justify-center h-64">
@@ -173,29 +266,37 @@ export default function AudienceBuilder() {
                   {!loading && results.length > 0 && (
                     <>
                       <div className="border rounded-lg overflow-hidden flex-1">
-                        <div className="bg-muted px-4 py-3 font-medium grid grid-cols-7 gap-4 text-sm">
+                        <div className="bg-muted px-4 py-3 font-medium grid grid-cols-8 gap-4 text-sm">
                           <div>Name</div>
                           <div>Title</div>
+                          <div>Email</div>
+                          <div>LinkedIn</div>
                           <div>Seniority</div>
                           <div>Department</div>
                           <div>Company</div>
                           <div>Location</div>
-                          <div>Actions</div>
                         </div>
                         <div className="divide-y overflow-auto max-h-[calc(100vh-400px)]">
                           {results.map((person: any) => (
-                            <div key={person.id} className="px-4 py-3 grid grid-cols-7 gap-4 text-sm hover:bg-muted/50">
+                            <div key={person.id} className="px-4 py-3 grid grid-cols-8 gap-4 text-sm hover:bg-muted/50">
                               <div className="font-medium">{person.name}</div>
                               <div className="truncate">{person.title}</div>
+                              <div>
+                                <BlurredField 
+                                  value={person.email || 'N/A'} 
+                                  isUnlocked={isUnlocked(person.id)} 
+                                />
+                              </div>
+                              <div>
+                                <BlurredField 
+                                  value={person.linkedin || 'N/A'} 
+                                  isUnlocked={isUnlocked(person.id)} 
+                                />
+                              </div>
                               <div>{person.seniority}</div>
                               <div>{person.department}</div>
                               <div>{person.company}</div>
                               <div>{person.location}</div>
-                              <div>
-                                <Button variant="ghost" size="sm">
-                                  View
-                                </Button>
-                              </div>
                             </div>
                           ))}
                         </div>
@@ -234,13 +335,22 @@ export default function AudienceBuilder() {
                 </div>
                 
                 {/* Right: Results */}
-                <div className="space-y-4 h-full flex flex-col">
-                  <div className="flex items-center justify-between">
-                    <div className="text-sm text-muted-foreground">
-                      {totalEstimate > 0 && `${totalEstimate} results found`}
+                  <div className="space-y-4 h-full flex flex-col">
+                    <div className="flex items-center justify-between">
+                      <div className="text-sm text-muted-foreground">
+                        {totalEstimate > 0 && `${totalEstimate} results found`}
+                      </div>
+                      <CreditBalance />
                     </div>
-                    <CreditBalance />
-                  </div>
+
+                    {results.length > 0 && (
+                      <Alert>
+                        <Info className="h-4 w-4" />
+                        <AlertDescription>
+                          Preview Mode: Contact details are blurred. Export, Save to List, or Send to unlock and use credits.
+                        </AlertDescription>
+                      </Alert>
+                    )}
 
                   {loading && (
                     <div className="flex items-center justify-center h-64">
@@ -301,6 +411,20 @@ export default function AudienceBuilder() {
           </div>
         </Tabs>
       </div>
+
+      {unlockDialogConfig && (
+        <UnlockConfirmDialog
+          open={showUnlockDialog}
+          onOpenChange={setShowUnlockDialog}
+          totalRecords={unlockDialogConfig.totalRecords}
+          alreadyUnlocked={unlockDialogConfig.alreadyUnlocked}
+          needUnlock={unlockDialogConfig.needUnlock}
+          currentCredits={unlockDialogConfig.currentCredits}
+          onConfirm={handleUnlockAndExport}
+          onCancel={() => setShowUnlockDialog(false)}
+          action={unlockDialogConfig.action}
+        />
+      )}
     </div>
   );
 }
