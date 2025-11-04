@@ -2,19 +2,20 @@ import { useState, useEffect } from 'react';
 import { ChartWithToggle } from './charts/ChartWithToggle';
 import { AnalyticsService, PeopleInsights as Insights } from '@/lib/analytics';
 import { PersonEntity } from '@/types/audience';
-import { generateMockPeople } from '@/lib/mockData';
 
-export function PeopleInsights() {
+interface PeopleInsightsProps {
+  records: PersonEntity[];
+}
+
+export function PeopleInsights({ records }: PeopleInsightsProps) {
   const [insights, setInsights] = useState<Insights | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Mock data for now
-    const mockPeople: PersonEntity[] = generateMockPeople(500);
-    const calculated = AnalyticsService.calculatePeopleInsights(mockPeople);
+    const calculated = AnalyticsService.calculatePeopleInsights(records);
     setInsights(calculated);
     setLoading(false);
-  }, []);
+  }, [records]);
 
   if (loading || !insights) {
     return <div className="p-6">Loading insights...</div>;

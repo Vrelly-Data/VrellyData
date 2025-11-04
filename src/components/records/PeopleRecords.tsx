@@ -22,7 +22,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { generateMockPeople } from '@/lib/mockData';
 import { PersonEntity } from '@/types/audience';
 import { RecordsTable } from './RecordsTable';
 import { RecordsFilterDropdown } from './RecordsFilterDropdown';
@@ -38,13 +37,18 @@ import { evaluateSmartFilter } from '@/lib/smartFilterEvaluator';
 import { SendContactsDialog } from './SendContactsDialog';
 import { supabase } from '@/integrations/supabase/client';
 
-export function PeopleRecords() {
-  const [records, setRecords] = useState<PersonEntity[]>(generateMockPeople(100));
+interface PeopleRecordsProps {
+  records: PersonEntity[];
+  setRecords: (records: PersonEntity[]) => void;
+  appliedFilter: SmartFilter | null;
+  setAppliedFilter: (filter: SmartFilter | null) => void;
+}
+
+export function PeopleRecords({ records, setRecords, appliedFilter, setAppliedFilter }: PeopleRecordsProps) {
   const [selectedRecords, setSelectedRecords] = useState<Set<string>>(new Set());
   const [isListDialogOpen, setIsListDialogOpen] = useState(false);
   const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
-  const [appliedFilter, setAppliedFilter] = useState<SmartFilter | null>(null);
   const [externalProjects, setExternalProjects] = useState<any[]>([]);
   const [externalCampaigns, setExternalCampaigns] = useState<Record<string, any[]>>({});
   const [sendDialogState, setSendDialogState] = useState<{
@@ -122,7 +126,7 @@ export function PeopleRecords() {
     
     const duplicateCount = importedRecords.length - newRecords.length;
     
-    setRecords(prev => [...newRecords, ...prev]);
+    setRecords([...newRecords, ...records]);
     setSelectedRecords(new Set());
     
     // Show appropriate feedback
@@ -135,7 +139,7 @@ export function PeopleRecords() {
   };
 
   const handleDelete = () => {
-    setRecords(prev => prev.filter(record => !selectedRecords.has(record.id)));
+    setRecords(records.filter(record => !selectedRecords.has(record.id)));
     const deletedCount = selectedRecords.size;
     setSelectedRecords(new Set());
     setIsDeleteDialogOpen(false);

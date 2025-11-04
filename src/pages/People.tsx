@@ -1,3 +1,4 @@
+import { useState, useMemo } from 'react';
 import { SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import { AppSidebar } from '@/components/AppSidebar';
 import { useNavigate } from 'react-router-dom';
@@ -6,9 +7,20 @@ import { PeopleRecords } from '@/components/records/PeopleRecords';
 import { PeopleInsights } from '@/components/insights/PeopleInsights';
 import { ListView } from '@/components/lists/ListView';
 import vrellyLogo from '@/assets/vrelly-logo.png';
+import { generateMockPeople } from '@/lib/mockData';
+import { PersonEntity } from '@/types/audience';
+import { SmartFilter } from '@/types/filterProperties';
+import { evaluateSmartFilter } from '@/lib/smartFilterEvaluator';
 
 export default function People() {
   const navigate = useNavigate();
+  const [records, setRecords] = useState<PersonEntity[]>(generateMockPeople(100));
+  const [appliedFilter, setAppliedFilter] = useState<SmartFilter | null>(null);
+
+  const filteredRecords = useMemo(() => {
+    if (!appliedFilter) return records;
+    return evaluateSmartFilter(records, appliedFilter);
+  }, [records, appliedFilter]);
 
   return (
     <SidebarProvider>
@@ -35,10 +47,15 @@ export default function People() {
                 </TabsList>
               </div>
               <TabsContent value="records" className="flex-1 m-0">
-                <PeopleRecords />
+                <PeopleRecords 
+                  records={records}
+                  setRecords={setRecords}
+                  appliedFilter={appliedFilter}
+                  setAppliedFilter={setAppliedFilter}
+                />
               </TabsContent>
               <TabsContent value="insights" className="flex-1 m-0">
-                <PeopleInsights />
+                <PeopleInsights records={filteredRecords} />
               </TabsContent>
               <TabsContent value="lists" className="flex-1 m-0">
                 <ListView entityType="person" />
