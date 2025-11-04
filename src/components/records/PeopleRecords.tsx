@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Plus, Download, FolderPlus, ChevronDown, Upload, Trash2, Send } from 'lucide-react';
@@ -54,11 +54,7 @@ export function PeopleRecords() {
   }>({ open: false, projectId: '', projectName: '' });
   const { toast } = useToast();
 
-  // Load external projects on mount
-  useMemo(() => {
-    loadExternalProjects();
-  }, []);
-
+  // Define functions first
   const loadExternalProjects = async () => {
     const { data } = await supabase
       .from('external_projects')
@@ -82,6 +78,11 @@ export function PeopleRecords() {
       setExternalCampaigns(prev => ({ ...prev, [projectId]: data }));
     }
   };
+
+  // Load external projects on mount
+  useEffect(() => {
+    loadExternalProjects();
+  }, []);
 
   const filteredRecords = useMemo(() => {
     if (!appliedFilter) return records;
