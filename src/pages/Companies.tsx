@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { CompanyRecords } from '@/components/records/CompanyRecords';
 import { CompanyInsights } from '@/components/insights/CompanyInsights';
+import { ListView } from '@/components/lists/ListView';
 import vrellyLogo from '@/assets/vrelly-logo.png';
 
 export default function Companies() {
@@ -30,6 +31,7 @@ export default function Companies() {
                 <TabsList>
                   <TabsTrigger value="records">Records</TabsTrigger>
                   <TabsTrigger value="insights">Insights</TabsTrigger>
+                  <TabsTrigger value="lists">Lists</TabsTrigger>
                 </TabsList>
               </div>
               <TabsContent value="records" className="flex-1 m-0">
@@ -37,6 +39,9 @@ export default function Companies() {
               </TabsContent>
               <TabsContent value="insights" className="flex-1 m-0">
                 <CompanyInsights />
+              </TabsContent>
+              <TabsContent value="lists" className="flex-1 m-0">
+                <ListView entityType="company" />
               </TabsContent>
             </Tabs>
           </main>

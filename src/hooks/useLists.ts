@@ -159,3 +159,86 @@ export function useAddToList() {
     },
   });
 }
+
+export function useListItems(listId: string) {
+  return useQuery({
+    queryKey: ['list-items', listId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('list_items')
+        .select('*')
+        .eq('list_id', listId)
+        .order('added_at', { ascending: false });
+
+      if (error) throw error;
+      return data as ListItem[];
+    },
+    enabled: !!listId,
+  });
+}
+
+export function useDeleteList() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (listId: string) => {
+      const { error } = await supabase
+        .from('lists')
+        .delete()
+        .eq('id', listId);
+
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['lists'] });
+      toast({
+        title: 'List deleted',
+        description: 'The list has been successfully deleted',
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: 'Error deleting list',
+        description: error.message,
+        variant: 'destructive',
+      });
+    },
+  });
+}
+
+export function useRemoveFromList() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({
+      listId,
+      recordIds,
+    }: {
+      listId: string;
+      recordIds: string[];
+    }) => {
+      const { error } = await supabase
+        .from('list_items')
+        .delete()
+        .eq('list_id', listId)
+        .in('entity_external_id', recordIds);
+
+      if (error) throw error;
+    },
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['list-items', variables.listId] });
+      queryClient.invalidateQueries({ queryKey: ['lists'] });
+      toast({
+        title: 'Items removed',
+        description: 'Selected items have been removed from the list',
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: 'Error removing items',
+        description: error.message,
+        variant: 'destructive',
+      });
+    },
+  });
+}
