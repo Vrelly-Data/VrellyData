@@ -125,6 +125,36 @@ export type Database = {
         }
         Relationships: []
       }
+      company_records: {
+        Row: {
+          created_at: string | null
+          entity_data: Json
+          entity_external_id: string
+          id: string
+          source: string
+          team_id: string
+          updated_at: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          entity_data: Json
+          entity_external_id: string
+          id?: string
+          source: string
+          team_id: string
+          updated_at?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          entity_data?: Json
+          entity_external_id?: string
+          id?: string
+          source?: string
+          team_id?: string
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
       credit_transactions: {
         Row: {
           audience_id: string | null
@@ -385,6 +415,36 @@ export type Database = {
         }
         Relationships: []
       }
+      people_records: {
+        Row: {
+          created_at: string | null
+          entity_data: Json
+          entity_external_id: string
+          id: string
+          source: string
+          team_id: string
+          updated_at: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          entity_data: Json
+          entity_external_id: string
+          id?: string
+          source: string
+          team_id: string
+          updated_at?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          entity_data?: Json
+          entity_external_id?: string
+          id?: string
+          source?: string
+          team_id?: string
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           billing_period_end: string | null
@@ -616,6 +676,36 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      unlocked_records: {
+        Row: {
+          entity_data: Json
+          entity_external_id: string
+          entity_type: Database["public"]["Enums"]["entity_type"]
+          id: string
+          team_id: string
+          unlocked_at: string | null
+          user_id: string
+        }
+        Insert: {
+          entity_data: Json
+          entity_external_id: string
+          entity_type: Database["public"]["Enums"]["entity_type"]
+          id?: string
+          team_id: string
+          unlocked_at?: string | null
+          user_id: string
+        }
+        Update: {
+          entity_data?: Json
+          entity_external_id?: string
+          entity_type?: Database["public"]["Enums"]["entity_type"]
+          id?: string
+          team_id?: string
+          unlocked_at?: string | null
+          user_id?: string
+        }
+        Relationships: []
       }
       webhooks: {
         Row: {
