@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { Save, Download, Users, Building2, Info } from 'lucide-react';
@@ -49,6 +49,19 @@ export default function AudienceBuilder() {
     action: 'export' | 'list' | 'send';
     currentCredits: number;
   } | null>(null);
+
+  // Debounced search for real-time preview
+  const debounceTimerRef = useRef<NodeJS.Timeout>();
+  
+  const debouncedSearch = useCallback((filterState: FilterBuilderState) => {
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+    
+    debounceTimerRef.current = setTimeout(() => {
+      handleSearch(filterState);
+    }, 800); // 800ms delay after user stops typing
+  }, [currentType, currentPage, perPage]);
   
   const handleSearch = async (filterState: FilterBuilderState) => {
     setLoading(true);
@@ -236,6 +249,7 @@ export default function AudienceBuilder() {
                   <FilterBuilder 
                     entityType="person" 
                     onSearch={handleSearch}
+                    onChange={debouncedSearch}
                   />
                 </div>
                 
@@ -331,6 +345,7 @@ export default function AudienceBuilder() {
                   <FilterBuilder 
                     entityType="company"
                     onSearch={handleSearch}
+                    onChange={debouncedSearch}
                   />
                 </div>
                 

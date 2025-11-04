@@ -1,40 +1,62 @@
-import { useState, FormEvent } from 'react';
+import { useState, FormEvent, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
-import { Input } from '@/components/ui/input';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Filter, Search } from 'lucide-react';
 import { useAudienceAttributes } from '@/hooks/useAudienceAttributes';
 import { FilterBuilderState } from '@/lib/filterConversion';
 import { EntityType } from '@/types/audience';
-import { MultiSelectDropdown } from './MultiSelectDropdown';
+import { TagInput } from '@/components/ui/tag-input';
 
 interface FilterBuilderProps {
   entityType: EntityType;
   onSearch: (filters: FilterBuilderState) => void;
+  onChange?: (filters: FilterBuilderState) => void;
 }
 
-export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
+export function FilterBuilder({ entityType, onSearch, onChange }: FilterBuilderProps) {
   const { attributes, loading } = useAudienceAttributes();
   const [filterState, setFilterState] = useState<FilterBuilderState>({
     industries: [],
     cities: [],
     gender: null,
     jobTitles: [],
+    seniority: null,
+    department: null,
     companySize: null,
     netWorth: null,
     income: null,
-    keywords: '',
+    keywords: [],
   });
 
   const updateFilter = <K extends keyof FilterBuilderState>(
     key: K,
     value: FilterBuilderState[K]
   ) => {
-    setFilterState(prev => ({ ...prev, [key]: value }));
+    setFilterState(prev => {
+      const newState = { ...prev, [key]: value };
+      onChange?.(newState);
+      return newState;
+    });
   };
+
+  useEffect(() => {
+    // Reset filters when entity type changes
+    setFilterState({
+      industries: [],
+      cities: [],
+      gender: null,
+      jobTitles: [],
+      seniority: null,
+      department: null,
+      companySize: null,
+      netWorth: null,
+      income: null,
+      keywords: [],
+    });
+  }, [entityType]);
 
   const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -58,29 +80,26 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
         <form onSubmit={handleSubmit} className="space-y-6">
           {/* Keywords */}
           <div className="space-y-2">
-            <Label htmlFor="keywords">Keywords</Label>
-            <Input
-              id="keywords"
-              type="text"
-              placeholder="Search company descriptions, titles, industries..."
+            <Label>Keywords</Label>
+            <TagInput
               value={filterState.keywords}
-              onChange={(e) => updateFilter('keywords', e.target.value)}
-              className="w-full"
+              onChange={(values) => updateFilter('keywords', values)}
+              placeholder="Type keywords and press Enter..."
+              suggestions={[]}
             />
             <p className="text-xs text-muted-foreground">
-              Search for keywords in company descriptions, job titles, and other text fields
+              Add keywords to search in company descriptions, job titles, and other text fields
             </p>
           </div>
 
           {/* Industry */}
           <div className="space-y-2">
             <Label>Industry</Label>
-            <MultiSelectDropdown
-              options={attributes.industries}
-              selected={filterState.industries}
+            <TagInput
+              value={filterState.industries}
               onChange={(values) => updateFilter('industries', values)}
-              placeholder="Type to search industries..."
-              loading={loading}
+              placeholder="Type industries and press Enter..."
+              suggestions={attributes.industries}
             />
           </div>
 
@@ -168,26 +187,64 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
               {/* Job Titles */}
               <div className="space-y-2">
                 <Label>Job Titles</Label>
-                <MultiSelectDropdown
-                  options={attributes.jobTitles}
-                  selected={filterState.jobTitles}
+                <TagInput
+                  value={filterState.jobTitles}
                   onChange={(values) => updateFilter('jobTitles', values)}
-                  placeholder="Type to search job titles..."
-                  loading={loading}
+                  placeholder="Type job titles and press Enter..."
+                  suggestions={attributes.jobTitles}
                 />
+              </div>
+
+              {/* Seniority */}
+              <div className="space-y-2">
+                <Label>Seniority</Label>
+                <Select
+                  value={filterState.seniority || ''}
+                  onValueChange={(value) => updateFilter('seniority', value || null)}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select seniority level..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {attributes.seniority.map((level) => (
+                      <SelectItem key={level} value={level}>
+                        {level}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Department */}
+              <div className="space-y-2">
+                <Label>Department</Label>
+                <Select
+                  value={filterState.department || ''}
+                  onValueChange={(value) => updateFilter('department', value || null)}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select department..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {attributes.departments.map((dept) => (
+                      <SelectItem key={dept} value={dept}>
+                        {dept}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             </>
           )}
 
           {/* Location */}
           <div className="space-y-2">
-            <Label>Location</Label>
-            <MultiSelectDropdown
-              options={attributes.cities}
-              selected={filterState.cities}
+            <Label>{entityType === 'person' ? 'Person Location' : 'Company Location'}</Label>
+            <TagInput
+              value={filterState.cities}
               onChange={(values) => updateFilter('cities', values)}
-              placeholder="Type to search locations..."
-              loading={loading}
+              placeholder="Type locations and press Enter..."
+              suggestions={attributes.cities}
             />
           </div>
 

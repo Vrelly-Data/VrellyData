@@ -35,6 +35,8 @@ export function useAudienceAttributes() {
           industries: industries || MOCK_ATTRIBUTES.industries,
           cities: MOCK_ATTRIBUTES.cities,
           jobTitles: MOCK_ATTRIBUTES.jobTitles,
+          seniority: MOCK_ATTRIBUTES.seniority,
+          departments: MOCK_ATTRIBUTES.departments,
           companySizeRanges: MOCK_ATTRIBUTES.companySizeRanges,
           netWorthRanges: MOCK_ATTRIBUTES.netWorthRanges,
           incomeRanges: MOCK_ATTRIBUTES.incomeRanges,
