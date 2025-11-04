@@ -4,7 +4,7 @@ import { useAuthStore } from '@/stores/authStore';
 import { useAudienceStore } from '@/stores/audienceStore';
 import { toast } from '@/hooks/use-toast';
 
-const MOCK_MODE = true;
+const MOCK_MODE = false;
 
 export function useCreditCheck() {
   const [isDeducting, setIsDeducting] = useState(false);

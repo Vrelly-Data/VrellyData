@@ -13,7 +13,7 @@ const logStep = (step: string, details?: any) => {
 };
 
 // Tier configuration mapping product IDs to tier info
-const TIER_CONFIG = {
+const TIER_CONFIG: Record<string, { tier: string; credits: number }> = {
   "prod_TMHGcnFjx5n8DZ": { tier: "starter", credits: 10000 },
   "prod_TMHHjUdtt2Xbdl": { tier: "professional", credits: 25000 },
   "prod_TMHItV1NP0yBYU": { tier: "enterprise", credits: 75000 },
@@ -102,18 +102,37 @@ serve(async (req) => {
       }
       logStep("Active subscription found", { subscriptionId, tier, credits, endDate: subscriptionEnd });
 
+      // Get current profile to check if billing period has changed
+      const { data: currentProfile } = await supabaseClient
+        .from('profiles')
+        .select('billing_period_start, billing_period_end')
+        .eq('id', user.id)
+        .single();
+
+      const newPeriodStart = new Date(subscription.current_period_start * 1000).toISOString();
+      const shouldResetCredits = !currentProfile?.billing_period_start || 
+                                  new Date(currentProfile.billing_period_start) < new Date(newPeriodStart);
+
       // Update profile with subscription info
+      const updateData: any = {
+        subscription_status: 'active',
+        subscription_tier: tier,
+        stripe_customer_id: customerId,
+        stripe_subscription_id: subscriptionId,
+        monthly_credit_limit: credits,
+        billing_period_start: newPeriodStart,
+        billing_period_end: subscriptionEnd,
+      };
+
+      // Reset credits_used_this_month if new billing period started
+      if (shouldResetCredits) {
+        updateData.credits_used_this_month = 0;
+        logStep("Resetting credits for new billing period");
+      }
+
       await supabaseClient
         .from('profiles')
-        .update({
-          subscription_status: 'active',
-          subscription_tier: tier,
-          stripe_customer_id: customerId,
-          stripe_subscription_id: subscriptionId,
-          monthly_credit_limit: credits,
-          billing_period_start: new Date(subscription.current_period_start * 1000).toISOString(),
-          billing_period_end: subscriptionEnd,
-        })
+        .update(updateData)
         .eq('id', user.id);
     } else {
       logStep("No active subscription found");

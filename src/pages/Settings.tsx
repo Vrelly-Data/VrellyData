@@ -310,23 +310,36 @@ export default function Settings() {
                   )}
                 </div>
 
-                <div className="space-y-2">
-                  <div className="flex justify-between text-sm">
-                    <span className="text-muted-foreground">Monthly Credits</span>
-                    <span className="font-medium">
-                      {profile?.credits_used_this_month?.toLocaleString() || 0} / {profile?.monthly_credit_limit?.toLocaleString() || 100}
-                    </span>
+                {/* Credit Usage Display */}
+                {profile && profile.monthly_credit_limit > 0 && (
+                  <div className="border rounded-lg p-4 space-y-3">
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm font-medium">Monthly Credit Usage</span>
+                      <span className="text-sm font-semibold">
+                        {(profile.credits_used_this_month || 0).toLocaleString()} / {profile.monthly_credit_limit.toLocaleString()}
+                      </span>
+                    </div>
+                    <Progress 
+                      value={(profile.credits_used_this_month || 0) / profile.monthly_credit_limit * 100} 
+                      className="h-2"
+                    />
+                    <div className="flex justify-between items-center text-xs text-muted-foreground">
+                      <span>
+                        {((profile.monthly_credit_limit - (profile.credits_used_this_month || 0)) / profile.monthly_credit_limit * 100).toFixed(0)}% remaining
+                      </span>
+                      {profile.billing_period_end && (
+                        <span>
+                          Resets on {format(new Date(profile.billing_period_end), 'MMM dd, yyyy')}
+                        </span>
+                      )}
+                    </div>
+                    {profile.credits_used_this_month >= profile.monthly_credit_limit * 0.9 && (
+                      <p className="text-sm text-destructive">
+                        ⚠️ You're approaching your monthly limit. Consider upgrading your plan.
+                      </p>
+                    )}
                   </div>
-                  <Progress 
-                    value={((profile?.credits_used_this_month || 0) / (profile?.monthly_credit_limit || 100)) * 100} 
-                    className="h-2"
-                  />
-                  {profile && profile.credits_used_this_month >= profile.monthly_credit_limit * 0.9 && (
-                    <p className="text-sm text-destructive">
-                      ⚠️ You're approaching your monthly limit. Consider upgrading your plan.
-                    </p>
-                  )}
-                </div>
+                )}
 
                 {profile?.billing_period_start && profile?.billing_period_end && (
                   <div className="text-sm text-muted-foreground">
