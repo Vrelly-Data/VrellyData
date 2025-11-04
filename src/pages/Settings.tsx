@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import { AppSidebar } from '@/components/AppSidebar';
@@ -17,6 +17,14 @@ import { formatDistanceToNow, format } from "date-fns";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { Check } from "lucide-react";
+import { useSubscription } from "@/hooks/useSubscription";
+
+// Price IDs for subscription tiers
+const PRICE_IDS = {
+  starter: "price_1SPYhwRvAXonKS41WFHowijk",
+  professional: "price_1SPYjHRvAXonKS41B0eriTUC",
+  enterprise: "price_1SPYjTRvAXonKS41RdJr9r7I",
+};
 
 export default function Settings() {
   const location = useLocation();
@@ -24,6 +32,31 @@ export default function Settings() {
   const { profile, user, fetchProfile } = useAuthStore();
   const { toast } = useToast();
   const [loading, setLoading] = useState(false);
+  const { subscriptionStatus, checkSubscription, createCheckoutSession, openCustomerPortal } = useSubscription();
+  
+  // Check for success/cancel params from Stripe
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (params.get('success')) {
+      toast({
+        title: "Success!",
+        description: "Your subscription has been activated. Refreshing status...",
+      });
+      setTimeout(() => {
+        checkSubscription();
+        fetchProfile();
+      }, 2000);
+      // Remove query params
+      navigate('/settings?tab=billing', { replace: true });
+    } else if (params.get('canceled')) {
+      toast({
+        title: "Canceled",
+        description: "Subscription upgrade was canceled.",
+        variant: "destructive",
+      });
+      navigate('/settings?tab=billing', { replace: true });
+    }
+  }, [location.search]);
   
   // Determine default tab based on route
   const defaultTab = location.pathname === '/billing' ? 'billing' : 'profile';
@@ -128,6 +161,10 @@ export default function Settings() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleUpgrade = (tier: keyof typeof PRICE_IDS) => {
+    createCheckoutSession(PRICE_IDS[tier]);
   };
 
   return (
@@ -338,6 +375,7 @@ export default function Settings() {
                       className="w-full mt-4" 
                       variant={profile?.subscription_tier === 'starter' ? 'outline' : 'default'}
                       disabled={profile?.subscription_tier === 'starter'}
+                      onClick={() => handleUpgrade('starter')}
                     >
                       {profile?.subscription_tier === 'starter' ? 'Current Plan' : 'Upgrade'}
                     </Button>
@@ -377,6 +415,7 @@ export default function Settings() {
                       className="w-full mt-4" 
                       variant={profile?.subscription_tier === 'professional' ? 'outline' : 'default'}
                       disabled={profile?.subscription_tier === 'professional'}
+                      onClick={() => handleUpgrade('professional')}
                     >
                       {profile?.subscription_tier === 'professional' ? 'Current Plan' : 'Upgrade'}
                     </Button>
@@ -419,6 +458,7 @@ export default function Settings() {
                       className="w-full mt-4" 
                       variant={profile?.subscription_tier === 'enterprise' ? 'outline' : 'default'}
                       disabled={profile?.subscription_tier === 'enterprise'}
+                      onClick={() => handleUpgrade('enterprise')}
                     >
                       {profile?.subscription_tier === 'enterprise' ? 'Current Plan' : 'Upgrade'}
                     </Button>
@@ -427,50 +467,50 @@ export default function Settings() {
 
                 {profile?.subscription_tier !== 'free' && (
                   <div className="mt-6 pt-6 border-t">
-                    <Button variant="outline" size="sm">
-                      Cancel Subscription
+                    <Button variant="outline" size="sm" onClick={openCustomerPortal}>
+                      Manage Subscription
                     </Button>
                     <p className="text-sm text-muted-foreground mt-2">
-                      Your subscription will remain active until the end of your billing period.
+                      Update payment method, view invoices, or cancel subscription
                     </p>
                   </div>
                 )}
               </CardContent>
             </Card>
 
-            {/* Usage History */}
+            {/* Recent Activity */}
             <Card>
               <CardHeader>
-                <CardTitle>Usage History</CardTitle>
-                <CardDescription>Your recent unlock events.</CardDescription>
+                <CardTitle>Recent Credit Usage</CardTitle>
+                <CardDescription>Your last 20 unlock events</CardDescription>
               </CardHeader>
               <CardContent>
-                {unlockHistory && unlockHistory.length > 0 ? (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Type</TableHead>
-                        <TableHead>Cost</TableHead>
-                        <TableHead>Date</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {unlockHistory.map((event) => (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Type</TableHead>
+                      <TableHead>Credits</TableHead>
+                      <TableHead>Date</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {unlockHistory && unlockHistory.length > 0 ? (
+                      unlockHistory.map((event) => (
                         <TableRow key={event.id}>
                           <TableCell className="capitalize">{event.entity_type}</TableCell>
-                          <TableCell>{event.cost} credits</TableCell>
-                          <TableCell>
-                            {formatDistanceToNow(new Date(event.created_at), { addSuffix: true })}
-                          </TableCell>
+                          <TableCell>{event.cost}</TableCell>
+                          <TableCell>{formatDistanceToNow(new Date(event.created_at), { addSuffix: true })}</TableCell>
                         </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                ) : (
-                  <div className="text-center py-8 text-muted-foreground">
-                    No unlock events yet. Start searching and unlocking contacts!
-                  </div>
-                )}
+                      ))
+                    ) : (
+                      <TableRow>
+                        <TableCell colSpan={3} className="text-center text-muted-foreground">
+                          No activity yet
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
               </CardContent>
             </Card>
           </div>
