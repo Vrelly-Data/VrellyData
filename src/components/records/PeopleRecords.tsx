@@ -196,46 +196,40 @@ export function PeopleRecords() {
                 Delete {selectedRecords.size > 0 && `(${selectedRecords.size})`}
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              {externalProjects.length > 0 && (
-                <>
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger disabled={selectedRecords.size === 0}>
+                  <Send className="h-4 w-4 mr-2" />
+                  Send {selectedRecords.size > 0 && `(${selectedRecords.size})`}
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent>
                   <DropdownMenuSub>
-                    <DropdownMenuSubTrigger disabled={selectedRecords.size === 0}>
-                      <Send className="h-4 w-4 mr-2" />
-                      Send {selectedRecords.size > 0 && `(${selectedRecords.size})`}
+                    <DropdownMenuSubTrigger>
+                      Tools
                     </DropdownMenuSubTrigger>
                     <DropdownMenuSubContent>
-                      {externalProjects.map((project) => (
-                        <DropdownMenuSub key={project.id}>
-                          <DropdownMenuSubTrigger>
+                      {externalProjects.length > 0 ? (
+                        externalProjects.map((project) => (
+                          <DropdownMenuItem
+                            key={project.id}
+                            onClick={() => setSendDialogState({
+                              open: true,
+                              projectId: project.id,
+                              projectName: project.name,
+                            })}
+                          >
                             {project.name}
-                          </DropdownMenuSubTrigger>
-                          <DropdownMenuSubContent>
-                            {externalCampaigns[project.id]?.length > 0 ? (
-                              externalCampaigns[project.id].map((campaign) => (
-                                <DropdownMenuItem
-                                  key={campaign.id}
-                                  onClick={() => setSendDialogState({
-                                    open: true,
-                                    projectId: project.id,
-                                    projectName: `${project.name} - ${campaign.campaign_name}`,
-                                  })}
-                                >
-                                  {campaign.campaign_name}
-                                </DropdownMenuItem>
-                              ))
-                            ) : (
-                              <DropdownMenuItem disabled>
-                                No campaigns available
-                              </DropdownMenuItem>
-                            )}
-                          </DropdownMenuSubContent>
-                        </DropdownMenuSub>
-                      ))}
+                          </DropdownMenuItem>
+                        ))
+                      ) : (
+                        <DropdownMenuItem disabled>
+                          No projects configured
+                        </DropdownMenuItem>
+                      )}
                     </DropdownMenuSubContent>
                   </DropdownMenuSub>
-                  <DropdownMenuSeparator />
-                </>
-              )}
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+              <DropdownMenuSeparator />
               <DropdownMenuItem 
                 disabled={selectedRecords.size === 0}
                 onClick={() => setIsListDialogOpen(true)}
