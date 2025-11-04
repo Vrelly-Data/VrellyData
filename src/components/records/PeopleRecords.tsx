@@ -1,13 +1,16 @@
 import { useState, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Plus, Download, FolderPlus, ChevronDown, Upload, Trash2 } from 'lucide-react';
+import { Plus, Download, FolderPlus, ChevronDown, Upload, Trash2, Send } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
   AlertDialog,
@@ -32,6 +35,8 @@ import { exportPeopleToCSV } from '@/lib/csvExport';
 import { useToast } from '@/hooks/use-toast';
 import { SmartFilter } from '@/types/filterProperties';
 import { evaluateSmartFilter } from '@/lib/smartFilterEvaluator';
+import { SendContactsDialog } from './SendContactsDialog';
+import { supabase } from '@/integrations/supabase/client';
 
 export function PeopleRecords() {
   const [records, setRecords] = useState<PersonEntity[]>(generateMockPeople(100));
@@ -40,7 +45,43 @@ export function PeopleRecords() {
   const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [appliedFilter, setAppliedFilter] = useState<SmartFilter | null>(null);
+  const [externalProjects, setExternalProjects] = useState<any[]>([]);
+  const [externalCampaigns, setExternalCampaigns] = useState<Record<string, any[]>>({});
+  const [sendDialogState, setSendDialogState] = useState<{
+    open: boolean;
+    projectId: string;
+    projectName: string;
+  }>({ open: false, projectId: '', projectName: '' });
   const { toast } = useToast();
+
+  // Load external projects on mount
+  useMemo(() => {
+    loadExternalProjects();
+  }, []);
+
+  const loadExternalProjects = async () => {
+    const { data } = await supabase
+      .from('external_projects')
+      .select('*')
+      .eq('is_active', true);
+    
+    if (data) {
+      setExternalProjects(data);
+      // Load campaigns for each project
+      data.forEach(project => loadCampaigns(project.id));
+    }
+  };
+
+  const loadCampaigns = async (projectId: string) => {
+    const { data } = await supabase
+      .from('external_campaigns')
+      .select('*')
+      .eq('project_id', projectId);
+    
+    if (data) {
+      setExternalCampaigns(prev => ({ ...prev, [projectId]: data }));
+    }
+  };
 
   const filteredRecords = useMemo(() => {
     if (!appliedFilter) return records;
@@ -154,6 +195,46 @@ export function PeopleRecords() {
                 Delete {selectedRecords.size > 0 && `(${selectedRecords.size})`}
               </DropdownMenuItem>
               <DropdownMenuSeparator />
+              {externalProjects.length > 0 && (
+                <>
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger disabled={selectedRecords.size === 0}>
+                      <Send className="h-4 w-4 mr-2" />
+                      Send {selectedRecords.size > 0 && `(${selectedRecords.size})`}
+                    </DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent>
+                      {externalProjects.map((project) => (
+                        <DropdownMenuSub key={project.id}>
+                          <DropdownMenuSubTrigger>
+                            {project.name}
+                          </DropdownMenuSubTrigger>
+                          <DropdownMenuSubContent>
+                            {externalCampaigns[project.id]?.length > 0 ? (
+                              externalCampaigns[project.id].map((campaign) => (
+                                <DropdownMenuItem
+                                  key={campaign.id}
+                                  onClick={() => setSendDialogState({
+                                    open: true,
+                                    projectId: project.id,
+                                    projectName: `${project.name} - ${campaign.campaign_name}`,
+                                  })}
+                                >
+                                  {campaign.campaign_name}
+                                </DropdownMenuItem>
+                              ))
+                            ) : (
+                              <DropdownMenuItem disabled>
+                                No campaigns available
+                              </DropdownMenuItem>
+                            )}
+                          </DropdownMenuSubContent>
+                        </DropdownMenuSub>
+                      ))}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                  <DropdownMenuSeparator />
+                </>
+              )}
               <DropdownMenuItem 
                 disabled={selectedRecords.size === 0}
                 onClick={() => setIsListDialogOpen(true)}
@@ -216,6 +297,14 @@ export function PeopleRecords() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <SendContactsDialog
+        open={sendDialogState.open}
+        onOpenChange={(open) => setSendDialogState(prev => ({ ...prev, open }))}
+        contactIds={Array.from(selectedRecords)}
+        projectId={sendDialogState.projectId}
+        projectName={sendDialogState.projectName}
+      />
     </div>
   );
 }

@@ -18,6 +18,7 @@ import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { Check } from "lucide-react";
 import { useSubscription } from "@/hooks/useSubscription";
+import { ExternalProjectsSettings } from "@/components/settings/ExternalProjectsSettings";
 
 // Price IDs for subscription tiers - UPDATE THESE AFTER RUNNING create-stripe-products
 const PRICE_IDS = {
@@ -194,6 +195,7 @@ export default function Settings() {
           <TabsTrigger value="profile">Profile</TabsTrigger>
           <TabsTrigger value="security">Security</TabsTrigger>
           <TabsTrigger value="billing">Billing & Credits</TabsTrigger>
+          <TabsTrigger value="integrations">Integrations</TabsTrigger>
         </TabsList>
 
         <TabsContent value="profile">
@@ -527,6 +529,10 @@ export default function Settings() {
               </CardContent>
             </Card>
           </div>
+        </TabsContent>
+
+        <TabsContent value="integrations">
+          <ExternalProjectsSettings />
         </TabsContent>
       </Tabs>
             </div>

@@ -14,6 +14,36 @@ export type Database = {
   }
   public: {
     Tables: {
+      api_keys: {
+        Row: {
+          created_at: string | null
+          id: string
+          is_active: boolean | null
+          key_hash: string
+          last_used_at: string | null
+          name: string
+          team_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          id?: string
+          is_active?: boolean | null
+          key_hash: string
+          last_used_at?: string | null
+          name: string
+          team_id: string
+        }
+        Update: {
+          created_at?: string | null
+          id?: string
+          is_active?: boolean | null
+          key_hash?: string
+          last_used_at?: string | null
+          name?: string
+          team_id?: string
+        }
+        Relationships: []
+      }
       audiences: {
         Row: {
           created_at: string
@@ -64,6 +94,36 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      campaigns: {
+        Row: {
+          created_at: string | null
+          description: string | null
+          id: string
+          is_active: boolean | null
+          name: string
+          team_id: string
+          updated_at: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          description?: string | null
+          id?: string
+          is_active?: boolean | null
+          name: string
+          team_id: string
+          updated_at?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          description?: string | null
+          id?: string
+          is_active?: boolean | null
+          name?: string
+          team_id?: string
+          updated_at?: string | null
+        }
+        Relationships: []
       }
       credit_transactions: {
         Row: {
@@ -150,6 +210,77 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      external_campaigns: {
+        Row: {
+          campaign_id: string
+          campaign_name: string
+          created_at: string | null
+          field_mappings: Json | null
+          id: string
+          last_synced_at: string | null
+          project_id: string
+        }
+        Insert: {
+          campaign_id: string
+          campaign_name: string
+          created_at?: string | null
+          field_mappings?: Json | null
+          id?: string
+          last_synced_at?: string | null
+          project_id: string
+        }
+        Update: {
+          campaign_id?: string
+          campaign_name?: string
+          created_at?: string | null
+          field_mappings?: Json | null
+          id?: string
+          last_synced_at?: string | null
+          project_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "external_campaigns_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "external_projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      external_projects: {
+        Row: {
+          api_endpoint: string
+          api_key_encrypted: string
+          created_at: string | null
+          id: string
+          is_active: boolean | null
+          name: string
+          team_id: string
+          updated_at: string | null
+        }
+        Insert: {
+          api_endpoint: string
+          api_key_encrypted: string
+          created_at?: string | null
+          id?: string
+          is_active?: boolean | null
+          name: string
+          team_id: string
+          updated_at?: string | null
+        }
+        Update: {
+          api_endpoint?: string
+          api_key_encrypted?: string
+          created_at?: string | null
+          id?: string
+          is_active?: boolean | null
+          name?: string
+          team_id?: string
+          updated_at?: string | null
+        }
+        Relationships: []
       }
       filter_presets: {
         Row: {
@@ -307,6 +438,44 @@ export type Database = {
           updated_at?: string
         }
         Relationships: []
+      }
+      received_contacts: {
+        Row: {
+          campaign_id: string | null
+          contact_data: Json
+          created_at: string | null
+          id: string
+          source_project: string
+          status: string | null
+          team_id: string
+        }
+        Insert: {
+          campaign_id?: string | null
+          contact_data: Json
+          created_at?: string | null
+          id?: string
+          source_project: string
+          status?: string | null
+          team_id: string
+        }
+        Update: {
+          campaign_id?: string | null
+          contact_data?: Json
+          created_at?: string | null
+          id?: string
+          source_project?: string
+          status?: string | null
+          team_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "received_contacts_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "campaigns"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       suppression_lists: {
         Row: {
