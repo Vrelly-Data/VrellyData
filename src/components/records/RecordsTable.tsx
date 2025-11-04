@@ -63,7 +63,7 @@ export function RecordsTable({ records, columns, selectedRecords, onSelectionCha
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead className="w-12">
+            <TableHead className="w-12 pl-3">
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
