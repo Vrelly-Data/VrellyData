@@ -5,10 +5,10 @@ import { RecordsTable } from '@/components/records/RecordsTable';
 import { useListItems, useRemoveFromList } from '@/hooks/useLists';
 import { Skeleton } from '@/components/ui/skeleton';
 import type { ListWithCount } from '@/types/lists';
-import type { TableColumn } from '@/types/tableColumns';
+import type { ColumnConfig } from '@/types/tableColumns';
 import { PERSON_COLUMNS } from '@/config/personTableColumns';
 import { COMPANY_COLUMNS } from '@/config/companyTableColumns';
-import { exportToCSV } from '@/lib/csvExport';
+import { exportPeopleToCSV, exportCompaniesToCSV } from '@/lib/csvExport';
 
 interface ListDetailViewProps {
   list: ListWithCount;
@@ -16,11 +16,11 @@ interface ListDetailViewProps {
 }
 
 export function ListDetailView({ list, onBack }: ListDetailViewProps) {
-  const [selectedRecords, setSelectedRecords] = useState<string[]>([]);
+  const [selectedRecords, setSelectedRecords] = useState<Set<string>>(new Set());
   const { data: listItems, isLoading } = useListItems(list.id);
   const removeFromList = useRemoveFromList();
 
-  const columns: TableColumn[] =
+  const columns: ColumnConfig<any>[] =
     list.entity_type === 'person' ? PERSON_COLUMNS : COMPANY_COLUMNS;
 
   const records = listItems?.map((item) => ({
@@ -31,14 +31,17 @@ export function ListDetailView({ list, onBack }: ListDetailViewProps) {
   const handleRemoveSelected = async () => {
     await removeFromList.mutateAsync({
       listId: list.id,
-      recordIds: selectedRecords,
+      recordIds: Array.from(selectedRecords),
     });
-    setSelectedRecords([]);
+    setSelectedRecords(new Set());
   };
 
   const handleExport = () => {
-    const visibleColumns = columns.filter((col) => col.defaultVisible);
-    exportToCSV(records, visibleColumns, `${list.name}.csv`);
+    if (list.entity_type === 'person') {
+      exportPeopleToCSV(records);
+    } else {
+      exportCompaniesToCSV(records);
+    }
   };
 
   return (
@@ -54,14 +57,14 @@ export function ListDetailView({ list, onBack }: ListDetailViewProps) {
           )}
         </div>
         <div className="flex gap-2">
-          {selectedRecords.length > 0 && (
+          {selectedRecords.size > 0 && (
             <Button
               variant="destructive"
               onClick={handleRemoveSelected}
               disabled={removeFromList.isPending}
             >
               <Trash2 className="h-4 w-4 mr-2" />
-              Remove {selectedRecords.length} items
+              Remove {selectedRecords.size} items
             </Button>
           )}
           <Button variant="outline" onClick={handleExport}>
@@ -81,13 +84,8 @@ export function ListDetailView({ list, onBack }: ListDetailViewProps) {
           <RecordsTable
             columns={columns}
             records={records}
-            isLoading={false}
             selectedRecords={selectedRecords}
             onSelectionChange={setSelectedRecords}
-            entityType={list.entity_type}
-            totalRecords={records.length}
-            currentPage={1}
-            onPageChange={() => {}}
           />
         </div>
       )}
