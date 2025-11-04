@@ -43,5 +43,15 @@ export const COMPANY_COLUMNS: ColumnConfig<CompanyEntity>[] = [
     visible: true,
     defaultVisible: true,
     renderCell: (value) => value || '-'
+  },
+  {
+    id: 'description',
+    label: 'Company Description',
+    field: 'description',
+    visible: false,
+    defaultVisible: false,
+    sortable: true,
+    width: 'min-w-[300px]',
+    renderCell: (value) => value || '-'
   }
 ];
