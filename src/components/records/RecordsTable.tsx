@@ -3,6 +3,14 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { PersonEntity, CompanyEntity } from '@/types/audience';
 import { ColumnConfig } from '@/types/tableColumns';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { Button } from '@/components/ui/button';
 
 interface RecordsTableProps {
   records: (PersonEntity | CompanyEntity)[];
@@ -30,6 +38,11 @@ export function RecordsTable({ records, columns, selectedRecords, onSelectionCha
     onSelectionChange(newSelected);
   };
 
+  const handleSelectNumber = (count: number) => {
+    const selectedIds = records.slice(0, count).map(r => r.id);
+    onSelectionChange(new Set(selectedIds));
+  };
+
   const allSelected = records.length > 0 && selectedRecords.size === records.length;
 
   return (
@@ -38,10 +51,38 @@ export function RecordsTable({ records, columns, selectedRecords, onSelectionCha
         <TableHeader>
           <TableRow>
             <TableHead className="w-12">
-              <Checkbox
-                checked={allSelected}
-                onCheckedChange={(v) => handleSelectAll(v === true)}
-              />
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+                    <Checkbox
+                      checked={allSelected}
+                      className="pointer-events-none"
+                    />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start">
+                  <DropdownMenuItem onClick={() => handleSelectAll(true)}>
+                    Select All ({records.length})
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={() => handleSelectNumber(10)}>
+                    Select First 10
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleSelectNumber(25)}>
+                    Select First 25
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleSelectNumber(50)}>
+                    Select First 50
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleSelectNumber(100)}>
+                    Select First 100
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={() => handleSelectAll(false)}>
+                    Deselect All
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </TableHead>
             {columns.map((column) => (
               <TableHead key={column.id} className={column.width}>
