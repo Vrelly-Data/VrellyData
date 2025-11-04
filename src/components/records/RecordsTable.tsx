@@ -1,3 +1,4 @@
+import * as React from 'react';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -11,6 +12,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 
 interface RecordsTableProps {
   records: (PersonEntity | CompanyEntity)[];
@@ -20,6 +22,8 @@ interface RecordsTableProps {
 }
 
 export function RecordsTable({ records, columns, selectedRecords, onSelectionChange }: RecordsTableProps) {
+  const [selectCount, setSelectCount] = React.useState<string>('');
+
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
       onSelectionChange(new Set(records.map(r => r.id)));
@@ -41,6 +45,15 @@ export function RecordsTable({ records, columns, selectedRecords, onSelectionCha
   const handleSelectNumber = (count: number) => {
     const selectedIds = records.slice(0, count).map(r => r.id);
     onSelectionChange(new Set(selectedIds));
+  };
+
+  const handleCustomSelect = (value: string) => {
+    const count = parseInt(value, 10);
+    if (!isNaN(count) && count > 0) {
+      const validCount = Math.min(count, records.length);
+      handleSelectNumber(validCount);
+      setSelectCount('');
+    }
   };
 
   const allSelected = records.length > 0 && selectedRecords.size === records.length;
@@ -65,18 +78,32 @@ export function RecordsTable({ records, columns, selectedRecords, onSelectionCha
                     Select All ({records.length})
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem onClick={() => handleSelectNumber(10)}>
-                    Select First 10
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => handleSelectNumber(25)}>
-                    Select First 25
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => handleSelectNumber(50)}>
-                    Select First 50
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => handleSelectNumber(100)}>
-                    Select First 100
-                  </DropdownMenuItem>
+                  <div className="px-2 py-2">
+                    <label className="text-sm font-medium mb-1.5 block">Select first:</label>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        type="number"
+                        min="1"
+                        max={records.length}
+                        value={selectCount}
+                        onChange={(e) => setSelectCount(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            handleCustomSelect(selectCount);
+                          }
+                        }}
+                        placeholder={`1-${records.length}`}
+                        className="h-8 w-24"
+                      />
+                      <Button 
+                        size="sm" 
+                        onClick={() => handleCustomSelect(selectCount)}
+                        disabled={!selectCount}
+                      >
+                        Select
+                      </Button>
+                    </div>
+                  </div>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={() => handleSelectAll(false)}>
                     Deselect All
