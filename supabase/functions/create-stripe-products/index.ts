@@ -15,19 +15,19 @@ interface ProductTier {
 const TIERS: ProductTier[] = [
   {
     name: 'Starter',
-    priceMonthly: 7500, // $75 in cents
+    priceMonthly: 9900, // $99 in cents
     credits: 10000,
     description: '10,000 credits per month - Perfect for small teams',
   },
   {
-    name: 'Professional',
-    priceMonthly: 15000, // $150 in cents
+    name: 'Pro',
+    priceMonthly: 29900, // $299 in cents
     credits: 25000,
     description: '25,000 credits per month - For growing businesses',
   },
   {
-    name: 'Enterprise',
-    priceMonthly: 35000, // $350 in cents
+    name: 'Premium',
+    priceMonthly: 49900, // $499 in cents
     credits: 75000,
     description: '75,000 credits per month - For large organizations',
   },

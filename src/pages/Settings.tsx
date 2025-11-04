@@ -19,11 +19,11 @@ import { Badge } from "@/components/ui/badge";
 import { Check } from "lucide-react";
 import { useSubscription } from "@/hooks/useSubscription";
 
-// Price IDs for subscription tiers
+// Price IDs for subscription tiers - UPDATE THESE AFTER RUNNING create-stripe-products
 const PRICE_IDS = {
   starter: "price_1SPYhwRvAXonKS41WFHowijk",
-  professional: "price_1SPYjHRvAXonKS41B0eriTUC",
-  enterprise: "price_1SPYjTRvAXonKS41RdJr9r7I",
+  pro: "price_1SPYjHRvAXonKS41B0eriTUC",
+  premium: "price_1SPYjTRvAXonKS41RdJr9r7I",
 };
 
 export default function Settings() {
@@ -365,7 +365,7 @@ export default function Settings() {
                       <div>
                         <h3 className="text-xl font-bold">Starter</h3>
                         <div className="mt-2">
-                          <span className="text-3xl font-bold">$75</span>
+                          <span className="text-3xl font-bold">$99</span>
                           <span className="text-muted-foreground">/month</span>
                         </div>
                       </div>
@@ -399,9 +399,9 @@ export default function Settings() {
                     <Badge className="absolute -top-3 left-1/2 -translate-x-1/2">Popular</Badge>
                     <div className="space-y-4 flex-1">
                       <div>
-                        <h3 className="text-xl font-bold">Professional</h3>
+                        <h3 className="text-xl font-bold">Pro</h3>
                         <div className="mt-2">
-                          <span className="text-3xl font-bold">$150</span>
+                          <span className="text-3xl font-bold">$299</span>
                           <span className="text-muted-foreground">/month</span>
                         </div>
                       </div>
@@ -426,11 +426,11 @@ export default function Settings() {
                     </div>
                     <Button 
                       className="w-full mt-4" 
-                      variant={profile?.subscription_tier === 'professional' ? 'outline' : 'default'}
-                      disabled={profile?.subscription_tier === 'professional'}
-                      onClick={() => handleUpgrade('professional')}
+                      variant={profile?.subscription_tier === 'pro' || profile?.subscription_tier === 'professional' ? 'outline' : 'default'}
+                      disabled={profile?.subscription_tier === 'pro' || profile?.subscription_tier === 'professional'}
+                      onClick={() => handleUpgrade('pro')}
                     >
-                      {profile?.subscription_tier === 'professional' ? 'Current Plan' : 'Upgrade'}
+                      {profile?.subscription_tier === 'pro' || profile?.subscription_tier === 'professional' ? 'Current Plan' : 'Upgrade'}
                     </Button>
                   </div>
 
@@ -438,9 +438,9 @@ export default function Settings() {
                   <div className="border rounded-lg p-6 flex flex-col h-full">
                     <div className="space-y-4 flex-1">
                       <div>
-                        <h3 className="text-xl font-bold">Enterprise</h3>
+                        <h3 className="text-xl font-bold">Premium</h3>
                         <div className="mt-2">
-                          <span className="text-3xl font-bold">$350</span>
+                          <span className="text-3xl font-bold">$499</span>
                           <span className="text-muted-foreground">/month</span>
                         </div>
                       </div>
@@ -469,11 +469,11 @@ export default function Settings() {
                     </div>
                     <Button 
                       className="w-full mt-4" 
-                      variant={profile?.subscription_tier === 'enterprise' ? 'outline' : 'default'}
-                      disabled={profile?.subscription_tier === 'enterprise'}
-                      onClick={() => handleUpgrade('enterprise')}
+                      variant={profile?.subscription_tier === 'premium' || profile?.subscription_tier === 'enterprise' ? 'outline' : 'default'}
+                      disabled={profile?.subscription_tier === 'premium' || profile?.subscription_tier === 'enterprise'}
+                      onClick={() => handleUpgrade('premium')}
                     >
-                      {profile?.subscription_tier === 'enterprise' ? 'Current Plan' : 'Upgrade'}
+                      {profile?.subscription_tier === 'premium' || profile?.subscription_tier === 'enterprise' ? 'Current Plan' : 'Upgrade'}
                     </Button>
                   </div>
                 </div>

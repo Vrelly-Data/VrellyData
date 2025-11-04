@@ -3,6 +3,9 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.3';
 
 const TIER_CREDITS = {
   starter: 10000,
+  pro: 25000,
+  premium: 75000,
+  // Backward compatibility
   professional: 25000,
   enterprise: 75000,
 };
@@ -96,7 +99,7 @@ Deno.serve(async (req) => {
           .update({
             subscription_status: 'canceled',
             subscription_tier: 'free',
-            monthly_credit_limit: 100,
+            monthly_credit_limit: 25,
           })
           .eq('id', userId);
 

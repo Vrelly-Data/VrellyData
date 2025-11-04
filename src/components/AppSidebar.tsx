@@ -67,7 +67,9 @@ export function AppSidebar() {
                 {!isCollapsed && (
                   <>
                     <div className="text-sm font-medium">{profile.name}</div>
-                    <div className="text-xs text-muted-foreground">{profile.credits} credits</div>
+                    <div className="text-xs text-muted-foreground">
+                      {profile.monthly_credit_limit - (profile.credits_used_this_month || 0)} / {profile.monthly_credit_limit} credits
+                    </div>
                   </>
                 )}
               </div>
