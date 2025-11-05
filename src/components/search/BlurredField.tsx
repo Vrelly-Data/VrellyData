@@ -15,7 +15,7 @@ export function BlurredField({ value, isUnlocked, className }: BlurredFieldProps
   return (
     <div className={cn("relative inline-flex items-center gap-1", className)}>
       <span className="blur-sm select-none pointer-events-none">
-        {value || 'email@example.com'}
+        {value || '••••••@••••••.com'}
       </span>
       <Lock className="h-3 w-3 text-muted-foreground absolute right-0" />
     </div>

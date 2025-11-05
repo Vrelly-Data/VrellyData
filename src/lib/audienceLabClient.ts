@@ -110,7 +110,7 @@ class AudienceLabClient {
     });
   }
 
-  async searchPeople(params: SearchParams & { filterState?: FilterBuilderState; page?: number; perPage?: number }): Promise<SearchResponse<PersonEntity>> {
+  async searchPeople(params: SearchParams & { filterState?: FilterBuilderState; page?: number; perPage?: number; unlockedIds?: Set<string> }): Promise<SearchResponse<PersonEntity>> {
     try {
       if (MOCK_MODE) {
         // Mock mode: Generate and filter mock data
@@ -119,8 +119,8 @@ class AudienceLabClient {
         // Simulate API delay
         await new Promise(resolve => setTimeout(resolve, 800));
         
-        // Generate mock data
-        let mockPeople = generateMockPeople(1500);
+        // Generate mock data with unlocked status
+        let mockPeople = generateMockPeople(1500, params.unlockedIds || new Set());
         
         // Apply filters if provided
         if (params.filterState) {
@@ -192,7 +192,7 @@ class AudienceLabClient {
     }
   }
 
-  async searchCompanies(params: SearchParams & { filterState?: FilterBuilderState; page?: number; perPage?: number }): Promise<SearchResponse<CompanyEntity>> {
+  async searchCompanies(params: SearchParams & { filterState?: FilterBuilderState; page?: number; perPage?: number; unlockedIds?: Set<string> }): Promise<SearchResponse<CompanyEntity>> {
     try {
       if (MOCK_MODE) {
         // Mock mode: Generate and filter mock data
@@ -200,7 +200,7 @@ class AudienceLabClient {
         
         await new Promise(resolve => setTimeout(resolve, 800));
         
-        let mockCompanies = generateMockCompanies(800);
+        let mockCompanies = generateMockCompanies(800, params.unlockedIds || new Set());
         
         if (params.filterState) {
           mockCompanies = filterMockCompanies(mockCompanies, params.filterState);
@@ -313,8 +313,8 @@ class AudienceLabClient {
         await new Promise(resolve => setTimeout(resolve, 500));
         
         const mockData = entityType === 'person' 
-          ? generateMockPeople(1500)
-          : generateMockCompanies(800);
+          ? generateMockPeople(1500, new Set())
+          : generateMockCompanies(800, new Set());
         
         const filtered = entityType === 'person'
           ? filterMockPeople(mockData as PersonEntity[], filterState)

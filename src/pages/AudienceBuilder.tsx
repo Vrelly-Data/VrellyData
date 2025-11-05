@@ -87,6 +87,7 @@ export default function AudienceBuilder() {
         filterState,
         page: currentPage,
         perPage,
+        unlockedIds: new Set<string>(), // Pass empty set for initial search (no unlocks yet)
       };
       
       if (currentType === 'person') {
@@ -229,6 +230,11 @@ export default function AudienceBuilder() {
     await saveRecords(selectedData, currentType, action);
     
     setShowUnlockDialog(false);
+    
+    toast({
+      title: 'Records unlocked',
+      description: `${needUnlock} ${needUnlock === 1 ? 'record' : 'records'} unlocked successfully`,
+    });
     
     // Perform the action
     await performAction(action, sendDialogState.projectId, sendDialogState.projectName);
