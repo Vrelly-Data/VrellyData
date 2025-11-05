@@ -34,7 +34,7 @@ export function AppSidebar() {
             <img 
               src={vrellyLogo} 
               alt="Vrelly Data" 
-              className={`${isCollapsed ? 'h-16 w-16 object-contain' : 'h-24'} cursor-pointer`}
+              className={`${isCollapsed ? 'h-24 w-24 object-contain' : 'h-36'} cursor-pointer`}
               onClick={() => navigate('/')}
             />
           </div>
