@@ -5,11 +5,11 @@ export interface FilterBuilderState {
   cities: string[];
   gender: 'male' | 'female' | null;
   jobTitles: string[];
-  seniority: string | null;
-  department: string | null;
-  companySize: string | null;
-  netWorth: string | null;
-  income: string | null;
+  seniority: string[];
+  department: string[];
+  companySize: string[];
+  netWorth: string[];
+  income: string[];
   keywords: string[];
   prospectData: string[];
 }
@@ -35,16 +35,16 @@ export function convertFilterStateToAudienceLabFormat(state: FilterBuilderState)
     filters.jobTitle = state.jobTitles;
   }
   
-  if (state.seniority) {
-    filters.seniority = [state.seniority];
+  if (state.seniority.length > 0) {
+    filters.seniority = state.seniority;
   }
   
-  if (state.department) {
-    filters.department = [state.department];
+  if (state.department.length > 0) {
+    filters.department = state.department;
   }
   
-  if (state.companySize) {
-    filters.companySize = [state.companySize];
+  if (state.companySize.length > 0) {
+    filters.companySize = state.companySize;
   }
   
   if (state.keywords.length > 0) {
@@ -77,17 +77,17 @@ export function filterMockPeople(people: PersonEntity[], state: FilterBuilderSta
     }
     
     // Filter by seniority
-    if (state.seniority && person.seniority !== state.seniority) {
+    if (state.seniority.length > 0 && !state.seniority.includes(person.seniority)) {
       return false;
     }
     
     // Filter by department
-    if (state.department && person.department !== state.department) {
+    if (state.department.length > 0 && !state.department.includes(person.department)) {
       return false;
     }
     
     // Filter by company size
-    if (state.companySize && person.companySize !== state.companySize) {
+    if (state.companySize.length > 0 && !state.companySize.includes(person.companySize)) {
       return false;
     }
     
@@ -137,17 +137,20 @@ export function filterMockCompanies(companies: CompanyEntity[], state: FilterBui
     }
     
     // Filter by company size (employee count ranges)
-    if (state.companySize) {
-      const range = state.companySize;
+    if (state.companySize.length > 0) {
       const count = company.employeeCount;
+      const matchesAnyRange = state.companySize.some(range => {
+        if (range === '1-10' && count >= 1 && count <= 10) return true;
+        if (range === '11-50' && count >= 11 && count <= 50) return true;
+        if (range === '51-200' && count >= 51 && count <= 200) return true;
+        if (range === '201-500' && count >= 201 && count <= 500) return true;
+        if (range === '501-1000' && count >= 501 && count <= 1000) return true;
+        if (range === '1001-5000' && count >= 1001 && count <= 5000) return true;
+        if (range === '5000+' && count >= 5000) return true;
+        return false;
+      });
       
-      if (range === '1-10' && (count < 1 || count > 10)) return false;
-      if (range === '11-50' && (count < 11 || count > 50)) return false;
-      if (range === '51-200' && (count < 51 || count > 200)) return false;
-      if (range === '201-500' && (count < 201 || count > 500)) return false;
-      if (range === '501-1000' && (count < 501 || count > 1000)) return false;
-      if (range === '1001-5000' && (count < 1001 || count > 5000)) return false;
-      if (range === '5000+' && count < 5000) return false;
+      if (!matchesAnyRange) return false;
     }
     
     // Filter by keywords (search in name, industry, description)
