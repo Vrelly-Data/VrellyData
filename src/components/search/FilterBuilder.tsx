@@ -28,7 +28,7 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
     netWorth: null,
     income: null,
     keywords: [],
-    prospectData: null,
+    prospectData: [],
   });
 
   const updateFilter = <K extends keyof FilterBuilderState>(
@@ -51,7 +51,7 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
         netWorth: null,
         income: null,
         keywords: [],
-        prospectData: null,
+        prospectData: [],
       });
   }, [entityType]);
 
@@ -89,62 +89,69 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
             </p>
           </div>
 
-          {/* Industry */}
-          <div className="space-y-2">
-            <Label>Industry</Label>
-            <TagInput
-              value={filterState.industries}
-              onChange={(values) => updateFilter('industries', values)}
-              placeholder="Type industries and press Enter..."
-              suggestions={attributes.industries}
-            />
-          </div>
-
-          {/* Company Size */}
-          <div className="space-y-2">
-            <Label>Company Size</Label>
-            <Select
-              value={filterState.companySize || ''}
-              onValueChange={(value) => updateFilter('companySize', value || null)}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Select company size..." />
-              </SelectTrigger>
-              <SelectContent>
-                {attributes.companySizeRanges.map((size) => (
-                  <SelectItem key={size} value={size}>
-                    {size} employees
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
           {/* People-only filters */}
           {entityType === 'person' && (
             <>
-              {/* Prospect Data */}
+              {/* Job Titles */}
               <div className="space-y-2">
-                <Label>Prospect Data</Label>
+                <Label>Job Titles</Label>
+                <TagInput
+                  value={filterState.jobTitles}
+                  onChange={(values) => updateFilter('jobTitles', values)}
+                  placeholder="Type job titles and press Enter..."
+                  suggestions={attributes.jobTitles}
+                />
+              </div>
+
+              {/* Seniority */}
+              <div className="space-y-2">
+                <Label>Seniority</Label>
                 <Select
-                  value={filterState.prospectData || ''}
-                  onValueChange={(value) => updateFilter('prospectData', value || null)}
+                  value={filterState.seniority || ''}
+                  onValueChange={(value) => updateFilter('seniority', value || null)}
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder="Select required data..." />
+                    <SelectValue placeholder="Select seniority level..." />
                   </SelectTrigger>
                   <SelectContent className="bg-background">
-                    <SelectItem value="personal_email">Personal Email</SelectItem>
-                    <SelectItem value="business_email">Business Email</SelectItem>
-                    <SelectItem value="direct_mobile">Direct Mobile</SelectItem>
-                    <SelectItem value="personal_linkedin">Personal LinkedIn</SelectItem>
-                    <SelectItem value="personal_facebook">Personal Facebook</SelectItem>
-                    <SelectItem value="personal_twitter">Personal Twitter</SelectItem>
+                    {attributes.seniority.map((level) => (
+                      <SelectItem key={level} value={level}>
+                        {level}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-muted-foreground">
-                  Only show contacts with this data available
-                </p>
+              </div>
+
+              {/* Department */}
+              <div className="space-y-2">
+                <Label>Department</Label>
+                <Select
+                  value={filterState.department || ''}
+                  onValueChange={(value) => updateFilter('department', value || null)}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select department..." />
+                  </SelectTrigger>
+                  <SelectContent className="bg-background">
+                    {attributes.departments.map((dept) => (
+                      <SelectItem key={dept} value={dept}>
+                        {dept}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Person Location */}
+              <div className="space-y-2">
+                <Label>Person Location</Label>
+                <TagInput
+                  value={filterState.cities}
+                  onChange={(values) => updateFilter('cities', values)}
+                  placeholder="Type locations and press Enter..."
+                  suggestions={attributes.cities}
+                />
               </div>
 
               {/* Person Net Worth */}
@@ -177,7 +184,7 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
                   <SelectTrigger>
                     <SelectValue placeholder="Select income range..." />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent className="bg-background">
                     {attributes.incomeRanges.map((range) => (
                       <SelectItem key={range} value={range}>
                         {range}
@@ -204,70 +211,62 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
                   </div>
                 </RadioGroup>
               </div>
-
-              {/* Job Titles */}
-              <div className="space-y-2">
-                <Label>Job Titles</Label>
-                <TagInput
-                  value={filterState.jobTitles}
-                  onChange={(values) => updateFilter('jobTitles', values)}
-                  placeholder="Type job titles and press Enter..."
-                  suggestions={attributes.jobTitles}
-                />
-              </div>
-
-              {/* Seniority */}
-              <div className="space-y-2">
-                <Label>Seniority</Label>
-                <Select
-                  value={filterState.seniority || ''}
-                  onValueChange={(value) => updateFilter('seniority', value || null)}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select seniority level..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {attributes.seniority.map((level) => (
-                      <SelectItem key={level} value={level}>
-                        {level}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {/* Department */}
-              <div className="space-y-2">
-                <Label>Department</Label>
-                <Select
-                  value={filterState.department || ''}
-                  onValueChange={(value) => updateFilter('department', value || null)}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select department..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {attributes.departments.map((dept) => (
-                      <SelectItem key={dept} value={dept}>
-                        {dept}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
             </>
           )}
 
-          {/* Location */}
+          {/* Industry */}
           <div className="space-y-2">
-            <Label>{entityType === 'person' ? 'Person Location' : 'Company Location'}</Label>
+            <Label>Industry</Label>
             <TagInput
-              value={filterState.cities}
-              onChange={(values) => updateFilter('cities', values)}
-              placeholder="Type locations and press Enter..."
-              suggestions={attributes.cities}
+              value={filterState.industries}
+              onChange={(values) => updateFilter('industries', values)}
+              placeholder="Type industries and press Enter..."
+              suggestions={attributes.industries}
             />
           </div>
+
+          {/* Company Size */}
+          <div className="space-y-2">
+            <Label>Company Size</Label>
+            <Select
+              value={filterState.companySize || ''}
+              onValueChange={(value) => updateFilter('companySize', value || null)}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select company size..." />
+              </SelectTrigger>
+              <SelectContent className="bg-background">
+                {attributes.companySizeRanges.map((size) => (
+                  <SelectItem key={size} value={size}>
+                    {size} employees
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Prospect Data - Person only, at the bottom */}
+          {entityType === 'person' && (
+            <div className="space-y-2">
+              <Label>Prospect Data</Label>
+              <TagInput
+                value={filterState.prospectData}
+                onChange={(values) => updateFilter('prospectData', values)}
+                placeholder="Type data types and press Enter..."
+                suggestions={[
+                  'personal_email',
+                  'business_email',
+                  'direct_mobile',
+                  'personal_linkedin',
+                  'personal_facebook',
+                  'personal_twitter'
+                ]}
+              />
+              <p className="text-xs text-muted-foreground">
+                Only show contacts with these data types available
+              </p>
+            </div>
+          )}
 
           {/* Hidden submit button for Enter key support */}
           <button type="submit" className="hidden" />

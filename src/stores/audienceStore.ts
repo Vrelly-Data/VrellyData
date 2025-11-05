@@ -59,7 +59,7 @@ export const useAudienceStore = create<AudienceState>((set) => ({
     netWorth: null,
     income: null,
     keywords: [],
-    prospectData: null,
+    prospectData: [],
   },
   availableAttributes: MOCK_ATTRIBUTES,
   
