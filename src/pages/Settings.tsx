@@ -312,7 +312,20 @@ export default function Settings() {
                   )}
                 </div>
 
-                {/* Credit Usage Display */}
+                {/* Credit Balance Display - Always visible */}
+                <div className="border rounded-lg p-4 space-y-3">
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm font-medium">Credit Balance</span>
+                    <span className="text-2xl font-bold text-primary">
+                      {(profile.credits || 0).toLocaleString()}
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Total credits available for searches and unlocks
+                  </p>
+                </div>
+
+                {/* Monthly Usage Display - Only if on a paid plan */}
                 {profile && profile.monthly_credit_limit > 0 && (
                   <div className="border rounded-lg p-4 space-y-3">
                     <div className="flex justify-between items-center">
@@ -327,7 +340,7 @@ export default function Settings() {
                     />
                     <div className="flex justify-between items-center text-xs text-muted-foreground">
                       <span>
-                        {((profile.monthly_credit_limit - (profile.credits_used_this_month || 0)) / profile.monthly_credit_limit * 100).toFixed(0)}% remaining
+                        {((profile.monthly_credit_limit - (profile.credits_used_this_month || 0)) / profile.monthly_credit_limit * 100).toFixed(0)}% remaining this month
                       </span>
                       {profile.billing_period_end && (
                         <span>

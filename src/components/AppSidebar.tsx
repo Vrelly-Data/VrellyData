@@ -68,7 +68,7 @@ export function AppSidebar() {
                   <>
                     <div className="text-sm font-medium">{profile.name}</div>
                     <div className="text-xs text-muted-foreground">
-                      {profile.monthly_credit_limit - (profile.credits_used_this_month || 0)} / {profile.monthly_credit_limit} credits
+                      {profile.credits.toLocaleString()} credits available
                     </div>
                   </>
                 )}
