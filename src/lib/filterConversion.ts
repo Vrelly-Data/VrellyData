@@ -90,13 +90,14 @@ export function filterMockPeople(people: PersonEntity[], state: FilterBuilderSta
       return false;
     }
     
-    // Filter by keywords (search in name, title, company, industry)
+    // Filter by keywords (search in name, title, company, industry, company description)
     if (state.keywords.length > 0) {
       const searchableFields = [
         person.name,
         person.title,
         person.company,
         person.industry,
+        person.companyDescription || '',
       ].join(' ').toLowerCase();
       
       const hasMatch = state.keywords.some(keyword => 
