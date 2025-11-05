@@ -11,13 +11,16 @@ import {
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu';
 import { ChevronDown } from 'lucide-react';
+import { useState } from 'react';
 
 interface PreviewTableProps {
   data: (PersonEntity | CompanyEntity)[];
@@ -28,14 +31,25 @@ interface PreviewTableProps {
 }
 
 export function PreviewTable({ data, entityType, isUnlocked, selectedRecords, onSelectionChange }: PreviewTableProps) {
+  const [selectCount, setSelectCount] = useState<string>('');
+
   const handleSelectAll = () => {
     const newSelected = new Set(data.map(r => r.id));
     onSelectionChange(newSelected);
   };
 
-  const handleSelectFirst = (count: number) => {
+  const handleSelectNumber = (count: number) => {
     const newSelected = new Set(data.slice(0, count).map(r => r.id));
     onSelectionChange(newSelected);
+  };
+
+  const handleCustomSelect = (value: string) => {
+    const count = parseInt(value, 10);
+    if (!isNaN(count) && count > 0) {
+      const validCount = Math.min(count, data.length);
+      handleSelectNumber(validCount);
+      setSelectCount('');
+    }
   };
 
   const handleDeselectAll = () => {
@@ -77,15 +91,34 @@ export function PreviewTable({ data, entityType, isUnlocked, selectedRecords, on
                     <DropdownMenuItem onClick={handleSelectAll}>
                       Select All ({data.length})
                     </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => handleSelectFirst(10)}>
-                      Select First 10
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => handleSelectFirst(25)}>
-                      Select First 25
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => handleSelectFirst(50)}>
-                      Select First 50
-                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <div className="px-2 py-2">
+                      <label className="text-sm font-medium mb-1.5 block">Select first:</label>
+                      <div className="flex items-center gap-2">
+                        <Input
+                          type="number"
+                          min="1"
+                          max={data.length}
+                          value={selectCount}
+                          onChange={(e) => setSelectCount(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              handleCustomSelect(selectCount);
+                            }
+                          }}
+                          placeholder={`1-${data.length}`}
+                          className="h-8 w-24"
+                        />
+                        <Button 
+                          size="sm" 
+                          onClick={() => handleCustomSelect(selectCount)}
+                          disabled={!selectCount}
+                        >
+                          Select
+                        </Button>
+                      </div>
+                    </div>
+                    <DropdownMenuSeparator />
                     <DropdownMenuItem onClick={handleDeselectAll}>
                       Deselect All
                     </DropdownMenuItem>
@@ -163,15 +196,34 @@ export function PreviewTable({ data, entityType, isUnlocked, selectedRecords, on
                   <DropdownMenuItem onClick={handleSelectAll}>
                     Select All ({data.length})
                   </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => handleSelectFirst(10)}>
-                    Select First 10
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => handleSelectFirst(25)}>
-                    Select First 25
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => handleSelectFirst(50)}>
-                    Select First 50
-                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <div className="px-2 py-2">
+                    <label className="text-sm font-medium mb-1.5 block">Select first:</label>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        type="number"
+                        min="1"
+                        max={data.length}
+                        value={selectCount}
+                        onChange={(e) => setSelectCount(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            handleCustomSelect(selectCount);
+                          }
+                        }}
+                        placeholder={`1-${data.length}`}
+                        className="h-8 w-24"
+                      />
+                      <Button 
+                        size="sm" 
+                        onClick={() => handleCustomSelect(selectCount)}
+                        disabled={!selectCount}
+                      >
+                        Select
+                      </Button>
+                    </div>
+                  </div>
+                  <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={handleDeselectAll}>
                     Deselect All
                   </DropdownMenuItem>
