@@ -69,6 +69,14 @@ export function PreviewTableRow({ entity, entityType, isUnlocked }: PreviewTable
               <div className="text-xs text-muted-foreground mb-1">Location</div>
               <div>{person.location || 'N/A'}</div>
             </div>
+            <div>
+              <div className="text-xs text-muted-foreground mb-1">Company Size</div>
+              <div>{person.companySize || 'N/A'}</div>
+            </div>
+            <div>
+              <div className="text-xs text-muted-foreground mb-1">Industry</div>
+              <div>{person.industry || 'N/A'}</div>
+            </div>
           </div>
         </CollapsibleContent>
       </Collapsible>

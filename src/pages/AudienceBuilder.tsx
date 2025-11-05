@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
-import { Save, Download, Users, Building2, Info } from 'lucide-react';
+import { Save, Download, Users, Building2, Info, List, TableIcon } from 'lucide-react';
 import { useAudienceStore } from '@/stores/audienceStore';
 import { audienceLabClient } from '@/lib/audienceLabClient';
 import { useToast } from '@/hooks/use-toast';
@@ -17,6 +17,7 @@ import { useCreditCheck } from '@/hooks/useCreditCheck';
 import { usePersistRecords } from '@/hooks/usePersistRecords';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { PreviewTableRow } from '@/components/search/PreviewTableRow';
+import { PreviewTable } from '@/components/search/PreviewTable';
 
 export default function AudienceBuilder() {
   const { toast } = useToast();
@@ -49,6 +50,7 @@ export default function AudienceBuilder() {
     action: 'export' | 'list' | 'send';
     currentCredits: number;
   } | null>(null);
+  const [viewMode, setViewMode] = useState<'compact' | 'table'>('compact');
 
   // Debounced search for real-time preview
   const debounceTimerRef = useRef<NodeJS.Timeout>();
@@ -256,8 +258,28 @@ export default function AudienceBuilder() {
                 {/* Right: Results */}
                   <div className="space-y-4 h-full flex flex-col">
                     <div className="flex items-center justify-between">
-                      <div className="text-sm text-muted-foreground">
-                        {totalEstimate > 0 && `${totalEstimate} results found`}
+                      <div className="flex items-center gap-4">
+                        <div className="text-sm text-muted-foreground">
+                          {totalEstimate > 0 && `${totalEstimate} results found`}
+                        </div>
+                        {results.length > 0 && (
+                          <div className="flex items-center gap-2">
+                            <Button
+                              variant={viewMode === 'compact' ? 'default' : 'outline'}
+                              size="sm"
+                              onClick={() => setViewMode('compact')}
+                            >
+                              <List className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant={viewMode === 'table' ? 'default' : 'outline'}
+                              size="sm"
+                              onClick={() => setViewMode('table')}
+                            >
+                              <TableIcon className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        )}
                       </div>
                       <CreditBalance />
                     </div>
@@ -279,16 +301,24 @@ export default function AudienceBuilder() {
 
                   {!loading && results.length > 0 && (
                     <>
-                      <div className="border rounded-lg divide-y overflow-auto flex-1 max-h-[calc(100vh-400px)]">
-                        {results.map((person: any) => (
-                          <PreviewTableRow
-                            key={person.id}
-                            entity={person}
-                            entityType="person"
-                            isUnlocked={isUnlocked}
-                          />
-                        ))}
-                      </div>
+                      {viewMode === 'compact' ? (
+                        <div className="border rounded-lg divide-y overflow-auto flex-1 max-h-[calc(100vh-400px)]">
+                          {results.map((person: any) => (
+                            <PreviewTableRow
+                              key={person.id}
+                              entity={person}
+                              entityType="person"
+                              isUnlocked={isUnlocked}
+                            />
+                          ))}
+                        </div>
+                      ) : (
+                        <PreviewTable
+                          data={results}
+                          entityType="person"
+                          isUnlocked={isUnlocked}
+                        />
+                      )}
                       
                       {totalPages > 1 && (
                         <PaginationControls
@@ -326,8 +356,28 @@ export default function AudienceBuilder() {
                 {/* Right: Results */}
                   <div className="space-y-4 h-full flex flex-col">
                     <div className="flex items-center justify-between">
-                      <div className="text-sm text-muted-foreground">
-                        {totalEstimate > 0 && `${totalEstimate} results found`}
+                      <div className="flex items-center gap-4">
+                        <div className="text-sm text-muted-foreground">
+                          {totalEstimate > 0 && `${totalEstimate} results found`}
+                        </div>
+                        {results.length > 0 && (
+                          <div className="flex items-center gap-2">
+                            <Button
+                              variant={viewMode === 'compact' ? 'default' : 'outline'}
+                              size="sm"
+                              onClick={() => setViewMode('compact')}
+                            >
+                              <List className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant={viewMode === 'table' ? 'default' : 'outline'}
+                              size="sm"
+                              onClick={() => setViewMode('table')}
+                            >
+                              <TableIcon className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        )}
                       </div>
                       <CreditBalance />
                     </div>
@@ -349,16 +399,24 @@ export default function AudienceBuilder() {
 
                   {!loading && results.length > 0 && (
                     <>
-                      <div className="border rounded-lg divide-y overflow-auto flex-1 max-h-[calc(100vh-400px)]">
-                        {results.map((company: any) => (
-                          <PreviewTableRow
-                            key={company.id}
-                            entity={company}
-                            entityType="company"
-                            isUnlocked={isUnlocked}
-                          />
-                        ))}
-                      </div>
+                      {viewMode === 'compact' ? (
+                        <div className="border rounded-lg divide-y overflow-auto flex-1 max-h-[calc(100vh-400px)]">
+                          {results.map((company: any) => (
+                            <PreviewTableRow
+                              key={company.id}
+                              entity={company}
+                              entityType="company"
+                              isUnlocked={isUnlocked}
+                            />
+                          ))}
+                        </div>
+                      ) : (
+                        <PreviewTable
+                          data={results}
+                          entityType="company"
+                          isUnlocked={isUnlocked}
+                        />
+                      )}
                       
                       {totalPages > 1 && (
                         <PaginationControls
