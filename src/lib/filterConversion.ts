@@ -11,6 +11,7 @@ export interface FilterBuilderState {
   netWorth: string | null;
   income: string | null;
   keywords: string[];
+  prospectData: string | null;
 }
 
 export function convertFilterStateToAudienceLabFormat(state: FilterBuilderState): AudienceLabFilters {
@@ -88,6 +89,16 @@ export function filterMockPeople(people: PersonEntity[], state: FilterBuilderSta
     // Filter by company size
     if (state.companySize && person.companySize !== state.companySize) {
       return false;
+    }
+    
+    // Filter by prospect data (mock implementation - ~70% of records have each type)
+    if (state.prospectData) {
+      // Mock: randomly determine if person has the selected data type
+      // In production, this will check actual fields from AudienceLab
+      const mockHasData = Math.random() > 0.3; // 70% have data
+      if (!mockHasData) {
+        return false;
+      }
     }
     
     // Filter by keywords (search in name, title, company, industry, company description)

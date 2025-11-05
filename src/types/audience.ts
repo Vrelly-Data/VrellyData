@@ -49,6 +49,15 @@ export interface PersonEntity {
   state?: string;
   country?: string;
   jobTitle?: string;
+  
+  // AudienceLab data availability fields
+  personalEmails?: string[];      // PERSONAL_EMAILS array
+  businessEmail?: string;          // BUSINESS_EMAIL (first one)
+  directNumber?: string;           // DIRECT_NUMBER (first one)
+  linkedinUrl?: string;            // LINKEDIN_URL
+  facebookUrl?: string;            // FACEBOOK_URL
+  twitterUrl?: string;             // TWITTER_URL
+  
   customFields?: Record<string, string>; // For unmapped CSV columns
 }
 

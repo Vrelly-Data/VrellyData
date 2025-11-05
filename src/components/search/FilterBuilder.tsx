@@ -28,6 +28,7 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
     netWorth: null,
     income: null,
     keywords: [],
+    prospectData: null,
   });
 
   const updateFilter = <K extends keyof FilterBuilderState>(
@@ -39,18 +40,19 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
 
   useEffect(() => {
     // Reset filters when entity type changes
-    setFilterState({
-      industries: [],
-      cities: [],
-      gender: null,
-      jobTitles: [],
-      seniority: null,
-      department: null,
-      companySize: null,
-      netWorth: null,
-      income: null,
-      keywords: [],
-    });
+      setFilterState({
+        industries: [],
+        cities: [],
+        gender: null,
+        jobTitles: [],
+        seniority: null,
+        department: null,
+        companySize: null,
+        netWorth: null,
+        income: null,
+        keywords: [],
+        prospectData: null,
+      });
   }, [entityType]);
 
   const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
@@ -121,6 +123,30 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
           {/* People-only filters */}
           {entityType === 'person' && (
             <>
+              {/* Prospect Data */}
+              <div className="space-y-2">
+                <Label>Prospect Data</Label>
+                <Select
+                  value={filterState.prospectData || ''}
+                  onValueChange={(value) => updateFilter('prospectData', value || null)}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select required data..." />
+                  </SelectTrigger>
+                  <SelectContent className="bg-background">
+                    <SelectItem value="personal_email">Personal Email</SelectItem>
+                    <SelectItem value="business_email">Business Email</SelectItem>
+                    <SelectItem value="direct_mobile">Direct Mobile</SelectItem>
+                    <SelectItem value="personal_linkedin">Personal LinkedIn</SelectItem>
+                    <SelectItem value="personal_facebook">Personal Facebook</SelectItem>
+                    <SelectItem value="personal_twitter">Personal Twitter</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Only show contacts with this data available
+                </p>
+              </div>
+
               {/* Person Net Worth */}
               <div className="space-y-2">
                 <Label>Person Net Worth</Label>
@@ -131,7 +157,7 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
                   <SelectTrigger>
                     <SelectValue placeholder="Select net worth range..." />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent className="bg-background">
                     {attributes.netWorthRanges.map((range) => (
                       <SelectItem key={range} value={range}>
                         {range}
