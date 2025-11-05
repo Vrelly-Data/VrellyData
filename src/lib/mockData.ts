@@ -79,6 +79,7 @@ export function generateMockPeople(count: number): PersonEntity[] {
       location: randomElement(MOCK_CITIES),
       company: company,
       companySize: randomElement(['1-10', '11-50', '51-200', '201-500', '501-1000', '1000+']),
+      companyDescription: randomElement(MOCK_COMPANY_DESCRIPTIONS),
       industry: randomElement(MOCK_INDUSTRIES),
       technologies: [],
       age: randomInt(25, 65),

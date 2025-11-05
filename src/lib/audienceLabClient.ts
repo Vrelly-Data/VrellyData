@@ -84,6 +84,7 @@ class AudienceLabClient {
           location: item.location || item.city,
           company: item.company || item.companyName,
           companySize: item.companySize,
+          companyDescription: item.companyDescription || item.company_description,
           industry: item.industry,
           technologies: item.technologies || [],
           email: item.email,

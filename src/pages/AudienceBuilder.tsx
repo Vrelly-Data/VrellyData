@@ -1,7 +1,18 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
-import { Save, Download, Users, Building2, Info, List, TableIcon } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { Save, Download, Users, Building2, Info, ChevronDown, FolderPlus, Send } from 'lucide-react';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { useAudienceStore } from '@/stores/audienceStore';
 import { audienceLabClient } from '@/lib/audienceLabClient';
 import { useToast } from '@/hooks/use-toast';
@@ -12,12 +23,15 @@ import { CreditBalance } from '@/components/search/CreditBalance';
 import { PaginationControls } from '@/components/search/PaginationControls';
 import { FilterBuilderState } from '@/lib/filterConversion';
 import { UnlockConfirmDialog } from '@/components/search/UnlockConfirmDialog';
+import { ListManagementDialog } from '@/components/records/ListManagementDialog';
+import { SendContactsDialog } from '@/components/records/SendContactsDialog';
 import { useUnlockedRecords } from '@/hooks/useUnlockedRecords';
 import { useCreditCheck } from '@/hooks/useCreditCheck';
 import { usePersistRecords } from '@/hooks/usePersistRecords';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { PreviewTableRow } from '@/components/search/PreviewTableRow';
 import { PreviewTable } from '@/components/search/PreviewTable';
+import { supabase } from '@/integrations/supabase/client';
+import { useEffect } from 'react';
 
 export default function AudienceBuilder() {
   const { toast } = useToast();
@@ -50,23 +64,19 @@ export default function AudienceBuilder() {
     action: 'export' | 'list' | 'send';
     currentCredits: number;
   } | null>(null);
-  const [viewMode, setViewMode] = useState<'compact' | 'table'>('compact');
-
-  // Debounced search for real-time preview
-  const debounceTimerRef = useRef<NodeJS.Timeout>();
   
-  const debouncedSearch = useCallback((filterState: FilterBuilderState) => {
-    if (debounceTimerRef.current) {
-      clearTimeout(debounceTimerRef.current);
-    }
-    
-    debounceTimerRef.current = setTimeout(() => {
-      handleSearch(filterState);
-    }, 800); // 800ms delay after user stops typing
-  }, [currentType, currentPage, perPage]);
+  const [selectedRecords, setSelectedRecords] = useState<Set<string>>(new Set());
+  const [isListDialogOpen, setIsListDialogOpen] = useState(false);
+  const [sendDialogState, setSendDialogState] = useState<{
+    open: boolean;
+    projectId: string;
+    projectName: string;
+  }>({ open: false, projectId: '', projectName: '' });
+  const [externalProjects, setExternalProjects] = useState<any[]>([]);
   
   const handleSearch = async (filterState: FilterBuilderState) => {
     setLoading(true);
+    setSelectedRecords(new Set()); // Clear selection on new search
     
     try {
       const params = {
@@ -109,101 +119,155 @@ export default function AudienceBuilder() {
       setLoading(false);
     }
   };
-  
 
-  const handleExport = async () => {
-    if (results.length === 0) {
+  // Load external projects for Send action
+  useEffect(() => {
+    loadExternalProjects();
+  }, []);
+
+  const loadExternalProjects = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data: membership } = await supabase
+        .from('team_memberships')
+        .select('team_id')
+        .eq('user_id', user.id)
+        .single();
+
+      if (!membership) return;
+
+      const { data, error } = await supabase
+        .from('external_projects')
+        .select('*')
+        .eq('team_id', membership.team_id)
+        .eq('is_active', true);
+
+      if (error) throw error;
+      setExternalProjects(data || []);
+    } catch (error) {
+      console.error('Error loading external projects:', error);
+    }
+  };
+
+  const handleActionClick = async (action: 'export' | 'list' | 'send', projectId?: string, projectName?: string) => {
+    if (selectedRecords.size === 0) {
       toast({
-        title: 'No data to export',
-        description: 'Please run a search first',
+        title: 'No records selected',
+        description: 'Please select at least one record',
         variant: 'destructive',
       });
       return;
     }
 
+    // Get selected records data
+    const selectedData = results.filter(r => selectedRecords.has(r.id));
+    
     // Calculate unlock cost
-    const alreadyUnlocked = results.filter(r => isUnlocked(r.id)).length;
-    const needUnlock = results.length - alreadyUnlocked;
-
+    const alreadyUnlocked = selectedData.filter(r => isUnlocked(r.id)).length;
+    const needUnlock = selectedData.length - alreadyUnlocked;
+    
     if (needUnlock > 0) {
-      // Fetch current credits before showing dialog
+      // Show unlock confirmation dialog
       const credits = await getCurrentCredits();
       setUnlockDialogConfig({
-        totalRecords: results.length,
+        totalRecords: selectedData.length,
         alreadyUnlocked,
         needUnlock,
-        action: 'export',
+        action,
         currentCredits: credits,
       });
+      
+      // Store project info for send action
+      if (action === 'send' && projectId && projectName) {
+        setSendDialogState({ open: false, projectId, projectName });
+      }
+      
       setShowUnlockDialog(true);
     } else {
-      // All already unlocked, export directly
-      await performExport();
+      // All already unlocked, proceed directly
+      await performAction(action, projectId, projectName);
     }
   };
 
-  const performExport = async () => {
-    try {
-      if (currentType === 'person') {
-        exportPeopleToCSV(results as PersonEntity[]);
-      } else {
-        exportCompaniesToCSV(results as CompanyEntity[]);
-      }
-
-      // Save to people/company records
-      await saveRecords(results, currentType, 'export');
-      
-      toast({
-        title: 'Export successful',
-        description: `Exported ${results.length} ${currentType === 'person' ? 'people' : 'companies'}`,
-      });
-    } catch (error) {
-      toast({
-        title: 'Export failed',
-        description: 'Failed to export data. Please try again.',
-        variant: 'destructive',
-      });
-    }
-  };
-
-  const handleUnlockAndExport = async () => {
+  const handleUnlockConfirm = async () => {
     if (!unlockDialogConfig) return;
-
-    const lockedRecords = results.filter(r => !isUnlocked(r.id));
-    const { needUnlock } = unlockDialogConfig;
-
+    
+    const selectedData = results.filter(r => selectedRecords.has(r.id));
+    const lockedRecords = selectedData.filter(r => !isUnlocked(r.id));
+    const { needUnlock, action } = unlockDialogConfig;
+    
     // Check credits
     const enoughCredits = await hasEnoughCredits(needUnlock);
     if (!enoughCredits) {
-      toast({
-        title: 'Insufficient credits',
-        description: `You need ${needUnlock} credits but don't have enough.`,
-        variant: 'destructive',
+      toast({ 
+        title: 'Insufficient credits', 
+        description: 'Please upgrade your plan to continue',
+        variant: 'destructive' 
       });
       return;
     }
-
+    
     // Deduct credits
     const result = await deductCredits(needUnlock);
     if (!result.success) {
-      toast({
-        title: 'Error',
-        description: 'Failed to deduct credits',
-        variant: 'destructive',
+      toast({ 
+        title: 'Error deducting credits', 
+        variant: 'destructive' 
       });
       return;
     }
-
-    // Mark as unlocked
+    
+    // Mark as unlocked in unlocked_records table
     await markAsUnlocked(
       lockedRecords.map(r => r.id),
       lockedRecords
     );
-
+    
+    // Save to people_records or company_records table
+    await saveRecords(selectedData, currentType, action);
+    
     setShowUnlockDialog(false);
     
-    // Perform export
-    await performExport();
+    // Perform the action
+    await performAction(action, sendDialogState.projectId, sendDialogState.projectName);
+  };
+
+  const performAction = async (action: 'export' | 'list' | 'send', projectId?: string, projectName?: string) => {
+    const selectedData = results.filter(r => selectedRecords.has(r.id));
+    
+    switch (action) {
+      case 'export':
+        if (currentType === 'person') {
+          exportPeopleToCSV(selectedData as PersonEntity[]);
+        } else {
+          exportCompaniesToCSV(selectedData as CompanyEntity[]);
+        }
+        toast({
+          title: 'Export successful',
+          description: `Exported ${selectedData.length} records`,
+        });
+        setSelectedRecords(new Set());
+        break;
+        
+      case 'list':
+        setIsListDialogOpen(true);
+        break;
+        
+      case 'send':
+        if (projectId && projectName) {
+          setSendDialogState({ open: true, projectId, projectName });
+        }
+        break;
+    }
+  };
+
+  const handleSaveAudience = () => {
+    toast({
+      title: 'Coming soon',
+      description: 'Save audience feature will be available soon',
+    });
   };
 
   return (
@@ -212,13 +276,9 @@ export default function AudienceBuilder() {
         <div className="flex items-center justify-between p-4">
           <h1 className="text-2xl font-bold">Audience Builder</h1>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm">
+            <Button variant="outline" size="sm" onClick={handleSaveAudience}>
               <Save className="h-4 w-4 mr-2" />
               Save Audience
-            </Button>
-            <Button variant="outline" size="sm" onClick={handleExport} disabled={results.length === 0}>
-              <Download className="h-4 w-4 mr-2" />
-              Export
             </Button>
           </div>
         </div>
@@ -227,7 +287,10 @@ export default function AudienceBuilder() {
       <div className="flex-1 overflow-hidden">
         <Tabs 
           value={currentType} 
-          onValueChange={(value) => setCurrentType(value as 'person' | 'company')}
+          onValueChange={(value) => {
+            setCurrentType(value as 'person' | 'company');
+            setSelectedRecords(new Set());
+          }}
           className="h-full flex flex-col"
         >
           <div className="border-b px-4">
@@ -251,47 +314,80 @@ export default function AudienceBuilder() {
                   <FilterBuilder 
                     entityType="person" 
                     onSearch={handleSearch}
-                    onChange={debouncedSearch}
                   />
                 </div>
                 
                 {/* Right: Results */}
-                  <div className="space-y-4 h-full flex flex-col">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-4">
-                        <div className="text-sm text-muted-foreground">
-                          {totalEstimate > 0 && `${totalEstimate} results found`}
-                        </div>
-                        {results.length > 0 && (
-                          <div className="flex items-center gap-2">
-                            <Button
-                              variant={viewMode === 'compact' ? 'default' : 'outline'}
-                              size="sm"
-                              onClick={() => setViewMode('compact')}
-                            >
-                              <List className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              variant={viewMode === 'table' ? 'default' : 'outline'}
-                              size="sm"
-                              onClick={() => setViewMode('table')}
-                            >
-                              <TableIcon className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        )}
-                      </div>
-                      <CreditBalance />
+                <div className="space-y-4 h-full flex flex-col">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-4">
+                      {selectedRecords.size > 0 && (
+                        <Badge variant="secondary">
+                          {selectedRecords.size} selected
+                        </Badge>
+                      )}
                     </div>
+                    <div className="flex items-center gap-2">
+                      <CreditBalance />
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button 
+                            size="sm" 
+                            disabled={selectedRecords.size === 0}
+                          >
+                            Actions ({selectedRecords.size})
+                            <ChevronDown className="h-4 w-4 ml-2" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-48">
+                          <DropdownMenuItem onClick={() => handleActionClick('export')}>
+                            <Download className="h-4 w-4 mr-2" />
+                            Export Selected
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleActionClick('list')}>
+                            <FolderPlus className="h-4 w-4 mr-2" />
+                            Add to List
+                          </DropdownMenuItem>
+                          <DropdownMenuSub>
+                            <DropdownMenuSubTrigger>
+                              <Send className="h-4 w-4 mr-2" />
+                              Send to Tool
+                            </DropdownMenuSubTrigger>
+                            <DropdownMenuSubContent>
+                              {externalProjects.length === 0 ? (
+                                <DropdownMenuItem disabled>
+                                  No tools connected
+                                </DropdownMenuItem>
+                              ) : (
+                                externalProjects.map((project) => (
+                                  <DropdownMenuItem 
+                                    key={project.id}
+                                    onClick={() => handleActionClick('send', project.id, project.name)}
+                                  >
+                                    {project.name}
+                                  </DropdownMenuItem>
+                                ))
+                              )}
+                            </DropdownMenuSubContent>
+                          </DropdownMenuSub>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem onClick={handleSaveAudience}>
+                            <Save className="h-4 w-4 mr-2" />
+                            Save Audience
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                  </div>
 
-                    {results.length > 0 && (
-                      <Alert>
-                        <Info className="h-4 w-4" />
-                        <AlertDescription>
-                          Preview Mode: Email and LinkedIn are blurred. Export, Save to List, or Send to unlock and use credits.
-                        </AlertDescription>
-                      </Alert>
-                    )}
+                  {results.length > 0 && (
+                    <Alert>
+                      <Info className="h-4 w-4" />
+                      <AlertDescription>
+                        Preview Mode: Email and LinkedIn are blurred. Use Actions to unlock and use credits.
+                      </AlertDescription>
+                    </Alert>
+                  )}
 
                   {loading && (
                     <div className="flex items-center justify-center h-64">
@@ -301,24 +397,13 @@ export default function AudienceBuilder() {
 
                   {!loading && results.length > 0 && (
                     <>
-                      {viewMode === 'compact' ? (
-                        <div className="border rounded-lg divide-y overflow-auto flex-1 max-h-[calc(100vh-400px)]">
-                          {results.map((person: any) => (
-                            <PreviewTableRow
-                              key={person.id}
-                              entity={person}
-                              entityType="person"
-                              isUnlocked={isUnlocked}
-                            />
-                          ))}
-                        </div>
-                      ) : (
-                        <PreviewTable
-                          data={results}
-                          entityType="person"
-                          isUnlocked={isUnlocked}
-                        />
-                      )}
+                      <PreviewTable
+                        data={results}
+                        entityType="person"
+                        isUnlocked={isUnlocked}
+                        selectedRecords={selectedRecords}
+                        onSelectionChange={setSelectedRecords}
+                      />
                       
                       {totalPages > 1 && (
                         <PaginationControls
@@ -349,47 +434,80 @@ export default function AudienceBuilder() {
                   <FilterBuilder 
                     entityType="company"
                     onSearch={handleSearch}
-                    onChange={debouncedSearch}
                   />
                 </div>
                 
                 {/* Right: Results */}
-                  <div className="space-y-4 h-full flex flex-col">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-4">
-                        <div className="text-sm text-muted-foreground">
-                          {totalEstimate > 0 && `${totalEstimate} results found`}
-                        </div>
-                        {results.length > 0 && (
-                          <div className="flex items-center gap-2">
-                            <Button
-                              variant={viewMode === 'compact' ? 'default' : 'outline'}
-                              size="sm"
-                              onClick={() => setViewMode('compact')}
-                            >
-                              <List className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              variant={viewMode === 'table' ? 'default' : 'outline'}
-                              size="sm"
-                              onClick={() => setViewMode('table')}
-                            >
-                              <TableIcon className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        )}
-                      </div>
-                      <CreditBalance />
+                <div className="space-y-4 h-full flex flex-col">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-4">
+                      {selectedRecords.size > 0 && (
+                        <Badge variant="secondary">
+                          {selectedRecords.size} selected
+                        </Badge>
+                      )}
                     </div>
+                    <div className="flex items-center gap-2">
+                      <CreditBalance />
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button 
+                            size="sm" 
+                            disabled={selectedRecords.size === 0}
+                          >
+                            Actions ({selectedRecords.size})
+                            <ChevronDown className="h-4 w-4 ml-2" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-48">
+                          <DropdownMenuItem onClick={() => handleActionClick('export')}>
+                            <Download className="h-4 w-4 mr-2" />
+                            Export Selected
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleActionClick('list')}>
+                            <FolderPlus className="h-4 w-4 mr-2" />
+                            Add to List
+                          </DropdownMenuItem>
+                          <DropdownMenuSub>
+                            <DropdownMenuSubTrigger>
+                              <Send className="h-4 w-4 mr-2" />
+                              Send to Tool
+                            </DropdownMenuSubTrigger>
+                            <DropdownMenuSubContent>
+                              {externalProjects.length === 0 ? (
+                                <DropdownMenuItem disabled>
+                                  No tools connected
+                                </DropdownMenuItem>
+                              ) : (
+                                externalProjects.map((project) => (
+                                  <DropdownMenuItem 
+                                    key={project.id}
+                                    onClick={() => handleActionClick('send', project.id, project.name)}
+                                  >
+                                    {project.name}
+                                  </DropdownMenuItem>
+                                ))
+                              )}
+                            </DropdownMenuSubContent>
+                          </DropdownMenuSub>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem onClick={handleSaveAudience}>
+                            <Save className="h-4 w-4 mr-2" />
+                            Save Audience
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                  </div>
 
-                    {results.length > 0 && (
-                      <Alert>
-                        <Info className="h-4 w-4" />
-                        <AlertDescription>
-                          Preview Mode: Contact details are blurred. Export, Save to List, or Send to unlock and use credits.
-                        </AlertDescription>
-                      </Alert>
-                    )}
+                  {results.length > 0 && (
+                    <Alert>
+                      <Info className="h-4 w-4" />
+                      <AlertDescription>
+                        Preview Mode: Contact details are blurred. Use Actions to unlock and use credits.
+                      </AlertDescription>
+                    </Alert>
+                  )}
 
                   {loading && (
                     <div className="flex items-center justify-center h-64">
@@ -399,24 +517,13 @@ export default function AudienceBuilder() {
 
                   {!loading && results.length > 0 && (
                     <>
-                      {viewMode === 'compact' ? (
-                        <div className="border rounded-lg divide-y overflow-auto flex-1 max-h-[calc(100vh-400px)]">
-                          {results.map((company: any) => (
-                            <PreviewTableRow
-                              key={company.id}
-                              entity={company}
-                              entityType="company"
-                              isUnlocked={isUnlocked}
-                            />
-                          ))}
-                        </div>
-                      ) : (
-                        <PreviewTable
-                          data={results}
-                          entityType="company"
-                          isUnlocked={isUnlocked}
-                        />
-                      )}
+                      <PreviewTable
+                        data={results}
+                        entityType="company"
+                        isUnlocked={isUnlocked}
+                        selectedRecords={selectedRecords}
+                        onSelectionChange={setSelectedRecords}
+                      />
                       
                       {totalPages > 1 && (
                         <PaginationControls
@@ -451,11 +558,35 @@ export default function AudienceBuilder() {
           alreadyUnlocked={unlockDialogConfig.alreadyUnlocked}
           needUnlock={unlockDialogConfig.needUnlock}
           currentCredits={unlockDialogConfig.currentCredits}
-          onConfirm={handleUnlockAndExport}
+          onConfirm={handleUnlockConfirm}
           onCancel={() => setShowUnlockDialog(false)}
           action={unlockDialogConfig.action}
         />
       )}
+
+      <ListManagementDialog
+        open={isListDialogOpen}
+        onOpenChange={setIsListDialogOpen}
+        entityType={currentType}
+        selectedRecords={Array.from(selectedRecords)}
+        records={results}
+        onSuccess={() => {
+          setSelectedRecords(new Set());
+          setIsListDialogOpen(false);
+          toast({ title: 'Added to list successfully' });
+        }}
+      />
+
+      <SendContactsDialog
+        open={sendDialogState.open}
+        onOpenChange={(open) => {
+          setSendDialogState(prev => ({ ...prev, open }));
+          if (!open) setSelectedRecords(new Set());
+        }}
+        contactIds={Array.from(selectedRecords)}
+        projectId={sendDialogState.projectId}
+        projectName={sendDialogState.projectName}
+      />
     </div>
   );
 }

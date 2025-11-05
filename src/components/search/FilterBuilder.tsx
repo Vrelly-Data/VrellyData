@@ -13,10 +13,9 @@ import { TagInput } from '@/components/ui/tag-input';
 interface FilterBuilderProps {
   entityType: EntityType;
   onSearch: (filters: FilterBuilderState) => void;
-  onChange?: (filters: FilterBuilderState) => void;
 }
 
-export function FilterBuilder({ entityType, onSearch, onChange }: FilterBuilderProps) {
+export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
   const { attributes, loading } = useAudienceAttributes();
   const [filterState, setFilterState] = useState<FilterBuilderState>({
     industries: [],
@@ -35,11 +34,7 @@ export function FilterBuilder({ entityType, onSearch, onChange }: FilterBuilderP
     key: K,
     value: FilterBuilderState[K]
   ) => {
-    setFilterState(prev => {
-      const newState = { ...prev, [key]: value };
-      onChange?.(newState);
-      return newState;
-    });
+    setFilterState(prev => ({ ...prev, [key]: value }));
   };
 
   useEffect(() => {

@@ -34,6 +34,7 @@ export interface PersonEntity {
   location?: string;
   company?: string;
   companySize?: string;
+  companyDescription?: string;
   industry?: string;
   technologies?: string[];
   email?: string;
