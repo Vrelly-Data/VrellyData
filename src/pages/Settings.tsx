@@ -317,7 +317,7 @@ export default function Settings() {
                   <div className="flex justify-between items-center">
                     <span className="text-sm font-medium">Credit Balance</span>
                     <span className="text-2xl font-bold text-primary">
-                      {(profile.credits || 0).toLocaleString()}
+                      {(profile?.credits ?? 0).toLocaleString()}
                     </span>
                   </div>
                   <p className="text-xs text-muted-foreground">

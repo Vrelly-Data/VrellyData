@@ -68,7 +68,7 @@ export function AppSidebar() {
                   <>
                     <div className="text-sm font-medium">{profile.name}</div>
                     <div className="text-xs text-muted-foreground">
-                      {profile.credits.toLocaleString()} credits available
+                      {(profile?.credits ?? 0).toLocaleString()} credits available
                     </div>
                   </>
                 )}
