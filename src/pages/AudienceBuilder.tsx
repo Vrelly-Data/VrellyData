@@ -275,6 +275,59 @@ export default function AudienceBuilder() {
     }
   };
 
+  const handleSelectAllResults = async () => {
+    // Show warning if selecting many records
+    if (totalEstimate > 1000) {
+      const confirmed = window.confirm(
+        `You are about to select ${totalEstimate.toLocaleString()} records. This may take a moment. Continue?`
+      );
+      if (!confirmed) return;
+    }
+    
+    setLoading(true);
+    try {
+      // Fetch ALL pages of results
+      const allResults: (PersonEntity | CompanyEntity)[] = [];
+      const totalPagesToFetch = Math.ceil(totalEstimate / perPage);
+      
+      for (let page = 1; page <= totalPagesToFetch; page++) {
+        const params = {
+          filters: filters || {
+            type: currentType,
+            where: { field: 'all', op: 'exists' as const },
+          },
+          filterState: {} as FilterBuilderState, // Use current filter state
+          page,
+          perPage,
+          unlockedIds: new Set<string>(),
+        };
+        
+        const response = currentType === 'person'
+          ? await audienceLabClient.searchPeople(params)
+          : await audienceLabClient.searchCompanies(params);
+        
+        allResults.push(...response.items);
+      }
+      
+      // Select all IDs
+      const allIds = new Set(allResults.map(r => r.id));
+      setSelectedRecords(allIds);
+      
+      toast({
+        title: 'All results selected',
+        description: `Selected ${allIds.size.toLocaleString()} records across all pages`,
+      });
+    } catch (error) {
+      toast({
+        title: 'Error',
+        description: 'Failed to select all results',
+        variant: 'destructive',
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleSaveAudience = async () => {
     if (totalEstimate === 0) {
       toast({
@@ -412,7 +465,12 @@ export default function AudienceBuilder() {
                     <div className="flex items-center gap-4">
                       {selectedRecords.size > 0 && (
                         <Badge variant="secondary">
-                          {selectedRecords.size} selected
+                          {selectedRecords.size.toLocaleString()} selected
+                          {selectedRecords.size < totalEstimate && (
+                            <span className="text-xs ml-1">
+                              of {totalEstimate.toLocaleString()}
+                            </span>
+                          )}
                         </Badge>
                       )}
                       {totalEstimate > 0 && (
@@ -497,6 +555,8 @@ export default function AudienceBuilder() {
                         isUnlocked={isUnlocked}
                         selectedRecords={selectedRecords}
                         onSelectionChange={setSelectedRecords}
+                        totalResults={totalEstimate}
+                        onSelectAllResults={handleSelectAllResults}
                       />
                       
                       {totalPages > 1 && (
@@ -537,7 +597,12 @@ export default function AudienceBuilder() {
                     <div className="flex items-center gap-4">
                       {selectedRecords.size > 0 && (
                         <Badge variant="secondary">
-                          {selectedRecords.size} selected
+                          {selectedRecords.size.toLocaleString()} selected
+                          {selectedRecords.size < totalEstimate && (
+                            <span className="text-xs ml-1">
+                              of {totalEstimate.toLocaleString()}
+                            </span>
+                          )}
                         </Badge>
                       )}
                       {totalEstimate > 0 && (
@@ -622,6 +687,8 @@ export default function AudienceBuilder() {
                         isUnlocked={isUnlocked}
                         selectedRecords={selectedRecords}
                         onSelectionChange={setSelectedRecords}
+                        totalResults={totalEstimate}
+                        onSelectAllResults={handleSelectAllResults}
                       />
                       
                       {totalPages > 1 && (

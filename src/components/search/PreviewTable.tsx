@@ -28,9 +28,11 @@ interface PreviewTableProps {
   isUnlocked: (id: string) => boolean;
   selectedRecords: Set<string>;
   onSelectionChange: (selected: Set<string>) => void;
+  totalResults: number;
+  onSelectAllResults?: () => void;
 }
 
-export function PreviewTable({ data, entityType, isUnlocked, selectedRecords, onSelectionChange }: PreviewTableProps) {
+export function PreviewTable({ data, entityType, isUnlocked, selectedRecords, onSelectionChange, totalResults, onSelectAllResults }: PreviewTableProps) {
   const [selectCount, setSelectCount] = useState<string>('');
 
   const handleSelectAll = () => {
@@ -87,10 +89,23 @@ export function PreviewTable({ data, entityType, isUnlocked, selectedRecords, on
                       <ChevronDown className="h-3 w-3 ml-1" />
                     </Button>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start">
+                  <DropdownMenuContent align="start" className="bg-background">
                     <DropdownMenuItem onClick={handleSelectAll}>
-                      Select All ({data.length})
+                      Select All on Page ({data.length})
                     </DropdownMenuItem>
+                    {totalResults > data.length && onSelectAllResults && (
+                      <>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem onClick={onSelectAllResults}>
+                          <div className="flex flex-col gap-1">
+                            <span>Select All {totalResults.toLocaleString()} Results</span>
+                            <span className="text-xs text-muted-foreground">
+                              May take a moment for large datasets
+                            </span>
+                          </div>
+                        </DropdownMenuItem>
+                      </>
+                    )}
                     <DropdownMenuSeparator />
                     <div className="px-2 py-2">
                       <label className="text-sm font-medium mb-1.5 block">Select first:</label>
@@ -192,10 +207,23 @@ export function PreviewTable({ data, entityType, isUnlocked, selectedRecords, on
                     <ChevronDown className="h-3 w-3 ml-1" />
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="start">
+                <DropdownMenuContent align="start" className="bg-background">
                   <DropdownMenuItem onClick={handleSelectAll}>
-                    Select All ({data.length})
+                    Select All on Page ({data.length})
                   </DropdownMenuItem>
+                  {totalResults > data.length && onSelectAllResults && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onClick={onSelectAllResults}>
+                        <div className="flex flex-col gap-1">
+                          <span>Select All {totalResults.toLocaleString()} Results</span>
+                          <span className="text-xs text-muted-foreground">
+                            May take a moment for large datasets
+                          </span>
+                        </div>
+                      </DropdownMenuItem>
+                    </>
+                  )}
                   <DropdownMenuSeparator />
                   <div className="px-2 py-2">
                     <label className="text-sm font-medium mb-1.5 block">Select first:</label>
