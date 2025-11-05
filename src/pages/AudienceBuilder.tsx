@@ -11,12 +11,12 @@ import { FilterBuilder } from '@/components/search/FilterBuilder';
 import { CreditBalance } from '@/components/search/CreditBalance';
 import { PaginationControls } from '@/components/search/PaginationControls';
 import { FilterBuilderState } from '@/lib/filterConversion';
-import { BlurredField } from '@/components/search/BlurredField';
 import { UnlockConfirmDialog } from '@/components/search/UnlockConfirmDialog';
 import { useUnlockedRecords } from '@/hooks/useUnlockedRecords';
 import { useCreditCheck } from '@/hooks/useCreditCheck';
 import { usePersistRecords } from '@/hooks/usePersistRecords';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { PreviewTableRow } from '@/components/search/PreviewTableRow';
 
 export default function AudienceBuilder() {
   const { toast } = useToast();
@@ -279,41 +279,15 @@ export default function AudienceBuilder() {
 
                   {!loading && results.length > 0 && (
                     <>
-                      <div className="border rounded-lg overflow-hidden flex-1">
-                        <div className="bg-muted px-4 py-3 font-medium grid grid-cols-8 gap-4 text-sm">
-                          <div>Name</div>
-                          <div>Title</div>
-                          <div>Email</div>
-                          <div>LinkedIn</div>
-                          <div>Seniority</div>
-                          <div>Department</div>
-                          <div>Company</div>
-                          <div>Location</div>
-                        </div>
-                        <div className="divide-y overflow-auto max-h-[calc(100vh-400px)]">
-                          {results.map((person: any) => (
-                            <div key={person.id} className="px-4 py-3 grid grid-cols-8 gap-4 text-sm hover:bg-muted/50">
-                              <div className="font-medium">{person.name}</div>
-                              <div className="truncate">{person.title}</div>
-                              <div>
-                                <BlurredField 
-                                  value={person.email || 'N/A'} 
-                                  isUnlocked={isUnlocked(person.id)} 
-                                />
-                              </div>
-                              <div>
-                                <BlurredField 
-                                  value={person.linkedin || 'N/A'} 
-                                  isUnlocked={isUnlocked(person.id)} 
-                                />
-                              </div>
-                              <div>{person.seniority}</div>
-                              <div>{person.department}</div>
-                              <div>{person.company}</div>
-                              <div>{person.location}</div>
-                            </div>
-                          ))}
-                        </div>
+                      <div className="border rounded-lg divide-y overflow-auto flex-1 max-h-[calc(100vh-400px)]">
+                        {results.map((person: any) => (
+                          <PreviewTableRow
+                            key={person.id}
+                            entity={person}
+                            entityType="person"
+                            isUnlocked={isUnlocked}
+                          />
+                        ))}
                       </div>
                       
                       {totalPages > 1 && (
@@ -375,31 +349,15 @@ export default function AudienceBuilder() {
 
                   {!loading && results.length > 0 && (
                     <>
-                      <div className="border rounded-lg overflow-hidden flex-1">
-                        <div className="bg-muted px-4 py-3 font-medium grid grid-cols-6 gap-4 text-sm">
-                          <div>Company</div>
-                          <div>Domain</div>
-                          <div>Industry</div>
-                          <div>Employees</div>
-                          <div>Location</div>
-                          <div>Actions</div>
-                        </div>
-                        <div className="divide-y overflow-auto max-h-[calc(100vh-400px)]">
-                          {results.map((company: any) => (
-                            <div key={company.id} className="px-4 py-3 grid grid-cols-6 gap-4 text-sm hover:bg-muted/50">
-                              <div className="font-medium">{company.name}</div>
-                              <div className="truncate">{company.domain}</div>
-                              <div>{company.industry}</div>
-                              <div>{company.employeeCount}</div>
-                              <div>{company.location}</div>
-                              <div>
-                                <Button variant="ghost" size="sm">
-                                  View
-                                </Button>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
+                      <div className="border rounded-lg divide-y overflow-auto flex-1 max-h-[calc(100vh-400px)]">
+                        {results.map((company: any) => (
+                          <PreviewTableRow
+                            key={company.id}
+                            entity={company}
+                            entityType="company"
+                            isUnlocked={isUnlocked}
+                          />
+                        ))}
                       </div>
                       
                       {totalPages > 1 && (
