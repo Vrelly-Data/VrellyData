@@ -94,15 +94,17 @@ export default function AudienceBuilder() {
         unlockedIds: new Set<string>(), // Pass empty set for initial search (no unlocks yet)
       };
       
+      let response;
+      
       if (currentType === 'person') {
-        const response = await audienceLabClient.searchPeople(params);
+        response = await audienceLabClient.searchPeople(params);
         setResults(response.items);
         setTotalEstimate(response.totalEstimate);
         if (response.pagination) {
           setTotalPages(response.pagination.total_pages);
         }
       } else {
-        const response = await audienceLabClient.searchCompanies(params);
+        response = await audienceLabClient.searchCompanies(params);
         setResults(response.items);
         setTotalEstimate(response.totalEstimate);
         if (response.pagination) {
@@ -112,7 +114,7 @@ export default function AudienceBuilder() {
       
       toast({
         title: 'Search complete',
-        description: `Found ${totalEstimate} results`,
+        description: `Found ${response.totalEstimate.toLocaleString()} ${currentType === 'person' ? 'people' : 'companies'}`,
       });
     } catch (error: any) {
       toast({
@@ -413,6 +415,11 @@ export default function AudienceBuilder() {
                           {selectedRecords.size} selected
                         </Badge>
                       )}
+                      {totalEstimate > 0 && (
+                        <div className="text-sm text-muted-foreground">
+                          Found {totalEstimate.toLocaleString()} {currentType === 'person' ? 'people' : 'companies'}
+                        </div>
+                      )}
                     </div>
                     <div className="flex items-center gap-2">
                       <CreditBalance />
@@ -532,6 +539,11 @@ export default function AudienceBuilder() {
                         <Badge variant="secondary">
                           {selectedRecords.size} selected
                         </Badge>
+                      )}
+                      {totalEstimate > 0 && (
+                        <div className="text-sm text-muted-foreground">
+                          Found {totalEstimate.toLocaleString()} {currentType === 'person' ? 'people' : 'companies'}
+                        </div>
                       )}
                     </div>
                     <div className="flex items-center gap-2">
