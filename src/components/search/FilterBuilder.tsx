@@ -9,6 +9,7 @@ import { useAudienceAttributes } from '@/hooks/useAudienceAttributes';
 import { FilterBuilderState } from '@/lib/filterConversion';
 import { EntityType } from '@/types/audience';
 import { TagInput } from '@/components/ui/tag-input';
+import { MultiSelectDropdown } from '@/components/search/MultiSelectDropdown';
 
 interface FilterBuilderProps {
   entityType: EntityType;
@@ -249,18 +250,18 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
           {entityType === 'person' && (
             <div className="space-y-2">
               <Label>Prospect Data</Label>
-              <TagInput
-                value={filterState.prospectData || []}
-                onChange={(values) => updateFilter('prospectData', values)}
-                placeholder="Type data types and press Enter..."
-                suggestions={[
-                  'personal_email',
-                  'business_email',
-                  'direct_mobile',
-                  'personal_linkedin',
-                  'personal_facebook',
-                  'personal_twitter'
+              <MultiSelectDropdown
+                options={[
+                  { label: 'Personal Email', value: 'personal_email' },
+                  { label: 'Business Email', value: 'business_email' },
+                  { label: 'Direct Mobile', value: 'direct_mobile' },
+                  { label: 'Personal LinkedIn', value: 'personal_linkedin' },
+                  { label: 'Personal Facebook', value: 'personal_facebook' },
+                  { label: 'Personal Twitter', value: 'personal_twitter' },
                 ]}
+                selected={filterState.prospectData || []}
+                onChange={(values) => updateFilter('prospectData', values)}
+                placeholder="Select data types..."
               />
               <p className="text-xs text-muted-foreground">
                 Only show contacts with these data types available

@@ -18,7 +18,7 @@ import { Badge } from '@/components/ui/badge';
 import { useState } from 'react';
 
 interface MultiSelectDropdownProps {
-  options: string[];
+  options: Array<{ label: string; value: string }> | string[];
   selected: string[];
   onChange: (values: string[]) => void;
   placeholder?: string;
@@ -34,12 +34,27 @@ export function MultiSelectDropdown({
 }: MultiSelectDropdownProps) {
   const [open, setOpen] = useState(false);
 
+  // Normalize options to always have label/value structure
+  const normalizedOptions = Array.isArray(options)
+    ? options.map(opt => 
+        typeof opt === 'string' 
+          ? { label: opt, value: opt }
+          : opt
+      )
+    : [];
+
   const handleSelect = (value: string) => {
     if (selected.includes(value)) {
       onChange(selected.filter(v => v !== value));
     } else {
       onChange([...selected, value]);
     }
+  };
+
+  // Get display label for a value
+  const getLabel = (value: string) => {
+    const option = normalizedOptions.find(opt => opt.value === value);
+    return option ? option.label : value;
   };
 
   return (
@@ -56,7 +71,7 @@ export function MultiSelectDropdown({
             <div className="flex gap-1 flex-wrap">
               {selected.slice(0, 2).map((value) => (
                 <Badge key={value} variant="secondary" className="text-xs">
-                  {value}
+                  {getLabel(value)}
                 </Badge>
               ))}
               {selected.length > 2 && (
@@ -77,19 +92,19 @@ export function MultiSelectDropdown({
           <CommandList>
             <CommandEmpty>No options found.</CommandEmpty>
             <CommandGroup>
-              {options.map((option) => (
+              {normalizedOptions.map((option) => (
                 <CommandItem
-                  key={option}
-                  value={option}
-                  onSelect={() => handleSelect(option)}
+                  key={option.value}
+                  value={option.label}
+                  onSelect={() => handleSelect(option.value)}
                 >
                   <Check
                     className={cn(
                       'mr-2 h-4 w-4',
-                      selected.includes(option) ? 'opacity-100' : 'opacity-0'
+                      selected.includes(option.value) ? 'opacity-100' : 'opacity-0'
                     )}
                   />
-                  {option}
+                  {option.label}
                 </CommandItem>
               ))}
             </CommandGroup>
