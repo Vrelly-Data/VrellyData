@@ -250,7 +250,7 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
             <div className="space-y-2">
               <Label>Prospect Data</Label>
               <TagInput
-                value={filterState.prospectData}
+                value={filterState.prospectData || []}
                 onChange={(values) => updateFilter('prospectData', values)}
                 placeholder="Type data types and press Enter..."
                 suggestions={[

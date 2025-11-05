@@ -27,8 +27,8 @@ export function TagInput({
 
   const filteredSuggestions = suggestions.filter(
     (suggestion) =>
-      suggestion.toLowerCase().includes(inputValue.toLowerCase()) &&
-      !value.includes(suggestion)
+      suggestion?.toLowerCase().includes(inputValue?.toLowerCase() || '') &&
+      !(value || []).includes(suggestion)
   );
 
   const addTag = (tag: string) => {
