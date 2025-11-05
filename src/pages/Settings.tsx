@@ -329,7 +329,7 @@ export default function Settings() {
                 {profile && profile.monthly_credit_limit > 0 && (
                   <div className="border rounded-lg p-4 space-y-3">
                     <div className="flex justify-between items-center">
-                      <span className="text-sm font-medium">Monthly Credit Usage</span>
+                      <span className="text-sm font-medium">Monthly Credit Allowance</span>
                       <span className="text-sm font-semibold">
                         {(profile.credits_used_this_month || 0).toLocaleString()} / {profile.monthly_credit_limit.toLocaleString()}
                       </span>
@@ -348,6 +348,9 @@ export default function Settings() {
                         </span>
                       )}
                     </div>
+                    <p className="text-xs text-muted-foreground mt-2">
+                      Your plan adds {profile.monthly_credit_limit.toLocaleString()} credits to your wallet each month
+                    </p>
                     {profile.credits_used_this_month >= profile.monthly_credit_limit * 0.9 && (
                       <p className="text-sm text-destructive">
                         ⚠️ You're approaching your monthly limit. Consider upgrading your plan.

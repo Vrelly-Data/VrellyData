@@ -25,6 +25,7 @@ import { FilterBuilderState } from '@/lib/filterConversion';
 import { UnlockConfirmDialog } from '@/components/search/UnlockConfirmDialog';
 import { ListManagementDialog } from '@/components/records/ListManagementDialog';
 import { SendContactsDialog } from '@/components/records/SendContactsDialog';
+import { SaveAudienceDialog } from '@/components/search/SaveAudienceDialog';
 import { useUnlockedRecords } from '@/hooks/useUnlockedRecords';
 import { useCreditCheck } from '@/hooks/useCreditCheck';
 import { usePersistRecords } from '@/hooks/usePersistRecords';
@@ -50,6 +51,7 @@ export default function AudienceBuilder() {
     setCurrentPage,
     setPerPage,
     setTotalPages,
+    filters,
   } = useAudienceStore();
 
   const { isUnlocked, markAsUnlocked } = useUnlockedRecords(currentType);
@@ -73,6 +75,8 @@ export default function AudienceBuilder() {
     projectName: string;
   }>({ open: false, projectId: '', projectName: '' });
   const [externalProjects, setExternalProjects] = useState<any[]>([]);
+  const [showSaveAudienceDialog, setShowSaveAudienceDialog] = useState(false);
+  const [currentCreditsForSave, setCurrentCreditsForSave] = useState(0);
   
   const handleSearch = async (filterState: FilterBuilderState) => {
     setLoading(true);
@@ -269,11 +273,88 @@ export default function AudienceBuilder() {
     }
   };
 
-  const handleSaveAudience = () => {
-    toast({
-      title: 'Coming soon',
-      description: 'Save audience feature will be available soon',
-    });
+  const handleSaveAudience = async () => {
+    if (totalEstimate === 0) {
+      toast({
+        title: 'No audience to save',
+        description: 'Please perform a search first',
+        variant: 'destructive',
+      });
+      return;
+    }
+    
+    // Get current credits before opening dialog
+    const credits = await getCurrentCredits();
+    setCurrentCreditsForSave(credits);
+    setShowSaveAudienceDialog(true);
+  };
+
+  const handleSaveAudienceConfirm = async (audienceName: string) => {
+    try {
+      // Get current credits
+      const credits = await getCurrentCredits();
+      
+      // Check if enough credits
+      if (credits < totalEstimate) {
+        toast({
+          title: 'Insufficient credits',
+          description: 'Please upgrade your plan to save this audience',
+          variant: 'destructive',
+        });
+        return;
+      }
+
+      // Deduct credits (1 credit per contact)
+      const result = await deductCredits(totalEstimate, undefined);
+      if (!result.success) {
+        toast({
+          title: 'Error deducting credits',
+          variant: 'destructive',
+        });
+        return;
+      }
+
+      // Get user and team info
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('User not authenticated');
+
+      const { data: membership } = await supabase
+        .from('team_memberships')
+        .select('team_id')
+        .eq('user_id', user.id)
+        .single();
+
+      if (!membership) throw new Error('No team membership found');
+
+      // Save audience to database
+      const { error: saveError } = await supabase
+        .from('audiences')
+        .insert({
+          name: audienceName,
+          team_id: membership.team_id,
+          type: currentType,
+          filters: filters || {},
+          result_count: totalEstimate,
+          created_by: user.id,
+        });
+
+      if (saveError) throw saveError;
+
+      setShowSaveAudienceDialog(false);
+      
+      toast({
+        title: 'Audience saved',
+        description: `"${audienceName}" has been saved successfully. ${totalEstimate.toLocaleString()} credits deducted.`,
+      });
+
+    } catch (error: any) {
+      console.error('Error saving audience:', error);
+      toast({
+        title: 'Error saving audience',
+        description: error.message || 'Failed to save audience',
+        variant: 'destructive',
+      });
+    }
   };
 
   return (
@@ -592,6 +673,15 @@ export default function AudienceBuilder() {
         contactIds={Array.from(selectedRecords)}
         projectId={sendDialogState.projectId}
         projectName={sendDialogState.projectName}
+      />
+
+      <SaveAudienceDialog
+        open={showSaveAudienceDialog}
+        onOpenChange={setShowSaveAudienceDialog}
+        totalContacts={totalEstimate}
+        currentCredits={currentCreditsForSave}
+        onConfirm={handleSaveAudienceConfirm}
+        onCancel={() => setShowSaveAudienceDialog(false)}
       />
     </div>
   );
