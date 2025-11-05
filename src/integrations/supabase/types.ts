@@ -755,6 +755,10 @@ export type Database = {
         Returns: undefined
       }
       reset_monthly_credits: { Args: never; Returns: undefined }
+      update_credits_for_testing: {
+        Args: { p_new_credits: number; p_user_id: string }
+        Returns: undefined
+      }
     }
     Enums: {
       entity_type: "person" | "company"
