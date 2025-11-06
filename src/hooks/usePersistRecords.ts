@@ -6,7 +6,7 @@ export function usePersistRecords() {
   async function saveRecords(
     entities: (PersonEntity | CompanyEntity)[],
     entityType: EntityType,
-    source: 'export' | 'list' | 'send' | 'auto-extracted'
+    source: 'export' | 'list' | 'send' | 'auto-extracted' | 'update'
   ) {
     try {
       const { data: { user } } = await supabase.auth.getUser();

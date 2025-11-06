@@ -29,6 +29,7 @@ import { SaveAudienceDialog } from '@/components/search/SaveAudienceDialog';
 import { useUnlockedRecords } from '@/hooks/useUnlockedRecords';
 import { useCreditCheck } from '@/hooks/useCreditCheck';
 import { usePersistRecords } from '@/hooks/usePersistRecords';
+import { useDeduplication } from '@/hooks/useDeduplication';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { PreviewTable } from '@/components/search/PreviewTable';
 import { supabase } from '@/integrations/supabase/client';
@@ -59,14 +60,23 @@ export default function AudienceBuilder() {
   const { isUnlocked, markAsUnlocked } = useUnlockedRecords(currentType);
   const { hasEnoughCredits, deductCredits, getCurrentCredits } = useCreditCheck();
   const { saveRecords } = usePersistRecords();
+  const { analyzeRecords } = useDeduplication(currentType);
   
   const [showUnlockDialog, setShowUnlockDialog] = useState(false);
   const [unlockDialogConfig, setUnlockDialogConfig] = useState<{
     totalRecords: number;
     alreadyUnlocked: number;
+    alreadyOwned: number;
+    canUpdate: number;
     needUnlock: number;
+    creditsRequired: number;
     action: 'export' | 'list' | 'send';
     currentCredits: number;
+  } | null>(null);
+  const [deduplicationAnalysis, setDeduplicationAnalysis] = useState<{
+    alreadyOwned: Array<{ id: string; data: any }>;
+    canUpdate: Array<{ id: string; current: any; new: any; changes: string[] }>;
+    newRecords: Array<{ id: string; data: any }>;
   } | null>(null);
   
   const [selectedRecords, setSelectedRecords] = useState<Set<string>>(new Set());
@@ -174,17 +184,25 @@ export default function AudienceBuilder() {
     // Get selected records data
     const selectedData = results.filter(r => selectedRecords.has(r.id));
     
-    // Calculate unlock cost
-    const alreadyUnlocked = selectedData.filter(r => isUnlocked(r.id)).length;
-    const needUnlock = selectedData.length - alreadyUnlocked;
+    // Analyze for deduplication (check against database records)
+    const analysis = await analyzeRecords(selectedData);
+    setDeduplicationAnalysis(analysis);
     
-    if (needUnlock > 0) {
-      // Show unlock confirmation dialog
+    // Calculate unlock cost based on already unlocked records
+    const alreadyUnlocked = selectedData.filter(r => isUnlocked(r.id)).length;
+    const needUnlock = selectedData.length - alreadyUnlocked - analysis.alreadyOwned.length - analysis.canUpdate.length;
+    const creditsRequired = analysis.newRecords.length;
+    
+    if (creditsRequired > 0 || needUnlock > 0) {
+      // Show unlock confirmation dialog with detailed breakdown
       const credits = await getCurrentCredits();
       setUnlockDialogConfig({
         totalRecords: selectedData.length,
         alreadyUnlocked,
-        needUnlock,
+        alreadyOwned: analysis.alreadyOwned.length,
+        canUpdate: analysis.canUpdate.length,
+        needUnlock: analysis.newRecords.length,
+        creditsRequired,
         action,
         currentCredits: credits,
       });
@@ -196,78 +214,109 @@ export default function AudienceBuilder() {
       
       setShowUnlockDialog(true);
     } else {
-      // All already unlocked, proceed directly
+      // All already owned/unlocked, proceed directly
+      // Show notification about duplicates
+      if (analysis.alreadyOwned.length > 0) {
+        toast({
+          title: 'Duplicates Skipped',
+          description: `${analysis.alreadyOwned.length} contacts already in your database`,
+        });
+      }
       await performAction(action, projectId, projectName);
     }
   };
 
   const handleUnlockConfirm = async () => {
-    if (!unlockDialogConfig) return;
+    if (!unlockDialogConfig || !deduplicationAnalysis) return;
     
     const selectedData = results.filter(r => selectedRecords.has(r.id));
-    const lockedRecords = selectedData.filter(r => !isUnlocked(r.id));
-    const { needUnlock, action } = unlockDialogConfig;
+    const { creditsRequired, action } = unlockDialogConfig;
     
-    // Check credits
-    const enoughCredits = await hasEnoughCredits(needUnlock);
-    if (!enoughCredits) {
-      toast({ 
-        title: 'Insufficient credits', 
-        description: 'Please upgrade your plan to continue',
-        variant: 'destructive' 
-      });
-      return;
+    // ONLY deduct credits for NEW records (not in database)
+    if (creditsRequired > 0) {
+      // Check credits
+      const enoughCredits = await hasEnoughCredits(creditsRequired);
+      if (!enoughCredits) {
+        toast({ 
+          title: 'Insufficient credits', 
+          description: 'Please upgrade your plan to continue',
+          variant: 'destructive' 
+        });
+        return;
+      }
+      
+      // Deduct credits ONLY for new records
+      const result = await deductCredits(creditsRequired);
+      if (!result.success) {
+        toast({ 
+          title: 'Error deducting credits', 
+          variant: 'destructive' 
+        });
+        return;
+      }
     }
     
-    // Deduct credits
-    const result = await deductCredits(needUnlock);
-    if (!result.success) {
-      toast({ 
-        title: 'Error deducting credits', 
-        variant: 'destructive' 
-      });
-      return;
+    // Mark ONLY new records as unlocked in unlocked_records table
+    if (deduplicationAnalysis.newRecords.length > 0) {
+      await markAsUnlocked(
+        deduplicationAnalysis.newRecords.map(r => r.id),
+        deduplicationAnalysis.newRecords.map(r => r.data)
+      );
     }
     
-    // Mark as unlocked in unlocked_records table
-    await markAsUnlocked(
-      lockedRecords.map(r => r.id),
-      lockedRecords
-    );
+    // Update existing records with new data (free - no credit charge)
+    if (deduplicationAnalysis.canUpdate.length > 0) {
+      await saveRecords(
+        deduplicationAnalysis.canUpdate.map(r => r.new),
+        currentType,
+        'update'
+      );
+    }
     
-    // Save to people_records or company_records table
-    const saveResult = await saveRecords(selectedData, currentType, action);
+    // Save all NEW records to people_records or company_records table
+    if (deduplicationAnalysis.newRecords.length > 0) {
+      const saveResult = await saveRecords(
+        deduplicationAnalysis.newRecords.map(r => r.data),
+        currentType,
+        action
+      );
 
-    // Verification: Log first record to ensure full data is saved
-    if (selectedData.length > 0) {
-      console.log('[UNLOCK VERIFICATION]', {
-        action,
-        totalRecords: selectedData.length,
-        sampleRecord: selectedData[0],
-        hasEmail: 'email' in selectedData[0],
-        hasPhone: 'phone' in selectedData[0],
-        saveSuccess: saveResult.success,
-      });
-      
-      // Warn if critical fields are missing (shouldn't happen, but good safeguard)
-      const firstRecord = selectedData[0];
-      const missingFields: string[] = [];
-      if ('email' in firstRecord && !firstRecord.email) missingFields.push('email');
-      if ('phone' in firstRecord && !firstRecord.phone) missingFields.push('phone');
-      
-      if (missingFields.length > 0 && currentType === 'person') {
-        console.warn('[UNLOCK WARNING] Unlocked person record missing fields:', missingFields);
+      // Verification: Log first record to ensure full data is saved
+      if (deduplicationAnalysis.newRecords.length > 0) {
+        console.log('[UNLOCK VERIFICATION]', {
+          action,
+          totalRecords: deduplicationAnalysis.newRecords.length,
+          sampleRecord: deduplicationAnalysis.newRecords[0].data,
+          hasEmail: 'email' in deduplicationAnalysis.newRecords[0].data,
+          hasPhone: 'phone' in deduplicationAnalysis.newRecords[0].data,
+          saveSuccess: saveResult.success,
+        });
       }
     }
     
     setShowUnlockDialog(false);
     
+    // Show summary toast notifications
+    const messages: string[] = [];
+    
+    if (deduplicationAnalysis.alreadyOwned.length > 0) {
+      messages.push(`${deduplicationAnalysis.alreadyOwned.length} already in database`);
+    }
+    
+    if (deduplicationAnalysis.canUpdate.length > 0) {
+      messages.push(`${deduplicationAnalysis.canUpdate.length} updated`);
+    }
+    
+    if (deduplicationAnalysis.newRecords.length > 0) {
+      messages.push(`${deduplicationAnalysis.newRecords.length} new contacts unlocked`);
+    }
+    
     toast({
-      title: 'Records unlocked',
-      description: `${needUnlock} ${needUnlock === 1 ? 'record' : 'records'} unlocked successfully`,
+      title: 'Action Complete',
+      description: messages.join(' • '),
     });
     
-    // Perform the action
+    // Perform the action with ALL selected records (owned + updated + new)
     await performAction(action, sendDialogState.projectId, sendDialogState.projectName);
   };
 
@@ -851,7 +900,10 @@ export default function AudienceBuilder() {
           onOpenChange={setShowUnlockDialog}
           totalRecords={unlockDialogConfig.totalRecords}
           alreadyUnlocked={unlockDialogConfig.alreadyUnlocked}
+          alreadyOwned={unlockDialogConfig.alreadyOwned}
+          canUpdate={unlockDialogConfig.canUpdate}
           needUnlock={unlockDialogConfig.needUnlock}
+          creditsRequired={unlockDialogConfig.creditsRequired}
           currentCredits={unlockDialogConfig.currentCredits}
           onConfirm={handleUnlockConfirm}
           onCancel={() => setShowUnlockDialog(false)}
