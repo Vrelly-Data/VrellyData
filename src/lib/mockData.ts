@@ -62,7 +62,7 @@ function randomInt(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
-export function generateMockPeople(count: number, unlockedIds: Set<string> = new Set()): PersonEntity[] {
+export function generateMockPeople(count: number): PersonEntity[] {
   const people: PersonEntity[] = [];
   
   for (let i = 0; i < count; i++) {
@@ -70,7 +70,6 @@ export function generateMockPeople(count: number, unlockedIds: Set<string> = new
     const firstName = randomElement(MOCK_FIRST_NAMES);
     const lastName = randomElement(MOCK_LAST_NAMES);
     const company = randomElement(MOCK_COMPANIES);
-    const isUnlocked = unlockedIds.has(id);
     
     people.push({
       id,
@@ -86,29 +85,22 @@ export function generateMockPeople(count: number, unlockedIds: Set<string> = new
       technologies: [],
       age: randomInt(25, 65),
       gender: randomElement(MOCK_GENDERS),
-      // Only show real contact info if unlocked
-      email: isUnlocked 
-        ? `${firstName.toLowerCase()}.${lastName.toLowerCase()}@${company.toLowerCase()}.com`
-        : '••••••@••••••.com',
-      phone: isUnlocked
-        ? `+1-${randomInt(200, 999)}-${randomInt(200, 999)}-${randomInt(1000, 9999)}`
-        : '+1-•••-•••-••••',
-      linkedin: isUnlocked
-        ? `https://linkedin.com/in/${firstName.toLowerCase()}-${lastName.toLowerCase()}`
-        : 'https://linkedin.com/in/••••••',
+      email: `${firstName.toLowerCase()}.${lastName.toLowerCase()}@${company.toLowerCase()}.com`,
+      phone: `+1-${randomInt(200, 999)}-${randomInt(200, 999)}-${randomInt(1000, 9999)}`,
+      linkedin: `https://linkedin.com/in/${firstName.toLowerCase()}-${lastName.toLowerCase()}`,
+      isUnlocked: false,
     });
   }
   
   return people;
 }
 
-export function generateMockCompanies(count: number, unlockedIds: Set<string> = new Set()): CompanyEntity[] {
+export function generateMockCompanies(count: number): CompanyEntity[] {
   const companies: CompanyEntity[] = [];
   
   for (let i = 0; i < count; i++) {
     const id = `company-${i}-${Date.now()}`;
     const name = randomElement(MOCK_COMPANIES);
-    const isUnlocked = unlockedIds.has(id);
     
     companies.push({
       id,
@@ -121,13 +113,9 @@ export function generateMockCompanies(count: number, unlockedIds: Set<string> = 
       technologies: [],
       fundingStage: randomElement(['Seed', 'Series A', 'Series B', 'Series C', 'IPO', 'Acquired']),
       description: randomElement(MOCK_COMPANY_DESCRIPTIONS),
-      // Only show real contact info if unlocked
-      linkedin: isUnlocked
-        ? `https://linkedin.com/company/${name.toLowerCase().replace(/\s+/g, '-')}`
-        : 'https://linkedin.com/company/••••••',
-      phone: isUnlocked
-        ? `+1-${randomInt(200, 999)}-${randomInt(200, 999)}-${randomInt(1000, 9999)}`
-        : '+1-•••-•••-••••',
+      linkedin: `https://linkedin.com/company/${name.toLowerCase().replace(/\s+/g, '-')}`,
+      phone: `+1-${randomInt(200, 999)}-${randomInt(200, 999)}-${randomInt(1000, 9999)}`,
+      isUnlocked: false,
     });
   }
   

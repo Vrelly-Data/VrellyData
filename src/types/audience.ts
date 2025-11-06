@@ -59,6 +59,7 @@ export interface PersonEntity {
   twitterUrl?: string;             // TWITTER_URL
   
   customFields?: Record<string, string>; // For unmapped CSV columns
+  isUnlocked?: boolean;            // Track if contact info has been unlocked
 }
 
 export interface CompanyEntity {
@@ -78,6 +79,7 @@ export interface CompanyEntity {
   state?: string;
   country?: string;
   customFields?: Record<string, string>; // For unmapped CSV columns
+  isUnlocked?: boolean;            // Track if contact info has been unlocked
 }
 
 export interface AudienceLabFilters {

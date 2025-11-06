@@ -94,6 +94,7 @@ class AudienceLabClient {
           linkedin: item.linkedin,
           age: item.age,
           gender: item.gender,
+          isUnlocked: false,
         } as PersonEntity;
       } else {
         return {
@@ -107,6 +108,9 @@ class AudienceLabClient {
           technologies: item.technologies || [],
           fundingStage: item.fundingStage,
           description: item.description,
+          linkedin: item.linkedin,
+          phone: item.phone,
+          isUnlocked: false,
         } as CompanyEntity;
       }
     });
@@ -123,7 +127,7 @@ class AudienceLabClient {
         
         // Initialize stable base dataset once
         if (!this.mockPeopleBase) {
-          this.mockPeopleBase = generateMockPeople(1500, new Set());
+          this.mockPeopleBase = generateMockPeople(1500);
         }
         
         // Apply filters to the stable base
@@ -214,7 +218,7 @@ class AudienceLabClient {
         
         // Initialize stable base dataset once
         if (!this.mockCompaniesBase) {
-          this.mockCompaniesBase = generateMockCompanies(800, new Set());
+          this.mockCompaniesBase = generateMockCompanies(800);
         }
         
         // Apply filters to the stable base
@@ -338,8 +342,8 @@ class AudienceLabClient {
         await new Promise(resolve => setTimeout(resolve, 500));
         
         const mockData = entityType === 'person' 
-          ? generateMockPeople(1500, new Set())
-          : generateMockCompanies(800, new Set());
+          ? generateMockPeople(1500)
+          : generateMockCompanies(800);
         
         const filtered = entityType === 'person'
           ? filterMockPeople(mockData as PersonEntity[], filterState)
