@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Plus, Download, FolderPlus, ChevronDown, Upload, Trash2 } from 'lucide-react';
@@ -19,7 +19,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { generateMockCompanies } from '@/lib/mockData';
 import { CompanyEntity } from '@/types/audience';
 import { RecordsTable } from './RecordsTable';
 import { RecordsFilterDropdown } from './RecordsFilterDropdown';
@@ -32,9 +31,16 @@ import { exportCompaniesToCSV } from '@/lib/csvExport';
 import { useToast } from '@/hooks/use-toast';
 import { SmartFilter } from '@/types/filterProperties';
 import { evaluateSmartFilter } from '@/lib/smartFilterEvaluator';
+import { useRecordsFromDatabase } from '@/hooks/useRecordsFromDatabase';
 
 export function CompanyRecords() {
-  const [records, setRecords] = useState<CompanyEntity[]>(generateMockCompanies(100));
+  const { records: dbRecords } = useRecordsFromDatabase('company');
+  const [records, setRecords] = useState<CompanyEntity[]>([]);
+  
+  // Sync with database records
+  useEffect(() => {
+    setRecords(dbRecords as CompanyEntity[]);
+  }, [dbRecords]);
   const [selectedRecords, setSelectedRecords] = useState<Set<string>>(new Set());
   const [isListDialogOpen, setIsListDialogOpen] = useState(false);
   const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);

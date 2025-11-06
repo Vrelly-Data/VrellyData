@@ -6,9 +6,12 @@ import { CompanyRecords } from '@/components/records/CompanyRecords';
 import { CompanyInsights } from '@/components/insights/CompanyInsights';
 import { ListView } from '@/components/lists/ListView';
 import vrellyLogo from '@/assets/vrelly-logo.png';
+import { useRecordsFromDatabase } from '@/hooks/useRecordsFromDatabase';
+import { Loader2 } from 'lucide-react';
 
 export default function Companies() {
   const navigate = useNavigate();
+  const { records, isLoading } = useRecordsFromDatabase('company');
 
   return (
     <SidebarProvider>
@@ -26,24 +29,33 @@ export default function Companies() {
             <h1 className="text-lg font-semibold ml-4">Companies</h1>
           </header>
           <main className="flex-1 overflow-hidden">
-            <Tabs defaultValue="records" className="h-full flex flex-col">
-              <div className="border-b px-6">
-                <TabsList>
-                  <TabsTrigger value="records">Records</TabsTrigger>
-                  <TabsTrigger value="insights">Insights</TabsTrigger>
-                  <TabsTrigger value="lists">Lists</TabsTrigger>
-                </TabsList>
+            {isLoading ? (
+              <div className="flex items-center justify-center h-full">
+                <div className="text-center">
+                  <Loader2 className="h-8 w-8 animate-spin text-primary mx-auto mb-2" />
+                  <p className="text-sm text-muted-foreground">Loading records...</p>
+                </div>
               </div>
-              <TabsContent value="records" className="flex-1 m-0">
-                <CompanyRecords />
-              </TabsContent>
-              <TabsContent value="insights" className="flex-1 m-0">
-                <CompanyInsights />
-              </TabsContent>
-              <TabsContent value="lists" className="flex-1 m-0">
-                <ListView entityType="company" />
-              </TabsContent>
-            </Tabs>
+            ) : (
+              <Tabs defaultValue="records" className="h-full flex flex-col">
+                <div className="border-b px-6">
+                  <TabsList>
+                    <TabsTrigger value="records">Records</TabsTrigger>
+                    <TabsTrigger value="insights">Insights</TabsTrigger>
+                    <TabsTrigger value="lists">Lists</TabsTrigger>
+                  </TabsList>
+                </div>
+                <TabsContent value="records" className="flex-1 m-0">
+                  <CompanyRecords />
+                </TabsContent>
+                <TabsContent value="insights" className="flex-1 m-0">
+                  <CompanyInsights />
+                </TabsContent>
+                <TabsContent value="lists" className="flex-1 m-0">
+                  <ListView entityType="company" />
+                </TabsContent>
+              </Tabs>
+            )}
           </main>
         </div>
       </div>
