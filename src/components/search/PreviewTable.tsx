@@ -88,7 +88,7 @@ export function PreviewTable({ data, entityType, isUnlocked, selectedRecords, on
           <TableHeader>
             <TableRow>
               <TableHead className="sticky left-0 bg-background z-10 w-[50px]">
-                <div className="flex items-center">
+                <div className="flex items-center pl-1.5">
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
@@ -210,7 +210,7 @@ export function PreviewTable({ data, entityType, isUnlocked, selectedRecords, on
         <TableHeader>
           <TableRow>
             <TableHead className="sticky left-0 bg-background z-10 w-[50px]">
-              <div className="flex items-center">
+              <div className="flex items-center pl-1.5">
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
