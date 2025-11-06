@@ -13,6 +13,7 @@ interface AudienceState {
   
   // Filter builder state
   filterBuilderState: FilterBuilderState;
+  filterState: FilterBuilderState | null;
   availableAttributes: MockAttributeOptions;
   
   // Pagination
@@ -31,6 +32,7 @@ interface AudienceState {
   setLoading: (loading: boolean) => void;
   setSelectedEntity: (entity: PersonEntity | CompanyEntity | null) => void;
   setFilterBuilderState: (state: FilterBuilderState) => void;
+  setFilterState: (state: FilterBuilderState) => void;
   setAvailableAttributes: (attributes: MockAttributeOptions) => void;
   setCurrentPage: (page: number) => void;
   setPerPage: (perPage: number) => void;
@@ -61,6 +63,7 @@ export const useAudienceStore = create<AudienceState>((set) => ({
     keywords: [],
     prospectData: [],
   },
+  filterState: null,
   availableAttributes: MOCK_ATTRIBUTES,
   
   currentPage: 1,
@@ -77,6 +80,7 @@ export const useAudienceStore = create<AudienceState>((set) => ({
   setLoading: (loading) => set({ loading }),
   setSelectedEntity: (entity) => set({ selectedEntity: entity }),
   setFilterBuilderState: (state) => set({ filterBuilderState: state }),
+  setFilterState: (state) => set({ filterState: state }),
   setAvailableAttributes: (attributes) => set({ availableAttributes: attributes }),
   setCurrentPage: (page) => set({ currentPage: page }),
   setPerPage: (perPage) => set({ perPage, currentPage: 1 }),

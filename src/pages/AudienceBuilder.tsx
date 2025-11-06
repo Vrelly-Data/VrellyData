@@ -52,6 +52,8 @@ export default function AudienceBuilder() {
     setPerPage,
     setTotalPages,
     filters,
+    filterState,
+    setFilterState,
   } = useAudienceStore();
 
   const { isUnlocked, markAsUnlocked } = useUnlockedRecords(currentType);
@@ -81,6 +83,7 @@ export default function AudienceBuilder() {
   const handleSearch = async (filterState: FilterBuilderState) => {
     setLoading(true);
     setSelectedRecords(new Set()); // Clear selection on new search
+    setFilterState(filterState); // Store filter state for selection operations
     
     try {
       const params = {
@@ -296,7 +299,19 @@ export default function AudienceBuilder() {
             type: currentType,
             where: { field: 'all', op: 'exists' as const },
           },
-          filterState: {} as FilterBuilderState, // Use current filter state
+          filterState: filterState || {
+            industries: [],
+            cities: [],
+            gender: null,
+            jobTitles: [],
+            seniority: [],
+            department: [],
+            companySize: [],
+            netWorth: [],
+            income: [],
+            keywords: [],
+            prospectData: [],
+          },
           page,
           perPage,
           unlockedIds: new Set<string>(),
@@ -342,7 +357,19 @@ export default function AudienceBuilder() {
             type: currentType,
             where: { field: 'all', op: 'exists' as const },
           },
-          filterState: {} as FilterBuilderState,
+          filterState: filterState || {
+            industries: [],
+            cities: [],
+            gender: null,
+            jobTitles: [],
+            seniority: [],
+            department: [],
+            companySize: [],
+            netWorth: [],
+            income: [],
+            keywords: [],
+            prospectData: [],
+          },
           page: currentPageNum,
           perPage,
           unlockedIds: new Set<string>(),
