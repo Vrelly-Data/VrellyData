@@ -399,12 +399,20 @@ export default function AudienceBuilder() {
       );
       setResults(uniqueResults);
       
+      // Clamp count to actual available results
+      const actualCount = Math.min(count, uniqueResults.length);
+      
       // Select first N unique IDs
-      const selectedIds = new Set(uniqueResults.slice(0, count).map(r => r.id));
+      const selectedIds = new Set(uniqueResults.slice(0, actualCount).map(r => r.id));
       setSelectedRecords(selectedIds);
       
-      // Update total estimate to match actual unique results found
-      setTotalEstimate(Math.max(totalEstimate, uniqueResults.length));
+      // Show info if user requested more than available
+      if (count > uniqueResults.length) {
+        toast({
+          title: 'Info',
+          description: `Only ${uniqueResults.length} unique results available; selected all of them.`,
+        });
+      }
     } catch (error) {
       toast({
         title: 'Error',

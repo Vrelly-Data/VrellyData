@@ -38,6 +38,8 @@ export interface UnlockResponse {
 
 class AudienceLabClient {
   private tempAudienceIds: string[] = [];
+  private mockPeopleBase?: PersonEntity[];
+  private mockCompaniesBase?: CompanyEntity[];
 
   private convertFiltersToAudienceLabFormat(filters: FilterDSL): AudienceLabFilters {
     // Convert our FilterDSL to AudienceLab's format
@@ -113,21 +115,31 @@ class AudienceLabClient {
   async searchPeople(params: SearchParams & { filterState?: FilterBuilderState; page?: number; perPage?: number; unlockedIds?: Set<string> }): Promise<SearchResponse<PersonEntity>> {
     try {
       if (MOCK_MODE) {
-        // Mock mode: Generate and filter mock data
+        // Mock mode: Generate and filter mock data from stable base
         console.log('[MOCK] Searching people with filters:', params.filterState);
         
         // Simulate API delay
         await new Promise(resolve => setTimeout(resolve, 800));
         
-        // Generate mock data with unlocked status
-        let mockPeople = generateMockPeople(1500, params.unlockedIds || new Set());
+        // Initialize stable base dataset once
+        if (!this.mockPeopleBase) {
+          this.mockPeopleBase = generateMockPeople(1500, new Set());
+        }
         
-        // Apply filters if provided
+        // Apply filters to the stable base
+        let mockPeople = this.mockPeopleBase;
         if (params.filterState) {
           mockPeople = filterMockPeople(mockPeople, params.filterState);
         }
         
-        // Apply pagination
+        // Mark unlocked records
+        const unlockedIds = params.unlockedIds || new Set();
+        mockPeople = mockPeople.map(person => ({
+          ...person,
+          isUnlocked: unlockedIds.has(person.id),
+        }));
+        
+        // Apply pagination to the filtered stable dataset
         const page = params.page || 1;
         const perPage = params.perPage || params.limit || 100;
         const start = (page - 1) * perPage;
@@ -195,17 +207,30 @@ class AudienceLabClient {
   async searchCompanies(params: SearchParams & { filterState?: FilterBuilderState; page?: number; perPage?: number; unlockedIds?: Set<string> }): Promise<SearchResponse<CompanyEntity>> {
     try {
       if (MOCK_MODE) {
-        // Mock mode: Generate and filter mock data
+        // Mock mode: Generate and filter mock data from stable base
         console.log('[MOCK] Searching companies with filters:', params.filterState);
         
         await new Promise(resolve => setTimeout(resolve, 800));
         
-        let mockCompanies = generateMockCompanies(800, params.unlockedIds || new Set());
+        // Initialize stable base dataset once
+        if (!this.mockCompaniesBase) {
+          this.mockCompaniesBase = generateMockCompanies(800, new Set());
+        }
         
+        // Apply filters to the stable base
+        let mockCompanies = this.mockCompaniesBase;
         if (params.filterState) {
           mockCompanies = filterMockCompanies(mockCompanies, params.filterState);
         }
         
+        // Mark unlocked records
+        const unlockedIds = params.unlockedIds || new Set();
+        mockCompanies = mockCompanies.map(company => ({
+          ...company,
+          isUnlocked: unlockedIds.has(company.id),
+        }));
+        
+        // Apply pagination to the filtered stable dataset
         const page = params.page || 1;
         const perPage = params.perPage || params.limit || 100;
         const start = (page - 1) * perPage;
