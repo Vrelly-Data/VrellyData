@@ -66,6 +66,13 @@ function downloadCSV(csvContent: string, filename: string): void {
  * Exports people data to CSV
  */
 export function exportPeopleToCSV(people: PersonEntity[]): void {
+  // Verification: Ensure we're exporting full data
+  console.log('[CSV EXPORT VERIFICATION]', {
+    totalRecords: people.length,
+    sampleRecord: people[0],
+    allHaveEmails: people.every(p => p.email),
+  });
+  
   const headers = [
     'ID',
     'Name',
@@ -90,6 +97,12 @@ export function exportPeopleToCSV(people: PersonEntity[]): void {
  * Exports company data to CSV
  */
 export function exportCompaniesToCSV(companies: CompanyEntity[]): void {
+  // Verification: Ensure we're exporting full data
+  console.log('[CSV EXPORT VERIFICATION]', {
+    totalRecords: companies.length,
+    sampleRecord: companies[0],
+  });
+  
   const headers = [
     'ID',
     'Name',

@@ -236,7 +236,29 @@ export default function AudienceBuilder() {
     );
     
     // Save to people_records or company_records table
-    await saveRecords(selectedData, currentType, action);
+    const saveResult = await saveRecords(selectedData, currentType, action);
+
+    // Verification: Log first record to ensure full data is saved
+    if (selectedData.length > 0) {
+      console.log('[UNLOCK VERIFICATION]', {
+        action,
+        totalRecords: selectedData.length,
+        sampleRecord: selectedData[0],
+        hasEmail: 'email' in selectedData[0],
+        hasPhone: 'phone' in selectedData[0],
+        saveSuccess: saveResult.success,
+      });
+      
+      // Warn if critical fields are missing (shouldn't happen, but good safeguard)
+      const firstRecord = selectedData[0];
+      const missingFields: string[] = [];
+      if ('email' in firstRecord && !firstRecord.email) missingFields.push('email');
+      if ('phone' in firstRecord && !firstRecord.phone) missingFields.push('phone');
+      
+      if (missingFields.length > 0 && currentType === 'person') {
+        console.warn('[UNLOCK WARNING] Unlocked person record missing fields:', missingFields);
+      }
+    }
     
     setShowUnlockDialog(false);
     
@@ -254,6 +276,15 @@ export default function AudienceBuilder() {
     
     switch (action) {
       case 'export':
+        // Verification: Log what we're about to export
+        console.log('[PRE-EXPORT VERIFICATION]', {
+          selectedCount: selectedRecords.size,
+          foundInResults: selectedData.length,
+          entityType: currentType,
+          allUnlocked: selectedData.every(r => 'isUnlocked' in r ? r.isUnlocked : false),
+          sampleRecord: selectedData[0],
+        });
+        
         if (currentType === 'person') {
           exportPeopleToCSV(selectedData as PersonEntity[]);
         } else {
