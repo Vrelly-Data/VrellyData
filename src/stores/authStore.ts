@@ -5,7 +5,6 @@ import { supabase } from '@/integrations/supabase/client';
 interface Profile {
   id: string;
   name: string | null;
-  role: 'admin' | 'member';
   credits: number;
   plan: string;
   subscription_tier: string;
@@ -18,50 +17,80 @@ interface Profile {
   stripe_subscription_id: string | null;
 }
 
+interface UserRole {
+  team_id: string;
+  role: 'admin' | 'member';
+}
+
 interface AuthState {
   user: User | null;
   session: Session | null;
   profile: Profile | null;
+  userRoles: UserRole[];
   loading: boolean;
   setUser: (user: User | null) => void;
   setSession: (session: Session | null) => void;
   setProfile: (profile: Profile | null) => void;
+  setUserRoles: (roles: UserRole[]) => void;
   setLoading: (loading: boolean) => void;
   signOut: () => Promise<void>;
   fetchProfile: () => Promise<void>;
+  isAdmin: (teamId?: string) => boolean;
 }
 
 export const useAuthStore = create<AuthState>((set, get) => ({
   user: null,
   session: null,
   profile: null,
+  userRoles: [],
   loading: true,
   
   setUser: (user) => set({ user }),
   setSession: (session) => set({ session }),
   setProfile: (profile) => set({ profile }),
+  setUserRoles: (roles) => set({ userRoles: roles }),
   setLoading: (loading) => set({ loading }),
   
   signOut: async () => {
     await supabase.auth.signOut();
-    set({ user: null, session: null, profile: null });
+    set({ user: null, session: null, profile: null, userRoles: [] });
   },
   
   fetchProfile: async () => {
     const { user } = get();
     if (!user) {
-      set({ profile: null });
+      set({ profile: null, userRoles: [] });
       return;
     }
 
-    const { data, error } = await supabase
+    // Fetch profile
+    const { data: profileData, error: profileError } = await supabase
       .from('profiles')
       .select('*')
       .eq('id', user.id)
       .single();
 
-    if (!error && data) {
-      set({ profile: data as Profile });
+    if (!profileError && profileData) {
+      set({ profile: profileData as Profile });
     }
+
+    // Fetch user roles
+    const { data: rolesData, error: rolesError } = await supabase
+      .from('user_roles')
+      .select('team_id, role')
+      .eq('user_id', user.id);
+
+    if (!rolesError && rolesData) {
+      set({ userRoles: rolesData as UserRole[] });
+    }
+  },
+
+  isAdmin: (teamId?: string) => {
+    const { userRoles } = get();
+    if (!teamId) {
+      // Check if admin in any team
+      return userRoles.some(r => r.role === 'admin');
+    }
+    return userRoles.some(r => r.team_id === teamId && r.role === 'admin');
   },
 }));

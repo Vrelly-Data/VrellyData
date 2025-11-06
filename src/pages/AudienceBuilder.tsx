@@ -30,6 +30,7 @@ import { useUnlockedRecords } from '@/hooks/useUnlockedRecords';
 import { useCreditCheck } from '@/hooks/useCreditCheck';
 import { usePersistRecords } from '@/hooks/usePersistRecords';
 import { useDeduplication } from '@/hooks/useDeduplication';
+import { useAuditLog } from '@/hooks/useAuditLog';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { PreviewTable } from '@/components/search/PreviewTable';
 import { supabase } from '@/integrations/supabase/client';
@@ -61,6 +62,7 @@ export default function AudienceBuilder() {
   const { hasEnoughCredits, deductCredits, getCurrentCredits } = useCreditCheck();
   const { saveRecords } = usePersistRecords();
   const { analyzeRecords } = useDeduplication(currentType);
+  const { logAuditEvent } = useAuditLog();
   
   const [showUnlockDialog, setShowUnlockDialog] = useState(false);
   const [unlockDialogConfig, setUnlockDialogConfig] = useState<{
@@ -262,6 +264,17 @@ export default function AudienceBuilder() {
         deduplicationAnalysis.newRecords.map(r => r.id),
         deduplicationAnalysis.newRecords.map(r => r.data)
       );
+      
+      // Log audit event for unlock
+      await logAuditEvent({
+        action: 'unlock',
+        entityType: currentType,
+        entityCount: deduplicationAnalysis.newRecords.length,
+        metadata: {
+          creditsDeducted: creditsRequired,
+          source: 'audience_builder',
+        },
+      });
     }
     
     // Update existing records with new data (free - no credit charge)
@@ -339,6 +352,18 @@ export default function AudienceBuilder() {
         } else {
           exportCompaniesToCSV(selectedData as CompanyEntity[]);
         }
+        
+        // Log audit event for export
+        await logAuditEvent({
+          action: 'export',
+          entityType: currentType,
+          entityCount: selectedData.length,
+          metadata: {
+            format: 'csv',
+            source: 'audience_builder',
+          },
+        });
+        
         toast({
           title: 'Export successful',
           description: `Exported ${selectedData.length} records`,

@@ -95,6 +95,53 @@ export type Database = {
           },
         ]
       }
+      audit_log: {
+        Row: {
+          action: string
+          created_at: string
+          entity_count: number | null
+          entity_type: string | null
+          id: string
+          ip_address: string | null
+          metadata: Json | null
+          team_id: string
+          user_agent: string | null
+          user_id: string
+        }
+        Insert: {
+          action: string
+          created_at?: string
+          entity_count?: number | null
+          entity_type?: string | null
+          id?: string
+          ip_address?: string | null
+          metadata?: Json | null
+          team_id: string
+          user_agent?: string | null
+          user_id: string
+        }
+        Update: {
+          action?: string
+          created_at?: string
+          entity_count?: number | null
+          entity_type?: string | null
+          id?: string
+          ip_address?: string | null
+          metadata?: Json | null
+          team_id?: string
+          user_agent?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "audit_log_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       campaigns: {
         Row: {
           created_at: string | null
@@ -456,7 +503,6 @@ export type Database = {
           monthly_credit_limit: number | null
           name: string | null
           plan: string | null
-          role: Database["public"]["Enums"]["user_role"]
           stripe_customer_id: string | null
           stripe_subscription_id: string | null
           subscription_status: string | null
@@ -473,7 +519,6 @@ export type Database = {
           monthly_credit_limit?: number | null
           name?: string | null
           plan?: string | null
-          role?: Database["public"]["Enums"]["user_role"]
           stripe_customer_id?: string | null
           stripe_subscription_id?: string | null
           subscription_status?: string | null
@@ -490,7 +535,6 @@ export type Database = {
           monthly_credit_limit?: number | null
           name?: string | null
           plan?: string | null
-          role?: Database["public"]["Enums"]["user_role"]
           stripe_customer_id?: string | null
           stripe_subscription_id?: string | null
           subscription_status?: string | null
@@ -707,6 +751,41 @@ export type Database = {
         }
         Relationships: []
       }
+      user_roles: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          id: string
+          role: Database["public"]["Enums"]["app_role"]
+          team_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          role?: Database["public"]["Enums"]["app_role"]
+          team_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          role?: Database["public"]["Enums"]["app_role"]
+          team_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_roles_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       webhooks: {
         Row: {
           created_at: string
@@ -754,6 +833,24 @@ export type Database = {
         Args: { p_amount: number; p_user_id: string }
         Returns: undefined
       }
+      get_user_team_id: { Args: { _user_id: string }; Returns: string }
+      has_role: {
+        Args: {
+          _role: Database["public"]["Enums"]["app_role"]
+          _team_id: string
+          _user_id: string
+        }
+        Returns: boolean
+      }
+      log_audit_event: {
+        Args: {
+          _action: string
+          _entity_count?: number
+          _entity_type?: string
+          _metadata?: Json
+        }
+        Returns: string
+      }
       reset_monthly_credits: { Args: never; Returns: undefined }
       update_credits_for_testing: {
         Args: { p_new_credits: number; p_user_id: string }
@@ -761,6 +858,7 @@ export type Database = {
       }
     }
     Enums: {
+      app_role: "admin" | "member"
       entity_type: "person" | "company"
       export_format: "csv" | "json"
       export_status: "pending" | "running" | "done" | "failed"
@@ -893,6 +991,7 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
+      app_role: ["admin", "member"],
       entity_type: ["person", "company"],
       export_format: ["csv", "json"],
       export_status: ["pending", "running", "done", "failed"],
