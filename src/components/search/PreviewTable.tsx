@@ -30,9 +30,10 @@ interface PreviewTableProps {
   onSelectionChange: (selected: Set<string>) => void;
   totalResults: number;
   onSelectAllResults?: () => void;
+  onSelectFirstN?: (count: number) => Promise<void>;
 }
 
-export function PreviewTable({ data, entityType, isUnlocked, selectedRecords, onSelectionChange, totalResults, onSelectAllResults }: PreviewTableProps) {
+export function PreviewTable({ data, entityType, isUnlocked, selectedRecords, onSelectionChange, totalResults, onSelectAllResults, onSelectFirstN }: PreviewTableProps) {
   const [selectCount, setSelectCount] = useState<string>('');
 
   const handleSelectAll = () => {
@@ -45,12 +46,23 @@ export function PreviewTable({ data, entityType, isUnlocked, selectedRecords, on
     onSelectionChange(newSelected);
   };
 
-  const handleCustomSelect = (value: string) => {
+  const handleCustomSelect = async (value: string) => {
     const count = parseInt(value, 10);
     if (!isNaN(count) && count > 0) {
-      const validCount = Math.min(count, data.length);
-      handleSelectNumber(validCount);
-      setSelectCount('');
+      const validCount = Math.min(count, totalResults);
+      
+      // If count is within current page, select directly
+      if (validCount <= data.length) {
+        handleSelectNumber(validCount);
+        setSelectCount('');
+        return;
+      }
+      
+      // If count exceeds current page, use callback to fetch more
+      if (onSelectFirstN) {
+        await onSelectFirstN(validCount);
+        setSelectCount('');
+      }
     }
   };
 
@@ -113,7 +125,7 @@ export function PreviewTable({ data, entityType, isUnlocked, selectedRecords, on
                         <Input
                           type="number"
                           min="1"
-                          max={data.length}
+                          max={totalResults}
                           value={selectCount}
                           onChange={(e) => setSelectCount(e.target.value)}
                           onKeyDown={(e) => {
@@ -121,7 +133,7 @@ export function PreviewTable({ data, entityType, isUnlocked, selectedRecords, on
                               handleCustomSelect(selectCount);
                             }
                           }}
-                          placeholder={`1-${data.length}`}
+                          placeholder={`1-${totalResults.toLocaleString()}`}
                           className="h-8 w-24"
                         />
                         <Button 
@@ -231,7 +243,7 @@ export function PreviewTable({ data, entityType, isUnlocked, selectedRecords, on
                       <Input
                         type="number"
                         min="1"
-                        max={data.length}
+                        max={totalResults}
                         value={selectCount}
                         onChange={(e) => setSelectCount(e.target.value)}
                         onKeyDown={(e) => {
@@ -239,7 +251,7 @@ export function PreviewTable({ data, entityType, isUnlocked, selectedRecords, on
                             handleCustomSelect(selectCount);
                           }
                         }}
-                        placeholder={`1-${data.length}`}
+                        placeholder={`1-${totalResults.toLocaleString()}`}
                         className="h-8 w-24"
                       />
                       <Button 

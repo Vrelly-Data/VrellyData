@@ -328,6 +328,59 @@ export default function AudienceBuilder() {
     }
   };
 
+  const handleSelectFirstN = async (count: number) => {
+    setLoading(true);
+    try {
+      const results: (PersonEntity | CompanyEntity)[] = [];
+      let fetched = 0;
+      let currentPageNum = 1;
+      
+      // Fetch pages until we have enough records
+      while (fetched < count) {
+        const params = {
+          filters: filters || {
+            type: currentType,
+            where: { field: 'all', op: 'exists' as const },
+          },
+          filterState: {} as FilterBuilderState,
+          page: currentPageNum,
+          perPage,
+          unlockedIds: new Set<string>(),
+        };
+        
+        const response = currentType === 'person'
+          ? await audienceLabClient.searchPeople(params)
+          : await audienceLabClient.searchCompanies(params);
+        
+        results.push(...response.items);
+        fetched += response.items.length;
+        currentPageNum++;
+        
+        // Safety check: don't fetch more pages than necessary
+        if (response.items.length === 0 || fetched >= count) {
+          break;
+        }
+      }
+      
+      // Select first N IDs
+      const selectedIds = new Set(results.slice(0, count).map(r => r.id));
+      setSelectedRecords(selectedIds);
+      
+      toast({
+        title: 'Records selected',
+        description: `Selected first ${selectedIds.size.toLocaleString()} records`,
+      });
+    } catch (error) {
+      toast({
+        title: 'Error',
+        description: 'Failed to select records',
+        variant: 'destructive',
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleSaveAudience = async () => {
     if (totalEstimate === 0) {
       toast({
@@ -557,6 +610,7 @@ export default function AudienceBuilder() {
                         onSelectionChange={setSelectedRecords}
                         totalResults={totalEstimate}
                         onSelectAllResults={handleSelectAllResults}
+                        onSelectFirstN={handleSelectFirstN}
                       />
                       
                       {totalPages > 1 && (
@@ -689,6 +743,7 @@ export default function AudienceBuilder() {
                         onSelectionChange={setSelectedRecords}
                         totalResults={totalEstimate}
                         onSelectAllResults={handleSelectAllResults}
+                        onSelectFirstN={handleSelectFirstN}
                       />
                       
                       {totalPages > 1 && (
