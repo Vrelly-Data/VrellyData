@@ -324,12 +324,18 @@ export default function AudienceBuilder() {
         allResults.push(...response.items);
       }
       
-      // Update global results to show all fetched records
-      setResults(allResults);
+      // Deduplicate results by ID before setting state
+      const uniqueResults = Array.from(
+        new Map(allResults.map(r => [r.id, r])).values()
+      );
+      setResults(uniqueResults);
       
-      // Select all IDs
-      const allIds = new Set(allResults.map(r => r.id));
+      // Select all unique IDs
+      const allIds = new Set(uniqueResults.map(r => r.id));
       setSelectedRecords(allIds);
+      
+      // Update total estimate to match actual unique results found
+      setTotalEstimate(allIds.size);
     } catch (error) {
       toast({
         title: 'Error',
@@ -387,12 +393,18 @@ export default function AudienceBuilder() {
         }
       }
       
-      // Update global results to show all fetched records
-      setResults(results);
+      // Deduplicate results by ID before setting state
+      const uniqueResults = Array.from(
+        new Map(results.map(r => [r.id, r])).values()
+      );
+      setResults(uniqueResults);
       
-      // Select first N IDs
-      const selectedIds = new Set(results.slice(0, count).map(r => r.id));
+      // Select first N unique IDs
+      const selectedIds = new Set(uniqueResults.slice(0, count).map(r => r.id));
       setSelectedRecords(selectedIds);
+      
+      // Update total estimate to match actual unique results found
+      setTotalEstimate(Math.max(totalEstimate, uniqueResults.length));
     } catch (error) {
       toast({
         title: 'Error',
