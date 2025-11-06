@@ -327,11 +327,6 @@ export default function AudienceBuilder() {
       // Select all IDs
       const allIds = new Set(allResults.map(r => r.id));
       setSelectedRecords(allIds);
-      
-      toast({
-        title: 'All results selected',
-        description: `Selected ${allIds.size.toLocaleString()} records across all pages`,
-      });
     } catch (error) {
       toast({
         title: 'Error',
@@ -392,11 +387,6 @@ export default function AudienceBuilder() {
       // Select first N IDs
       const selectedIds = new Set(results.slice(0, count).map(r => r.id));
       setSelectedRecords(selectedIds);
-      
-      toast({
-        title: 'Records selected',
-        description: `Selected first ${selectedIds.size.toLocaleString()} records`,
-      });
     } catch (error) {
       toast({
         title: 'Error',
