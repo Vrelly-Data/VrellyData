@@ -57,7 +57,9 @@ export function convertFilterStateToAudienceLabFormat(state: FilterBuilderState)
 export function filterMockPeople(people: PersonEntity[], state: FilterBuilderState): PersonEntity[] {
   return people.filter(person => {
     // Filter by city
-    if (state.cities.length > 0 && !state.cities.includes(person.location)) {
+    if (state.cities.length > 0 && !state.cities.some(city => 
+      city.toLowerCase() === person.location?.toLowerCase()
+    )) {
       return false;
     }
     
@@ -67,27 +69,37 @@ export function filterMockPeople(people: PersonEntity[], state: FilterBuilderSta
     }
     
     // Filter by industry
-    if (state.industries.length > 0 && !state.industries.includes(person.industry)) {
+    if (state.industries.length > 0 && !state.industries.some(industry => 
+      industry.toLowerCase() === person.industry?.toLowerCase()
+    )) {
       return false;
     }
     
     // Filter by job title
-    if (state.jobTitles.length > 0 && !state.jobTitles.includes(person.title)) {
+    if (state.jobTitles.length > 0 && !state.jobTitles.some(title => 
+      title.toLowerCase() === person.title?.toLowerCase()
+    )) {
       return false;
     }
     
     // Filter by seniority
-    if (state.seniority.length > 0 && !state.seniority.includes(person.seniority)) {
+    if (state.seniority.length > 0 && !state.seniority.some(sen => 
+      sen.toLowerCase() === person.seniority?.toLowerCase()
+    )) {
       return false;
     }
     
     // Filter by department
-    if (state.department.length > 0 && !state.department.includes(person.department)) {
+    if (state.department.length > 0 && !state.department.some(dept => 
+      dept.toLowerCase() === person.department?.toLowerCase()
+    )) {
       return false;
     }
     
     // Filter by company size
-    if (state.companySize.length > 0 && !state.companySize.includes(person.companySize)) {
+    if (state.companySize.length > 0 && !state.companySize.some(size => 
+      size.toLowerCase() === person.companySize?.toLowerCase()
+    )) {
       return false;
     }
     
@@ -127,12 +139,16 @@ export function filterMockPeople(people: PersonEntity[], state: FilterBuilderSta
 export function filterMockCompanies(companies: CompanyEntity[], state: FilterBuilderState): CompanyEntity[] {
   return companies.filter(company => {
     // Filter by industry
-    if (state.industries.length > 0 && !state.industries.includes(company.industry)) {
+    if (state.industries.length > 0 && !state.industries.some(industry => 
+      industry.toLowerCase() === company.industry?.toLowerCase()
+    )) {
       return false;
     }
     
     // Filter by location
-    if (state.cities.length > 0 && !state.cities.includes(company.location)) {
+    if (state.cities.length > 0 && !state.cities.some(city => 
+      city.toLowerCase() === company.location?.toLowerCase()
+    )) {
       return false;
     }
     
