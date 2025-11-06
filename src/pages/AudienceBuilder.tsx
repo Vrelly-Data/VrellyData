@@ -324,6 +324,9 @@ export default function AudienceBuilder() {
         allResults.push(...response.items);
       }
       
+      // Update global results to show all fetched records
+      setResults(allResults);
+      
       // Select all IDs
       const allIds = new Set(allResults.map(r => r.id));
       setSelectedRecords(allIds);
@@ -383,6 +386,9 @@ export default function AudienceBuilder() {
           break;
         }
       }
+      
+      // Update global results to show all fetched records
+      setResults(results);
       
       // Select first N IDs
       const selectedIds = new Set(results.slice(0, count).map(r => r.id));
