@@ -85,6 +85,25 @@ serve(async (req) => {
         break;
       }
 
+      case 'enrich': {
+        const { filter, is_or_match = false, page = 1, page_size = 100 } = params;
+        response = await fetch(`${AUDIENCELAB_BASE_URL}/enrich`, {
+          method: 'POST',
+          headers: {
+            'X-Api-Key': apiKey,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            request_id: `req_${Date.now()}`,
+            filter,
+            is_or_match,
+            page,
+            page_size,
+          }),
+        });
+        break;
+      }
+
       default:
         throw new Error(`Unknown action: ${action}`);
     }

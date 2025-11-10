@@ -6,7 +6,7 @@ import { generateMockPeople, generateMockCompanies, MOCK_ATTRIBUTES } from '@/li
 // Set to false to use real AudienceLab API (requires credits)
 // API Configuration: https://api.audiencelab.io
 // API Key stored in: AUDIENCELAB_API_KEY secret
-const MOCK_MODE = true;
+const MOCK_MODE = false;
 
 export interface SearchParams {
   filters: FilterDSL;
@@ -37,83 +37,95 @@ export interface UnlockResponse {
 }
 
 class AudienceLabClient {
-  private tempAudienceIds: string[] = [];
   private mockPeopleBase?: PersonEntity[];
   private mockCompaniesBase?: CompanyEntity[];
 
-  private convertFiltersToAudienceLabFormat(filters: FilterDSL): AudienceLabFilters {
-    // Convert our FilterDSL to AudienceLab's format
-    const labFilters: AudienceLabFilters = {};
+  private convertToEnrichFilter(filterState: FilterBuilderState): any {
+    const filter: any = {};
     
-    // Extract filters from the where clause
-    if ('and' in filters.where) {
-      filters.where.and?.forEach(operand => {
-        if (operand.field === 'age' && operand.op === 'range' && Array.isArray(operand.value)) {
-          labFilters.age = { minAge: operand.value[0], maxAge: operand.value[1] };
-        }
-        if (operand.field === 'location' && operand.op === 'in') {
-          labFilters.city = Array.isArray(operand.value) ? operand.value : [operand.value];
-        }
-        if (operand.field === 'gender' && operand.op === 'in') {
-          labFilters.gender = Array.isArray(operand.value) ? operand.value : [operand.value];
-        }
-        if (operand.field === 'industry' && operand.op === 'in') {
-          labFilters.businessProfile = {
-            industry: Array.isArray(operand.value) ? operand.value : [operand.value]
-          };
-        }
-        if (operand.field === 'title' && operand.op === 'in') {
-          labFilters.jobTitle = Array.isArray(operand.value) ? operand.value : [operand.value];
-        }
-        if (operand.field === 'keywords' && operand.value) {
-          labFilters.keywords = operand.value;
-        }
-      });
+    // Map FilterBuilderState to /enrich filter format
+    if (filterState.industries?.length > 0) {
+      filter.industry = filterState.industries;
     }
     
-    return labFilters;
+    if (filterState.cities?.length > 0) {
+      filter.personal_city = filterState.cities;
+    }
+    
+    if (filterState.gender) {
+      filter.gender = filterState.gender;
+    }
+    
+    if (filterState.jobTitles?.length > 0) {
+      filter.job_title = filterState.jobTitles;
+    }
+    
+    if (filterState.seniority?.length > 0) {
+      filter.seniority = filterState.seniority;
+    }
+    
+    if (filterState.department?.length > 0) {
+      filter.department = filterState.department;
+    }
+    
+    if (filterState.companySize?.length > 0) {
+      filter.company_size = filterState.companySize;
+    }
+    
+    if (filterState.keywords?.length > 0) {
+      filter.keywords = filterState.keywords.join(' ');
+    }
+    
+    return filter;
   }
 
-  private mapAudienceDataToEntities(data: any[], type: EntityType): (PersonEntity | CompanyEntity)[] {
-    return data.map((item, index) => {
-      if (type === 'person') {
-        return {
-          id: item.id || `person-${index}`,
-          name: item.name || item.fullName || 'Unknown',
-          title: item.title || item.jobTitle,
-          seniority: item.seniority,
-          department: item.department,
-          location: item.location || item.city,
-          company: item.company || item.companyName,
-          companySize: item.companySize,
-          companyDescription: item.companyDescription || item.company_description,
-          industry: item.industry,
-          technologies: item.technologies || [],
-          email: item.email,
-          phone: item.phone,
-          linkedin: item.linkedin,
-          age: item.age,
-          gender: item.gender,
-          isUnlocked: false,
-        } as PersonEntity;
-      } else {
-        return {
-          id: item.id || `company-${index}`,
-          name: item.name || item.companyName || 'Unknown',
-          domain: item.domain || item.website,
-          industry: item.industry,
-          employeeCount: item.employeeCount || item.employees,
-          revenue: item.revenue,
-          location: item.location || item.headquarters,
-          technologies: item.technologies || [],
-          fundingStage: item.fundingStage,
-          description: item.description,
-          linkedin: item.linkedin,
-          phone: item.phone,
-          isUnlocked: false,
-        } as CompanyEntity;
-      }
-    });
+  private mapEnrichDataToPeople(data: any[]): PersonEntity[] {
+    return data.map((item, index) => ({
+      id: item.uuid || item.sha256_email || `person-${index}`,
+      name: `${item.first_name || ''} ${item.last_name || ''}`.trim() || 'Unknown',
+      firstName: item.first_name,
+      lastName: item.last_name,
+      email: item.email,
+      businessEmail: item.business_email,
+      phone: item.phone,
+      title: item.job_title,
+      seniority: item.seniority,
+      department: item.department,
+      location: item.personal_city || item.personal_state,
+      city: item.personal_city,
+      state: item.personal_state,
+      country: item.personal_country,
+      company: item.company_name,
+      companyDomain: item.company_domain,
+      industry: item.industry,
+      linkedin: item.linkedin_url,
+      age: item.age,
+      gender: item.gender,
+      customFields: {},
+      isUnlocked: false,
+    }));
+  }
+
+  private mapEnrichDataToCompanies(data: any[]): CompanyEntity[] {
+    return data.map((item, index) => ({
+      id: item.uuid || item.company_domain || `company-${index}`,
+      name: item.company_name || 'Unknown',
+      domain: item.company_domain,
+      industry: item.industry,
+      employeeCount: item.employee_count,
+      revenue: item.revenue,
+      location: item.company_city || item.company_state,
+      city: item.company_city,
+      state: item.company_state,
+      country: item.company_country,
+      technologies: item.technologies || [],
+      fundingStage: item.funding_stage,
+      description: item.company_description,
+      linkedin: item.company_linkedin_url,
+      phone: item.company_phone,
+      customFields: {},
+      isUnlocked: false,
+    }));
   }
 
   async searchPeople(params: SearchParams & { filterState?: FilterBuilderState; page?: number; perPage?: number; unlockedIds?: Set<string> }): Promise<SearchResponse<PersonEntity>> {
@@ -161,44 +173,47 @@ class AudienceLabClient {
           facets: {},
         };
       } else {
-        // Real API mode
-        const filters = this.convertFiltersToAudienceLabFormat(params.filters);
-        const audienceName = `temp-search-${Date.now()}`;
+        // Real API mode - use /enrich endpoint
+        console.log('[AudienceLab API] Searching people with filters:', params.filterState);
         
-        const createResponse = await supabase.functions.invoke('audiencelab-api', {
+        const filter = this.convertToEnrichFilter(params.filterState || {});
+        console.log('[AudienceLab API] Converted filter:', filter);
+        
+        const response = await supabase.functions.invoke('audiencelab-api', {
           body: {
-            action: 'createAudience',
-            name: audienceName,
-            filters,
-            days_back: 30,
-          },
-        });
-
-        if (createResponse.error) throw createResponse.error;
-        
-        const audienceId = createResponse.data?.id || createResponse.data?.audience_id;
-        if (!audienceId) throw new Error('No audience ID returned');
-        
-        this.tempAudienceIds.push(audienceId);
-
-        const getResponse = await supabase.functions.invoke('audiencelab-api', {
-          body: {
-            action: 'getAudience',
-            audience_id: audienceId,
+            action: 'enrich',
+            filter,
+            is_or_match: false, // Use AND logic by default
             page: params.page || 1,
             page_size: params.perPage || params.limit || 100,
           },
         });
 
-        if (getResponse.error) throw getResponse.error;
+        if (response.error) throw response.error;
 
-        const data = getResponse.data?.data || [];
-        const pagination = getResponse.data?.pagination || {};
+        const data = response.data?.result || [];
+        const found = response.data?.found || 0;
+        
+        console.log('[AudienceLab API] Results received:', data.length, 'of', found);
+
+        // Map API response to PersonEntity
+        const entities = this.mapEnrichDataToPeople(data);
+        
+        // Mark unlocked records
+        const unlockedIds = params.unlockedIds || new Set();
+        const entitiesWithUnlockStatus = entities.map(person => ({
+          ...person,
+          isUnlocked: unlockedIds.has(person.id),
+        }));
 
         return {
-          items: this.mapAudienceDataToEntities(data, 'person') as PersonEntity[],
-          totalEstimate: data.length,
-          pagination,
+          items: entitiesWithUnlockStatus,
+          totalEstimate: found,
+          pagination: {
+            page: params.page || 1,
+            per_page: params.perPage || params.limit || 100,
+            total_pages: Math.ceil(found / (params.perPage || params.limit || 100)),
+          },
           facets: {},
         };
       }
@@ -252,43 +267,47 @@ class AudienceLabClient {
           facets: {},
         };
       } else {
-        // Real API mode
-        const filters = this.convertFiltersToAudienceLabFormat(params.filters);
-        const audienceName = `temp-company-search-${Date.now()}`;
+        // Real API mode - use /enrich endpoint
+        console.log('[AudienceLab API] Searching companies with filters:', params.filterState);
         
-        const createResponse = await supabase.functions.invoke('audiencelab-api', {
+        const filter = this.convertToEnrichFilter(params.filterState || {});
+        console.log('[AudienceLab API] Converted filter:', filter);
+        
+        const response = await supabase.functions.invoke('audiencelab-api', {
           body: {
-            action: 'createAudience',
-            name: audienceName,
-            filters,
-            days_back: 30,
-          },
-        });
-
-        if (createResponse.error) throw createResponse.error;
-        
-        const audienceId = createResponse.data?.id || createResponse.data?.audience_id;
-        if (!audienceId) throw new Error('No audience ID returned');
-        
-        this.tempAudienceIds.push(audienceId);
-
-        const getResponse = await supabase.functions.invoke('audiencelab-api', {
-          body: {
-            action: 'getAudience',
-            audience_id: audienceId,
+            action: 'enrich',
+            filter,
+            is_or_match: false,
             page: params.page || 1,
             page_size: params.perPage || params.limit || 100,
           },
         });
 
-        if (getResponse.error) throw getResponse.error;
+        if (response.error) throw response.error;
 
-        const data = getResponse.data?.data || [];
+        const data = response.data?.result || [];
+        const found = response.data?.found || 0;
+        
+        console.log('[AudienceLab API] Results received:', data.length, 'of', found);
+
+        // Map API response to CompanyEntity
+        const entities = this.mapEnrichDataToCompanies(data);
+        
+        // Mark unlocked records
+        const unlockedIds = params.unlockedIds || new Set();
+        const entitiesWithUnlockStatus = entities.map(company => ({
+          ...company,
+          isUnlocked: unlockedIds.has(company.id),
+        }));
 
         return {
-          items: this.mapAudienceDataToEntities(data, 'company') as CompanyEntity[],
-          totalEstimate: data.length,
-          pagination: getResponse.data?.pagination,
+          items: entitiesWithUnlockStatus,
+          totalEstimate: found,
+          pagination: {
+            page: params.page || 1,
+            per_page: params.perPage || params.limit || 100,
+            total_pages: Math.ceil(found / (params.perPage || params.limit || 100)),
+          },
           facets: {},
         };
       }
@@ -367,22 +386,6 @@ class AudienceLabClient {
     }
   }
 
-  async cleanupTempAudiences(): Promise<void> {
-    // Clean up temporary audiences
-    for (const audienceId of this.tempAudienceIds) {
-      try {
-        await supabase.functions.invoke('audiencelab-api', {
-          body: {
-            action: 'deleteAudience',
-            audience_id: audienceId,
-          },
-        });
-      } catch (error) {
-        console.error(`Error deleting temp audience ${audienceId}:`, error);
-      }
-    }
-    this.tempAudienceIds = [];
-  }
 }
 
 export const audienceLabClient = new AudienceLabClient();
