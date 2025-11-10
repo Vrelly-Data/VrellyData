@@ -40,7 +40,7 @@ class AudienceLabClient {
   private mockPeopleBase?: PersonEntity[];
   private mockCompaniesBase?: CompanyEntity[];
 
-  private convertToEnrichFilter(filterState: FilterBuilderState): any {
+  private convertToEnrichFilter(filterState: Partial<FilterBuilderState>): any {
     const filter: any = {};
     
     // Map FilterBuilderState to /enrich filter format
