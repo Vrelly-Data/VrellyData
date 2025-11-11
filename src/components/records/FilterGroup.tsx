@@ -52,7 +52,7 @@ export function FilterGroup({
         Or
       </Button>
 
-      {rule.groups && rule.groups.map((group) => (
+      {rule.groups && Array.isArray(rule.groups) && rule.groups.map((group) => (
         <div key={group.id} className="ml-4 mt-3">
           <div className="flex items-center gap-2 mb-3">
             <div className="h-px bg-border flex-1" />

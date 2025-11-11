@@ -62,7 +62,7 @@ export function useSmartFilter(entityType: EntityType, initialFilter?: SmartFilt
         return {
           ...rule,
           conditions: rule.conditions.filter(c => c.id !== conditionId),
-          groups: rule.groups?.map(updateGroup)
+          groups: rule.groups ? rule.groups.map(updateGroup) : undefined
         };
       };
 
@@ -81,7 +81,7 @@ export function useSmartFilter(entityType: EntityType, initialFilter?: SmartFilt
           conditions: rule.conditions.map(c => 
             c.id === conditionId ? { ...c, ...updates } : c
           ),
-          groups: rule.groups?.map(updateGroup)
+          groups: rule.groups ? rule.groups.map(updateGroup) : undefined
         };
       };
 
