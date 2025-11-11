@@ -7,6 +7,38 @@ const corsHeaders = {
 
 const AUDIENCELAB_BASE_URL = 'https://api.audiencelab.io';
 
+// Allowlist of valid top-level filter keys based on AudienceLabFilters type
+const ALLOWED_FILTER_KEYS = new Set([
+  'age', 'city', 'gender', 'businessProfile', 'jobTitle', 'keywords',
+  'segment', 'days_back', 'seniority', 'department', 'companySize', 'fundingStage'
+]);
+
+// Filter allowlist - removes unknown keys and handles businessProfile
+function filterAllowlist(obj: any): any {
+  if (!obj || typeof obj !== 'object') return undefined;
+  
+  const out: any = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (!ALLOWED_FILTER_KEYS.has(k)) {
+      console.log(`[Filter Allowlist] Dropping unknown key: ${k}`);
+      continue;
+    }
+    
+    // Handle businessProfile specially
+    if (k === 'businessProfile' && v && typeof v === 'object') {
+      const bp: any = {};
+      const vObj = v as any;
+      if (Array.isArray(vObj.industry) && vObj.industry.length) bp.industry = vObj.industry;
+      if (Object.keys(bp).length) out.businessProfile = bp;
+      continue;
+    }
+    
+    out[k] = v;
+  }
+  
+  return Object.keys(out).length ? out : undefined;
+}
+
 // Helper to remove undefined, null, empty strings, and empty arrays from payloads
 function sanitizePayload(obj: any): any {
   if (Array.isArray(obj)) {
@@ -119,23 +151,28 @@ serve(async (req) => {
       }
 
       case 'enrich': {
-        const { filter, is_or_match = false, page = 1, page_size = 100 } = params;
-        const sanitizedFilter = sanitizePayload(filter);
+        const { filters, is_or_match = false, page = 1, per_page = 100 } = params;
+        
+        // Apply allowlist and sanitize
+        const allowlistedFilter = filterAllowlist(filters);
+        const sanitizedFilter = sanitizePayload(allowlistedFilter);
         const request_id = `req_${Date.now()}`;
         
-        // Try 3 different payload shapes in order
+        console.log('[AudienceLab API v2] Allowlisted filter:', JSON.stringify(sanitizedFilter, null, 2));
+        
+        // Try 3 different payload shapes in order: filters (preferred), flattened, filter
         const payloadAttempts = [
           {
+            label: 'filters_plural',
+            body: { request_id, filters: sanitizedFilter, is_or_match, page, per_page }
+          },
+          {
             label: 'flattened',
-            body: { request_id, ...sanitizedFilter, is_or_match, page, page_size }
+            body: { request_id, ...sanitizedFilter, is_or_match, page, per_page }
           },
           {
-            label: 'nested_filter',
-            body: { request_id, filter: sanitizedFilter, is_or_match, page, page_size }
-          },
-          {
-            label: 'nested_filters',
-            body: { request_id, filters: sanitizedFilter, is_or_match, page, page_size }
+            label: 'filter_singular',
+            body: { request_id, filter: sanitizedFilter, is_or_match, page, per_page }
           }
         ];
         

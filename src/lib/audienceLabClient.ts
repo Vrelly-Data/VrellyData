@@ -1,6 +1,6 @@
 import { FilterDSL, PersonEntity, CompanyEntity, EntityType, AudienceLabFilters, CreateAudienceRequest } from '@/types/audience';
 import { supabase } from '@/integrations/supabase/client';
-import { FilterBuilderState, filterMockPeople, filterMockCompanies } from '@/lib/filterConversion';
+import { FilterBuilderState, filterMockPeople, filterMockCompanies, convertFilterStateToAudienceLabFormat } from '@/lib/filterConversion';
 import { generateMockPeople, generateMockCompanies, MOCK_ATTRIBUTES } from '@/lib/mockData';
 
 // Set to false to use real AudienceLab API (requires credits)
@@ -40,49 +40,6 @@ class AudienceLabClient {
   private mockPeopleBase?: PersonEntity[];
   private mockCompaniesBase?: CompanyEntity[];
 
-  private convertToEnrichFilter(filterState: Partial<FilterBuilderState>): any {
-    const filter: any = {};
-    
-    // Helper to add non-empty arrays
-    const addArrayField = (key: string, value: any[] | undefined) => {
-      if (value && Array.isArray(value) && value.length > 0) {
-        const trimmed = value.map(v => typeof v === 'string' ? v.trim() : v).filter(v => v);
-        if (trimmed.length > 0) {
-          filter[key] = trimmed;
-        }
-      }
-    };
-    
-    // Helper to add non-empty strings
-    const addStringField = (key: string, value: any) => {
-      if (value && typeof value === 'string' && value.trim()) {
-        filter[key] = value.trim();
-      }
-    };
-    
-    // Map FilterBuilderState to /enrich filter format
-    addArrayField('industry', filterState.industries);
-    addArrayField('personal_city', filterState.cities);
-    addArrayField('job_title', filterState.jobTitles);
-    addArrayField('seniority', filterState.seniority);
-    addArrayField('department', filterState.department);
-    addArrayField('company_size', filterState.companySize);
-    
-    // Normalize gender to lowercase
-    if (filterState.gender && filterState.gender.trim()) {
-      filter.gender = filterState.gender.toLowerCase();
-    }
-    
-    // Keywords should be joined into a single string
-    if (filterState.keywords && filterState.keywords.length > 0) {
-      const joined = filterState.keywords.join(' ').trim();
-      if (joined) {
-        filter.keywords = joined;
-      }
-    }
-    
-    return filter;
-  }
 
   private mapEnrichDataToPeople(data: any[]): PersonEntity[] {
     return data.map((item, index) => ({
@@ -181,16 +138,20 @@ class AudienceLabClient {
         // Real API mode - use /enrich endpoint
         console.log('[AudienceLab API] Searching people with filters:', params.filterState);
         
-        const filter = this.convertToEnrichFilter(params.filterState || {});
-        console.log('[AudienceLab API] Converted filter:', filter);
+        const filters = convertFilterStateToAudienceLabFormat(params.filterState || {
+          industries: [], cities: [], gender: null, jobTitles: [], seniority: [],
+          department: [], companySize: [], netWorth: [], income: [], keywords: [],
+          prospectData: [],
+        });
+        console.log('[AudienceLab API] Converted filters:', filters);
         
         const response = await supabase.functions.invoke('audiencelab-api', {
           body: {
             action: 'enrich',
-            filter,
-            is_or_match: false, // Use AND logic by default
+            filters,
+            is_or_match: false,
             page: params.page || 1,
-            page_size: params.perPage || params.limit || 100,
+            per_page: params.perPage || params.limit || 100,
           },
         });
 
@@ -283,16 +244,20 @@ class AudienceLabClient {
         // Real API mode - use /enrich endpoint
         console.log('[AudienceLab API] Searching companies with filters:', params.filterState);
         
-        const filter = this.convertToEnrichFilter(params.filterState || {});
-        console.log('[AudienceLab API] Converted filter:', filter);
+        const filters = convertFilterStateToAudienceLabFormat(params.filterState || {
+          industries: [], cities: [], gender: null, jobTitles: [], seniority: [],
+          department: [], companySize: [], netWorth: [], income: [], keywords: [],
+          prospectData: [],
+        });
+        console.log('[AudienceLab API] Converted filters:', filters);
         
         const response = await supabase.functions.invoke('audiencelab-api', {
           body: {
             action: 'enrich',
-            filter,
+            filters,
             is_or_match: false,
             page: params.page || 1,
-            page_size: params.perPage || params.limit || 100,
+            per_page: params.perPage || params.limit || 100,
           },
         });
 
