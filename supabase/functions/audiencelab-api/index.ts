@@ -19,7 +19,7 @@ serve(async (req) => {
     }
 
     const { action, ...params } = await req.json();
-    console.log('AudienceLab API request:', { action, params });
+    console.log('[AudienceLab API v2] Request:', { action, params });
 
     let response: Response;
 
