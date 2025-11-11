@@ -331,7 +331,7 @@ class AudienceLabClient {
     };
   }
 
-  async getAttributes(attribute: string): Promise<any> {
+  async getAttributes(attribute: string): Promise<string[]> {
     try {
       if (MOCK_MODE) {
         console.log(`[MOCK] Getting ${attribute} attributes`);
@@ -346,7 +346,30 @@ class AudienceLabClient {
         });
 
         if (response.error) throw response.error;
-        return response.data;
+        
+        // Normalize response to string[]
+        let data = response.data;
+        
+        // Handle nested structure: response.data?.attributes?.[attribute]?.data
+        if (data?.attributes?.[attribute]?.data) {
+          data = data.attributes[attribute].data;
+        }
+        
+        // If already an array, process it
+        if (Array.isArray(data)) {
+          return data.map(item => {
+            if (typeof item === 'string') return item;
+            if (typeof item === 'object' && item !== null) {
+              // Try common property names
+              return item.name || item.value || item.label || String(item);
+            }
+            return String(item);
+          });
+        }
+        
+        // Fallback to empty array
+        console.warn(`[AudienceLab] Unexpected attributes format for ${attribute}:`, response.data);
+        return [];
       }
     } catch (error) {
       console.error(`Error getting ${attribute} attributes:`, error);

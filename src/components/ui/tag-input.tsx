@@ -25,7 +25,10 @@ export function TagInput({
   const [showSuggestions, setShowSuggestions] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const filteredSuggestions = suggestions.filter(
+  // Defensive array guard
+  const safeSuggestions = Array.isArray(suggestions) ? suggestions : [];
+
+  const filteredSuggestions = safeSuggestions.filter(
     (suggestion) =>
       suggestion?.toLowerCase().includes(inputValue?.toLowerCase() || '') &&
       !(value || []).includes(suggestion)
