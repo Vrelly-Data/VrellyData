@@ -43,37 +43,42 @@ class AudienceLabClient {
   private convertToEnrichFilter(filterState: Partial<FilterBuilderState>): any {
     const filter: any = {};
     
+    // Helper to add non-empty arrays
+    const addArrayField = (key: string, value: any[] | undefined) => {
+      if (value && Array.isArray(value) && value.length > 0) {
+        const trimmed = value.map(v => typeof v === 'string' ? v.trim() : v).filter(v => v);
+        if (trimmed.length > 0) {
+          filter[key] = trimmed;
+        }
+      }
+    };
+    
+    // Helper to add non-empty strings
+    const addStringField = (key: string, value: any) => {
+      if (value && typeof value === 'string' && value.trim()) {
+        filter[key] = value.trim();
+      }
+    };
+    
     // Map FilterBuilderState to /enrich filter format
-    if (filterState.industries?.length > 0) {
-      filter.industry = filterState.industries;
+    addArrayField('industry', filterState.industries);
+    addArrayField('personal_city', filterState.cities);
+    addArrayField('job_title', filterState.jobTitles);
+    addArrayField('seniority', filterState.seniority);
+    addArrayField('department', filterState.department);
+    addArrayField('company_size', filterState.companySize);
+    
+    // Normalize gender to lowercase
+    if (filterState.gender && filterState.gender.trim()) {
+      filter.gender = filterState.gender.toLowerCase();
     }
     
-    if (filterState.cities?.length > 0) {
-      filter.personal_city = filterState.cities;
-    }
-    
-    if (filterState.gender) {
-      filter.gender = filterState.gender;
-    }
-    
-    if (filterState.jobTitles?.length > 0) {
-      filter.job_title = filterState.jobTitles;
-    }
-    
-    if (filterState.seniority?.length > 0) {
-      filter.seniority = filterState.seniority;
-    }
-    
-    if (filterState.department?.length > 0) {
-      filter.department = filterState.department;
-    }
-    
-    if (filterState.companySize?.length > 0) {
-      filter.company_size = filterState.companySize;
-    }
-    
-    if (filterState.keywords?.length > 0) {
-      filter.keywords = filterState.keywords.join(' ');
+    // Keywords should be joined into a single string
+    if (filterState.keywords && filterState.keywords.length > 0) {
+      const joined = filterState.keywords.join(' ').trim();
+      if (joined) {
+        filter.keywords = joined;
+      }
     }
     
     return filter;
@@ -189,7 +194,19 @@ class AudienceLabClient {
           },
         });
 
-        if (response.error) throw response.error;
+        if (response.error) {
+          // Extract upstream error message if available
+          const errorMsg = response.error?.message || 
+                          (typeof response.error === 'object' && response.error !== null 
+                            ? JSON.stringify(response.error) 
+                            : 'Unknown error');
+          throw new Error(errorMsg);
+        }
+        
+        // Check if the response data itself contains an error
+        if (response.data?.message && response.data?.status === 'failure') {
+          throw new Error(response.data.message);
+        }
 
         const data = response.data?.result || [];
         const found = response.data?.found || 0;
@@ -283,7 +300,20 @@ class AudienceLabClient {
           },
         });
 
-        if (response.error) throw response.error;
+
+        if (response.error) {
+          // Extract upstream error message if available
+          const errorMsg = response.error?.message || 
+                          (typeof response.error === 'object' && response.error !== null 
+                            ? JSON.stringify(response.error) 
+                            : 'Unknown error');
+          throw new Error(errorMsg);
+        }
+        
+        // Check if the response data itself contains an error
+        if (response.data?.message && response.data?.status === 'failure') {
+          throw new Error(response.data.message);
+        }
 
         const data = response.data?.result || [];
         const found = response.data?.found || 0;

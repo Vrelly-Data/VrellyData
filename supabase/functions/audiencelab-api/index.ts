@@ -7,6 +7,39 @@ const corsHeaders = {
 
 const AUDIENCELAB_BASE_URL = 'https://api.audiencelab.io';
 
+// Helper to remove undefined, null, empty strings, and empty arrays from payloads
+function sanitizePayload(obj: any): any {
+  if (Array.isArray(obj)) {
+    const filtered = obj.filter(item => item !== undefined && item !== null && item !== '');
+    return filtered.length > 0 ? filtered.map(sanitizePayload) : undefined;
+  }
+  
+  if (obj && typeof obj === 'object') {
+    const sanitized: any = {};
+    for (const [key, value] of Object.entries(obj)) {
+      if (value === undefined || value === null || value === '') {
+        continue;
+      }
+      if (Array.isArray(value)) {
+        const sanitizedArray = sanitizePayload(value);
+        if (sanitizedArray && sanitizedArray.length > 0) {
+          sanitized[key] = sanitizedArray;
+        }
+      } else if (typeof value === 'object') {
+        const sanitizedObj = sanitizePayload(value);
+        if (sanitizedObj && Object.keys(sanitizedObj).length > 0) {
+          sanitized[key] = sanitizedObj;
+        }
+      } else {
+        sanitized[key] = value;
+      }
+    }
+    return Object.keys(sanitized).length > 0 ? sanitized : undefined;
+  }
+  
+  return obj;
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -87,19 +120,22 @@ serve(async (req) => {
 
       case 'enrich': {
         const { filter, is_or_match = false, page = 1, page_size = 100 } = params;
+        const sanitizedFilter = sanitizePayload(filter);
+        const requestBody = {
+          request_id: `req_${Date.now()}`,
+          filter: sanitizedFilter,
+          is_or_match,
+          page,
+          page_size,
+        };
+        console.log('[AudienceLab API v2] Outbound enrich body:', JSON.stringify(requestBody, null, 2));
         response = await fetch(`${AUDIENCELAB_BASE_URL}/enrich`, {
           method: 'POST',
           headers: {
             'X-Api-Key': apiKey,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({
-            request_id: `req_${Date.now()}`,
-            filter,
-            is_or_match,
-            page,
-            page_size,
-          }),
+          body: JSON.stringify(requestBody),
         });
         break;
       }
@@ -112,7 +148,12 @@ serve(async (req) => {
     console.log('AudienceLab API response:', { status: response.status, data });
 
     if (!response.ok) {
-      throw new Error(`AudienceLab API error: ${JSON.stringify(data)}`);
+      // Return the upstream error status and data directly to the client
+      console.error('AudienceLab API error:', response.status, data);
+      return new Response(JSON.stringify(data), {
+        status: response.status,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
     return new Response(JSON.stringify(data), {
