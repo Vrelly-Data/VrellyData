@@ -195,17 +195,13 @@ class AudienceLabClient {
         });
 
         if (response.error) {
-          // Extract upstream error message if available
-          const errorMsg = response.error?.message || 
-                          (typeof response.error === 'object' && response.error !== null 
-                            ? JSON.stringify(response.error) 
-                            : 'Unknown error');
-          throw new Error(errorMsg);
+          console.error('Error calling audiencelab-api:', response.error);
+          throw new Error(response.error.message || 'Failed to search people');
         }
-        
-        // Check if the response data itself contains an error
-        if (response.data?.message && response.data?.status === 'failure') {
-          throw new Error(response.data.message);
+
+        if (response.data?.ok === false) {
+          console.error('AudienceLab API returned error:', response.data);
+          throw new Error(response.data?.error || 'Search failed');
         }
 
         const data = response.data?.result || [];
@@ -302,12 +298,13 @@ class AudienceLabClient {
 
 
         if (response.error) {
-          // Extract upstream error message if available
-          const errorMsg = response.error?.message || 
-                          (typeof response.error === 'object' && response.error !== null 
-                            ? JSON.stringify(response.error) 
-                            : 'Unknown error');
-          throw new Error(errorMsg);
+          console.error('Error calling audiencelab-api for companies:', response.error);
+          throw new Error(response.error.message || 'Failed to search companies');
+        }
+
+        if (response.data?.ok === false) {
+          console.error('AudienceLab API returned error:', response.data);
+          throw new Error(response.data?.error || 'Search failed');
         }
         
         // Check if the response data itself contains an error

@@ -121,23 +121,65 @@ serve(async (req) => {
       case 'enrich': {
         const { filter, is_or_match = false, page = 1, page_size = 100 } = params;
         const sanitizedFilter = sanitizePayload(filter);
-        const requestBody = {
-          request_id: `req_${Date.now()}`,
-          filter: sanitizedFilter,
-          is_or_match,
-          page,
-          page_size,
-        };
-        console.log('[AudienceLab API v2] Outbound enrich body:', JSON.stringify(requestBody, null, 2));
-        response = await fetch(`${AUDIENCELAB_BASE_URL}/enrich`, {
-          method: 'POST',
-          headers: {
-            'X-Api-Key': apiKey,
-            'Content-Type': 'application/json',
+        const request_id = `req_${Date.now()}`;
+        
+        // Try 3 different payload shapes in order
+        const payloadAttempts = [
+          {
+            label: 'flattened',
+            body: { request_id, ...sanitizedFilter, is_or_match, page, page_size }
           },
-          body: JSON.stringify(requestBody),
+          {
+            label: 'nested_filter',
+            body: { request_id, filter: sanitizedFilter, is_or_match, page, page_size }
+          },
+          {
+            label: 'nested_filters',
+            body: { request_id, filters: sanitizedFilter, is_or_match, page, page_size }
+          }
+        ];
+        
+        let lastError: any = null;
+        let lastStatus = 500;
+        
+        for (const attempt of payloadAttempts) {
+          console.log(`[AudienceLab API v2] Trying ${attempt.label} payload:`, JSON.stringify(attempt.body, null, 2));
+          
+          const apiResponse = await fetch(`${AUDIENCELAB_BASE_URL}/enrich`, {
+            method: 'POST',
+            headers: {
+              'X-Api-Key': apiKey,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(attempt.body),
+          });
+          
+          const data = await apiResponse.json();
+          
+          if (apiResponse.ok) {
+            console.log(`[AudienceLab API v2] Success with ${attempt.label}:`, { status: apiResponse.status });
+            return new Response(JSON.stringify({ ok: true, ...data }), {
+              headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            });
+          }
+          
+          console.log(`[AudienceLab API v2] ${attempt.label} failed:`, { status: apiResponse.status, data });
+          lastError = data;
+          lastStatus = apiResponse.status;
+        }
+        
+        // All attempts failed - return standardized error
+        const errorMessage = lastError?.message || lastError?.error || 'Search failed';
+        console.error('[AudienceLab API v2] All payload attempts failed:', { status: lastStatus, error: errorMessage });
+        
+        return new Response(JSON.stringify({
+          ok: false,
+          status: lastStatus,
+          error: errorMessage,
+          raw: lastError
+        }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
-        break;
       }
 
       default:
@@ -148,7 +190,6 @@ serve(async (req) => {
     console.log('AudienceLab API response:', { status: response.status, data });
 
     if (!response.ok) {
-      // Return the upstream error status and data directly to the client
       console.error('AudienceLab API error:', response.status, data);
       return new Response(JSON.stringify(data), {
         status: response.status,
