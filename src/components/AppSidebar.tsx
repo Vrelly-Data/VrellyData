@@ -9,7 +9,7 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from '@/components/ui/sidebar';
-import { Home, Users, Building2, Settings, LogOut } from 'lucide-react';
+import { Home, Users, Building2, Settings, LogOut, Shield } from 'lucide-react';
 import { useAuthStore } from '@/stores/authStore';
 import vrellyLogo from '@/assets/vrelly-logo.png';
 
@@ -22,9 +22,10 @@ const navItems = [
 
 export function AppSidebar() {
   const { state } = useSidebar();
-  const { signOut, profile } = useAuthStore();
+  const { signOut, profile, isAdmin } = useAuthStore();
   const navigate = useNavigate();
   const isCollapsed = state === 'collapsed';
+  const showAdminLink = isAdmin();
 
   return (
     <Sidebar collapsible="icon"  className={isCollapsed ? 'w-28' : 'w-60'}>
@@ -56,6 +57,21 @@ export function AppSidebar() {
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               ))}
+              {showAdminLink && (
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild>
+                    <NavLink
+                      to="/admin"
+                      className={({ isActive }) =>
+                        isActive ? 'bg-muted text-primary font-medium' : 'hover:bg-muted/50'
+                      }
+                    >
+                      <Shield className="h-4 w-4" />
+                      {!isCollapsed && <span>Admin</span>}
+                    </NavLink>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              )}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
