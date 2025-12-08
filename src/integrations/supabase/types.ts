@@ -240,6 +240,39 @@ export type Database = {
           },
         ]
       }
+      data_source_templates: {
+        Row: {
+          column_mappings: Json
+          created_at: string | null
+          created_by: string
+          description: string | null
+          entity_type: Database["public"]["Enums"]["entity_type"]
+          id: string
+          name: string
+          updated_at: string | null
+        }
+        Insert: {
+          column_mappings?: Json
+          created_at?: string | null
+          created_by: string
+          description?: string | null
+          entity_type: Database["public"]["Enums"]["entity_type"]
+          id?: string
+          name: string
+          updated_at?: string | null
+        }
+        Update: {
+          column_mappings?: Json
+          created_at?: string | null
+          created_by?: string
+          description?: string | null
+          entity_type?: Database["public"]["Enums"]["entity_type"]
+          id?: string
+          name?: string
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
       export_jobs: {
         Row: {
           audience_id: string
@@ -390,6 +423,44 @@ export type Database = {
             columns: ["team_id"]
             isOneToOne: false
             referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      free_data: {
+        Row: {
+          created_at: string | null
+          entity_data: Json
+          entity_external_id: string
+          entity_type: Database["public"]["Enums"]["entity_type"]
+          id: string
+          source_template_id: string | null
+          uploaded_by: string
+        }
+        Insert: {
+          created_at?: string | null
+          entity_data: Json
+          entity_external_id: string
+          entity_type: Database["public"]["Enums"]["entity_type"]
+          id?: string
+          source_template_id?: string | null
+          uploaded_by: string
+        }
+        Update: {
+          created_at?: string | null
+          entity_data?: Json
+          entity_external_id?: string
+          entity_type?: Database["public"]["Enums"]["entity_type"]
+          id?: string
+          source_template_id?: string | null
+          uploaded_by?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "free_data_source_template_id_fkey"
+            columns: ["source_template_id"]
+            isOneToOne: false
+            referencedRelation: "data_source_templates"
             referencedColumns: ["id"]
           },
         ]
@@ -842,6 +913,7 @@ export type Database = {
         }
         Returns: boolean
       }
+      is_global_admin: { Args: { _user_id: string }; Returns: boolean }
       log_audit_event: {
         Args: {
           _action: string
