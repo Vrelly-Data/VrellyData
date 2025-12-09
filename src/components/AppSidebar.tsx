@@ -22,8 +22,7 @@ const navItems = [
 
 export function AppSidebar() {
   const { state } = useSidebar();
-  const { signOut, profile } = useAuthStore();
-  const userRoles = useAuthStore(state => state.userRoles);
+  const { signOut, profile, userRoles } = useAuthStore();
   const navigate = useNavigate();
   const isCollapsed = state === 'collapsed';
   const showAdminLink = userRoles.some(r => r.role === 'admin');
