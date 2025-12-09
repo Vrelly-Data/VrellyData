@@ -22,10 +22,11 @@ const navItems = [
 
 export function AppSidebar() {
   const { state } = useSidebar();
-  const { signOut, profile, isAdmin } = useAuthStore();
+  const { signOut, profile } = useAuthStore();
+  const userRoles = useAuthStore(state => state.userRoles);
   const navigate = useNavigate();
   const isCollapsed = state === 'collapsed';
-  const showAdminLink = isAdmin();
+  const showAdminLink = userRoles.some(r => r.role === 'admin');
 
   return (
     <Sidebar collapsible="icon"  className={isCollapsed ? 'w-28' : 'w-60'}>
