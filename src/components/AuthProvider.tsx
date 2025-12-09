@@ -28,7 +28,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     );
 
     // Check for existing session
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
+    supabase.auth.getSession().then(async ({ data: { session }, error }) => {
+      if (error) {
+        console.error('Session error:', error);
+        setSession(null);
+        setUser(null);
+        setLoading(false);
+        return;
+      }
+      
       setSession(session);
       setUser(session?.user ?? null);
       
@@ -36,6 +44,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         profileFetchedRef.current = true;
         await fetchProfile();
       }
+      setLoading(false);
+    }).catch((err) => {
+      console.error('Auth check failed:', err);
+      setSession(null);
+      setUser(null);
       setLoading(false);
     });
 
