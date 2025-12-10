@@ -28,11 +28,13 @@ interface AuthState {
   profile: Profile | null;
   userRoles: UserRole[];
   loading: boolean;
+  profileLoading: boolean;
   setUser: (user: User | null) => void;
   setSession: (session: Session | null) => void;
   setProfile: (profile: Profile | null) => void;
   setUserRoles: (roles: UserRole[]) => void;
   setLoading: (loading: boolean) => void;
+  setProfileLoading: (loading: boolean) => void;
   signOut: () => Promise<void>;
   fetchProfile: () => Promise<void>;
   isAdmin: (teamId?: string) => boolean;
@@ -44,24 +46,28 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   profile: null,
   userRoles: [],
   loading: true,
+  profileLoading: false,
   
   setUser: (user) => set({ user }),
   setSession: (session) => set({ session }),
   setProfile: (profile) => set({ profile }),
   setUserRoles: (roles) => set({ userRoles: roles }),
   setLoading: (loading) => set({ loading }),
+  setProfileLoading: (loading) => set({ profileLoading: loading }),
   
   signOut: async () => {
     await supabase.auth.signOut();
-    set({ user: null, session: null, profile: null, userRoles: [] });
+    set({ user: null, session: null, profile: null, userRoles: [], profileLoading: false });
   },
   
   fetchProfile: async () => {
     const { user } = get();
     if (!user) {
-      set({ profile: null, userRoles: [] });
+      set({ profile: null, userRoles: [], profileLoading: false });
       return;
     }
+
+    set({ profileLoading: true });
 
     // Fetch profile
     const { data: profileData, error: profileError } = await supabase
@@ -85,9 +91,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
     if (rolesError) {
       console.error('Error fetching user roles:', rolesError);
+      set({ profileLoading: false });
     } else if (rolesData) {
       console.log('User roles loaded:', rolesData);
-      set({ userRoles: rolesData as UserRole[] });
+      set({ userRoles: rolesData as UserRole[], profileLoading: false });
+    } else {
+      set({ profileLoading: false });
     }
   },
 
