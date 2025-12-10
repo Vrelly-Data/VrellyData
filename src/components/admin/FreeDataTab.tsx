@@ -161,9 +161,9 @@ export function FreeDataTab() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-lg font-medium">Free Data</h3>
+          <h3 className="text-lg font-medium">Platform Data</h3>
           <p className="text-sm text-muted-foreground">
-            Upload data that will be available to all users for free
+            Upload data that will be available to all users (credits charged on download)
           </p>
         </div>
         <div className="flex items-center gap-4">
@@ -261,7 +261,7 @@ export function FreeDataTab() {
       <Dialog open={showUploadDialog} onOpenChange={setShowUploadDialog}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>Upload Free Data</DialogTitle>
+            <DialogTitle>Upload Platform Data</DialogTitle>
           </DialogHeader>
 
           <div className="space-y-4">
