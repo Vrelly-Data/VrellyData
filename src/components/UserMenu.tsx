@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom';
-import { LogOut, Settings, User, CreditCard } from 'lucide-react';
+import { LogOut, Settings, CreditCard } from 'lucide-react';
 import { useAuthStore } from '@/stores/authStore';
 import {
   DropdownMenu,
@@ -66,13 +66,6 @@ export function UserMenu() {
         >
           <Settings className="mr-2 h-4 w-4" />
           <span>Settings</span>
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          className="cursor-pointer"
-          onSelect={() => navigate('/billing')}
-        >
-          <User className="mr-2 h-4 w-4" />
-          <span>Billing</span>
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem
