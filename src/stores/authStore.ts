@@ -36,7 +36,7 @@ interface AuthState {
   setLoading: (loading: boolean) => void;
   setProfileLoading: (loading: boolean) => void;
   signOut: () => Promise<void>;
-  fetchProfile: () => Promise<void>;
+  fetchProfile: (userId?: string) => Promise<void>;
   isAdmin: (teamId?: string) => boolean;
 }
 
@@ -60,9 +60,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ user: null, session: null, profile: null, userRoles: [], profileLoading: false });
   },
   
-  fetchProfile: async () => {
+  fetchProfile: async (userId?: string) => {
     const { user } = get();
-    if (!user) {
+    const effectiveUserId = userId || user?.id;
+    
+    if (!effectiveUserId) {
       set({ profile: null, userRoles: [], profileLoading: false });
       return;
     }
@@ -73,7 +75,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const { data: profileData, error: profileError } = await supabase
       .from('profiles')
       .select('*')
-      .eq('id', user.id)
+      .eq('id', effectiveUserId)
       .single();
 
     if (profileError) {
@@ -87,7 +89,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const { data: rolesData, error: rolesError } = await supabase
       .from('user_roles')
       .select('team_id, role')
-      .eq('user_id', user.id);
+      .eq('user_id', effectiveUserId);
 
     if (rolesError) {
       console.error('Error fetching user roles:', rolesError);
