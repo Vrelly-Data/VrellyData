@@ -70,7 +70,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       .eq('id', user.id)
       .single();
 
-    if (!profileError && profileData) {
+    if (profileError) {
+      console.error('Error fetching profile:', profileError);
+    } else if (profileData) {
       set({ profile: profileData as Profile });
     }
 
@@ -80,7 +82,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       .select('team_id, role')
       .eq('user_id', user.id);
 
-    if (!rolesError && rolesData) {
+    if (rolesError) {
+      console.error('Error fetching user roles:', rolesError);
+    } else if (rolesData) {
       set({ userRoles: rolesData as UserRole[] });
     }
   },
