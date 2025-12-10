@@ -4,7 +4,7 @@ import { useAuthStore } from '@/stores/authStore';
 import { Loader2 } from 'lucide-react';
 
 export function AdminRoute({ children }: { children: React.ReactNode }) {
-  const { user, loading, isAdmin } = useAuthStore();
+  const { user, loading, isAdmin, userRoles } = useAuthStore();
   const navigate = useNavigate();
   const [checking, setChecking] = useState(true);
   const [hasAccess, setHasAccess] = useState(false);
@@ -29,7 +29,7 @@ export function AdminRoute({ children }: { children: React.ReactNode }) {
     };
 
     checkAccess();
-  }, [user, loading, navigate, isAdmin]);
+  }, [user, loading, navigate, isAdmin, userRoles]);
 
   if (loading || checking) {
     return (
