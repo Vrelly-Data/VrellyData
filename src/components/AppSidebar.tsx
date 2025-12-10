@@ -76,9 +76,9 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {profile && (
-          <SidebarGroup className="mt-auto">
-            <SidebarGroupContent>
+        <SidebarGroup className="mt-auto">
+          <SidebarGroupContent>
+            {profile && (
               <div className={`px-3 py-2 ${isCollapsed ? 'text-center' : ''}`}>
                 {!isCollapsed && (
                   <>
@@ -89,17 +89,17 @@ export function AppSidebar() {
                   </>
                 )}
               </div>
-              <SidebarMenu>
-                <SidebarMenuItem>
-                  <SidebarMenuButton onClick={signOut}>
-                    <LogOut className="h-4 w-4" />
-                    {!isCollapsed && <span>Sign Out</span>}
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-        )}
+            )}
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton onClick={signOut}>
+                  <LogOut className="h-4 w-4" />
+                  {!isCollapsed && <span>Sign Out</span>}
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
       </SidebarContent>
     </Sidebar>
   );
