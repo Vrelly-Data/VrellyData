@@ -902,8 +902,9 @@ export type Database = {
     Functions: {
       deduct_credits: {
         Args: { p_amount: number; p_user_id: string }
-        Returns: undefined
+        Returns: Json
       }
+      get_daily_credit_status: { Args: { p_user_id: string }; Returns: Json }
       get_user_team_id: { Args: { _user_id: string }; Returns: string }
       has_role: {
         Args: {
