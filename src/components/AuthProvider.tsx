@@ -19,14 +19,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUser(session?.user ?? null);
         setLoading(false);
         
-        // Defer Supabase calls with setTimeout to prevent deadlock
+        // Defer Supabase calls with queueMicrotask to prevent deadlock
         if (session?.user && !profileFetchedRef.current) {
           profileFetchedRef.current = true;
-          setTimeout(() => {
+          queueMicrotask(() => {
             fetchProfile().catch((error) => {
               console.error('Profile fetch error:', error);
             });
-          }, 0);
+          });
         }
         
         if (!session?.user) {
