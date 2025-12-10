@@ -14,7 +14,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { useAudienceStore } from '@/stores/audienceStore';
-import { audienceLabClient } from '@/lib/audienceLabClient';
+import { useFreeDataSearch } from '@/hooks/useFreeDataSearch';
 import { useToast } from '@/hooks/use-toast';
 import { exportPeopleToCSV, exportCompaniesToCSV } from '@/lib/csvExport';
 import { PersonEntity, CompanyEntity } from '@/types/audience';
@@ -63,6 +63,7 @@ export default function AudienceBuilder() {
   const { saveRecords } = usePersistRecords();
   const { analyzeRecords } = useDeduplication(currentType);
   const { logAuditEvent } = useAuditLog();
+  const { searchPeople, searchCompanies } = useFreeDataSearch();
   
   const [showUnlockDialog, setShowUnlockDialog] = useState(false);
   const [unlockDialogConfig, setUnlockDialogConfig] = useState<{
@@ -97,33 +98,18 @@ export default function AudienceBuilder() {
     setFilterState(filterState); // Store filter state for selection operations
     
     try {
-      const params = {
-        filters: {
-          type: currentType,
-          where: { field: 'all', op: 'exists' as const },
-        },
-        filterState,
-        page: currentPage,
-        perPage,
-        unlockedIds: new Set<string>(), // Pass empty set for initial search (no unlocks yet)
-      };
-      
       let response;
       
       if (currentType === 'person') {
-        response = await audienceLabClient.searchPeople(params);
+        response = await searchPeople(filterState, currentPage, perPage);
         setResults(response.items);
         setTotalEstimate(response.totalEstimate);
-        if (response.pagination) {
-          setTotalPages(response.pagination.total_pages);
-        }
+        setTotalPages(response.pagination.total_pages);
       } else {
-        response = await audienceLabClient.searchCompanies(params);
+        response = await searchCompanies(filterState, currentPage, perPage);
         setResults(response.items);
         setTotalEstimate(response.totalEstimate);
-        if (response.pagination) {
-          setTotalPages(response.pagination.total_pages);
-        }
+        setTotalPages(response.pagination.total_pages);
       }
       
       toast({
@@ -397,33 +383,24 @@ export default function AudienceBuilder() {
       const allResults: (PersonEntity | CompanyEntity)[] = [];
       const totalPagesToFetch = Math.ceil(totalEstimate / perPage);
       
+      const currentFilterState = filterState || {
+        industries: [],
+        cities: [],
+        gender: null,
+        jobTitles: [],
+        seniority: [],
+        department: [],
+        companySize: [],
+        netWorth: [],
+        income: [],
+        keywords: [],
+        prospectData: [],
+      };
+      
       for (let page = 1; page <= totalPagesToFetch; page++) {
-        const params = {
-          filters: filters || {
-            type: currentType,
-            where: { field: 'all', op: 'exists' as const },
-          },
-          filterState: filterState || {
-            industries: [],
-            cities: [],
-            gender: null,
-            jobTitles: [],
-            seniority: [],
-            department: [],
-            companySize: [],
-            netWorth: [],
-            income: [],
-            keywords: [],
-            prospectData: [],
-          },
-          page,
-          perPage,
-          unlockedIds: new Set<string>(),
-        };
-        
         const response = currentType === 'person'
-          ? await audienceLabClient.searchPeople(params)
-          : await audienceLabClient.searchCompanies(params);
+          ? await searchPeople(currentFilterState, page, perPage)
+          : await searchCompanies(currentFilterState, page, perPage);
         
         allResults.push(...response.items);
       }
@@ -458,34 +435,25 @@ export default function AudienceBuilder() {
       let fetched = 0;
       let currentPageNum = 1;
       
+      const currentFilterState = filterState || {
+        industries: [],
+        cities: [],
+        gender: null,
+        jobTitles: [],
+        seniority: [],
+        department: [],
+        companySize: [],
+        netWorth: [],
+        income: [],
+        keywords: [],
+        prospectData: [],
+      };
+      
       // Fetch pages until we have enough records
       while (fetched < count) {
-        const params = {
-          filters: filters || {
-            type: currentType,
-            where: { field: 'all', op: 'exists' as const },
-          },
-          filterState: filterState || {
-            industries: [],
-            cities: [],
-            gender: null,
-            jobTitles: [],
-            seniority: [],
-            department: [],
-            companySize: [],
-            netWorth: [],
-            income: [],
-            keywords: [],
-            prospectData: [],
-          },
-          page: currentPageNum,
-          perPage,
-          unlockedIds: new Set<string>(),
-        };
-        
         const response = currentType === 'person'
-          ? await audienceLabClient.searchPeople(params)
-          : await audienceLabClient.searchCompanies(params);
+          ? await searchPeople(currentFilterState, currentPageNum, perPage)
+          : await searchCompanies(currentFilterState, currentPageNum, perPage);
         
         results.push(...response.items);
         fetched += response.items.length;
