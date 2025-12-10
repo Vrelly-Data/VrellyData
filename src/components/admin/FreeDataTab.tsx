@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useFreeData } from '@/hooks/useFreeData';
 import { useDataSourceTemplates } from '@/hooks/useDataSourceTemplates';
 import { Button } from '@/components/ui/button';
@@ -30,7 +30,7 @@ import {
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Upload, Trash2, Loader2, FileSpreadsheet, ArrowRight } from 'lucide-react';
+import { Trash2, Loader2, FileSpreadsheet, ArrowRight } from 'lucide-react';
 import { parseCSVFile, transformImportData } from '@/lib/csvImportMapper';
 import { extractCompaniesFromPeople } from '@/lib/companyExtraction';
 import { PlatformDataFieldMapper, FieldMapping, initializeMappings } from './PlatformDataFieldMapper';
@@ -38,14 +38,19 @@ import { toast } from 'sonner';
 import { PersonEntity } from '@/types/audience';
 import { CSVFieldMapping } from '@/types/csvImport';
 
-type UploadStep = 'select-file' | 'map-fields' | 'preview';
+type UploadStep = 'select-file' | 'map-fields';
 
-export function FreeDataTab() {
+interface FreeDataTabProps {
+  showUploadDialog: boolean;
+  onCloseUploadDialog: () => void;
+}
+
+export function FreeDataTab({ showUploadDialog, onCloseUploadDialog }: FreeDataTabProps) {
   const [entityType, setEntityType] = useState<'person' | 'company'>('person');
   const { records, loading, totalCount, uploadFreeData, deleteFreeData, refetch } = useFreeData(entityType);
   const { templates, createTemplate } = useDataSourceTemplates();
   
-  const [showUploadDialog, setShowUploadDialog] = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(false);
   const [uploadStep, setUploadStep] = useState<UploadStep>('select-file');
   const [uploading, setUploading] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -60,6 +65,13 @@ export function FreeDataTab() {
   const [templateName, setTemplateName] = useState('');
   
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Open dialog when parent triggers it
+  useEffect(() => {
+    if (showUploadDialog) {
+      setDialogOpen(true);
+    }
+  }, [showUploadDialog]);
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -144,7 +156,7 @@ export function FreeDataTab() {
       toast.success(`Created ${personRecords.length} people and ${companyRecords.length} companies`);
       
       // Reset dialog state
-      resetUploadDialog();
+      handleCloseDialog();
     } catch (error: any) {
       console.error('Upload error:', error);
       toast.error(error.message || 'Failed to upload data');
@@ -153,8 +165,8 @@ export function FreeDataTab() {
     }
   };
 
-  const resetUploadDialog = () => {
-    setShowUploadDialog(false);
+  const handleCloseDialog = () => {
+    setDialogOpen(false);
     setUploadStep('select-file');
     setCsvHeaders([]);
     setCsvRawData([]);
@@ -164,6 +176,7 @@ export function FreeDataTab() {
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
+    onCloseUploadDialog();
   };
 
   const handleSelectAll = (checked: boolean) => {
@@ -206,26 +219,20 @@ export function FreeDataTab() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-lg font-medium">Platform Data</h3>
+          <h3 className="text-lg font-medium">Uploads</h3>
           <p className="text-sm text-muted-foreground">
-            Upload data that will be available to all users (credits charged on download)
+            Uploaded data available to all users (credits charged on download)
           </p>
         </div>
-        <div className="flex items-center gap-4">
-          <Select value={entityType} onValueChange={(v) => setEntityType(v as 'person' | 'company')}>
-            <SelectTrigger className="w-[150px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="person">People</SelectItem>
-              <SelectItem value="company">Companies</SelectItem>
-            </SelectContent>
-          </Select>
-          <Button onClick={() => setShowUploadDialog(true)}>
-            <Upload className="h-4 w-4 mr-2" />
-            Upload CSV
-          </Button>
-        </div>
+        <Select value={entityType} onValueChange={(v) => setEntityType(v as 'person' | 'company')}>
+          <SelectTrigger className="w-[150px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="person">People</SelectItem>
+            <SelectItem value="company">Companies</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
 
       <div className="flex items-center justify-between">
@@ -248,10 +255,7 @@ export function FreeDataTab() {
         <Card>
           <CardContent className="py-12 text-center">
             <FileSpreadsheet className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-            <p className="text-muted-foreground">No platform data uploaded yet</p>
-            <Button variant="outline" className="mt-4" onClick={() => setShowUploadDialog(true)}>
-              Upload your first CSV
-            </Button>
+            <p className="text-muted-foreground">No uploads yet</p>
           </CardContent>
         </Card>
       ) : (
@@ -303,14 +307,14 @@ export function FreeDataTab() {
         </Card>
       )}
 
-      <Dialog open={showUploadDialog} onOpenChange={(open) => {
-        if (!open) resetUploadDialog();
-        else setShowUploadDialog(true);
+      <Dialog open={dialogOpen} onOpenChange={(open) => {
+        if (!open) handleCloseDialog();
+        else setDialogOpen(true);
       }}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
           <DialogHeader>
             <DialogTitle>
-              {uploadStep === 'select-file' && 'Upload Platform Data'}
+              {uploadStep === 'select-file' && 'Upload CSV'}
               {uploadStep === 'map-fields' && 'Map CSV Columns'}
             </DialogTitle>
           </DialogHeader>
@@ -373,7 +377,7 @@ export function FreeDataTab() {
           </div>
 
           <DialogFooter className="border-t pt-4">
-            <Button variant="outline" onClick={resetUploadDialog}>
+            <Button variant="outline" onClick={handleCloseDialog}>
               Cancel
             </Button>
             {uploadStep === 'map-fields' && (
