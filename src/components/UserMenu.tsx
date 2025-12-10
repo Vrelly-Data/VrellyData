@@ -27,8 +27,8 @@ export function UserMenu() {
         .slice(0, 2)
     : user.email?.slice(0, 2).toUpperCase() ?? 'U';
 
-  const handleSignOut = async () => {
-    await signOut();
+  const handleSignOut = () => {
+    signOut();
     navigate('/auth');
   };
 
