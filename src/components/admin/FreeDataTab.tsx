@@ -1,9 +1,10 @@
 import { useState, useRef } from 'react';
 import { useFreeData } from '@/hooks/useFreeData';
-import { useDataSourceTemplates, ColumnMapping } from '@/hooks/useDataSourceTemplates';
+import { useDataSourceTemplates } from '@/hooks/useDataSourceTemplates';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Checkbox as CheckboxComponent } from '@/components/ui/checkbox';
 import {
   Select,
   SelectContent,
@@ -29,25 +30,36 @@ import {
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Upload, Trash2, Loader2, FileSpreadsheet } from 'lucide-react';
-import { parseCSVFile } from '@/lib/csvImportMapper';
+import { Upload, Trash2, Loader2, FileSpreadsheet, ArrowRight } from 'lucide-react';
+import { parseCSVFile, transformImportData } from '@/lib/csvImportMapper';
+import { extractCompaniesFromPeople } from '@/lib/companyExtraction';
+import { PlatformDataFieldMapper, FieldMapping, initializeMappings } from './PlatformDataFieldMapper';
 import { toast } from 'sonner';
+import { PersonEntity } from '@/types/audience';
+import { CSVFieldMapping } from '@/types/csvImport';
+
+type UploadStep = 'select-file' | 'map-fields' | 'preview';
 
 export function FreeDataTab() {
   const [entityType, setEntityType] = useState<'person' | 'company'>('person');
   const { records, loading, totalCount, uploadFreeData, deleteFreeData, refetch } = useFreeData(entityType);
-  const { templates } = useDataSourceTemplates();
+  const { templates, createTemplate } = useDataSourceTemplates();
   
   const [showUploadDialog, setShowUploadDialog] = useState(false);
-  const [selectedTemplate, setSelectedTemplate] = useState<string>('');
-  const [uploadEntityType, setUploadEntityType] = useState<'person' | 'company'>('person');
-  const [parsedData, setParsedData] = useState<any[]>([]);
+  const [uploadStep, setUploadStep] = useState<UploadStep>('select-file');
   const [uploading, setUploading] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   
+  // CSV parsing state
+  const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
+  const [csvRawData, setCsvRawData] = useState<any[]>([]);
+  const [fieldMappings, setFieldMappings] = useState<FieldMapping[]>([]);
+  
+  // Template saving
+  const [saveAsTemplate, setSaveAsTemplate] = useState(false);
+  const [templateName, setTemplateName] = useState('');
+  
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const filteredTemplates = templates.filter(t => t.entity_type === uploadEntityType);
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -56,47 +68,20 @@ export function FreeDataTab() {
     try {
       const { headers, data } = await parseCSVFile(file);
       
-      const template = templates.find(t => t.id === selectedTemplate);
-      if (!template) {
-        toast.error('Please select a data source template');
+      if (headers.length === 0 || data.length === 0) {
+        toast.error('CSV file appears to be empty');
         return;
       }
-
-      // Transform data using template mappings
-      const transformedData = data.map((row, index) => {
-        const entityData: Record<string, any> = {};
-        let externalId = '';
-
-        template.column_mappings.forEach((mapping: ColumnMapping) => {
-          if (mapping.systemField && mapping.csvHeader in row) {
-            const value = row[mapping.csvHeader];
-            entityData[mapping.systemField] = value;
-            
-            // Use email or name as external ID
-            if (mapping.systemField === 'email' || mapping.systemField === 'domain') {
-              externalId = value;
-            }
-          }
-        });
-
-        // Generate external ID if not found
-        if (!externalId) {
-          if (uploadEntityType === 'person') {
-            externalId = entityData.email || entityData.linkedin || `person-${index}-${Date.now()}`;
-          } else {
-            externalId = entityData.domain || entityData.name || `company-${index}-${Date.now()}`;
-          }
-        }
-
-        return {
-          entity_type: uploadEntityType,
-          entity_data: entityData,
-          entity_external_id: externalId,
-          source_template_id: selectedTemplate
-        };
-      });
-
-      setParsedData(transformedData);
+      
+      setCsvHeaders(headers);
+      setCsvRawData(data);
+      
+      // Initialize mappings with auto-detection
+      const initialMappings = initializeMappings(headers, data);
+      setFieldMappings(initialMappings);
+      
+      setUploadStep('map-fields');
+      toast.success(`Loaded ${data.length} rows with ${headers.length} columns`);
     } catch (error: any) {
       toast.error('Failed to parse CSV file');
       console.error(error);
@@ -104,22 +89,80 @@ export function FreeDataTab() {
   };
 
   const handleUpload = async () => {
-    if (parsedData.length === 0) {
+    if (csvRawData.length === 0) {
       toast.error('No data to upload');
       return;
     }
 
     setUploading(true);
     try {
-      await uploadFreeData(parsedData);
-      setShowUploadDialog(false);
-      setParsedData([]);
-      setSelectedTemplate('');
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
+      // Convert FieldMapping[] to CSVFieldMapping[] for transformImportData
+      const csvMappings: CSVFieldMapping[] = fieldMappings.map(m => ({
+        csvHeader: m.csvHeader,
+        systemField: m.systemField,
+        preview: m.preview
+      }));
+      
+      // Transform data to person entities
+      const personEntities = transformImportData(csvMappings, csvRawData, 'person') as PersonEntity[];
+      
+      // Extract companies from people
+      const companyEntities = extractCompaniesFromPeople(personEntities);
+      
+      // Prepare person records for upload
+      const personRecords = personEntities.map((person, index) => ({
+        entity_type: 'person' as const,
+        entity_data: person as Record<string, any>,
+        entity_external_id: person.email || person.linkedin || `person-${Date.now()}-${index}`
+      }));
+      
+      // Prepare company records for upload
+      const companyRecords = companyEntities.map((company, index) => ({
+        entity_type: 'company' as const,
+        entity_data: company as Record<string, any>,
+        entity_external_id: company.domain || company.name?.toLowerCase().replace(/[^a-z0-9]/g, '-') || `company-${Date.now()}-${index}`
+      }));
+      
+      // Upload both
+      const allRecords = [...personRecords, ...companyRecords];
+      
+      await uploadFreeData(allRecords);
+      
+      // Optionally save as template
+      if (saveAsTemplate && templateName.trim()) {
+        const columnMappings = fieldMappings
+          .filter(m => m.systemField)
+          .map(m => ({
+            csvHeader: m.csvHeader,
+            systemField: m.systemField
+          }));
+        
+        await createTemplate(templateName.trim(), 'person', columnMappings as any);
+        toast.success(`Template "${templateName}" saved`);
       }
+      
+      toast.success(`Created ${personRecords.length} people and ${companyRecords.length} companies`);
+      
+      // Reset dialog state
+      resetUploadDialog();
+    } catch (error: any) {
+      console.error('Upload error:', error);
+      toast.error(error.message || 'Failed to upload data');
     } finally {
       setUploading(false);
+    }
+  };
+
+  const resetUploadDialog = () => {
+    setShowUploadDialog(false);
+    setUploadStep('select-file');
+    setCsvHeaders([]);
+    setCsvRawData([]);
+    setFieldMappings([]);
+    setSaveAsTemplate(false);
+    setTemplateName('');
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
     }
   };
 
@@ -156,6 +199,8 @@ export function FreeDataTab() {
     }
     return ['name', 'domain', 'industry', 'employeeCount', 'location'];
   };
+
+  const mappedFieldsCount = fieldMappings.filter(m => m.systemField).length;
 
   return (
     <div className="space-y-6">
@@ -203,7 +248,7 @@ export function FreeDataTab() {
         <Card>
           <CardContent className="py-12 text-center">
             <FileSpreadsheet className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-            <p className="text-muted-foreground">No free data uploaded yet</p>
+            <p className="text-muted-foreground">No platform data uploaded yet</p>
             <Button variant="outline" className="mt-4" onClick={() => setShowUploadDialog(true)}>
               Upload your first CSV
             </Button>
@@ -248,7 +293,7 @@ export function FreeDataTab() {
                         {templates.find(t => t.id === record.source_template_id)?.name || 'Unknown'}
                       </Badge>
                     ) : (
-                      '-'
+                      <Badge variant="secondary">Direct Upload</Badge>
                     )}
                   </TableCell>
                 </TableRow>
@@ -258,92 +303,94 @@ export function FreeDataTab() {
         </Card>
       )}
 
-      <Dialog open={showUploadDialog} onOpenChange={setShowUploadDialog}>
-        <DialogContent className="max-w-lg">
+      <Dialog open={showUploadDialog} onOpenChange={(open) => {
+        if (!open) resetUploadDialog();
+        else setShowUploadDialog(true);
+      }}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
           <DialogHeader>
-            <DialogTitle>Upload Platform Data</DialogTitle>
+            <DialogTitle>
+              {uploadStep === 'select-file' && 'Upload Platform Data'}
+              {uploadStep === 'map-fields' && 'Map CSV Columns'}
+            </DialogTitle>
           </DialogHeader>
 
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label>Entity Type</Label>
-              <Select value={uploadEntityType} onValueChange={(v) => {
-                setUploadEntityType(v as 'person' | 'company');
-                setSelectedTemplate('');
-                setParsedData([]);
-              }}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="person">Person</SelectItem>
-                  <SelectItem value="company">Company</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2">
-              <Label>Data Source Template</Label>
-              <Select value={selectedTemplate} onValueChange={setSelectedTemplate}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select a template" />
-                </SelectTrigger>
-                <SelectContent>
-                  {filteredTemplates.map((template) => (
-                    <SelectItem key={template.id} value={template.id}>
-                      {template.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {filteredTemplates.length === 0 && (
-                <p className="text-xs text-muted-foreground">
-                  No templates for this entity type. Create one first.
+          <div className="flex-1 overflow-auto">
+            {uploadStep === 'select-file' && (
+              <div className="space-y-4 py-4">
+                <p className="text-sm text-muted-foreground">
+                  Upload a CSV file containing contact data. The system will automatically create both people and company records.
                 </p>
-              )}
-            </div>
+                <div className="space-y-2">
+                  <Label>CSV File</Label>
+                  <Input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".csv"
+                    onChange={handleFileSelect}
+                  />
+                </div>
+              </div>
+            )}
 
-            <div className="space-y-2">
-              <Label>CSV File</Label>
-              <Input
-                ref={fileInputRef}
-                type="file"
-                accept=".csv"
-                onChange={handleFileSelect}
-                disabled={!selectedTemplate}
-              />
-            </div>
-
-            {parsedData.length > 0 && (
-              <div className="p-4 bg-muted rounded-lg">
-                <p className="text-sm font-medium">
-                  {parsedData.length} records ready to upload
-                </p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Preview: {Object.keys(parsedData[0]?.entity_data || {}).join(', ')}
-                </p>
+            {uploadStep === 'map-fields' && (
+              <div className="space-y-4 py-4">
+                <div className="flex items-center gap-2 text-sm text-muted-foreground mb-4">
+                  <Badge variant="outline">{csvRawData.length} rows</Badge>
+                  <ArrowRight className="h-4 w-4" />
+                  <span>People + Auto-extracted Companies</span>
+                </div>
+                
+                <PlatformDataFieldMapper
+                  headers={csvHeaders}
+                  rawData={csvRawData}
+                  mappings={fieldMappings}
+                  onMappingsChange={setFieldMappings}
+                />
+                
+                <div className="border-t pt-4 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <CheckboxComponent
+                      id="save-template"
+                      checked={saveAsTemplate}
+                      onCheckedChange={(checked) => setSaveAsTemplate(!!checked)}
+                    />
+                    <Label htmlFor="save-template" className="text-sm cursor-pointer">
+                      Save this mapping as a template for future uploads
+                    </Label>
+                  </div>
+                  
+                  {saveAsTemplate && (
+                    <Input
+                      placeholder="Template name (e.g., Apollo Export, LinkedIn Sales Nav)"
+                      value={templateName}
+                      onChange={(e) => setTemplateName(e.target.value)}
+                    />
+                  )}
+                </div>
               </div>
             )}
           </div>
 
-          <DialogFooter>
-            <Button variant="outline" onClick={() => {
-              setShowUploadDialog(false);
-              setParsedData([]);
-              setSelectedTemplate('');
-            }}>
+          <DialogFooter className="border-t pt-4">
+            <Button variant="outline" onClick={resetUploadDialog}>
               Cancel
             </Button>
-            <Button onClick={handleUpload} disabled={parsedData.length === 0 || uploading}>
-              {uploading ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Uploading...
-                </>
-              ) : (
-                `Upload ${parsedData.length} Records`
-              )}
-            </Button>
+            {uploadStep === 'map-fields' && (
+              <Button 
+                onClick={handleUpload} 
+                disabled={mappedFieldsCount === 0 || uploading || (saveAsTemplate && !templateName.trim())}
+              >
+                {uploading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Uploading...
+                  </>
+                ) : (
+                  `Upload ${csvRawData.length} Records`
+                )}
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
