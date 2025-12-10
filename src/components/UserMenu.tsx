@@ -62,14 +62,14 @@ export function UserMenu() {
         <DropdownMenuSeparator />
         <DropdownMenuItem
           className="cursor-pointer"
-          onClick={() => navigate('/settings')}
+          onSelect={() => navigate('/settings')}
         >
           <Settings className="mr-2 h-4 w-4" />
           <span>Settings</span>
         </DropdownMenuItem>
         <DropdownMenuItem
           className="cursor-pointer"
-          onClick={() => navigate('/billing')}
+          onSelect={() => navigate('/billing')}
         >
           <User className="mr-2 h-4 w-4" />
           <span>Billing</span>
@@ -77,7 +77,7 @@ export function UserMenu() {
         <DropdownMenuSeparator />
         <DropdownMenuItem
           className="cursor-pointer text-destructive focus:text-destructive"
-          onClick={handleSignOut}
+          onSelect={handleSignOut}
         >
           <LogOut className="mr-2 h-4 w-4" />
           <span>Sign Out</span>
