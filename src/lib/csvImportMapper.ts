@@ -3,6 +3,17 @@ import { SystemField, CSVFieldMapping } from '@/types/csvImport';
 import { PersonEntity, CompanyEntity, EntityType } from '@/types/audience';
 
 /**
+ * Extract the first value from a comma-separated string
+ * e.g., "x@hotmail.com, y@gmail.com, z@outlook.com" => "x@hotmail.com"
+ */
+function extractFirstValue(value: string): string {
+  if (value.includes(',')) {
+    return value.split(',')[0].trim();
+  }
+  return value;
+}
+
+/**
  * Calculate string similarity using Levenshtein distance
  */
 function calculateSimilarity(str1: string, str2: string): number {
@@ -154,8 +165,7 @@ export function transformImportData(
         
         const value = row[mapping.csvHeader];
         if (!value) return;
-        
-        const trimmedValue = String(value).trim();
+        const trimmedValue = extractFirstValue(String(value).trim());
         
         // Handle custom fields
         if (mapping.systemField === 'custom') {
@@ -235,8 +245,7 @@ export function transformImportData(
         
         const value = row[mapping.csvHeader];
         if (!value) return;
-        
-        const trimmedValue = String(value).trim();
+        const trimmedValue = extractFirstValue(String(value).trim());
         
         // Handle custom fields
         if (mapping.systemField === 'custom') {
