@@ -59,7 +59,7 @@ export default function AudienceBuilder() {
   } = useAudienceStore();
 
   const { isUnlocked, markAsUnlocked } = useUnlockedRecords(currentType);
-  const { hasEnoughCredits, deductCredits, getCurrentCredits } = useCreditCheck();
+  const { hasEnoughCredits, deductCredits, getRemainingCreditsToday } = useCreditCheck();
   const { saveRecords } = usePersistRecords();
   const { analyzeRecords } = useDeduplication(currentType);
   const { logAuditEvent } = useAuditLog();
@@ -67,18 +67,17 @@ export default function AudienceBuilder() {
   const [showUnlockDialog, setShowUnlockDialog] = useState(false);
   const [unlockDialogConfig, setUnlockDialogConfig] = useState<{
     totalRecords: number;
-    alreadyUnlocked: number;
     alreadyOwned: number;
     canUpdate: number;
-    needUnlock: number;
+    newRecords: number;
     creditsRequired: number;
     action: 'export' | 'list' | 'send';
-    currentCredits: number;
+    remainingCreditsToday: number;
   } | null>(null);
   const [deduplicationAnalysis, setDeduplicationAnalysis] = useState<{
     alreadyOwned: Array<{ id: string; data: any }>;
-    canUpdate: Array<{ id: string; current: any; new: any; changes: string[] }>;
-    newRecords: Array<{ id: string; data: any }>;
+    canUpdate: Array<{ id: string; current: any; new: any; changes: string[]; newHash: string }>;
+    newRecords: Array<{ id: string; data: any; hash: string }>;
   } | null>(null);
   
   const [selectedRecords, setSelectedRecords] = useState<Set<string>>(new Set());
@@ -190,23 +189,23 @@ export default function AudienceBuilder() {
     const analysis = await analyzeRecords(selectedData);
     setDeduplicationAnalysis(analysis);
     
-    // Calculate unlock cost based on already unlocked records
-    const alreadyUnlocked = selectedData.filter(r => isUnlocked(r.id)).length;
-    const needUnlock = selectedData.length - alreadyUnlocked - analysis.alreadyOwned.length - analysis.canUpdate.length;
-    const creditsRequired = analysis.newRecords.length;
+    // Calculate credits required:
+    // - New records cost 1 credit each
+    // - Updated records cost 1 credit each  
+    // - Already owned (same data) cost 0 credits
+    const creditsRequired = analysis.newRecords.length + analysis.canUpdate.length;
     
-    if (creditsRequired > 0 || needUnlock > 0) {
+    if (creditsRequired > 0) {
       // Show unlock confirmation dialog with detailed breakdown
-      const credits = await getCurrentCredits();
+      const remainingToday = await getRemainingCreditsToday();
       setUnlockDialogConfig({
         totalRecords: selectedData.length,
-        alreadyUnlocked,
         alreadyOwned: analysis.alreadyOwned.length,
         canUpdate: analysis.canUpdate.length,
-        needUnlock: analysis.newRecords.length,
+        newRecords: analysis.newRecords.length,
         creditsRequired,
         action,
-        currentCredits: credits,
+        remainingCreditsToday: remainingToday,
       });
       
       // Store project info for send action
@@ -539,22 +538,22 @@ export default function AudienceBuilder() {
       return;
     }
     
-    // Get current credits before opening dialog
-    const credits = await getCurrentCredits();
-    setCurrentCreditsForSave(credits);
+    // Get remaining credits for today
+    const remaining = await getRemainingCreditsToday();
+    setCurrentCreditsForSave(remaining);
     setShowSaveAudienceDialog(true);
   };
 
   const handleSaveAudienceConfirm = async (audienceName: string) => {
     try {
-      // Get current credits
-      const credits = await getCurrentCredits();
+      // Get remaining credits for today
+      const remaining = await getRemainingCreditsToday();
       
       // Check if enough credits
-      if (credits < totalEstimate) {
+      if (remaining < totalEstimate) {
         toast({
           title: 'Insufficient credits',
-          description: 'Please upgrade your plan to save this audience',
+          description: 'You have reached your daily credit limit. Please try again tomorrow.',
           variant: 'destructive',
         });
         return;
@@ -924,12 +923,11 @@ export default function AudienceBuilder() {
           open={showUnlockDialog}
           onOpenChange={setShowUnlockDialog}
           totalRecords={unlockDialogConfig.totalRecords}
-          alreadyUnlocked={unlockDialogConfig.alreadyUnlocked}
           alreadyOwned={unlockDialogConfig.alreadyOwned}
           canUpdate={unlockDialogConfig.canUpdate}
-          needUnlock={unlockDialogConfig.needUnlock}
+          newRecords={unlockDialogConfig.newRecords}
           creditsRequired={unlockDialogConfig.creditsRequired}
-          currentCredits={unlockDialogConfig.currentCredits}
+          remainingCreditsToday={unlockDialogConfig.remainingCreditsToday}
           onConfirm={handleUnlockConfirm}
           onCancel={() => setShowUnlockDialog(false)}
           action={unlockDialogConfig.action}
