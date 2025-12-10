@@ -22,8 +22,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // Defer Supabase calls with queueMicrotask to prevent deadlock
         if (session?.user && !profileFetchedRef.current) {
           profileFetchedRef.current = true;
+          const userId = session.user.id; // Capture ID immediately
           queueMicrotask(() => {
-            fetchProfile().catch((error) => {
+            fetchProfile(userId).catch((error) => {
               console.error('Profile fetch error:', error);
             });
           });
@@ -53,7 +54,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (session?.user && !profileFetchedRef.current) {
         profileFetchedRef.current = true;
         try {
-          await fetchProfile();
+          await fetchProfile(session.user.id);
         } catch (error) {
           console.error('Profile fetch error:', error);
         }
