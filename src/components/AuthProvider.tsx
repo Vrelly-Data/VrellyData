@@ -11,30 +11,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     // Set up auth state listener
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
+      (event, session) => {
         if (!mounted) return;
         
+        // Update state synchronously first
         setSession(session);
         setUser(session?.user ?? null);
+        setLoading(false);
         
-        // Fetch profile when user signs in
+        // Defer Supabase calls with setTimeout to prevent deadlock
         if (session?.user && !profileFetchedRef.current) {
           profileFetchedRef.current = true;
-          try {
-            // Small delay to ensure session token is ready
-            await new Promise(resolve => setTimeout(resolve, 100));
-            await fetchProfile();
-          } catch (error) {
-            console.error('Profile fetch error:', error);
-          }
+          setTimeout(() => {
+            fetchProfile().catch((error) => {
+              console.error('Profile fetch error:', error);
+            });
+          }, 0);
         }
         
         if (!session?.user) {
           profileFetchedRef.current = false;
         }
-        
-        // Always set loading to false after auth state change is processed
-        setLoading(false);
       }
     );
 
