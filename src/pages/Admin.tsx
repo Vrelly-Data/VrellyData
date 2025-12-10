@@ -1,15 +1,19 @@
+import { useState } from 'react';
 import { SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import { AppSidebar } from '@/components/AppSidebar';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { DataSourceTemplatesTab } from '@/components/admin/DataSourceTemplatesTab';
 import { FreeDataTab } from '@/components/admin/FreeDataTab';
-import { Database, FileSpreadsheet } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Database, Upload, Plus } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import vrellyLogo from '@/assets/vrelly-logo.png';
 import { UserMenu } from '@/components/UserMenu';
 
 export default function Admin() {
   const navigate = useNavigate();
+  const [showCreateTemplateDialog, setShowCreateTemplateDialog] = useState(false);
+  const [showUploadDialog, setShowUploadDialog] = useState(false);
 
   return (
     <SidebarProvider>
@@ -31,34 +35,51 @@ export default function Admin() {
           </header>
           <main className="flex-1 p-6 overflow-auto">
             <div className="max-w-6xl mx-auto">
-              <div className="mb-8">
-                <p className="text-muted-foreground mt-2">
-                  Manage data source templates and free data
+              <div className="mb-6">
+                <p className="text-muted-foreground">
+                  Manage data source templates and uploads
                 </p>
               </div>
 
-            <Tabs defaultValue="templates" className="space-y-6">
-              <TabsList>
-                <TabsTrigger value="templates" className="flex items-center gap-2">
-                  <Database className="h-4 w-4" />
-                  Data Source Templates
-                </TabsTrigger>
-                <TabsTrigger value="free-data" className="flex items-center gap-2">
-                  <FileSpreadsheet className="h-4 w-4" />
-                  Free Data
-                </TabsTrigger>
-              </TabsList>
+              <div className="flex items-center gap-3 mb-6">
+                <Button onClick={() => setShowCreateTemplateDialog(true)}>
+                  <Plus className="h-4 w-4 mr-2" />
+                  Create Template
+                </Button>
+                <Button variant="outline" onClick={() => setShowUploadDialog(true)}>
+                  <Upload className="h-4 w-4 mr-2" />
+                  Upload CSV
+                </Button>
+              </div>
 
-              <TabsContent value="templates">
-                <DataSourceTemplatesTab />
-              </TabsContent>
+              <Tabs defaultValue="templates" className="space-y-6">
+                <TabsList>
+                  <TabsTrigger value="templates" className="flex items-center gap-2">
+                    <Database className="h-4 w-4" />
+                    Templates
+                  </TabsTrigger>
+                  <TabsTrigger value="uploads" className="flex items-center gap-2">
+                    <Upload className="h-4 w-4" />
+                    Uploads
+                  </TabsTrigger>
+                </TabsList>
 
-              <TabsContent value="free-data">
-                <FreeDataTab />
-              </TabsContent>
-            </Tabs>
-          </div>
-        </main>
+                <TabsContent value="templates">
+                  <DataSourceTemplatesTab 
+                    showCreateDialog={showCreateTemplateDialog}
+                    onCloseCreateDialog={() => setShowCreateTemplateDialog(false)}
+                  />
+                </TabsContent>
+
+                <TabsContent value="uploads">
+                  <FreeDataTab 
+                    showUploadDialog={showUploadDialog}
+                    onCloseUploadDialog={() => setShowUploadDialog(false)}
+                  />
+                </TabsContent>
+              </Tabs>
+            </div>
+          </main>
         </div>
       </div>
     </SidebarProvider>

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useDataSourceTemplates, ColumnMapping } from '@/hooks/useDataSourceTemplates';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -26,12 +26,17 @@ import {
   DialogTitle,
   DialogFooter,
 } from '@/components/ui/dialog';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { PERSON_IMPORT_FIELDS, COMPANY_IMPORT_FIELDS } from '@/config/csvImportFields';
-import { Plus, Pencil, Trash2, Loader2 } from 'lucide-react';
+import { Pencil, Trash2, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
-export function DataSourceTemplatesTab() {
+interface DataSourceTemplatesTabProps {
+  showCreateDialog: boolean;
+  onCloseCreateDialog: () => void;
+}
+
+export function DataSourceTemplatesTab({ showCreateDialog, onCloseCreateDialog }: DataSourceTemplatesTabProps) {
   const { templates, loading, createTemplate, updateTemplate, deleteTemplate } = useDataSourceTemplates();
   const [showDialog, setShowDialog] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<string | null>(null);
@@ -45,6 +50,13 @@ export function DataSourceTemplatesTab() {
   const [step, setStep] = useState<'info' | 'mapping'>('info');
 
   const systemFields = entityType === 'person' ? PERSON_IMPORT_FIELDS : COMPANY_IMPORT_FIELDS;
+
+  // Open dialog when parent triggers it
+  useEffect(() => {
+    if (showCreateDialog) {
+      handleOpenCreate();
+    }
+  }, [showCreateDialog]);
 
   const resetForm = () => {
     setName('');
@@ -132,8 +144,13 @@ export function DataSourceTemplatesTab() {
       await createTemplate(name, entityType, mappings, description);
     }
 
+    handleCloseDialog();
+  };
+
+  const handleCloseDialog = () => {
     setShowDialog(false);
     resetForm();
+    onCloseCreateDialog();
   };
 
   const handleDelete = async (id: string) => {
@@ -152,26 +169,17 @@ export function DataSourceTemplatesTab() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h3 className="text-lg font-medium">Data Source Templates</h3>
-          <p className="text-sm text-muted-foreground">
-            Create templates to auto-map CSV columns from different data sources
-          </p>
-        </div>
-        <Button onClick={handleOpenCreate}>
-          <Plus className="h-4 w-4 mr-2" />
-          Create Template
-        </Button>
+      <div>
+        <h3 className="text-lg font-medium">Data Source Templates</h3>
+        <p className="text-sm text-muted-foreground">
+          Reusable mappings for auto-mapping CSV columns from different data sources
+        </p>
       </div>
 
       {templates.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center">
             <p className="text-muted-foreground">No templates created yet</p>
-            <Button variant="outline" className="mt-4" onClick={handleOpenCreate}>
-              Create your first template
-            </Button>
           </CardContent>
         </Card>
       ) : (
@@ -220,7 +228,7 @@ export function DataSourceTemplatesTab() {
         </Card>
       )}
 
-      <Dialog open={showDialog} onOpenChange={(open) => { if (!open) resetForm(); setShowDialog(open); }}>
+      <Dialog open={showDialog} onOpenChange={(open) => { if (!open) handleCloseDialog(); }}>
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
@@ -330,7 +338,7 @@ export function DataSourceTemplatesTab() {
           )}
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => { resetForm(); setShowDialog(false); }}>
+            <Button variant="outline" onClick={handleCloseDialog}>
               Cancel
             </Button>
             {step === 'info' ? (
