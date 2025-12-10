@@ -1,87 +1,36 @@
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuthStore } from '@/stores/authStore';
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const { setUser, setSession, setLoading, fetchProfile } = useAuthStore();
-  const profileFetchedRef = useRef(false);
 
   useEffect(() => {
-    let mounted = true;
+    // First get the initial session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setUser(session?.user ?? null);
+      
+      if (session?.user) {
+        fetchProfile(session.user.id);
+      }
+      setLoading(false);
+    });
 
-    // Set up auth state listener
+    // Then set up the listener for changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (event, session) => {
-        if (!mounted) return;
-        
-        // Update state synchronously first
         setSession(session);
         setUser(session?.user ?? null);
-        setLoading(false);
         
-        // Defer Supabase calls with queueMicrotask to prevent deadlock
-        if (session?.user && !profileFetchedRef.current) {
-          profileFetchedRef.current = true;
-          const userId = session.user.id; // Capture ID immediately
-          queueMicrotask(() => {
-            fetchProfile(userId).catch((error) => {
-              console.error('Profile fetch error:', error);
-            });
-          });
-        }
-        
-        if (!session?.user) {
-          profileFetchedRef.current = false;
+        if (session?.user && (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED')) {
+          fetchProfile(session.user.id);
         }
       }
     );
 
-    // Check for existing session
-    supabase.auth.getSession().then(async ({ data: { session }, error }) => {
-      if (!mounted) return;
-      
-      if (error) {
-        console.error('Session error:', error);
-        setSession(null);
-        setUser(null);
-        setLoading(false);
-        return;
-      }
-      
-      setSession(session);
-      setUser(session?.user ?? null);
-      
-      if (session?.user && !profileFetchedRef.current) {
-        profileFetchedRef.current = true;
-        try {
-          await fetchProfile(session.user.id);
-        } catch (error) {
-          console.error('Profile fetch error:', error);
-        }
-      }
-      setLoading(false);
-    }).catch((err) => {
-      console.error('Auth check failed:', err);
-      if (mounted) {
-        setSession(null);
-        setUser(null);
-        setLoading(false);
-      }
-    });
-
-    // Safety timeout - if still loading after 10 seconds, force stop
-    const timeout = setTimeout(() => {
-      if (mounted) {
-        setLoading(false);
-      }
-    }, 10000);
-
-    return () => {
-      mounted = false;
-      clearTimeout(timeout);
-      subscription.unsubscribe();
-    };
-  }, [setUser, setSession, setLoading, fetchProfile]);
+    return () => subscription.unsubscribe();
+  }, []);
 
   return <>{children}</>;
 }
