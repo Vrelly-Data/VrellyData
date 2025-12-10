@@ -8,6 +8,7 @@ import { ListView } from '@/components/lists/ListView';
 import vrellyLogo from '@/assets/vrelly-logo.png';
 import { useRecordsFromDatabase } from '@/hooks/useRecordsFromDatabase';
 import { Loader2 } from 'lucide-react';
+import { UserMenu } from '@/components/UserMenu';
 
 export default function Companies() {
   const navigate = useNavigate();
@@ -27,6 +28,9 @@ export default function Companies() {
               onClick={() => navigate('/')}
             />
             <h1 className="text-lg font-semibold ml-4">Companies</h1>
+            <div className="ml-auto">
+              <UserMenu />
+            </div>
           </header>
           <main className="flex-1 overflow-hidden">
             {isLoading ? (

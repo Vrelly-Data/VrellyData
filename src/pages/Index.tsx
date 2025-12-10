@@ -3,6 +3,7 @@ import { AppSidebar } from '@/components/AppSidebar';
 import { useNavigate } from 'react-router-dom';
 import AudienceBuilder from './AudienceBuilder';
 import vrellyLogo from '@/assets/vrelly-logo.png';
+import { UserMenu } from '@/components/UserMenu';
 
 const Index = () => {
   const navigate = useNavigate();
@@ -20,6 +21,9 @@ const Index = () => {
               className="h-[4.5rem] cursor-pointer" 
               onClick={() => navigate('/')}
             />
+            <div className="ml-auto">
+              <UserMenu />
+            </div>
           </header>
           <main className="flex-1 overflow-hidden">
             <AudienceBuilder />

@@ -12,6 +12,7 @@ import { SmartFilter } from '@/types/filterProperties';
 import { evaluateSmartFilter } from '@/lib/smartFilterEvaluator';
 import { useRecordsFromDatabase } from '@/hooks/useRecordsFromDatabase';
 import { Loader2 } from 'lucide-react';
+import { UserMenu } from '@/components/UserMenu';
 
 export default function People() {
   const navigate = useNavigate();
@@ -37,6 +38,9 @@ export default function People() {
               onClick={() => navigate('/')}
             />
             <h1 className="text-lg font-semibold ml-4">People</h1>
+            <div className="ml-auto">
+              <UserMenu />
+            </div>
           </header>
           <main className="flex-1 overflow-hidden">
             {isLoading ? (

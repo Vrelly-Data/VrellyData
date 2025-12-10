@@ -19,6 +19,7 @@ import { Badge } from "@/components/ui/badge";
 import { Check } from "lucide-react";
 import { useSubscription } from "@/hooks/useSubscription";
 import { ExternalProjectsSettings } from "@/components/settings/ExternalProjectsSettings";
+import { UserMenu } from "@/components/UserMenu";
 
 // Price IDs for subscription tiers - UPDATE THESE AFTER RUNNING create-stripe-products
 const PRICE_IDS = {
@@ -182,6 +183,9 @@ export default function Settings() {
               onClick={() => navigate('/')}
             />
             <h1 className="text-lg font-semibold ml-4">Settings</h1>
+            <div className="ml-auto">
+              <UserMenu />
+            </div>
           </header>
           <main className="flex-1 overflow-auto">
             <div className="container max-w-4xl py-8">
