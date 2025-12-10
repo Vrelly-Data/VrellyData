@@ -7,28 +7,41 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const profileFetchedRef = useRef(false);
 
   useEffect(() => {
+    let mounted = true;
+
     // Set up auth state listener
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
+        if (!mounted) return;
+        
         setSession(session);
         setUser(session?.user ?? null);
         
         // Fetch profile when user signs in
         if (session?.user && !profileFetchedRef.current) {
           profileFetchedRef.current = true;
-          // Small delay to ensure session token is ready
-          await new Promise(resolve => setTimeout(resolve, 100));
-          await fetchProfile();
+          try {
+            // Small delay to ensure session token is ready
+            await new Promise(resolve => setTimeout(resolve, 100));
+            await fetchProfile();
+          } catch (error) {
+            console.error('Profile fetch error:', error);
+          }
         }
         
         if (!session?.user) {
           profileFetchedRef.current = false;
         }
+        
+        // Always set loading to false after auth state change is processed
+        setLoading(false);
       }
     );
 
     // Check for existing session
     supabase.auth.getSession().then(async ({ data: { session }, error }) => {
+      if (!mounted) return;
+      
       if (error) {
         console.error('Session error:', error);
         setSession(null);
@@ -42,17 +55,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       
       if (session?.user && !profileFetchedRef.current) {
         profileFetchedRef.current = true;
-        await fetchProfile();
+        try {
+          await fetchProfile();
+        } catch (error) {
+          console.error('Profile fetch error:', error);
+        }
       }
       setLoading(false);
     }).catch((err) => {
       console.error('Auth check failed:', err);
-      setSession(null);
-      setUser(null);
-      setLoading(false);
+      if (mounted) {
+        setSession(null);
+        setUser(null);
+        setLoading(false);
+      }
     });
 
-    return () => subscription.unsubscribe();
+    // Safety timeout - if still loading after 10 seconds, force stop
+    const timeout = setTimeout(() => {
+      if (mounted) {
+        setLoading(false);
+      }
+    }, 10000);
+
+    return () => {
+      mounted = false;
+      clearTimeout(timeout);
+      subscription.unsubscribe();
+    };
   }, [setUser, setSession, setLoading, fetchProfile]);
 
   return <>{children}</>;
