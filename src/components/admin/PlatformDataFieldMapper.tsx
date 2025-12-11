@@ -147,31 +147,20 @@ export function PlatformDataFieldMapper({
                     )}>
                       <SelectValue placeholder="Select field..." />
                     </SelectTrigger>
-                    <SelectContent className="bg-popover max-h-[400px] overflow-y-auto">
+                    <SelectContent>
                       <SelectItem value="skip">
-                        <span className="text-muted-foreground">Skip this column</span>
+                        Skip this column
                       </SelectItem>
                       
                       {ALL_SYSTEM_FIELDS.map(field => {
                         const isUsedElsewhere = usedFields.has(field.id) && mapping.systemField !== field.id;
-                        const mappedTo = isUsedElsewhere 
-                          ? mappings.find(m => m.systemField === field.id)?.csvHeader 
-                          : null;
                         return (
                           <SelectItem 
                             key={field.id} 
                             value={field.id}
                             disabled={isUsedElsewhere}
-                            className={cn(isUsedElsewhere && "opacity-60")}
                           >
-                            <div className="flex items-center gap-2 w-full">
-                              <span className={cn(isUsedElsewhere && "line-through")}>{field.label}</span>
-                              {isUsedElsewhere && mappedTo && (
-                                <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded ml-auto">
-                                  ✓ {mappedTo}
-                                </span>
-                              )}
-                            </div>
+                            {isUsedElsewhere ? `${field.label} (mapped)` : field.label}
                           </SelectItem>
                         );
                       })}
