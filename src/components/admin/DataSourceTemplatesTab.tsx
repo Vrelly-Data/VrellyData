@@ -28,7 +28,7 @@ import {
 } from '@/components/ui/dialog';
 import { Card, CardContent } from '@/components/ui/card';
 import { PERSON_IMPORT_FIELDS, COMPANY_IMPORT_FIELDS } from '@/config/csvImportFields';
-import { Pencil, Trash2, Loader2, Check } from 'lucide-react';
+import { Pencil, Trash2, Loader2, Check, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 
@@ -328,27 +328,40 @@ export function DataSourceTemplatesTab({ showCreateDialog, onCloseCreateDialog }
                           </div>
                         </TableCell>
                         <TableCell>
-                          <Select
-                            value={mapping.systemField || 'skip'}
-                            onValueChange={(v) => handleMappingChange(index, v === 'skip' ? null : v)}
-                          >
-                            <SelectTrigger 
-                              className={cn(
-                                "w-[200px]",
-                                mapping.systemField && "border-green-500 bg-green-50 dark:bg-green-950/30"
-                              )}
+                          <div className="flex items-center gap-2">
+                            <Select
+                              value={mapping.systemField || 'skip'}
+                              onValueChange={(v) => handleMappingChange(index, v === 'skip' ? null : v)}
                             >
-                              <SelectValue placeholder="Select field" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="skip">Skip this column</SelectItem>
-                              {allSystemFields.map((field) => (
-                                <SelectItem key={field.id} value={field.id}>
-                                  {field.label}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
+                              <SelectTrigger 
+                                className={cn(
+                                  "w-[200px]",
+                                  mapping.systemField && "border-green-500 bg-green-50 dark:bg-green-950/30"
+                                )}
+                              >
+                                <SelectValue placeholder="Select field" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="skip">Skip this column</SelectItem>
+                                {allSystemFields.map((field) => (
+                                  <SelectItem key={field.id} value={field.id}>
+                                    {field.label}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            {mapping.systemField && (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                                onClick={() => handleMappingChange(index, null)}
+                                title="Clear mapping"
+                              >
+                                <X className="h-4 w-4" />
+                              </Button>
+                            )}
+                          </div>
                         </TableCell>
                       </TableRow>
                     ))}
