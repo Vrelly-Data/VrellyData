@@ -1,11 +1,9 @@
-import { useState, useMemo } from 'react';
+import { useMemo } from 'react';
 import { Label } from '@/components/ui/label';
 import {
   Select,
   SelectContent,
-  SelectGroup,
   SelectItem,
-  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
@@ -15,6 +13,7 @@ import { PERSON_IMPORT_FIELDS, COMPANY_IMPORT_FIELDS } from '@/config/csvImportF
 import { autoMapFields } from '@/lib/csvImportMapper';
 import { Check, Circle } from 'lucide-react';
 import { cn } from '@/lib/utils';
+
 export interface FieldMapping {
   csvHeader: string;
   systemField: string | null;
@@ -28,18 +27,17 @@ interface PlatformDataFieldMapperProps {
   onMappingsChange: (mappings: FieldMapping[]) => void;
 }
 
-// Combine all fields for unified mapping (both person and company)
+// Combine all fields into a single flat list, sorted alphabetically
 const ALL_SYSTEM_FIELDS = [
-  ...PERSON_IMPORT_FIELDS.filter(f => f.id !== 'custom').map(f => ({
-    ...f,
-    category: 'person' as const
-  })),
-  ...COMPANY_IMPORT_FIELDS.filter(f => f.id !== 'custom').map(f => ({
-    ...f,
-    category: 'company' as const
-  })),
-  { id: 'custom', label: 'Custom Field (Keep Original)', category: 'other' as const, aliases: [] }
-];
+  ...PERSON_IMPORT_FIELDS.filter(f => f.id !== 'custom'),
+  ...COMPANY_IMPORT_FIELDS.filter(f => f.id !== 'custom'),
+  { id: 'custom', label: 'Custom Field (Keep Original)', aliases: [] }
+].sort((a, b) => {
+  // Keep "Custom Field" at the end
+  if (a.id === 'custom') return 1;
+  if (b.id === 'custom') return -1;
+  return a.label.localeCompare(b.label);
+});
 
 export function initializeMappings(headers: string[], rawData: any[]): FieldMapping[] {
   // Auto-map based on aliases
@@ -82,10 +80,6 @@ export function PlatformDataFieldMapper({
   const usedFields = useMemo(() => {
     return new Set(mappings.map(m => m.systemField).filter(Boolean));
   }, [mappings]);
-
-  const personFields = ALL_SYSTEM_FIELDS.filter(f => f.category === 'person');
-  const companyFields = ALL_SYSTEM_FIELDS.filter(f => f.category === 'company');
-  const otherFields = ALL_SYSTEM_FIELDS.filter(f => f.category === 'other');
 
   const mappedCount = mappings.filter(m => m.systemField).length;
   const allMapped = mappedCount === headers.length;
@@ -157,68 +151,29 @@ export function PlatformDataFieldMapper({
                       <span className="text-muted-foreground">Skip this column</span>
                     </SelectItem>
                     
-                    <SelectGroup>
-                      <SelectLabel className="text-xs font-semibold text-primary">Person Fields</SelectLabel>
-                      {personFields.map(field => {
-                        const isUsedElsewhere = usedFields.has(field.id) && mapping.systemField !== field.id;
-                        const mappedTo = isUsedElsewhere 
-                          ? mappings.find(m => m.systemField === field.id)?.csvHeader 
-                          : null;
-                        return (
-                          <SelectItem 
-                            key={field.id} 
-                            value={field.id}
-                            disabled={isUsedElsewhere}
-                            className={cn(isUsedElsewhere && "opacity-60")}
-                          >
-                            <div className="flex items-center gap-2 w-full">
-                              <span className={cn(isUsedElsewhere && "line-through")}>{field.label}</span>
-                              {isUsedElsewhere && mappedTo && (
-                                <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded ml-auto">
-                                  ✓ {mappedTo}
-                                </span>
-                              )}
-                            </div>
-                          </SelectItem>
-                        );
-                      })}
-                    </SelectGroup>
-                    
-                    <SelectGroup>
-                      <SelectLabel className="text-xs font-semibold text-primary">Company Fields</SelectLabel>
-                      {companyFields.map(field => {
-                        const isUsedElsewhere = usedFields.has(field.id) && mapping.systemField !== field.id;
-                        const mappedTo = isUsedElsewhere 
-                          ? mappings.find(m => m.systemField === field.id)?.csvHeader 
-                          : null;
-                        return (
-                          <SelectItem 
-                            key={field.id} 
-                            value={field.id}
-                            disabled={isUsedElsewhere}
-                            className={cn(isUsedElsewhere && "opacity-60")}
-                          >
-                            <div className="flex items-center gap-2 w-full">
-                              <span className={cn(isUsedElsewhere && "line-through")}>{field.label}</span>
-                              {isUsedElsewhere && mappedTo && (
-                                <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded ml-auto">
-                                  ✓ {mappedTo}
-                                </span>
-                              )}
-                            </div>
-                          </SelectItem>
-                        );
-                      })}
-                    </SelectGroup>
-                    
-                    <SelectGroup>
-                      <SelectLabel className="text-xs font-semibold text-muted-foreground">Other</SelectLabel>
-                      {otherFields.map(field => (
-                        <SelectItem key={field.id} value={field.id}>
-                          {field.label}
+                    {ALL_SYSTEM_FIELDS.map(field => {
+                      const isUsedElsewhere = usedFields.has(field.id) && mapping.systemField !== field.id;
+                      const mappedTo = isUsedElsewhere 
+                        ? mappings.find(m => m.systemField === field.id)?.csvHeader 
+                        : null;
+                      return (
+                        <SelectItem 
+                          key={field.id} 
+                          value={field.id}
+                          disabled={isUsedElsewhere}
+                          className={cn(isUsedElsewhere && "opacity-60")}
+                        >
+                          <div className="flex items-center gap-2 w-full">
+                            <span className={cn(isUsedElsewhere && "line-through")}>{field.label}</span>
+                            {isUsedElsewhere && mappedTo && (
+                              <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded ml-auto">
+                                ✓ {mappedTo}
+                              </span>
+                            )}
+                          </div>
                         </SelectItem>
-                      ))}
-                    </SelectGroup>
+                      );
+                    })}
                   </SelectContent>
                 </Select>
               </div>
@@ -229,3 +184,4 @@ export function PlatformDataFieldMapper({
     </div>
   );
 }
+
