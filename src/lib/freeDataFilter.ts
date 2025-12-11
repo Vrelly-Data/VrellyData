@@ -205,6 +205,7 @@ export function mapFreeDataToPerson(record: {
     incomeRange: extractFirst(data.incomeRange) || extractFirst(data.income),
     skills: extractFirst(data.skills),
     interests: extractFirst(data.interests),
+    educationHistory: extractFirst(data.educationHistory) || extractFirst(data.education),
     customFields: data.customFields || {},
     isUnlocked: false,
   };
