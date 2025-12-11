@@ -121,7 +121,7 @@ export function buildFreeDataQuery(
     filters.prospectData.forEach(dataType => {
       switch (dataType) {
         case 'personal_email':
-          query = query.not('entity_data->email', 'is', null);
+          query = query.not('entity_data->personalEmail', 'is', null);
           break;
         case 'business_email':
           query = query.not('entity_data->businessEmail', 'is', null);
@@ -177,7 +177,8 @@ export function mapFreeDataToPerson(record: {
     companyDescription: data.companyDescription || data.description,
     industry: extractFirst(data.industry),
     technologies: Array.isArray(data.technologies) ? data.technologies : [],
-    email: extractFirst(data.email),
+    email: extractFirst(data.email) || extractFirst(data.businessEmail) || extractFirst(data.personalEmail),
+    personalEmail: extractFirst(data.personalEmail),
     phone: extractFirst(data.phone),
     linkedin: extractFirst(data.linkedin) || extractFirst(data.linkedinUrl),
     website: extractFirst(data.website),
@@ -241,6 +242,7 @@ export function mapFreeDataToCompany(record: {
     fundingStage: extractFirst(data.fundingStage),
     description: data.description || data.companyDescription,
     linkedin: extractFirst(data.linkedin) || extractFirst(data.companyLinkedin),
+    email: extractFirst(data.email) || extractFirst(data.companyEmail),
     phone: extractFirst(data.phone) || extractFirst(data.companyPhone),
     city: extractFirst(data.city),
     state: extractFirst(data.state),
