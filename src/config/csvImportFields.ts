@@ -213,45 +213,45 @@ export const COMPANY_IMPORT_FIELDS: SystemField[] = [
     label: 'Location',
     aliases: ['location', 'address', 'full address', 'headquarters']
   },
-  {
-    id: 'city',
+{
+    id: 'companyCity',
     label: 'Company City',
-    aliases: ['city', 'company city', 'town', 'locality', 'hq city']
+    aliases: ['city', 'company city', 'town', 'locality', 'hq city', 'headquarters city']
   },
   {
-    id: 'state',
+    id: 'companyState',
     label: 'Company State',
-    aliases: ['state', 'company state', 'province', 'region', 'state/province', 'hq state']
+    aliases: ['state', 'company state', 'province', 'region', 'state/province', 'hq state', 'headquarters state']
   },
   {
-    id: 'country',
+    id: 'companyCountry',
     label: 'Company Country',
-    aliases: ['country', 'company country', 'nation', 'hq country']
+    aliases: ['country', 'company country', 'nation', 'hq country', 'headquarters country']
   },
   {
-    id: 'zipCode',
+    id: 'companyZipCode',
     label: 'Company Zip',
-    aliases: ['zip', 'zipcode', 'zip code', 'postal code', 'company zip', 'hq zip']
+    aliases: ['zip', 'zipcode', 'zip code', 'postal code', 'company zip', 'hq zip', 'headquarters zip']
   },
   {
-    id: 'description',
+    id: 'companyDescription',
     label: 'Company Description',
-    aliases: ['description', 'company description', 'about', 'bio', 'summary']
+    aliases: ['description', 'company description', 'about', 'bio', 'summary', 'company bio', 'company about']
   },
   {
-    id: 'revenue',
+    id: 'companyRevenue',
     label: 'Company Revenue',
-    aliases: ['revenue', 'annual revenue', 'company revenue', 'sales']
+    aliases: ['revenue', 'annual revenue', 'company revenue', 'sales', 'yearly revenue']
   },
   {
-    id: 'sic',
+    id: 'companySic',
     label: 'Company SIC',
-    aliases: ['sic', 'sic code', 'standard industrial classification']
+    aliases: ['sic', 'sic code', 'standard industrial classification', 'sic number']
   },
   {
-    id: 'naics',
+    id: 'companyNaics',
     label: 'Company NAICS',
-    aliases: ['naics', 'naics code', 'north american industry classification']
+    aliases: ['naics', 'naics code', 'north american industry classification', 'naics number']
   },
   {
     id: 'custom',
