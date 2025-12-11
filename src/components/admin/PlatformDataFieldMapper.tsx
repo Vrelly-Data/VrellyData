@@ -27,10 +27,11 @@ interface PlatformDataFieldMapperProps {
   onMappingsChange: (mappings: FieldMapping[]) => void;
 }
 
-// Combine all fields into a single flat list, sorted alphabetically
+// Combine all fields into a single flat list, remove duplicates by id AND label, sorted alphabetically
 const ALL_SYSTEM_FIELDS = [
   ...PERSON_IMPORT_FIELDS.filter(f => f.id !== 'custom'),
-  ...COMPANY_IMPORT_FIELDS.filter(f => f.id !== 'custom'),
+  ...COMPANY_IMPORT_FIELDS.filter(f => f.id !== 'custom' && 
+    !PERSON_IMPORT_FIELDS.some(pf => pf.id === f.id || pf.label === f.label)),
   { id: 'custom', label: 'Custom Field (Keep Original)', aliases: [] }
 ].sort((a, b) => {
   // Keep "Custom Field" at the end
