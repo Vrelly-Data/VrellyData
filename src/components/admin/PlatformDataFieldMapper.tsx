@@ -152,7 +152,7 @@ export function PlatformDataFieldMapper({
                   )}>
                     <SelectValue placeholder="Select field..." />
                   </SelectTrigger>
-                  <SelectContent className="bg-popover">
+                  <SelectContent className="bg-popover max-h-[400px] overflow-y-auto">
                     <SelectItem value="skip">
                       <span className="text-muted-foreground">Skip this column</span>
                     </SelectItem>
