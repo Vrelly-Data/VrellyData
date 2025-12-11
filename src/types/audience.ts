@@ -68,6 +68,7 @@ export interface PersonEntity {
   incomeRange?: string;
   skills?: string;
   interests?: string;
+  educationHistory?: string;
   
   customFields?: Record<string, string>; // For unmapped CSV columns
   isUnlocked?: boolean;            // Track if contact info has been unlocked

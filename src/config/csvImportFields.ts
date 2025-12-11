@@ -155,6 +155,11 @@ export const PERSON_IMPORT_FIELDS: SystemField[] = [
     aliases: ['interests', 'person interests', 'hobbies']
   },
   {
+    id: 'educationHistory',
+    label: 'Education History',
+    aliases: ['education', 'education history', 'school', 'university', 'college', 'degree', 'alma mater', 'educational background']
+  },
+  {
     id: 'custom',
     label: 'Custom Field (Keep Original Name)',
     required: false,
