@@ -10,32 +10,8 @@ export function buildFreeDataQuery(
   filters: FilterBuilderState,
   entityType: EntityType
 ): any {
-  // Keywords - search in description, company, name, title (case-insensitive)
-  if (filters.keywords.length > 0) {
-    // Build OR conditions for keyword search across multiple fields
-    const keywordConditions = filters.keywords.map(keyword => {
-      const escapedKeyword = keyword.replace(/[%_]/g, '\\$&');
-      // Search in multiple fields - using textSearch approach
-      return `entity_data->>'description'.ilike.%${escapedKeyword}%,` +
-             `entity_data->>'company'.ilike.%${escapedKeyword}%,` +
-             `entity_data->>'name'.ilike.%${escapedKeyword}%,` +
-             `entity_data->>'title'.ilike.%${escapedKeyword}%,` +
-             `entity_data->>'companyDescription'.ilike.%${escapedKeyword}%`;
-    });
-    
-    // For each keyword, create an OR filter
-    filters.keywords.forEach(keyword => {
-      const escapedKeyword = keyword.replace(/[%_]/g, '\\$&').toLowerCase();
-      // We use raw filter with or conditions
-      query = query.or(
-        `entity_data->description.ilike.%${escapedKeyword}%,` +
-        `entity_data->company.ilike.%${escapedKeyword}%,` +
-        `entity_data->name.ilike.%${escapedKeyword}%,` +
-        `entity_data->title.ilike.%${escapedKeyword}%,` +
-        `entity_data->companyDescription.ilike.%${escapedKeyword}%`
-      );
-    });
-  }
+  // NOTE: Keyword search is handled separately via the search_free_data_keywords RPC function
+  // to properly handle JSONB text extraction with ILIKE
 
   // Industry filter
   if (filters.industries.length > 0) {

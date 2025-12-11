@@ -925,6 +925,22 @@ export type Database = {
         Returns: string
       }
       reset_monthly_credits: { Args: never; Returns: undefined }
+      search_free_data_keywords: {
+        Args: {
+          p_entity_type: Database["public"]["Enums"]["entity_type"]
+          p_keywords: string[]
+          p_limit?: number
+          p_offset?: number
+        }
+        Returns: {
+          created_at: string
+          entity_data: Json
+          entity_external_id: string
+          entity_type: Database["public"]["Enums"]["entity_type"]
+          id: string
+          total_count: number
+        }[]
+      }
       update_credits_for_testing: {
         Args: { p_new_credits: number; p_user_id: string }
         Returns: undefined
