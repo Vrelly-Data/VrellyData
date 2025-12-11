@@ -38,6 +38,7 @@ export interface PersonEntity {
   industry?: string;
   technologies?: string[];
   email?: string;
+  personalEmail?: string;
   phone?: string;
   linkedin?: string;
   website?: string;
@@ -86,6 +87,7 @@ export interface CompanyEntity {
   fundingStage?: string;
   description?: string;
   linkedin?: string;
+  email?: string;
   phone?: string;
   city?: string;
   state?: string;

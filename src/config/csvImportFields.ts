@@ -14,10 +14,14 @@ export const PERSON_IMPORT_FIELDS: SystemField[] = [
     aliases: ['last name', 'lastname', 'last_name', 'lname', 'surname', 'family name']
   },
   {
-    id: 'email',
-    label: 'Email',
-    required: false,
-    aliases: ['email', 'email address', 'e-mail', 'mail', 'primary email', 'work email']
+    id: 'personalEmail',
+    label: 'Person Personal Email',
+    aliases: ['personal email', 'private email', 'home email', 'personal e-mail', 'secondary email', 'alternate email']
+  },
+  {
+    id: 'businessEmail',
+    label: 'Person Business Email',
+    aliases: ['business email', 'work email', 'corporate email', 'professional email', 'office email', 'company email address', 'email', 'email address', 'e-mail', 'mail', 'primary email']
   },
   {
     id: 'title',
@@ -198,6 +202,11 @@ export const COMPANY_IMPORT_FIELDS: SystemField[] = [
     id: 'phone',
     label: 'Company Phone',
     aliases: ['phone', 'telephone', 'company phone', 'office phone', 'phone number']
+  },
+  {
+    id: 'email',
+    label: 'Company Email',
+    aliases: ['email', 'company email', 'contact email', 'corporate email', 'business email', 'info email']
   },
   {
     id: 'location',
