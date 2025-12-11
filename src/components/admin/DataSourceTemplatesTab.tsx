@@ -50,11 +50,11 @@ export function DataSourceTemplatesTab({ showCreateDialog, onCloseCreateDialog }
   const [mappings, setMappings] = useState<ColumnMapping[]>([]);
   const [step, setStep] = useState<'info' | 'mapping'>('info');
 
-  // Combine all fields, remove duplicates, sort alphabetically (custom at end)
+  // Combine all fields, remove duplicates by id AND label, sort alphabetically (custom at end)
   const allSystemFields = [
     ...PERSON_IMPORT_FIELDS.filter(f => f.id !== 'custom'),
     ...COMPANY_IMPORT_FIELDS.filter(f => f.id !== 'custom' && 
-      !PERSON_IMPORT_FIELDS.some(pf => pf.id === f.id))
+      !PERSON_IMPORT_FIELDS.some(pf => pf.id === f.id || pf.label === f.label))
   ]
     .sort((a, b) => a.label.localeCompare(b.label))
     .concat([{ id: 'custom', label: 'Custom Field', required: false, aliases: [] }]);
