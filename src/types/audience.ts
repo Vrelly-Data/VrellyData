@@ -92,6 +92,7 @@ export interface CompanyEntity {
   city?: string;
   state?: string;
   country?: string;
+  zipCode?: string;
   sic?: string;                    // Standard Industrial Classification
   naics?: string;                  // North American Industry Classification
   customFields?: Record<string, string>; // For unmapped CSV columns
