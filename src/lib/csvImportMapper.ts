@@ -177,39 +177,57 @@ export function transformImportData(
         }
         
         switch (mapping.systemField) {
+          // Name fields
           case 'firstName':
             firstName = trimmedValue;
             break;
           case 'lastName':
             lastName = trimmedValue;
             break;
+          
+          // Email fields
           case 'email':
             entity.email = trimmedValue;
             break;
+          case 'personalEmail':
+            entity.personalEmail = trimmedValue;
+            break;
+          case 'businessEmail':
+            entity.businessEmail = trimmedValue;
+            break;
+          
+          // Job fields
           case 'title':
             entity.title = trimmedValue;
             entity.jobTitle = trimmedValue;
             break;
+          case 'seniority':
+            entity.seniority = trimmedValue;
+            break;
+          case 'department':
+            entity.department = trimmedValue;
+            break;
+          
+          // Contact fields
           case 'phone':
             entity.phone = trimmedValue;
-            break;
-          case 'company':
-            entity.company = trimmedValue;
-            break;
-          case 'website':
-            entity.website = trimmedValue;
             break;
           case 'linkedin':
             entity.linkedin = trimmedValue;
             break;
-          case 'companyLinkedin':
-            entity.companyLinkedin = trimmedValue;
+          case 'linkedinUrl':
+            entity.linkedinUrl = trimmedValue;
             break;
-          case 'industry':
-            entity.industry = trimmedValue;
+          case 'twitterUrl':
+            entity.twitterUrl = trimmedValue;
             break;
-          case 'companyPhone':
-            entity.companyPhone = trimmedValue;
+          case 'facebookUrl':
+            entity.facebookUrl = trimmedValue;
+            break;
+          
+          // Location fields
+          case 'address':
+            entity.address = trimmedValue;
             break;
           case 'city':
             entity.city = trimmedValue;
@@ -220,8 +238,94 @@ export function transformImportData(
           case 'country':
             entity.country = trimmedValue;
             break;
+          case 'zipCode':
+            entity.zipCode = trimmedValue;
+            break;
+          
+          // Demographics fields
+          case 'age':
+            const ageNum = parseInt(trimmedValue);
+            entity.age = !isNaN(ageNum) ? ageNum : undefined;
+            break;
+          case 'gender':
+            entity.gender = trimmedValue;
+            break;
+          case 'children':
+            entity.children = trimmedValue;
+            break;
+          case 'homeowner':
+            entity.homeowner = trimmedValue;
+            break;
+          case 'married':
+            entity.married = trimmedValue;
+            break;
+          case 'netWorth':
+            entity.netWorth = trimmedValue;
+            break;
+          case 'incomeRange':
+            entity.incomeRange = trimmedValue;
+            break;
+          
+          // Skills and interests
+          case 'skills':
+            entity.skills = trimmedValue;
+            break;
+          case 'interests':
+            entity.interests = trimmedValue;
+            break;
+          case 'educationHistory':
+            entity.educationHistory = trimmedValue;
+            break;
+          
+          // Company fields (for person's company)
+          case 'company':
+            entity.company = trimmedValue;
+            break;
+          case 'website':
+            entity.website = trimmedValue;
+            break;
+          case 'companyLinkedin':
+          case 'companyLinkedinUrl':
+            entity.companyLinkedin = trimmedValue;
+            break;
+          case 'industry':
+          case 'companyIndustry':
+            entity.industry = trimmedValue;
+            break;
+          case 'companyPhone':
+          case 'companyPhoneNumber':
+            entity.companyPhone = trimmedValue;
+            break;
           case 'companySize':
+          case 'employeeCount':
             entity.companySize = trimmedValue;
+            break;
+          case 'companyDescription':
+            entity.companyDescription = trimmedValue;
+            break;
+          case 'companyCity':
+            entity.companyCity = trimmedValue;
+            break;
+          case 'companyState':
+            entity.companyState = trimmedValue;
+            break;
+          case 'companyCountry':
+            entity.companyCountry = trimmedValue;
+            break;
+          case 'companyZipCode':
+            entity.companyZipCode = trimmedValue;
+            break;
+          case 'companyRevenue':
+            entity.companyRevenue = trimmedValue;
+            break;
+          case 'companySic':
+            entity.companySic = trimmedValue;
+            break;
+          case 'companyNaics':
+            entity.companyNaics = trimmedValue;
+            break;
+          case 'domain':
+            entity.domain = trimmedValue;
             break;
         }
       });
@@ -263,32 +367,70 @@ export function transformImportData(
           case 'domain':
             entity.domain = trimmedValue;
             break;
+          case 'email':
+            entity.email = trimmedValue;
+            break;
+          
+          // Industry and size
           case 'industry':
+          case 'companyIndustry':
             entity.industry = trimmedValue;
             break;
           case 'employeeCount':
+          case 'companySize':
             const count = parseInt(trimmedValue.replace(/[^0-9]/g, ''));
             if (!isNaN(count)) {
               entity.employeeCount = count;
             }
             break;
+          
+          // Contact fields
           case 'linkedin':
+          case 'companyLinkedinUrl':
             entity.linkedin = trimmedValue;
             break;
           case 'phone':
+          case 'companyPhoneNumber':
             entity.phone = trimmedValue;
             break;
+          
+          // Location fields
           case 'location':
             entity.location = trimmedValue;
             break;
           case 'city':
+          case 'companyCity':
             entity.city = trimmedValue;
             break;
           case 'state':
+          case 'companyState':
             entity.state = trimmedValue;
             break;
           case 'country':
+          case 'companyCountry':
             entity.country = trimmedValue;
+            break;
+          case 'zipCode':
+          case 'companyZipCode':
+            entity.zipCode = trimmedValue;
+            break;
+          
+          // Company details
+          case 'description':
+          case 'companyDescription':
+            entity.description = trimmedValue;
+            break;
+          case 'revenue':
+          case 'companyRevenue':
+            entity.revenue = trimmedValue;
+            break;
+          case 'sic':
+          case 'companySic':
+            entity.sic = trimmedValue;
+            break;
+          case 'naics':
+          case 'companyNaics':
+            entity.naics = trimmedValue;
             break;
         }
       });
