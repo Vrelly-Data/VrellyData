@@ -50,6 +50,7 @@ export interface PersonEntity {
   state?: string;
   country?: string;
   jobTitle?: string;
+  domain?: string;
   
   // AudienceLab data availability fields
   personalEmails?: string[];      // PERSONAL_EMAILS array
@@ -70,6 +71,15 @@ export interface PersonEntity {
   skills?: string;
   interests?: string;
   educationHistory?: string;
+  
+  // Company location fields (for person's company)
+  companyCity?: string;
+  companyState?: string;
+  companyCountry?: string;
+  companyZipCode?: string;
+  companyRevenue?: string;
+  companySic?: string;
+  companyNaics?: string;
   
   customFields?: Record<string, string>; // For unmapped CSV columns
   isUnlocked?: boolean;            // Track if contact info has been unlocked
