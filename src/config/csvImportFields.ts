@@ -215,18 +215,23 @@ export const COMPANY_IMPORT_FIELDS: SystemField[] = [
   },
   {
     id: 'city',
-    label: 'City',
-    aliases: ['city', 'town', 'locality']
+    label: 'Company City',
+    aliases: ['city', 'company city', 'town', 'locality', 'hq city']
   },
   {
     id: 'state',
-    label: 'State',
-    aliases: ['state', 'province', 'region', 'state/province']
+    label: 'Company State',
+    aliases: ['state', 'company state', 'province', 'region', 'state/province', 'hq state']
   },
   {
     id: 'country',
-    label: 'Country',
-    aliases: ['country', 'nation']
+    label: 'Company Country',
+    aliases: ['country', 'company country', 'nation', 'hq country']
+  },
+  {
+    id: 'zipCode',
+    label: 'Company Zip',
+    aliases: ['zip', 'zipcode', 'zip code', 'postal code', 'company zip', 'hq zip']
   },
   {
     id: 'description',

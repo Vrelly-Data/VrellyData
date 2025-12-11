@@ -247,6 +247,7 @@ export function mapFreeDataToCompany(record: {
     city: extractFirst(data.city),
     state: extractFirst(data.state),
     country: extractFirst(data.country),
+    zipCode: extractFirst(data.zipCode),
     sic: extractFirst(data.sic),
     naics: extractFirst(data.naics),
     customFields: data.customFields || {},
