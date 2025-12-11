@@ -58,6 +58,17 @@ export interface PersonEntity {
   facebookUrl?: string;            // FACEBOOK_URL
   twitterUrl?: string;             // TWITTER_URL
   
+  // Additional demographic fields
+  address?: string;
+  zipCode?: string;
+  children?: string;               // Y/N
+  homeowner?: string;              // Y/N
+  married?: string;                // Y/N
+  netWorth?: string;
+  incomeRange?: string;
+  skills?: string;
+  interests?: string;
+  
   customFields?: Record<string, string>; // For unmapped CSV columns
   isUnlocked?: boolean;            // Track if contact info has been unlocked
 }
@@ -78,6 +89,8 @@ export interface CompanyEntity {
   city?: string;
   state?: string;
   country?: string;
+  sic?: string;                    // Standard Industrial Classification
+  naics?: string;                  // North American Industry Classification
   customFields?: Record<string, string>; // For unmapped CSV columns
   isUnlocked?: boolean;            // Track if contact info has been unlocked
 }

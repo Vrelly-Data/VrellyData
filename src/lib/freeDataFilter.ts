@@ -58,9 +58,11 @@ export function buildFreeDataQuery(
     query = query.or(cityConditions);
   }
 
-  // Gender filter (person only)
+  // Gender filter (person only) - translate male/female to M/F
   if (entityType === 'person' && filters.gender) {
-    query = query.ilike('entity_data->gender', filters.gender);
+    const genderCode = filters.gender.toLowerCase() === 'male' ? 'M' : 
+                       filters.gender.toLowerCase() === 'female' ? 'F' : filters.gender;
+    query = query.ilike('entity_data->gender', genderCode);
   }
 
   // Job Titles filter (person only)
@@ -193,6 +195,16 @@ export function mapFreeDataToPerson(record: {
     linkedinUrl: extractFirst(data.linkedinUrl) || extractFirst(data.linkedin),
     facebookUrl: extractFirst(data.facebookUrl),
     twitterUrl: extractFirst(data.twitterUrl),
+    // Additional demographic fields
+    address: extractFirst(data.address),
+    zipCode: extractFirst(data.zipCode),
+    children: extractFirst(data.children),
+    homeowner: extractFirst(data.homeowner),
+    married: extractFirst(data.married),
+    netWorth: extractFirst(data.netWorth),
+    incomeRange: extractFirst(data.incomeRange) || extractFirst(data.income),
+    skills: extractFirst(data.skills),
+    interests: extractFirst(data.interests),
     customFields: data.customFields || {},
     isUnlocked: false,
   };
@@ -232,6 +244,8 @@ export function mapFreeDataToCompany(record: {
     city: extractFirst(data.city),
     state: extractFirst(data.state),
     country: extractFirst(data.country),
+    sic: extractFirst(data.sic),
+    naics: extractFirst(data.naics),
     customFields: data.customFields || {},
     isUnlocked: false,
   };

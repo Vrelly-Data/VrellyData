@@ -80,6 +80,81 @@ export const PERSON_IMPORT_FIELDS: SystemField[] = [
     aliases: ['company size', 'employees', 'employee count', 'size', 'headcount', 'number of employees', '# employees', 'no of employees']
   },
   {
+    id: 'address',
+    label: 'Person Address',
+    aliases: ['address', 'person address', 'street', 'street address']
+  },
+  {
+    id: 'zipCode',
+    label: 'Person Zip',
+    aliases: ['zip', 'zipcode', 'zip code', 'postal code', 'person zip']
+  },
+  {
+    id: 'age',
+    label: 'Person Age',
+    aliases: ['age', 'person age']
+  },
+  {
+    id: 'children',
+    label: 'Children',
+    aliases: ['children', 'has children', 'kids', 'number of children']
+  },
+  {
+    id: 'gender',
+    label: 'Gender',
+    aliases: ['gender', 'sex']
+  },
+  {
+    id: 'homeowner',
+    label: 'Homeowner',
+    aliases: ['homeowner', 'home owner', 'owns home']
+  },
+  {
+    id: 'married',
+    label: 'Married',
+    aliases: ['married', 'marital status', 'marriage status']
+  },
+  {
+    id: 'netWorth',
+    label: 'Net Worth',
+    aliases: ['net worth', 'networth', 'net_worth', 'wealth']
+  },
+  {
+    id: 'incomeRange',
+    label: 'Income Range',
+    aliases: ['income', 'income range', 'salary', 'annual income']
+  },
+  {
+    id: 'department',
+    label: 'Department',
+    aliases: ['department', 'dept', 'team', 'division']
+  },
+  {
+    id: 'seniority',
+    label: 'Seniority',
+    aliases: ['seniority', 'level', 'job level', 'career level']
+  },
+  {
+    id: 'twitterUrl',
+    label: 'Person Twitter URL',
+    aliases: ['twitter', 'twitter url', 'twitter profile', 'x url']
+  },
+  {
+    id: 'facebookUrl',
+    label: 'Person Facebook URL',
+    aliases: ['facebook', 'facebook url', 'facebook profile', 'fb url']
+  },
+  {
+    id: 'skills',
+    label: 'Person Skills',
+    aliases: ['skills', 'person skills', 'expertise']
+  },
+  {
+    id: 'interests',
+    label: 'Person Interests',
+    aliases: ['interests', 'person interests', 'hobbies']
+  },
+  {
     id: 'custom',
     label: 'Custom Field (Keep Original Name)',
     required: false,
@@ -138,6 +213,26 @@ export const COMPANY_IMPORT_FIELDS: SystemField[] = [
     id: 'country',
     label: 'Country',
     aliases: ['country', 'nation']
+  },
+  {
+    id: 'description',
+    label: 'Company Description',
+    aliases: ['description', 'company description', 'about', 'bio', 'summary']
+  },
+  {
+    id: 'revenue',
+    label: 'Company Revenue',
+    aliases: ['revenue', 'annual revenue', 'company revenue', 'sales']
+  },
+  {
+    id: 'sic',
+    label: 'Company SIC',
+    aliases: ['sic', 'sic code', 'standard industrial classification']
+  },
+  {
+    id: 'naics',
+    label: 'Company NAICS',
+    aliases: ['naics', 'naics code', 'north american industry classification']
   },
   {
     id: 'custom',
