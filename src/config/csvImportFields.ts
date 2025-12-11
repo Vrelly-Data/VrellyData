@@ -184,9 +184,9 @@ export const COMPANY_IMPORT_FIELDS: SystemField[] = [
     aliases: ['website', 'domain', 'url', 'web', 'site', 'web address']
   },
   {
-    id: 'industry',
-    label: 'Industry',
-    aliases: ['industry', 'sector', 'vertical', 'business type']
+    id: 'companyIndustry',
+    label: 'Company Industry',
+    aliases: ['industry', 'sector', 'vertical', 'business type', 'company industry']
   },
   {
     id: 'employeeCount',
@@ -194,14 +194,14 @@ export const COMPANY_IMPORT_FIELDS: SystemField[] = [
     aliases: ['company size', 'employees', 'employee count', 'size', 'headcount', 'number of employees', 'employeecount']
   },
   {
-    id: 'linkedin',
+    id: 'companyLinkedinUrl',
     label: 'Company LinkedIn Profile',
-    aliases: ['linkedin', 'linkedin url', 'linkedin profile', 'li url', 'company linkedin']
+    aliases: ['linkedin', 'linkedin url', 'linkedin profile', 'li url', 'company linkedin', 'company linkedin url']
   },
   {
-    id: 'phone',
+    id: 'companyPhoneNumber',
     label: 'Company Phone',
-    aliases: ['phone', 'telephone', 'company phone', 'office phone', 'phone number']
+    aliases: ['phone', 'telephone', 'company phone', 'office phone', 'phone number', 'company phone number']
   },
   {
     id: 'email',

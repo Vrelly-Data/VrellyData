@@ -34,7 +34,7 @@ const ALL_SYSTEM_FIELDS = [
     ...f,
     category: 'person' as const
   })),
-  ...COMPANY_IMPORT_FIELDS.filter(f => f.id !== 'custom' && !PERSON_IMPORT_FIELDS.some(pf => pf.id === f.id)).map(f => ({
+  ...COMPANY_IMPORT_FIELDS.filter(f => f.id !== 'custom').map(f => ({
     ...f,
     category: 'company' as const
   })),
