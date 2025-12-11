@@ -28,7 +28,8 @@ import {
 } from '@/components/ui/dialog';
 import { Card, CardContent } from '@/components/ui/card';
 import { PERSON_IMPORT_FIELDS, COMPANY_IMPORT_FIELDS } from '@/config/csvImportFields';
-import { Pencil, Trash2, Loader2 } from 'lucide-react';
+import { Pencil, Trash2, Loader2, Check } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 
 interface DataSourceTemplatesTabProps {
@@ -49,7 +50,14 @@ export function DataSourceTemplatesTab({ showCreateDialog, onCloseCreateDialog }
   const [mappings, setMappings] = useState<ColumnMapping[]>([]);
   const [step, setStep] = useState<'info' | 'mapping'>('info');
 
-  const systemFields = entityType === 'person' ? PERSON_IMPORT_FIELDS : COMPANY_IMPORT_FIELDS;
+  // Combine all fields, remove duplicates, sort alphabetically (custom at end)
+  const allSystemFields = [
+    ...PERSON_IMPORT_FIELDS.filter(f => f.id !== 'custom'),
+    ...COMPANY_IMPORT_FIELDS.filter(f => f.id !== 'custom' && 
+      !PERSON_IMPORT_FIELDS.some(pf => pf.id === f.id))
+  ]
+    .sort((a, b) => a.label.localeCompare(b.label))
+    .concat([{ id: 'custom', label: 'Custom Field', required: false, aliases: [] }]);
 
   // Open dialog when parent triggers it
   useEffect(() => {
@@ -101,7 +109,7 @@ export function DataSourceTemplatesTab({ showCreateDialog, onCloseCreateDialog }
     // Auto-map based on aliases
     const newMappings: ColumnMapping[] = headers.map(header => {
       const lowerHeader = header.toLowerCase();
-      const matchedField = systemFields.find(
+      const matchedField = allSystemFields.find(
         f => f.id === lowerHeader || 
              f.label.toLowerCase() === lowerHeader ||
              f.aliases?.some(a => a.toLowerCase() === lowerHeader)
@@ -307,21 +315,34 @@ export function DataSourceTemplatesTab({ showCreateDialog, onCloseCreateDialog }
                   </TableHeader>
                   <TableBody>
                     {mappings.map((mapping, index) => (
-                      <TableRow key={index}>
+                      <TableRow 
+                        key={index}
+                        className={cn(mapping.systemField && "bg-green-50 dark:bg-green-950/20")}
+                      >
                         <TableCell className="font-mono text-sm">
-                          {mapping.csvHeader}
+                          <div className="flex items-center gap-2">
+                            {mapping.systemField && (
+                              <Check className="h-4 w-4 text-green-600 flex-shrink-0" />
+                            )}
+                            {mapping.csvHeader}
+                          </div>
                         </TableCell>
                         <TableCell>
                           <Select
                             value={mapping.systemField || 'skip'}
                             onValueChange={(v) => handleMappingChange(index, v === 'skip' ? null : v)}
                           >
-                            <SelectTrigger className="w-[200px]">
+                            <SelectTrigger 
+                              className={cn(
+                                "w-[200px]",
+                                mapping.systemField && "border-green-500 bg-green-50 dark:bg-green-950/30"
+                              )}
+                            >
                               <SelectValue placeholder="Select field" />
                             </SelectTrigger>
                             <SelectContent>
                               <SelectItem value="skip">Skip this column</SelectItem>
-                              {systemFields.map((field) => (
+                              {allSystemFields.map((field) => (
                                 <SelectItem key={field.id} value={field.id}>
                                   {field.label}
                                 </SelectItem>
