@@ -60,7 +60,8 @@ export function FreeDataTab({ showUploadDialog, onCloseUploadDialog }: FreeDataT
   const [csvRawData, setCsvRawData] = useState<any[]>([]);
   const [fieldMappings, setFieldMappings] = useState<FieldMapping[]>([]);
   
-  // Template saving
+  // Template selection and saving
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
   const [saveAsTemplate, setSaveAsTemplate] = useState(false);
   const [templateName, setTemplateName] = useState('');
   
@@ -88,10 +89,30 @@ export function FreeDataTab({ showUploadDialog, onCloseUploadDialog }: FreeDataT
       setCsvHeaders(headers);
       setCsvRawData(data);
       
-      // Initialize mappings with auto-detection
-      const initialMappings = initializeMappings(headers, data);
-      setFieldMappings(initialMappings);
+      // Initialize mappings - apply template if selected, otherwise auto-detect
+      let initialMappings = initializeMappings(headers, data);
       
+      if (selectedTemplateId) {
+        const selectedTemplate = templates.find(t => t.id === selectedTemplateId);
+        if (selectedTemplate && selectedTemplate.column_mappings) {
+          const templateMappings = selectedTemplate.column_mappings as Array<{ csvHeader: string; systemField: string }>;
+          
+          // Apply template mappings to matching headers
+          initialMappings = initialMappings.map(mapping => {
+            const templateMapping = templateMappings.find(
+              tm => tm.csvHeader.toLowerCase() === mapping.csvHeader.toLowerCase()
+            );
+            if (templateMapping) {
+              return { ...mapping, systemField: templateMapping.systemField };
+            }
+            return mapping;
+          });
+          
+          toast.success(`Applied template "${selectedTemplate.name}" mappings`);
+        }
+      }
+      
+      setFieldMappings(initialMappings);
       setUploadStep('map-fields');
       toast.success(`Loaded ${data.length} rows with ${headers.length} columns`);
     } catch (error: any) {
@@ -171,6 +192,7 @@ export function FreeDataTab({ showUploadDialog, onCloseUploadDialog }: FreeDataT
     setCsvHeaders([]);
     setCsvRawData([]);
     setFieldMappings([]);
+    setSelectedTemplateId(null);
     setSaveAsTemplate(false);
     setTemplateName('');
     if (fileInputRef.current) {
@@ -325,6 +347,32 @@ export function FreeDataTab({ showUploadDialog, onCloseUploadDialog }: FreeDataT
                 <p className="text-sm text-muted-foreground">
                   Upload a CSV file containing contact data. The system will automatically create both people and company records.
                 </p>
+                
+                {templates.length > 0 && (
+                  <div className="space-y-2">
+                    <Label>Apply Template (Optional)</Label>
+                    <Select
+                      value={selectedTemplateId || 'none'}
+                      onValueChange={(v) => setSelectedTemplateId(v === 'none' ? null : v)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select a template to auto-map columns" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">No template (auto-detect)</SelectItem>
+                        {templates.map((template) => (
+                          <SelectItem key={template.id} value={template.id}>
+                            {template.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      Templates apply saved column mappings to matching CSV headers
+                    </p>
+                  </div>
+                )}
+                
                 <div className="space-y-2">
                   <Label>CSV File</Label>
                   <Input
