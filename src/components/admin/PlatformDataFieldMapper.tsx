@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { Label } from '@/components/ui/label';
+import { Button } from '@/components/ui/button';
 import {
   Select,
   SelectContent,
@@ -11,9 +12,8 @@ import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { PERSON_IMPORT_FIELDS, COMPANY_IMPORT_FIELDS } from '@/config/csvImportFields';
 import { autoMapFields } from '@/lib/csvImportMapper';
-import { Check, Circle } from 'lucide-react';
+import { Check, Circle, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
-
 export interface FieldMapping {
   csvHeader: string;
   systemField: string | null;
@@ -134,48 +134,61 @@ export function PlatformDataFieldMapper({
                   )}
                 </div>
                 
-                <Select
-                  value={mapping.systemField || 'skip'}
-                  onValueChange={(value) => handleMappingChange(mapping.csvHeader, value)}
-                >
-                  <SelectTrigger className={cn(
-                    "w-[200px]",
-                    isMapped 
-                      ? "border-green-500 bg-green-50 dark:bg-green-950/30" 
-                      : "border-dashed border-muted-foreground/40"
-                  )}>
-                    <SelectValue placeholder="Select field..." />
-                  </SelectTrigger>
-                  <SelectContent className="bg-popover max-h-[400px] overflow-y-auto">
-                    <SelectItem value="skip">
-                      <span className="text-muted-foreground">Skip this column</span>
-                    </SelectItem>
-                    
-                    {ALL_SYSTEM_FIELDS.map(field => {
-                      const isUsedElsewhere = usedFields.has(field.id) && mapping.systemField !== field.id;
-                      const mappedTo = isUsedElsewhere 
-                        ? mappings.find(m => m.systemField === field.id)?.csvHeader 
-                        : null;
-                      return (
-                        <SelectItem 
-                          key={field.id} 
-                          value={field.id}
-                          disabled={isUsedElsewhere}
-                          className={cn(isUsedElsewhere && "opacity-60")}
-                        >
-                          <div className="flex items-center gap-2 w-full">
-                            <span className={cn(isUsedElsewhere && "line-through")}>{field.label}</span>
-                            {isUsedElsewhere && mappedTo && (
-                              <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded ml-auto">
-                                ✓ {mappedTo}
-                              </span>
-                            )}
-                          </div>
-                        </SelectItem>
-                      );
-                    })}
-                  </SelectContent>
-                </Select>
+                <div className="flex items-center gap-2">
+                  <Select
+                    value={mapping.systemField || 'skip'}
+                    onValueChange={(value) => handleMappingChange(mapping.csvHeader, value)}
+                  >
+                    <SelectTrigger className={cn(
+                      "w-[200px]",
+                      isMapped 
+                        ? "border-green-500 bg-green-50 dark:bg-green-950/30" 
+                        : "border-dashed border-muted-foreground/40"
+                    )}>
+                      <SelectValue placeholder="Select field..." />
+                    </SelectTrigger>
+                    <SelectContent className="bg-popover max-h-[400px] overflow-y-auto">
+                      <SelectItem value="skip">
+                        <span className="text-muted-foreground">Skip this column</span>
+                      </SelectItem>
+                      
+                      {ALL_SYSTEM_FIELDS.map(field => {
+                        const isUsedElsewhere = usedFields.has(field.id) && mapping.systemField !== field.id;
+                        const mappedTo = isUsedElsewhere 
+                          ? mappings.find(m => m.systemField === field.id)?.csvHeader 
+                          : null;
+                        return (
+                          <SelectItem 
+                            key={field.id} 
+                            value={field.id}
+                            disabled={isUsedElsewhere}
+                            className={cn(isUsedElsewhere && "opacity-60")}
+                          >
+                            <div className="flex items-center gap-2 w-full">
+                              <span className={cn(isUsedElsewhere && "line-through")}>{field.label}</span>
+                              {isUsedElsewhere && mappedTo && (
+                                <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded ml-auto">
+                                  ✓ {mappedTo}
+                                </span>
+                              )}
+                            </div>
+                          </SelectItem>
+                        );
+                      })}
+                    </SelectContent>
+                  </Select>
+                  {isMapped && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                      onClick={() => handleMappingChange(mapping.csvHeader, 'skip')}
+                      title="Clear mapping"
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  )}
+                </div>
               </div>
             );
           })}
