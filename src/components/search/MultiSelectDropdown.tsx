@@ -64,19 +64,17 @@ export function MultiSelectDropdown({
           variant="outline"
           role="combobox"
           aria-expanded={open}
-          className="w-full justify-between"
+          className="w-full justify-between h-auto min-h-10"
           disabled={loading}
         >
           {selected.length > 0 ? (
-            <div className="flex gap-1 flex-wrap">
-              {selected.slice(0, 2).map((value) => (
-                <Badge key={value} variant="secondary" className="text-xs">
-                  {getLabel(value)}
-                </Badge>
-              ))}
-              {selected.length > 2 && (
-                <Badge variant="secondary" className="text-xs">
-                  +{selected.length - 2} more
+            <div className="flex gap-1 items-center overflow-hidden flex-1 min-w-0">
+              <Badge variant="secondary" className="text-xs shrink-0 max-w-[150px] truncate">
+                {getLabel(selected[0])}
+              </Badge>
+              {selected.length > 1 && (
+                <Badge variant="secondary" className="text-xs shrink-0">
+                  +{selected.length - 1} more
                 </Badge>
               )}
             </div>
