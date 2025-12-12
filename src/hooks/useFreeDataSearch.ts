@@ -81,6 +81,10 @@ export function useFreeDataSearch() {
         p_has_linkedin: prospectFlags.hasLinkedin || null,
         p_has_facebook: prospectFlags.hasFacebook || null,
         p_has_twitter: prospectFlags.hasTwitter || null,
+        p_person_city: filterState.personCity?.length > 0 ? filterState.personCity : null,
+        p_person_country: filterState.personCountry?.length > 0 ? filterState.personCountry : null,
+        p_company_city: filterState.companyCity?.length > 0 ? filterState.companyCity : null,
+        p_company_country: filterState.companyCountry?.length > 0 ? filterState.companyCountry : null,
         p_limit: perPage,
         p_offset: offset,
       });
