@@ -395,6 +395,10 @@ export default function AudienceBuilder() {
         income: [],
         keywords: [],
         prospectData: [],
+        personCity: [],
+        personCountry: [],
+        companyCity: [],
+        companyCountry: [],
       };
       
       for (let page = 1; page <= totalPagesToFetch; page++) {
@@ -447,6 +451,10 @@ export default function AudienceBuilder() {
         income: [],
         keywords: [],
         prospectData: [],
+        personCity: [],
+        personCountry: [],
+        companyCity: [],
+        companyCountry: [],
       };
       
       // Fetch pages until we have enough records

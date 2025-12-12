@@ -141,7 +141,7 @@ class AudienceLabClient {
         const filters = convertFilterStateToAudienceLabFormat(params.filterState || {
           industries: [], cities: [], gender: null, jobTitles: [], seniority: [],
           department: [], companySize: [], netWorth: [], income: [], keywords: [],
-          prospectData: [],
+          prospectData: [], personCity: [], personCountry: [], companyCity: [], companyCountry: [],
         });
         console.log('[AudienceLab API] Converted filters:', filters);
         
@@ -247,7 +247,7 @@ class AudienceLabClient {
         const filters = convertFilterStateToAudienceLabFormat(params.filterState || {
           industries: [], cities: [], gender: null, jobTitles: [], seniority: [],
           department: [], companySize: [], netWorth: [], income: [], keywords: [],
-          prospectData: [],
+          prospectData: [], personCity: [], personCountry: [], companyCity: [], companyCountry: [],
         });
         console.log('[AudienceLab API] Converted filters:', filters);
         
