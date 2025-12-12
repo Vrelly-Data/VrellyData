@@ -85,6 +85,8 @@ export function useFreeDataSearch() {
         p_person_country: filterState.personCountry?.length > 0 ? filterState.personCountry : null,
         p_company_city: filterState.companyCity?.length > 0 ? filterState.companyCity : null,
         p_company_country: filterState.companyCountry?.length > 0 ? filterState.companyCountry : null,
+        p_person_interests: filterState.personInterests?.length > 0 ? filterState.personInterests : null,
+        p_person_skills: filterState.personSkills?.length > 0 ? filterState.personSkills : null,
         p_limit: perPage,
         p_offset: offset,
       });
