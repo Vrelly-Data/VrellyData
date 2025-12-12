@@ -2,7 +2,6 @@ import { useState, FormEvent, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
-import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 import { Filter, Search } from 'lucide-react';
@@ -221,19 +220,24 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
               {/* Gender */}
               <div className="space-y-3">
                 <Label>Gender</Label>
-                <RadioGroup
-                  value={filterState.gender || ''}
-                  onValueChange={(value) => updateFilter('gender', value as 'male' | 'female' | null)}
-                >
-                  <div className="flex items-center space-x-2">
-                    <RadioGroupItem value="male" id="male" />
-                    <Label htmlFor="male" className="font-normal cursor-pointer">Male</Label>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <RadioGroupItem value="female" id="female" />
-                    <Label htmlFor="female" className="font-normal cursor-pointer">Female</Label>
-                  </div>
-                </RadioGroup>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant={filterState.gender === 'male' ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => updateFilter('gender', filterState.gender === 'male' ? null : 'male')}
+                  >
+                    Male
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={filterState.gender === 'female' ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => updateFilter('gender', filterState.gender === 'female' ? null : 'female')}
+                  >
+                    Female
+                  </Button>
+                </div>
               </div>
             </>
           )}
