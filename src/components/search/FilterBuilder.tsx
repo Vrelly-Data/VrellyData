@@ -35,6 +35,8 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
     personCountry: [],
     companyCity: [],
     companyCountry: [],
+    personInterests: [],
+    personSkills: [],
   });
 
   const updateFilter = <K extends keyof FilterBuilderState>(
@@ -62,6 +64,8 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
         personCountry: [],
         companyCity: [],
         companyCountry: [],
+        personInterests: [],
+        personSkills: [],
       });
   }, [entityType]);
 
@@ -187,6 +191,28 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
                   selected={filterState.income}
                   onChange={(values) => updateFilter('income', values)}
                   placeholder="Select income ranges..."
+                />
+              </div>
+
+              {/* Person Interest */}
+              <div className="space-y-2">
+                <Label>Person Interest</Label>
+                <TagInput
+                  value={filterState.personInterests}
+                  onChange={(values) => updateFilter('personInterests', values)}
+                  placeholder="Type interests and press Enter..."
+                  suggestions={[]}
+                />
+              </div>
+
+              {/* Person Skill */}
+              <div className="space-y-2">
+                <Label>Person Skill</Label>
+                <TagInput
+                  value={filterState.personSkills}
+                  onChange={(values) => updateFilter('personSkills', values)}
+                  placeholder="Type skills and press Enter..."
+                  suggestions={[]}
                 />
               </div>
 

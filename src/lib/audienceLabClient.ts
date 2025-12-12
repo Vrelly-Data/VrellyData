@@ -142,6 +142,7 @@ class AudienceLabClient {
           industries: [], cities: [], gender: null, jobTitles: [], seniority: [],
           department: [], companySize: [], netWorth: [], income: [], keywords: [],
           prospectData: [], personCity: [], personCountry: [], companyCity: [], companyCountry: [],
+          personInterests: [], personSkills: [],
         });
         console.log('[AudienceLab API] Converted filters:', filters);
         
@@ -248,6 +249,7 @@ class AudienceLabClient {
           industries: [], cities: [], gender: null, jobTitles: [], seniority: [],
           department: [], companySize: [], netWorth: [], income: [], keywords: [],
           prospectData: [], personCity: [], personCountry: [], companyCity: [], companyCountry: [],
+          personInterests: [], personSkills: [],
         });
         console.log('[AudienceLab API] Converted filters:', filters);
         

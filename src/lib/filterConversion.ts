@@ -16,6 +16,8 @@ export interface FilterBuilderState {
   personCountry: string[];
   companyCity: string[];
   companyCountry: string[];
+  personInterests: string[];
+  personSkills: string[];
 }
 
 export function convertFilterStateToAudienceLabFormat(state: FilterBuilderState): AudienceLabFilters {
