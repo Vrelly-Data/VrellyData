@@ -7,7 +7,7 @@ const MOCK_COMPANIES = ['TechCorp', 'DataSoft', 'CloudInc', 'InnovateLabs', 'Fut
 const MOCK_INDUSTRIES = ['Software', 'E-commerce', 'Consulting', 'Marketing', 'Sales', 'Finance', 'Healthcare', 'Manufacturing', 'Retail', 'Education'];
 const MOCK_JOB_TITLES = ['Software Engineer', 'Marketing Manager', 'Sales Director', 'CTO', 'Product Manager', 'Data Analyst', 'UX Designer', 'Account Executive', 'VP of Operations', 'CEO'];
 const MOCK_SENIORITY = ['Individual Contributor', 'Manager', 'Head of', 'Director', 'VP', 'President', 'C-Level'];
-const MOCK_DEPARTMENTS = ['Engineering', 'Sales', 'Marketing', 'Operations', 'Finance', 'Product', 'Customer Success'];
+const MOCK_DEPARTMENTS = ['Community And Social Services', 'Customer Success', 'Engineering', 'Executive', 'Finance', 'Human Resources', 'Information Technology', 'Legal', 'Marketing', 'Operations', 'Product', 'Sales'];
 const MOCK_GENDERS = ['male', 'female', 'other'];
 const MOCK_SEGMENTS = ['Tech', 'Healthcare', 'Finance', 'Retail', 'Manufacturing'];
 
