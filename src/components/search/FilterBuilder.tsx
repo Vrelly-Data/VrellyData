@@ -157,28 +157,6 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
                 />
               </div>
 
-              {/* Company City */}
-              <div className="space-y-2">
-                <Label>Company City</Label>
-                <TagInput
-                  value={filterState.companyCity}
-                  onChange={(values) => updateFilter('companyCity', values)}
-                  placeholder="Type cities and press Enter..."
-                  suggestions={attributes.cities}
-                />
-              </div>
-
-              {/* Company Country */}
-              <div className="space-y-2">
-                <Label>Company Country</Label>
-                <TagInput
-                  value={filterState.companyCountry}
-                  onChange={(values) => updateFilter('companyCountry', values)}
-                  placeholder="Type countries and press Enter..."
-                  suggestions={[]}
-                />
-              </div>
-
               {/* Person Address */}
               <div className="space-y-2">
                 <Label>Person Address</Label>
@@ -254,6 +232,28 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
               selected={filterState.companySize}
               onChange={(values) => updateFilter('companySize', values)}
               placeholder="Select company sizes..."
+            />
+          </div>
+
+          {/* Company City */}
+          <div className="space-y-2">
+            <Label>Company City</Label>
+            <TagInput
+              value={filterState.companyCity}
+              onChange={(values) => updateFilter('companyCity', values)}
+              placeholder="Type cities and press Enter..."
+              suggestions={attributes.cities}
+            />
+          </div>
+
+          {/* Company Country */}
+          <div className="space-y-2">
+            <Label>Company Country</Label>
+            <TagInput
+              value={filterState.companyCountry}
+              onChange={(values) => updateFilter('companyCountry', values)}
+              placeholder="Type countries and press Enter..."
+              suggestions={[]}
             />
           </div>
 
