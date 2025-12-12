@@ -31,6 +31,10 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
     income: [],
     keywords: [],
     prospectData: [],
+    personCity: [],
+    personCountry: [],
+    companyCity: [],
+    companyCountry: [],
   });
 
   const updateFilter = <K extends keyof FilterBuilderState>(
@@ -54,6 +58,10 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
         income: [],
         keywords: [],
         prospectData: [],
+        personCity: [],
+        personCountry: [],
+        companyCity: [],
+        companyCountry: [],
       });
   }, [entityType]);
 
@@ -127,13 +135,57 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
             />
           </div>
 
-              {/* Person Location */}
+              {/* Person City */}
               <div className="space-y-2">
-                <Label>Person Location</Label>
+                <Label>Person City</Label>
+                <TagInput
+                  value={filterState.personCity}
+                  onChange={(values) => updateFilter('personCity', values)}
+                  placeholder="Type cities and press Enter..."
+                  suggestions={attributes.cities}
+                />
+              </div>
+
+              {/* Person Country */}
+              <div className="space-y-2">
+                <Label>Person Country</Label>
+                <TagInput
+                  value={filterState.personCountry}
+                  onChange={(values) => updateFilter('personCountry', values)}
+                  placeholder="Type countries and press Enter..."
+                  suggestions={[]}
+                />
+              </div>
+
+              {/* Company City */}
+              <div className="space-y-2">
+                <Label>Company City</Label>
+                <TagInput
+                  value={filterState.companyCity}
+                  onChange={(values) => updateFilter('companyCity', values)}
+                  placeholder="Type cities and press Enter..."
+                  suggestions={attributes.cities}
+                />
+              </div>
+
+              {/* Company Country */}
+              <div className="space-y-2">
+                <Label>Company Country</Label>
+                <TagInput
+                  value={filterState.companyCountry}
+                  onChange={(values) => updateFilter('companyCountry', values)}
+                  placeholder="Type countries and press Enter..."
+                  suggestions={[]}
+                />
+              </div>
+
+              {/* Person Address */}
+              <div className="space-y-2">
+                <Label>Person Address</Label>
                 <TagInput
                   value={filterState.cities}
                   onChange={(values) => updateFilter('cities', values)}
-                  placeholder="Type locations and press Enter..."
+                  placeholder="Type addresses and press Enter..."
                   suggestions={attributes.cities}
                 />
               </div>
