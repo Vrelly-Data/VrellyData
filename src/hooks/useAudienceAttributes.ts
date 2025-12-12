@@ -38,6 +38,7 @@ export function useAudienceAttributes() {
           seniority: MOCK_ATTRIBUTES.seniority,
           departments: MOCK_ATTRIBUTES.departments,
           companySizeRanges: MOCK_ATTRIBUTES.companySizeRanges,
+          companyRevenueRanges: MOCK_ATTRIBUTES.companyRevenueRanges,
           netWorthRanges: MOCK_ATTRIBUTES.netWorthRanges,
           incomeRanges: MOCK_ATTRIBUTES.incomeRanges,
         });

@@ -58,6 +58,7 @@ export const useAudienceStore = create<AudienceState>((set) => ({
     seniority: [],
     department: [],
     companySize: [],
+    companyRevenue: [],
     netWorth: [],
     income: [],
     keywords: [],
