@@ -8,6 +8,7 @@ export interface FilterBuilderState {
   seniority: string[];
   department: string[];
   companySize: string[];
+  companyRevenue: string[];
   netWorth: string[];
   income: string[];
   keywords: string[];

@@ -27,6 +27,7 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
     seniority: [],
     department: [],
     companySize: [],
+    companyRevenue: [],
     netWorth: [],
     income: [],
     keywords: [],
@@ -56,6 +57,7 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
         seniority: [],
         department: [],
         companySize: [],
+        companyRevenue: [],
         netWorth: [],
         income: [],
         keywords: [],
@@ -258,6 +260,20 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
               selected={filterState.companySize}
               onChange={(values) => updateFilter('companySize', values)}
               placeholder="Select company sizes..."
+            />
+          </div>
+
+          {/* Company Revenue */}
+          <div className="space-y-2">
+            <Label>Company Revenue</Label>
+            <MultiSelectDropdown
+              options={attributes.companyRevenueRanges.map(range => ({
+                label: range,
+                value: range
+              }))}
+              selected={filterState.companyRevenue}
+              onChange={(values) => updateFilter('companyRevenue', values)}
+              placeholder="Select revenue ranges..."
             />
           </div>
 

@@ -39,6 +39,7 @@ export interface MockAttributeOptions {
   seniority: string[];
   departments: string[];
   companySizeRanges: string[];
+  companyRevenueRanges: string[];
   netWorthRanges: string[];
   incomeRanges: string[];
 }
@@ -50,6 +51,7 @@ export const MOCK_ATTRIBUTES: MockAttributeOptions = {
   seniority: MOCK_SENIORITY,
   departments: MOCK_DEPARTMENTS,
   companySizeRanges: ['1-10', '11-50', '51-200', '201-500', '501-1000', '1001-5000', '5000+'],
+  companyRevenueRanges: ['Under $1M', '$1M - $10M', '$10M - $50M', '$50M - $100M', '$100M - $500M', '$500M - $1B', '$1B+'],
   netWorthRanges: ['Under $100K', '$100K - $500K', '$500K - $1M', '$1M - $5M', '$5M - $10M', '$10M - $50M', '$50M+'],
   incomeRanges: ['Under $50K', '$50K - $100K', '$100K - $200K', '$200K - $500K', '$500K - $1M', '$1M+'],
 };
