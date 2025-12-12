@@ -21,6 +21,10 @@ Deno.serve(async (req) => {
       throw new Error('Missing required environment variables');
     }
 
+    if (!webhookSecret) {
+      throw new Error('STRIPE_WEBHOOK_SECRET is not configured - webhook signature verification required');
+    }
+
     const stripe = new Stripe(stripeKey, { apiVersion: '2023-10-16' });
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
@@ -30,9 +34,7 @@ Deno.serve(async (req) => {
     }
 
     const body = await req.text();
-    const event = webhookSecret
-      ? stripe.webhooks.constructEvent(body, signature, webhookSecret)
-      : JSON.parse(body);
+    const event = stripe.webhooks.constructEvent(body, signature, webhookSecret);
 
     console.log(`Processing webhook event: ${event.type}`);
 
