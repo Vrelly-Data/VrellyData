@@ -570,7 +570,9 @@ export type Database = {
           created_at: string
           credits: number
           credits_used_this_month: number | null
+          credits_used_today: number
           id: string
+          last_credit_reset_date: string | null
           monthly_credit_limit: number | null
           name: string | null
           plan: string | null
@@ -586,7 +588,9 @@ export type Database = {
           created_at?: string
           credits?: number
           credits_used_this_month?: number | null
+          credits_used_today?: number
           id: string
+          last_credit_reset_date?: string | null
           monthly_credit_limit?: number | null
           name?: string | null
           plan?: string | null
@@ -602,7 +606,9 @@ export type Database = {
           created_at?: string
           credits?: number
           credits_used_this_month?: number | null
+          credits_used_today?: number
           id?: string
+          last_credit_reset_date?: string | null
           monthly_credit_limit?: number | null
           name?: string | null
           plan?: string | null
@@ -923,6 +929,10 @@ export type Database = {
           _metadata?: Json
         }
         Returns: string
+      }
+      reset_daily_credits_if_needed: {
+        Args: { p_user_id: string }
+        Returns: undefined
       }
       reset_monthly_credits: { Args: never; Returns: undefined }
       search_free_data_keywords: {
