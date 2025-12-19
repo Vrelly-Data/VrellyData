@@ -2,10 +2,10 @@ import { useState, FormEvent, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 import { Filter, Search } from 'lucide-react';
 import { useAudienceAttributes } from '@/hooks/useAudienceAttributes';
+import { useFreeDataSuggestions } from '@/hooks/useFreeDataSuggestions';
 import { FilterBuilderState } from '@/lib/filterConversion';
 import { EntityType } from '@/types/audience';
 import { TagInput } from '@/components/ui/tag-input';
@@ -18,6 +18,7 @@ interface FilterBuilderProps {
 
 export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
   const { attributes, loading } = useAudienceAttributes();
+  const { suggestions } = useFreeDataSuggestions();
   const [filterState, setFilterState] = useState<FilterBuilderState>({
     industries: [],
     cities: [],
@@ -202,7 +203,7 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
                   value={filterState.personInterests}
                   onChange={(values) => updateFilter('personInterests', values)}
                   placeholder="Type interests and press Enter..."
-                  suggestions={[]}
+                  suggestions={suggestions.interests}
                 />
               </div>
 
@@ -213,7 +214,7 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
                   value={filterState.personSkills}
                   onChange={(values) => updateFilter('personSkills', values)}
                   placeholder="Type skills and press Enter..."
-                  suggestions={[]}
+                  suggestions={suggestions.skills}
                 />
               </div>
 
@@ -249,7 +250,7 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
               value={filterState.industries}
               onChange={(values) => updateFilter('industries', values)}
               placeholder="Type industries and press Enter..."
-              suggestions={attributes.industries}
+              suggestions={[...new Set([...attributes.industries, ...suggestions.industries])]}
             />
           </div>
 
