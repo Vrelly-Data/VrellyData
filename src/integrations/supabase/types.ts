@@ -989,6 +989,10 @@ export type Database = {
           total_count: number
         }[]
       }
+      title_matches_seniority: {
+        Args: { p_seniority: string[]; p_title: string }
+        Returns: boolean
+      }
       update_credits_for_testing: {
         Args: { p_new_credits: number; p_user_id: string }
         Returns: undefined
