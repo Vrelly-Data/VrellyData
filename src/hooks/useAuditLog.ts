@@ -1,6 +1,6 @@
 import { supabase } from '@/integrations/supabase/client';
 
-export type AuditAction = 'unlock' | 'export' | 'role_change' | 'bulk_access' | 'secret_access';
+export type AuditAction = 'unlock' | 'export' | 'role_change' | 'bulk_access' | 'secret_access' | 'save_audience';
 
 interface LogAuditParams {
   action: AuditAction;

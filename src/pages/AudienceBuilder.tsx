@@ -528,6 +528,8 @@ export default function AudienceBuilder() {
 
   const handleSaveAudienceConfirm = async (audienceName: string) => {
     try {
+      setLoading(true);
+      
       // Get remaining credits for today
       const remaining = await getRemainingCreditsToday();
       
@@ -541,8 +543,46 @@ export default function AudienceBuilder() {
         return;
       }
 
+      // Fetch ALL results to save
+      const allResults: (PersonEntity | CompanyEntity)[] = [];
+      const totalPagesToFetch = Math.ceil(totalEstimate / perPage);
+      
+      const currentFilterState = filterState || {
+        industries: [],
+        cities: [],
+        gender: null,
+        jobTitles: [],
+        seniority: [],
+        department: [],
+        companySize: [],
+        companyRevenue: [],
+        netWorth: [],
+        income: [],
+        keywords: [],
+        prospectData: [],
+        personCity: [],
+        personCountry: [],
+        companyCity: [],
+        companyCountry: [],
+        personInterests: [],
+        personSkills: [],
+      };
+      
+      for (let page = 1; page <= totalPagesToFetch; page++) {
+        const response = currentType === 'person'
+          ? await searchPeople(currentFilterState, page, perPage)
+          : await searchCompanies(currentFilterState, page, perPage);
+        
+        allResults.push(...response.items);
+      }
+      
+      // Deduplicate results by ID
+      const uniqueResults = Array.from(
+        new Map(allResults.map(r => [r.id, r])).values()
+      );
+
       // Deduct credits (1 credit per contact)
-      const result = await deductCredits(totalEstimate, undefined);
+      const result = await deductCredits(uniqueResults.length, undefined);
       if (!result.success) {
         toast({
           title: 'Error deducting credits',
@@ -563,7 +603,7 @@ export default function AudienceBuilder() {
 
       if (!membership) throw new Error('No team membership found');
 
-      // Save audience to database
+      // Save audience metadata to database
       const { error: saveError } = await supabase
         .from('audiences')
         .insert({
@@ -571,17 +611,28 @@ export default function AudienceBuilder() {
           team_id: membership.team_id,
           type: currentType,
           filters: filters || {},
-          result_count: totalEstimate,
+          result_count: uniqueResults.length,
           created_by: user.id,
         });
 
       if (saveError) throw saveError;
 
+      // Save the actual records to people_records/company_records
+      await saveRecords(uniqueResults, currentType, 'export');
+
+      // Log audit event
+      await logAuditEvent({
+        action: 'save_audience',
+        entityType: currentType,
+        entityCount: uniqueResults.length,
+        metadata: { audienceName, filters: filters || {} },
+      });
+
       setShowSaveAudienceDialog(false);
       
       toast({
         title: 'Audience saved',
-        description: `"${audienceName}" has been saved successfully. ${totalEstimate.toLocaleString()} credits deducted.`,
+        description: `"${audienceName}" has been saved with ${uniqueResults.length.toLocaleString()} records. ${uniqueResults.length.toLocaleString()} credits deducted.`,
       });
 
     } catch (error: any) {
@@ -591,6 +642,8 @@ export default function AudienceBuilder() {
         description: error.message || 'Failed to save audience',
         variant: 'destructive',
       });
+    } finally {
+      setLoading(false);
     }
   };
 
