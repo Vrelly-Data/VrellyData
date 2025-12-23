@@ -3,10 +3,80 @@ import { SystemField, CSVFieldMapping } from '@/types/csvImport';
 import { PersonEntity, CompanyEntity, EntityType } from '@/types/audience';
 
 /**
+ * Parse employee count string to a number (upper bound for ranges)
+ * Examples: "1-10" -> 10, "51-200" -> 200, "26 to 50" -> 50, "1000+" -> 1000, "26,000" -> 26000
+ */
+function parseEmployeeCountFromString(sizeStr: string): number | undefined {
+  if (!sizeStr) return undefined;
+  
+  // Remove commas from numbers first (e.g., "26,000" -> "26000")
+  const cleanStr = sizeStr.replace(/,/g, '').trim();
+  
+  // Handle "26 to 50" format → extract upper bound (50)
+  const toMatch = cleanStr.match(/(\d+)\s+to\s+(\d+)/i);
+  if (toMatch) {
+    return parseInt(toMatch[2], 10);
+  }
+  
+  // Handle "51-200" or "500 - 1000" format → extract upper bound
+  const dashMatch = cleanStr.match(/(\d+)\s*-\s*(\d+)/);
+  if (dashMatch) {
+    return parseInt(dashMatch[2], 10);
+  }
+  
+  // Handle "1000+" format → return the number
+  const plusMatch = cleanStr.match(/(\d+)\+/);
+  if (plusMatch) {
+    return parseInt(plusMatch[1], 10);
+  }
+  
+  // Single number
+  const singleMatch = cleanStr.match(/^(\d+)$/);
+  if (singleMatch) {
+    return parseInt(singleMatch[1], 10);
+  }
+  
+  // Extract first number as last resort
+  const anyMatch = cleanStr.match(/(\d+)/);
+  if (anyMatch) {
+    return parseInt(anyMatch[1], 10);
+  }
+  
+  return undefined;
+}
+
+/**
+ * Convert an employee count number to a standardized range bucket string
+ */
+function employeeCountToRangeBucket(count: number): string {
+  if (count <= 10) return '1-10';
+  if (count <= 50) return '11-50';
+  if (count <= 200) return '51-200';
+  if (count <= 500) return '201-500';
+  if (count <= 1000) return '501-1000';
+  if (count <= 5000) return '1001-5000';
+  if (count <= 10000) return '5001-10000';
+  return '10000+';
+}
+
+/**
  * Extract the first value from a comma-separated string
  * e.g., "x@hotmail.com, y@gmail.com, z@outlook.com" => "x@hotmail.com"
+ * 
+ * IMPORTANT: Does NOT split numbers with thousand separators (e.g., "26,000" stays as "26,000")
  */
 function extractFirstValue(value: string): string {
+  // Don't split if it looks like a number with thousand separators (e.g., "26,000" or "1,234,567")
+  if (/^\d{1,3}(,\d{3})+(\+)?$/.test(value.trim())) {
+    return value.trim();
+  }
+  
+  // Don't split if it looks like a range with commas (e.g., "1,001 to 5,000")
+  if (/^\d[\d,]*\s+(to|-)\s+\d[\d,]*$/.test(value.trim())) {
+    return value.trim();
+  }
+  
+  // For actual comma-separated lists (like emails), take the first value
   if (value.includes(',')) {
     return value.split(',')[0].trim();
   }
@@ -378,9 +448,14 @@ export function transformImportData(
             break;
           case 'employeeCount':
           case 'companySize':
-            const count = parseInt(trimmedValue.replace(/[^0-9]/g, ''));
-            if (!isNaN(count)) {
-              entity.employeeCount = count;
+            // Parse employee count properly, handling ranges and formats
+            const parsedCount = parseEmployeeCountFromString(trimmedValue);
+            if (parsedCount !== undefined) {
+              entity.employeeCount = parsedCount;
+              entity.companySize = employeeCountToRangeBucket(parsedCount);
+            } else {
+              // If we can't parse it, store the raw value as companySize
+              entity.companySize = trimmedValue;
             }
             break;
           
