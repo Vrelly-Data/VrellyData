@@ -32,6 +32,9 @@ export function extractCompaniesFromPeople(people: PersonEntity[]): CompanyEntit
       if (!existing.location && person.location) {
         existing.location = person.location;
       }
+      if (!existing.domain && (person.domain || person.website)) {
+        existing.domain = person.domain || person.website;
+      }
       
       return;
     }
@@ -40,6 +43,7 @@ export function extractCompaniesFromPeople(people: PersonEntity[]): CompanyEntit
     const company: CompanyEntity = {
       id: `company-${companyKey}-${Date.now()}-${index}`,
       name: person.company,
+      domain: person.domain || person.website,
       industry: person.industry,
       location: person.location,
       city: person.city,
