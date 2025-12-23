@@ -130,13 +130,26 @@ export function mapFreeDataToPerson(record: {
 }): PersonEntity {
   const data = record.entity_data || {};
   
-  // Extract first value if comma-separated
+  // Extract first value if comma-separated, but don't break numbers with thousand separators
   const extractFirst = (value: any): string | undefined => {
     if (!value) return undefined;
-    if (typeof value === 'string' && value.includes(',')) {
-      return value.split(',')[0].trim();
+    const strVal = String(value).trim();
+    
+    // Don't split if it looks like a number with thousand separators (e.g., "26,000")
+    if (/^\d{1,3}(,\d{3})+(\+)?$/.test(strVal)) {
+      return strVal;
     }
-    return String(value);
+    
+    // Don't split if it looks like a range with commas (e.g., "1,001 to 5,000")
+    if (/^\d[\d,]*\s+(to|-)\s+\d[\d,]*$/.test(strVal)) {
+      return strVal;
+    }
+    
+    // For actual comma-separated lists, take the first value
+    if (strVal.includes(',')) {
+      return strVal.split(',')[0].trim();
+    }
+    return strVal;
   };
 
   // Parse employee count and compute standardized range for company size
@@ -259,13 +272,26 @@ export function mapFreeDataToCompany(record: {
 }): CompanyEntity {
   const data = record.entity_data || {};
   
-  // Extract first value if comma-separated
+  // Extract first value if comma-separated, but don't break numbers with thousand separators
   const extractFirst = (value: any): string | undefined => {
     if (!value) return undefined;
-    if (typeof value === 'string' && value.includes(',')) {
-      return value.split(',')[0].trim();
+    const strVal = String(value).trim();
+    
+    // Don't split if it looks like a number with thousand separators (e.g., "26,000")
+    if (/^\d{1,3}(,\d{3})+(\+)?$/.test(strVal)) {
+      return strVal;
     }
-    return String(value);
+    
+    // Don't split if it looks like a range with commas (e.g., "1,001 to 5,000")
+    if (/^\d[\d,]*\s+(to|-)\s+\d[\d,]*$/.test(strVal)) {
+      return strVal;
+    }
+    
+    // For actual comma-separated lists, take the first value
+    if (strVal.includes(',')) {
+      return strVal.split(',')[0].trim();
+    }
+    return strVal;
   };
 
   // Parse employee count from companySize or employeeCount field
