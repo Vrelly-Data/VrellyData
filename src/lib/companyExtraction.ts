@@ -83,16 +83,42 @@ export function extractCompaniesFromPeople(people: PersonEntity[]): CompanyEntit
 }
 
 /**
- * Parse company size string to employee count number
- * Examples: "1-10" -> 10, "50-200" -> 200, "1000+" -> 1000
+ * Parse company size string to employee count number (upper bound)
+ * Examples: "1-10" -> 10, "51-200" -> 200, "26 to 50" -> 50, "1000+" -> 1000, "26,000" -> 26000
  */
 function parseEmployeeCount(sizeStr: string): number | undefined {
   if (!sizeStr) return undefined;
   
-  // Extract numbers from string
-  const match = sizeStr.match(/(\d+)[+-]?/);
-  if (match) {
-    return parseInt(match[1], 10);
+  const str = String(sizeStr).trim();
+  
+  // Handle "26 to 50" format → extract upper bound (50)
+  const toMatch = str.match(/(\d[\d,]*)\s+to\s+(\d[\d,]*)/i);
+  if (toMatch) {
+    return parseInt(toMatch[2].replace(/,/g, ''), 10);
+  }
+  
+  // Handle "51-200" format → extract upper bound (200)
+  const dashMatch = str.match(/(\d[\d,]*)\s*-\s*(\d[\d,]*)/);
+  if (dashMatch) {
+    return parseInt(dashMatch[2].replace(/,/g, ''), 10);
+  }
+  
+  // Handle "1000+" or "10000+" format → return the number
+  const plusMatch = str.match(/(\d[\d,]*)\+/);
+  if (plusMatch) {
+    return parseInt(plusMatch[1].replace(/,/g, ''), 10);
+  }
+  
+  // Single number (handles commas like "26,000")
+  const singleMatch = str.match(/^(\d[\d,]*)$/);
+  if (singleMatch) {
+    return parseInt(singleMatch[1].replace(/,/g, ''), 10);
+  }
+  
+  // Extract first number as last resort
+  const anyMatch = str.match(/(\d[\d,]*)/);
+  if (anyMatch) {
+    return parseInt(anyMatch[1].replace(/,/g, ''), 10);
   }
   
   return undefined;
