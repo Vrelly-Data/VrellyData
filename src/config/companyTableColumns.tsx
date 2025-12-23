@@ -1,5 +1,6 @@
 import { CompanyEntity } from '@/types/audience';
 import { ColumnConfig } from '@/types/tableColumns';
+import { employeeCountToRange } from '@/lib/companyExtraction';
 
 export const COMPANY_COLUMNS: ColumnConfig<CompanyEntity>[] = [
   {
@@ -26,7 +27,7 @@ export const COMPANY_COLUMNS: ColumnConfig<CompanyEntity>[] = [
     visible: true,
     defaultVisible: true,
     sortable: true,
-    renderCell: (value) => value?.toLocaleString() || '-'
+    renderCell: (value, record) => record.companySize || employeeCountToRange(value) || '-'
   },
   {
     id: 'location',

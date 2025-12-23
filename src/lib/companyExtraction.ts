@@ -1,6 +1,23 @@
 import { PersonEntity, CompanyEntity } from '@/types/audience';
 
 /**
+ * Convert an exact employee count to a standardized range string
+ * Standard ranges: 1-10, 11-50, 51-200, 201-500, 501-1000, 1001-5000, 5001-10000, 10000+
+ */
+export function employeeCountToRange(count: number | undefined): string | undefined {
+  if (count === undefined || count === null) return undefined;
+  
+  if (count <= 10) return '1-10';
+  if (count <= 50) return '11-50';
+  if (count <= 200) return '51-200';
+  if (count <= 500) return '201-500';
+  if (count <= 1000) return '501-1000';
+  if (count <= 5000) return '1001-5000';
+  if (count <= 10000) return '5001-10000';
+  return '10000+';
+}
+
+/**
  * Extracts company information from person entities
  * Deduplicates by company name (case-insensitive)
  */
@@ -40,6 +57,7 @@ export function extractCompaniesFromPeople(people: PersonEntity[]): CompanyEntit
     }
     
     // Create new company entity
+    const parsedCount = person.companySize ? parseEmployeeCount(person.companySize) : undefined;
     const company: CompanyEntity = {
       id: `company-${companyKey}-${Date.now()}-${index}`,
       name: person.company,
@@ -50,7 +68,8 @@ export function extractCompaniesFromPeople(people: PersonEntity[]): CompanyEntit
       state: person.state,
       country: person.country,
       description: person.companyDescription,
-      employeeCount: person.companySize ? parseEmployeeCount(person.companySize) : undefined,
+      employeeCount: parsedCount,
+      companySize: person.companySize || employeeCountToRange(parsedCount),
       technologies: person.technologies,
       linkedin: person.companyLinkedin,
       phone: person.companyPhone,

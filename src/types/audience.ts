@@ -91,6 +91,7 @@ export interface CompanyEntity {
   domain?: string;
   industry?: string;
   employeeCount?: number;
+  companySize?: string;  // Display range like "51-200"
   revenue?: string;
   location?: string;
   technologies?: string[];
