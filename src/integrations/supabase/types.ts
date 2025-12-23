@@ -931,6 +931,10 @@ export type Database = {
         }
         Returns: string
       }
+      parse_employee_count_upper: {
+        Args: { size_str: string }
+        Returns: number
+      }
       reset_daily_credits_if_needed: {
         Args: { p_user_id: string }
         Returns: undefined
