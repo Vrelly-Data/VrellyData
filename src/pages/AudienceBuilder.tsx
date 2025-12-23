@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -38,6 +39,7 @@ import { useEffect } from 'react';
 
 export default function AudienceBuilder() {
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   const { 
     currentType, 
     setCurrentType, 
@@ -620,19 +622,54 @@ export default function AudienceBuilder() {
       // Save the actual records to people_records/company_records
       await saveRecords(uniqueResults, currentType, 'export');
 
+      // Create a list for this audience
+      const { data: newList, error: listError } = await supabase
+        .from('lists')
+        .insert({
+          name: audienceName,
+          description: `Auto-generated from audience "${audienceName}"`,
+          entity_type: currentType,
+          team_id: membership.team_id,
+          created_by: user.id,
+        })
+        .select()
+        .single();
+
+      if (listError) throw listError;
+
+      // Add all records to the list in batches
+      const batchSize = 500;
+      for (let i = 0; i < uniqueResults.length; i += batchSize) {
+        const batch = uniqueResults.slice(i, i + batchSize).map(record => ({
+          list_id: newList.id,
+          entity_external_id: record.id,
+          entity_data: JSON.parse(JSON.stringify(record)),
+          added_by: user.id,
+        }));
+        
+        const { error: itemsError } = await supabase
+          .from('list_items')
+          .insert(batch);
+        
+        if (itemsError) throw itemsError;
+      }
+
+      // Invalidate lists cache to refresh UI
+      queryClient.invalidateQueries({ queryKey: ['lists', currentType] });
+
       // Log audit event
       await logAuditEvent({
         action: 'save_audience',
         entityType: currentType,
         entityCount: uniqueResults.length,
-        metadata: { audienceName, filters: filters || {} },
+        metadata: { audienceName, filters: filters || {}, listId: newList.id },
       });
 
       setShowSaveAudienceDialog(false);
       
       toast({
         title: 'Audience saved',
-        description: `"${audienceName}" has been saved with ${uniqueResults.length.toLocaleString()} records. ${uniqueResults.length.toLocaleString()} credits deducted.`,
+        description: `"${audienceName}" has been saved with ${uniqueResults.length.toLocaleString()} records and added to a new list.`,
       });
 
     } catch (error: any) {
