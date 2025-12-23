@@ -139,6 +139,11 @@ export function mapFreeDataToPerson(record: {
     return String(value);
   };
 
+  // Parse employee count and compute standardized range for company size
+  const rawCompanySize = extractFirst(data.companySize) || extractFirst(data.employeeCount);
+  const parsedCount = parseEmployeeCountFromData(rawCompanySize);
+  const computedCompanySize = employeeCountToRange(parsedCount);
+
   return {
     id: record.entity_external_id,
     name: data.name || `${data.firstName || ''} ${data.lastName || ''}`.trim() || 'Unknown',
@@ -149,7 +154,7 @@ export function mapFreeDataToPerson(record: {
     department: extractFirst(data.department),
     location: extractFirst(data.location) || extractFirst(data.city),
     company: extractFirst(data.company),
-    companySize: extractFirst(data.companySize),
+    companySize: computedCompanySize,
     companyDescription: data.companyDescription || data.description,
     industry: extractFirst(data.industry),
     technologies: Array.isArray(data.technologies) ? data.technologies : [],
@@ -189,6 +194,63 @@ export function mapFreeDataToPerson(record: {
 }
 
 /**
+ * Parse employee count from various formats and return upper bound
+ */
+function parseEmployeeCountFromData(sizeStr: string | undefined): number | undefined {
+  if (!sizeStr) return undefined;
+  
+  const str = String(sizeStr).trim();
+  
+  // Handle "26 to 50" format → extract upper bound (50)
+  const toMatch = str.match(/(\d[\d,]*)\s+to\s+(\d[\d,]*)/i);
+  if (toMatch) {
+    return parseInt(toMatch[2].replace(/,/g, ''), 10);
+  }
+  
+  // Handle "51-200" format → extract upper bound (200)
+  const dashMatch = str.match(/(\d[\d,]*)\s*-\s*(\d[\d,]*)/);
+  if (dashMatch) {
+    return parseInt(dashMatch[2].replace(/,/g, ''), 10);
+  }
+  
+  // Handle "1000+" format
+  const plusMatch = str.match(/(\d[\d,]*)\+/);
+  if (plusMatch) {
+    return parseInt(plusMatch[1].replace(/,/g, ''), 10);
+  }
+  
+  // Single number
+  const singleMatch = str.match(/^(\d[\d,]*)$/);
+  if (singleMatch) {
+    return parseInt(singleMatch[1].replace(/,/g, ''), 10);
+  }
+  
+  // Extract any number as fallback
+  const anyMatch = str.match(/(\d[\d,]*)/);
+  if (anyMatch) {
+    return parseInt(anyMatch[1].replace(/,/g, ''), 10);
+  }
+  
+  return undefined;
+}
+
+/**
+ * Convert employee count to standardized range string
+ */
+function employeeCountToRange(count: number | undefined): string | undefined {
+  if (count === undefined || count === null) return undefined;
+  
+  if (count <= 10) return '1-10';
+  if (count <= 50) return '11-50';
+  if (count <= 200) return '51-200';
+  if (count <= 500) return '201-500';
+  if (count <= 1000) return '501-1000';
+  if (count <= 5000) return '1001-5000';
+  if (count <= 10000) return '5001-10000';
+  return '10000+';
+}
+
+/**
  * Map a free_data record to CompanyEntity
  */
 export function mapFreeDataToCompany(record: { 
@@ -206,12 +268,18 @@ export function mapFreeDataToCompany(record: {
     return String(value);
   };
 
+  // Parse employee count from companySize or employeeCount field
+  const rawSize = extractFirst(data.companySize) || extractFirst(data.employeeCount);
+  const parsedCount = parseEmployeeCountFromData(rawSize);
+  const computedRange = employeeCountToRange(parsedCount);
+
   return {
     id: record.entity_external_id,
     name: extractFirst(data.name) || extractFirst(data.company) || 'Unknown',
     domain: extractFirst(data.domain) || extractFirst(data.website),
     industry: extractFirst(data.industry),
-    employeeCount: data.employeeCount ? Number(data.employeeCount) : undefined,
+    employeeCount: parsedCount,
+    companySize: computedRange,
     revenue: extractFirst(data.companyRevenue) || extractFirst(data.revenue),
     location: extractFirst(data.location) || extractFirst(data.companyCity) || extractFirst(data.city),
     technologies: Array.isArray(data.technologies) ? data.technologies : [],
