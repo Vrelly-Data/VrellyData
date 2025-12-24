@@ -12,9 +12,15 @@ function evaluateCondition(record: RecordEntity, condition: FilterCondition): bo
   
   switch (condition.operator) {
     case 'equals':
+      if (typeof value === 'string' && typeof conditionValue === 'string') {
+        return value.toLowerCase() === conditionValue.toLowerCase();
+      }
       return value === conditionValue;
     
     case 'not_equals':
+      if (typeof value === 'string' && typeof conditionValue === 'string') {
+        return value.toLowerCase() !== conditionValue.toLowerCase();
+      }
       return value !== conditionValue;
     
     case 'contains':
@@ -56,10 +62,22 @@ function evaluateCondition(record: RecordEntity, condition: FilterCondition): bo
     
     case 'in':
       if (!Array.isArray(conditionValue)) return false;
+      if (typeof value === 'string') {
+        const lowerValue = value.toLowerCase();
+        return conditionValue.some(v => 
+          typeof v === 'string' ? v.toLowerCase() === lowerValue : v === value
+        );
+      }
       return conditionValue.includes(value);
     
     case 'not_in':
       if (!Array.isArray(conditionValue)) return true;
+      if (typeof value === 'string') {
+        const lowerValue = value.toLowerCase();
+        return !conditionValue.some(v => 
+          typeof v === 'string' ? v.toLowerCase() === lowerValue : v === value
+        );
+      }
       return !conditionValue.includes(value);
     
     case 'is_empty':
