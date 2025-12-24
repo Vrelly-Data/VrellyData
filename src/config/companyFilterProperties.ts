@@ -42,14 +42,6 @@ export const COMPANY_FILTER_PROPERTIES: PropertyDefinition[] = [
   
   // Company Size & Structure
   {
-    id: 'num_employees',
-    label: '# Employees',
-    type: 'number',
-    category: 'Company Size',
-    operators: ['equals', 'not_equals', 'less_than', 'greater_than', 'less_than_or_equal', 'greater_than_or_equal', 'between'],
-    placeholder: 'Enter number'
-  },
-  {
     id: 'company_size',
     label: 'Company Size',
     type: 'multiselect',
@@ -346,22 +338,6 @@ export const COMPANY_FILTER_PROPERTIES: PropertyDefinition[] = [
   
   // Company Profile
   {
-    id: 'account_owner',
-    label: 'Account Owner',
-    type: 'multiselect',
-    category: 'Company Profile',
-    operators: ['in', 'not_in', 'is_known', 'is_unknown'],
-    options: []
-  },
-  {
-    id: 'short_description',
-    label: 'Short Description',
-    type: 'text',
-    category: 'Company Profile',
-    operators: ['contains', 'not_contains', 'is_empty', 'is_not_empty'],
-    placeholder: 'Search description'
-  },
-  {
     id: 'founded_year',
     label: 'Founded Year',
     type: 'number',
@@ -383,21 +359,6 @@ export const COMPANY_FILTER_PROPERTIES: PropertyDefinition[] = [
     category: 'Company Profile',
     operators: ['in', 'not_in', 'is_empty', 'is_not_empty'],
     options: []
-  },
-  {
-    id: 'apollo_account_id',
-    label: 'Apollo Account ID',
-    type: 'text',
-    category: 'Company Profile',
-    operators: ['equals', 'is_empty', 'is_not_empty'],
-    placeholder: 'Enter Apollo ID'
-  },
-  {
-    id: 'b2b_ecommerce',
-    label: 'B2B eCommerce?',
-    type: 'boolean',
-    category: 'Company Profile',
-    operators: ['equals'],
   },
   
   // Time-based
