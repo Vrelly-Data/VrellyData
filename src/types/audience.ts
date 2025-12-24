@@ -80,6 +80,7 @@ export interface PersonEntity {
   companyRevenue?: string;
   companySic?: string;
   companyNaics?: string;
+  keywords?: string[];              // Tags/keywords associated with the person
   
   customFields?: Record<string, string>; // For unmapped CSV columns
   isUnlocked?: boolean;            // Track if contact info has been unlocked
@@ -107,6 +108,7 @@ export interface CompanyEntity {
   sic?: string;                    // Standard Industrial Classification
   naics?: string;                  // North American Industry Classification
   companyAddress?: string;         // Full street address for the company
+  keywords?: string[];              // Tags/keywords associated with the company
   customFields?: Record<string, string>; // For unmapped CSV columns
   isUnlocked?: boolean;            // Track if contact info has been unlocked
 }

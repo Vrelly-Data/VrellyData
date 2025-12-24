@@ -400,6 +400,9 @@ export function transformImportData(
           case 'technologies':
             entity.technologies = trimmedValue.split(',').map(t => t.trim()).filter(Boolean);
             break;
+          case 'keywords':
+            entity.keywords = trimmedValue.split(',').map(k => k.trim()).filter(Boolean);
+            break;
         }
       });
       
@@ -519,6 +522,9 @@ export function transformImportData(
             break;
           case 'companyAddress':
             entity.companyAddress = trimmedValue;
+            break;
+          case 'keywords':
+            entity.keywords = trimmedValue.split(',').map(k => k.trim()).filter(Boolean);
             break;
         }
       });

@@ -205,6 +205,11 @@ export function mapFreeDataToPerson(record: {
     skills: extractFirst(data.skills),
     interests: extractFirst(data.interests),
     educationHistory: extractFirst(data.educationHistory) || extractFirst(data.education),
+    keywords: Array.isArray(data.keywords) 
+      ? data.keywords 
+      : (typeof data.keywords === 'string' && data.keywords 
+          ? data.keywords.split(',').map((k: string) => k.trim()).filter(Boolean) 
+          : []),
     customFields: data.customFields || {},
     isUnlocked: false,
   };
@@ -329,6 +334,11 @@ export function mapFreeDataToCompany(record: {
     sic: extractFirst(data.companySic) || extractFirst(data.sic),
     naics: extractFirst(data.companyNaics) || extractFirst(data.naics),
     companyAddress: extractFirst(data.companyAddress),
+    keywords: Array.isArray(data.keywords) 
+      ? data.keywords 
+      : (typeof data.keywords === 'string' && data.keywords 
+          ? data.keywords.split(',').map((k: string) => k.trim()).filter(Boolean) 
+          : []),
     customFields: data.customFields || {},
     isUnlocked: false,
   };

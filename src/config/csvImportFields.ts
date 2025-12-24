@@ -169,6 +169,11 @@ export const PERSON_IMPORT_FIELDS: SystemField[] = [
     aliases: ['technologies', 'tech stack', 'tools', 'platforms', 'technology', 'tech', 'software used']
   },
   {
+    id: 'keywords',
+    label: 'Keywords',
+    aliases: ['keywords', 'tags', 'labels', 'keyword', 'tag']
+  },
+  {
     id: 'custom',
     label: 'Custom Field (Keep Original Name)',
     required: false,
@@ -272,6 +277,11 @@ export const COMPANY_IMPORT_FIELDS: SystemField[] = [
     id: 'companyAddress',
     label: 'Company Address',
     aliases: ['company address', 'company street', 'company street address', 'hq address', 'headquarters address', 'office address', 'business address']
+  },
+  {
+    id: 'keywords',
+    label: 'Company Keywords',
+    aliases: ['keywords', 'tags', 'labels', 'keyword', 'tag', 'company keywords', 'company tags']
   },
   {
     id: 'custom',
