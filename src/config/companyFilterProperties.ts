@@ -57,7 +57,23 @@ export const COMPANY_FILTER_PROPERTIES: PropertyDefinition[] = [
     type: 'multiselect',
     category: 'Industry & Classification',
     operators: ['in', 'not_in', 'is_known', 'is_unknown'],
-    options: []
+    options: [
+      { label: 'Software', value: 'Software' },
+      { label: 'Technology', value: 'Technology' },
+      { label: 'Healthcare', value: 'Healthcare' },
+      { label: 'Finance', value: 'Finance' },
+      { label: 'Manufacturing', value: 'Manufacturing' },
+      { label: 'Retail', value: 'Retail' },
+      { label: 'E-commerce', value: 'E-commerce' },
+      { label: 'Education', value: 'Education' },
+      { label: 'Marketing', value: 'Marketing' },
+      { label: 'Consulting', value: 'Consulting' },
+      { label: 'Real Estate', value: 'Real Estate' },
+      { label: 'Media', value: 'Media' },
+      { label: 'Telecommunications', value: 'Telecommunications' },
+      { label: 'Insurance', value: 'Insurance' },
+      { label: 'Construction', value: 'Construction' },
+    ]
   },
   {
     id: 'sic_codes',
