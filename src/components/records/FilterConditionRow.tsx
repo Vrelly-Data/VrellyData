@@ -25,6 +25,7 @@ import { TextInput } from './filter-inputs/TextInput';
 import { NumberInput } from './filter-inputs/NumberInput';
 import { SelectInput } from './filter-inputs/SelectInput';
 import { MultiSelectInput } from './filter-inputs/MultiSelectInput';
+import { ComboMultiSelectInput } from './filter-inputs/ComboMultiSelectInput';
 import { BooleanInput } from './filter-inputs/BooleanInput';
 import { CurrencyInput } from './filter-inputs/CurrencyInput';
 import { DateInput } from './filter-inputs/DateInput';
@@ -119,11 +120,11 @@ export function FilterConditionRow({ condition, properties, onUpdate, onRemove }
         );
       case 'multiselect':
         return (
-          <MultiSelectInput
+          <ComboMultiSelectInput
             value={condition.value}
             onChange={handleValueChange}
             options={selectedProperty.options || []}
-            placeholder={selectedProperty.placeholder}
+            placeholder={selectedProperty.placeholder || 'Type or select...'}
           />
         );
       case 'boolean':
