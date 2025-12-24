@@ -164,6 +164,11 @@ export const PERSON_IMPORT_FIELDS: SystemField[] = [
     aliases: ['education', 'education history', 'school', 'university', 'college', 'degree', 'alma mater', 'educational background']
   },
   {
+    id: 'technologies',
+    label: 'Technologies',
+    aliases: ['technologies', 'tech stack', 'tools', 'platforms', 'technology', 'tech', 'software used']
+  },
+  {
     id: 'custom',
     label: 'Custom Field (Keep Original Name)',
     required: false,
@@ -252,6 +257,21 @@ export const COMPANY_IMPORT_FIELDS: SystemField[] = [
     id: 'companyNaics',
     label: 'Company NAICS',
     aliases: ['naics', 'naics code', 'north american industry classification', 'naics number']
+  },
+  {
+    id: 'technologies',
+    label: 'Company Technologies',
+    aliases: ['technologies', 'tech stack', 'tools', 'platforms', 'technology', 'tech', 'software used', 'company technologies']
+  },
+  {
+    id: 'fundingStage',
+    label: 'Funding / Funding Stage',
+    aliases: ['funding', 'funding stage', 'funding round', 'investment stage', 'series', 'funding status', 'funding level']
+  },
+  {
+    id: 'companyAddress',
+    label: 'Company Address',
+    aliases: ['company address', 'company street', 'company street address', 'hq address', 'headquarters address', 'office address', 'business address']
   },
   {
     id: 'custom',

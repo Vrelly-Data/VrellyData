@@ -170,7 +170,11 @@ export function mapFreeDataToPerson(record: {
     companySize: computedCompanySize,
     companyDescription: data.companyDescription || data.description,
     industry: extractFirst(data.industry),
-    technologies: Array.isArray(data.technologies) ? data.technologies : [],
+    technologies: Array.isArray(data.technologies) 
+      ? data.technologies 
+      : (typeof data.technologies === 'string' && data.technologies 
+          ? data.technologies.split(',').map((t: string) => t.trim()).filter(Boolean) 
+          : []),
     email: extractFirst(data.email) || extractFirst(data.businessEmail) || extractFirst(data.personalEmail),
     personalEmail: extractFirst(data.personalEmail),
     phone: extractFirst(data.phone),
@@ -308,8 +312,12 @@ export function mapFreeDataToCompany(record: {
     companySize: computedRange,
     revenue: extractFirst(data.companyRevenue) || extractFirst(data.revenue),
     location: extractFirst(data.location) || extractFirst(data.companyCity) || extractFirst(data.city),
-    technologies: Array.isArray(data.technologies) ? data.technologies : [],
-    fundingStage: extractFirst(data.fundingStage),
+    technologies: Array.isArray(data.technologies) 
+      ? data.technologies 
+      : (typeof data.technologies === 'string' && data.technologies 
+          ? data.technologies.split(',').map((t: string) => t.trim()).filter(Boolean) 
+          : []),
+    fundingStage: extractFirst(data.fundingStage) || extractFirst(data.funding),
     description: extractFirst(data.companyDescription) || extractFirst(data.description),
     linkedin: extractFirst(data.linkedin) || extractFirst(data.companyLinkedin),
     email: extractFirst(data.email) || extractFirst(data.companyEmail),
@@ -320,6 +328,7 @@ export function mapFreeDataToCompany(record: {
     zipCode: extractFirst(data.companyZipCode) || extractFirst(data.zipCode),
     sic: extractFirst(data.companySic) || extractFirst(data.sic),
     naics: extractFirst(data.companyNaics) || extractFirst(data.naics),
+    companyAddress: extractFirst(data.companyAddress),
     customFields: data.customFields || {},
     isUnlocked: false,
   };
