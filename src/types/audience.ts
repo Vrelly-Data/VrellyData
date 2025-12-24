@@ -106,6 +106,7 @@ export interface CompanyEntity {
   zipCode?: string;
   sic?: string;                    // Standard Industrial Classification
   naics?: string;                  // North American Industry Classification
+  companyAddress?: string;         // Full street address for the company
   customFields?: Record<string, string>; // For unmapped CSV columns
   isUnlocked?: boolean;            // Track if contact info has been unlocked
 }

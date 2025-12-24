@@ -397,6 +397,9 @@ export function transformImportData(
           case 'domain':
             entity.domain = trimmedValue;
             break;
+          case 'technologies':
+            entity.technologies = trimmedValue.split(',').map(t => t.trim()).filter(Boolean);
+            break;
         }
       });
       
@@ -506,6 +509,16 @@ export function transformImportData(
           case 'naics':
           case 'companyNaics':
             entity.naics = trimmedValue;
+            break;
+          case 'technologies':
+            entity.technologies = trimmedValue.split(',').map(t => t.trim()).filter(Boolean);
+            break;
+          case 'fundingStage':
+          case 'funding':
+            entity.fundingStage = trimmedValue;
+            break;
+          case 'companyAddress':
+            entity.companyAddress = trimmedValue;
             break;
         }
       });
