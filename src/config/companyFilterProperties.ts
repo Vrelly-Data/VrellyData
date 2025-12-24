@@ -5,17 +5,17 @@ export const COMPANY_FILTER_PROPERTIES: PropertyDefinition[] = [
   {
     id: 'company_name',
     label: 'Company Name',
-    type: 'text',
+    type: 'multiselect',
     category: 'Basic Information',
-    operators: ['equals', 'not_equals', 'contains', 'not_contains', 'starts_with', 'ends_with', 'is_empty', 'is_not_empty'],
-    placeholder: 'Enter company name'
+    operators: ['in', 'not_in', 'is_empty', 'is_not_empty'],
+    options: []
   },
   {
     id: 'account_stage',
     label: 'Account Stage',
-    type: 'select',
+    type: 'multiselect',
     category: 'Basic Information',
-    operators: ['equals', 'not_equals', 'in', 'not_in', 'is_known', 'is_unknown'],
+    operators: ['in', 'not_in', 'is_known', 'is_unknown'],
     options: [
       { label: 'Lead', value: 'lead' },
       { label: 'Prospect', value: 'prospect' },
@@ -31,6 +31,14 @@ export const COMPANY_FILTER_PROPERTIES: PropertyDefinition[] = [
     operators: ['in', 'not_in'],
     options: []
   },
+  {
+    id: 'keywords',
+    label: 'Keywords',
+    type: 'multiselect',
+    category: 'Basic Information',
+    operators: ['in', 'not_in', 'is_empty', 'is_not_empty'],
+    options: []
+  },
   
   // Company Size & Structure
   {
@@ -40,6 +48,23 @@ export const COMPANY_FILTER_PROPERTIES: PropertyDefinition[] = [
     category: 'Company Size',
     operators: ['equals', 'not_equals', 'less_than', 'greater_than', 'less_than_or_equal', 'greater_than_or_equal', 'between'],
     placeholder: 'Enter number'
+  },
+  {
+    id: 'company_size',
+    label: 'Company Size',
+    type: 'multiselect',
+    category: 'Company Size',
+    operators: ['in', 'not_in', 'is_known', 'is_unknown'],
+    options: [
+      { label: '1-10', value: '1-10' },
+      { label: '11-50', value: '11-50' },
+      { label: '51-200', value: '51-200' },
+      { label: '201-500', value: '201-500' },
+      { label: '501-1000', value: '501-1000' },
+      { label: '1001-5000', value: '1001-5000' },
+      { label: '5001-10000', value: '5001-10000' },
+      { label: '10001+', value: '10001+' },
+    ]
   },
   {
     id: 'number_of_retail_locations',
@@ -78,26 +103,18 @@ export const COMPANY_FILTER_PROPERTIES: PropertyDefinition[] = [
   {
     id: 'sic_codes',
     label: 'SIC Codes',
-    type: 'text',
+    type: 'multiselect',
     category: 'Industry & Classification',
-    operators: ['equals', 'contains', 'is_empty', 'is_not_empty'],
-    placeholder: 'Enter SIC code'
+    operators: ['in', 'not_in', 'is_empty', 'is_not_empty'],
+    options: []
   },
   {
     id: 'naics_codes',
     label: 'NAICS Codes',
-    type: 'text',
+    type: 'multiselect',
     category: 'Industry & Classification',
-    operators: ['equals', 'contains', 'is_empty', 'is_not_empty'],
-    placeholder: 'Enter NAICS code'
-  },
-  {
-    id: 'keywords',
-    label: 'Keywords',
-    type: 'text',
-    category: 'Industry & Classification',
-    operators: ['contains', 'not_contains', 'is_empty', 'is_not_empty'],
-    placeholder: 'Enter keywords'
+    operators: ['in', 'not_in', 'is_empty', 'is_not_empty'],
+    options: []
   },
   
   // Contact Information
@@ -154,31 +171,62 @@ export const COMPANY_FILTER_PROPERTIES: PropertyDefinition[] = [
   {
     id: 'company_city',
     label: 'Company City',
-    type: 'text',
+    type: 'multiselect',
     category: 'Location',
-    operators: ['equals', 'contains', 'in', 'not_in'],
-    placeholder: 'Enter city'
+    operators: ['in', 'not_in', 'is_empty', 'is_not_empty'],
+    options: [
+      { label: 'New York', value: 'New York' },
+      { label: 'Los Angeles', value: 'Los Angeles' },
+      { label: 'Chicago', value: 'Chicago' },
+      { label: 'San Francisco', value: 'San Francisco' },
+      { label: 'Boston', value: 'Boston' },
+      { label: 'Seattle', value: 'Seattle' },
+      { label: 'Austin', value: 'Austin' },
+      { label: 'Denver', value: 'Denver' },
+      { label: 'Miami', value: 'Miami' },
+      { label: 'Atlanta', value: 'Atlanta' },
+      { label: 'London', value: 'London' },
+      { label: 'Toronto', value: 'Toronto' },
+    ]
   },
   {
     id: 'company_state',
     label: 'Company State',
-    type: 'text',
+    type: 'multiselect',
     category: 'Location',
-    operators: ['equals', 'in', 'not_in'],
-    placeholder: 'Enter state'
+    operators: ['in', 'not_in', 'is_empty', 'is_not_empty'],
+    options: [
+      { label: 'California', value: 'California' },
+      { label: 'New York', value: 'New York' },
+      { label: 'Texas', value: 'Texas' },
+      { label: 'Florida', value: 'Florida' },
+      { label: 'Illinois', value: 'Illinois' },
+      { label: 'Pennsylvania', value: 'Pennsylvania' },
+      { label: 'Ohio', value: 'Ohio' },
+      { label: 'Georgia', value: 'Georgia' },
+      { label: 'Massachusetts', value: 'Massachusetts' },
+      { label: 'Washington', value: 'Washington' },
+      { label: 'Colorado', value: 'Colorado' },
+      { label: 'Arizona', value: 'Arizona' },
+    ]
   },
   {
     id: 'company_country',
     label: 'Company Country',
-    type: 'select',
+    type: 'multiselect',
     category: 'Location',
-    operators: ['equals', 'not_equals', 'in', 'not_in'],
+    operators: ['in', 'not_in', 'is_empty', 'is_not_empty'],
     options: [
-      { label: 'United States', value: 'US' },
-      { label: 'United Kingdom', value: 'UK' },
-      { label: 'Canada', value: 'CA' },
-      { label: 'Germany', value: 'DE' },
-      { label: 'France', value: 'FR' },
+      { label: 'United States', value: 'United States' },
+      { label: 'United Kingdom', value: 'United Kingdom' },
+      { label: 'Canada', value: 'Canada' },
+      { label: 'Germany', value: 'Germany' },
+      { label: 'France', value: 'France' },
+      { label: 'Australia', value: 'Australia' },
+      { label: 'India', value: 'India' },
+      { label: 'Brazil', value: 'Brazil' },
+      { label: 'Netherlands', value: 'Netherlands' },
+      { label: 'Spain', value: 'Spain' },
     ]
   },
   {
@@ -186,7 +234,7 @@ export const COMPANY_FILTER_PROPERTIES: PropertyDefinition[] = [
     label: 'Company Postal Code',
     type: 'text',
     category: 'Location',
-    operators: ['equals', 'starts_with'],
+    operators: ['equals', 'starts_with', 'is_empty', 'is_not_empty'],
     placeholder: 'Enter postal code'
   },
   {
@@ -205,7 +253,23 @@ export const COMPANY_FILTER_PROPERTIES: PropertyDefinition[] = [
     type: 'multiselect',
     category: 'Technology',
     operators: ['in', 'not_in', 'is_empty', 'is_not_empty'],
-    options: []
+    options: [
+      { label: 'React', value: 'React' },
+      { label: 'Salesforce', value: 'Salesforce' },
+      { label: 'HubSpot', value: 'HubSpot' },
+      { label: 'AWS', value: 'AWS' },
+      { label: 'Google Analytics', value: 'Google Analytics' },
+      { label: 'Shopify', value: 'Shopify' },
+      { label: 'WordPress', value: 'WordPress' },
+      { label: 'Slack', value: 'Slack' },
+      { label: 'Zoom', value: 'Zoom' },
+      { label: 'Microsoft 365', value: 'Microsoft 365' },
+      { label: 'Zendesk', value: 'Zendesk' },
+      { label: 'Mailchimp', value: 'Mailchimp' },
+      { label: 'Intercom', value: 'Intercom' },
+      { label: 'Stripe', value: 'Stripe' },
+      { label: 'Segment', value: 'Segment' },
+    ]
   },
   
   // Financial Information
@@ -220,11 +284,22 @@ export const COMPANY_FILTER_PROPERTIES: PropertyDefinition[] = [
   },
   {
     id: 'latest_funding',
-    label: 'Latest Funding',
-    type: 'text',
+    label: 'Latest Funding Stage',
+    type: 'multiselect',
     category: 'Financial Information',
-    operators: ['equals', 'contains'],
-    placeholder: 'e.g., Series A'
+    operators: ['in', 'not_in', 'is_known', 'is_unknown'],
+    options: [
+      { label: 'Pre-Seed', value: 'Pre-Seed' },
+      { label: 'Seed', value: 'Seed' },
+      { label: 'Series A', value: 'Series A' },
+      { label: 'Series B', value: 'Series B' },
+      { label: 'Series C', value: 'Series C' },
+      { label: 'Series D', value: 'Series D' },
+      { label: 'Series E+', value: 'Series E+' },
+      { label: 'IPO', value: 'IPO' },
+      { label: 'Acquired', value: 'Acquired' },
+      { label: 'Private Equity', value: 'Private Equity' },
+    ]
   },
   {
     id: 'latest_funding_amount',
@@ -254,21 +329,28 @@ export const COMPANY_FILTER_PROPERTIES: PropertyDefinition[] = [
   },
   {
     id: 'revenue',
-    label: 'Revenue',
-    type: 'currency',
+    label: 'Revenue Range',
+    type: 'multiselect',
     category: 'Financial Information',
-    operators: ['equals', 'less_than', 'greater_than', 'between'],
-    placeholder: 'Enter amount',
-    unit: 'USD'
+    operators: ['in', 'not_in', 'is_known', 'is_unknown'],
+    options: [
+      { label: 'Under $1M', value: 'Under $1M' },
+      { label: '$1M - $10M', value: '$1M - $10M' },
+      { label: '$10M - $50M', value: '$10M - $50M' },
+      { label: '$50M - $100M', value: '$50M - $100M' },
+      { label: '$100M - $500M', value: '$100M - $500M' },
+      { label: '$500M - $1B', value: '$500M - $1B' },
+      { label: '$1B+', value: '$1B+' },
+    ]
   },
   
   // Company Profile
   {
     id: 'account_owner',
     label: 'Account Owner',
-    type: 'select',
+    type: 'multiselect',
     category: 'Company Profile',
-    operators: ['equals', 'not_equals', 'is_known', 'is_unknown'],
+    operators: ['in', 'not_in', 'is_known', 'is_unknown'],
     options: []
   },
   {
@@ -297,10 +379,10 @@ export const COMPANY_FILTER_PROPERTIES: PropertyDefinition[] = [
   {
     id: 'subsidiary_of',
     label: 'Subsidiary of',
-    type: 'text',
+    type: 'multiselect',
     category: 'Company Profile',
-    operators: ['equals', 'contains', 'is_empty', 'is_not_empty'],
-    placeholder: 'Enter parent company'
+    operators: ['in', 'not_in', 'is_empty', 'is_not_empty'],
+    options: []
   },
   {
     id: 'apollo_account_id',
