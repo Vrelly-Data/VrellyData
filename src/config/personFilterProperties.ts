@@ -19,7 +19,7 @@ export const PERSON_FILTER_PROPERTIES: PropertyDefinition[] = [
     placeholder: 'Enter email'
   },
   {
-    id: 'personal_email',
+    id: 'personalEmail',
     label: 'Personal Email',
     type: 'text',
     category: 'Basic Information',
@@ -27,7 +27,7 @@ export const PERSON_FILTER_PROPERTIES: PropertyDefinition[] = [
     placeholder: 'Enter personal email'
   },
   {
-    id: 'business_email',
+    id: 'businessEmail',
     label: 'Business Email',
     type: 'text',
     category: 'Basic Information',
@@ -133,7 +133,7 @@ export const PERSON_FILTER_PROPERTIES: PropertyDefinition[] = [
     options: []
   },
   {
-    id: 'company_size',
+    id: 'companySize',
     label: 'Company Size',
     type: 'multiselect',
     category: 'Company Information',
@@ -146,7 +146,7 @@ export const PERSON_FILTER_PROPERTIES: PropertyDefinition[] = [
       { label: '501-1000', value: '501-1000' },
       { label: '1001-5000', value: '1001-5000' },
       { label: '5001-10000', value: '5001-10000' },
-      { label: '10001+', value: '10001+' },
+      { label: '10000+', value: '10000+' },
     ]
   },
   {
@@ -174,7 +174,7 @@ export const PERSON_FILTER_PROPERTIES: PropertyDefinition[] = [
     ]
   },
   {
-    id: 'company_linkedin',
+    id: 'companyLinkedin',
     label: 'Company LinkedIn',
     type: 'url',
     category: 'Company Information',
@@ -182,7 +182,7 @@ export const PERSON_FILTER_PROPERTIES: PropertyDefinition[] = [
     placeholder: 'Enter company LinkedIn URL'
   },
   {
-    id: 'company_phone',
+    id: 'companyPhone',
     label: 'Company Phone',
     type: 'text',
     category: 'Company Information',
@@ -279,7 +279,7 @@ export const PERSON_FILTER_PROPERTIES: PropertyDefinition[] = [
     placeholder: 'Enter LinkedIn URL'
   },
   {
-    id: 'twitter_url',
+    id: 'twitterUrl',
     label: 'Twitter URL',
     type: 'url',
     category: 'Social',
@@ -287,7 +287,7 @@ export const PERSON_FILTER_PROPERTIES: PropertyDefinition[] = [
     placeholder: 'Enter Twitter URL'
   },
   {
-    id: 'facebook_url',
+    id: 'facebookUrl',
     label: 'Facebook URL',
     type: 'url',
     category: 'Social',
@@ -317,7 +317,7 @@ export const PERSON_FILTER_PROPERTIES: PropertyDefinition[] = [
     ]
   },
   {
-    id: 'income_range',
+    id: 'incomeRange',
     label: 'Income Range',
     type: 'multiselect',
     category: 'Demographics',
@@ -333,7 +333,7 @@ export const PERSON_FILTER_PROPERTIES: PropertyDefinition[] = [
     ]
   },
   {
-    id: 'net_worth',
+    id: 'netWorth',
     label: 'Net Worth',
     type: 'multiselect',
     category: 'Demographics',
@@ -449,7 +449,7 @@ export const PERSON_FILTER_PROPERTIES: PropertyDefinition[] = [
   
   // Time-based
   {
-    id: 'added_on',
+    id: 'addedOn',
     label: 'Added on',
     type: 'date',
     category: 'Time-based',
