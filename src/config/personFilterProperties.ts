@@ -63,10 +63,10 @@ export const PERSON_FILTER_PROPERTIES: PropertyDefinition[] = [
   {
     id: 'title',
     label: 'Job Title',
-    type: 'text',
+    type: 'tags',
     category: 'Job Information',
-    operators: ['contains', 'not_contains', 'equals', 'is_empty', 'is_not_empty'],
-    placeholder: 'Search job titles...'
+    operators: ['in', 'not_in', 'is_empty', 'is_not_empty'],
+    placeholder: 'Type job title and press Enter...'
   },
   {
     id: 'seniority',
