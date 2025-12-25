@@ -38,9 +38,10 @@ interface FilterConditionRowProps {
   properties: PropertyDefinition[];
   onUpdate: (updates: Partial<FilterCondition>) => void;
   onRemove: () => void;
+  onApply?: () => void;
 }
 
-export function FilterConditionRow({ condition, properties, onUpdate, onRemove }: FilterConditionRowProps) {
+export function FilterConditionRow({ condition, properties, onUpdate, onRemove, onApply }: FilterConditionRowProps) {
   const [propertyOpen, setPropertyOpen] = useState(false);
   
   const selectedProperty = properties.find(p => p.id === condition.property);
@@ -81,6 +82,7 @@ export function FilterConditionRow({ condition, properties, onUpdate, onRemove }
             value={condition.value}
             onChange={handleValueChange}
             placeholder={selectedProperty.placeholder}
+            onEnterPress={onApply}
           />
         );
       case 'number':

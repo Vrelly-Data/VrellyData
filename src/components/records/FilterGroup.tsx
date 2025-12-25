@@ -9,6 +9,7 @@ interface FilterGroupProps {
   onAddCondition: (groupId: string) => void;
   onRemoveCondition: (conditionId: string) => void;
   onUpdateCondition: (conditionId: string, updates: any) => void;
+  onApply?: () => void;
 }
 
 export function FilterGroup({ 
@@ -16,7 +17,8 @@ export function FilterGroup({
   properties, 
   onAddCondition, 
   onRemoveCondition, 
-  onUpdateCondition 
+  onUpdateCondition,
+  onApply
 }: FilterGroupProps) {
   return (
     <div className="border rounded-lg p-4 space-y-3">
@@ -37,6 +39,7 @@ export function FilterGroup({
               properties={properties}
               onUpdate={(updates) => onUpdateCondition(condition.id, updates)}
               onRemove={() => onRemoveCondition(condition.id)}
+              onApply={onApply}
             />
           </div>
         ))}
@@ -67,6 +70,7 @@ export function FilterGroup({
             onAddCondition={onAddCondition}
             onRemoveCondition={onRemoveCondition}
             onUpdateCondition={onUpdateCondition}
+            onApply={onApply}
           />
         </div>
       ))}
