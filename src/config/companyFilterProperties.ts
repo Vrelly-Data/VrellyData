@@ -3,7 +3,7 @@ import { PropertyDefinition } from '@/types/filterProperties';
 export const COMPANY_FILTER_PROPERTIES: PropertyDefinition[] = [
   // Basic Information
   {
-    id: 'company_name',
+    id: 'name',
     label: 'Company Name',
     type: 'multiselect',
     category: 'Basic Information',
@@ -11,7 +11,7 @@ export const COMPANY_FILTER_PROPERTIES: PropertyDefinition[] = [
     options: []
   },
   {
-    id: 'account_stage',
+    id: 'accountStage',
     label: 'Account Stage',
     type: 'multiselect',
     category: 'Basic Information',
@@ -42,7 +42,7 @@ export const COMPANY_FILTER_PROPERTIES: PropertyDefinition[] = [
   
   // Company Size & Structure
   {
-    id: 'company_size',
+    id: 'companySize',
     label: 'Company Size',
     type: 'multiselect',
     category: 'Company Size',
@@ -55,11 +55,11 @@ export const COMPANY_FILTER_PROPERTIES: PropertyDefinition[] = [
       { label: '501-1000', value: '501-1000' },
       { label: '1001-5000', value: '1001-5000' },
       { label: '5001-10000', value: '5001-10000' },
-      { label: '10001+', value: '10001+' },
+      { label: '10000+', value: '10000+' },
     ]
   },
   {
-    id: 'number_of_retail_locations',
+    id: 'numberOfRetailLocations',
     label: 'Number of Retail Locations',
     type: 'number',
     category: 'Company Size',
@@ -93,7 +93,7 @@ export const COMPANY_FILTER_PROPERTIES: PropertyDefinition[] = [
     ]
   },
   {
-    id: 'sic_codes',
+    id: 'sicCodes',
     label: 'SIC Codes',
     type: 'multiselect',
     category: 'Industry & Classification',
@@ -101,7 +101,7 @@ export const COMPANY_FILTER_PROPERTIES: PropertyDefinition[] = [
     options: []
   },
   {
-    id: 'naics_codes',
+    id: 'naicsCodes',
     label: 'NAICS Codes',
     type: 'multiselect',
     category: 'Industry & Classification',
@@ -119,7 +119,7 @@ export const COMPANY_FILTER_PROPERTIES: PropertyDefinition[] = [
     placeholder: 'Enter website URL'
   },
   {
-    id: 'company_linkedin_url',
+    id: 'linkedinUrl',
     label: 'Company LinkedIn URL',
     type: 'url',
     category: 'Contact Information',
@@ -127,7 +127,7 @@ export const COMPANY_FILTER_PROPERTIES: PropertyDefinition[] = [
     placeholder: 'Enter LinkedIn URL'
   },
   {
-    id: 'facebook_url',
+    id: 'facebookUrl',
     label: 'Facebook URL',
     type: 'url',
     category: 'Contact Information',
@@ -135,7 +135,7 @@ export const COMPANY_FILTER_PROPERTIES: PropertyDefinition[] = [
     placeholder: 'Enter Facebook URL'
   },
   {
-    id: 'twitter_url',
+    id: 'twitterUrl',
     label: 'Twitter URL',
     type: 'url',
     category: 'Contact Information',
@@ -143,7 +143,7 @@ export const COMPANY_FILTER_PROPERTIES: PropertyDefinition[] = [
     placeholder: 'Enter Twitter URL'
   },
   {
-    id: 'company_phone',
+    id: 'phone',
     label: 'Company Phone',
     type: 'text',
     category: 'Contact Information',
@@ -153,7 +153,7 @@ export const COMPANY_FILTER_PROPERTIES: PropertyDefinition[] = [
   
   // Location
   {
-    id: 'company_street',
+    id: 'street',
     label: 'Company Street',
     type: 'text',
     category: 'Location',
@@ -161,7 +161,7 @@ export const COMPANY_FILTER_PROPERTIES: PropertyDefinition[] = [
     placeholder: 'Enter street address'
   },
   {
-    id: 'company_city',
+    id: 'city',
     label: 'Company City',
     type: 'multiselect',
     category: 'Location',
@@ -182,7 +182,7 @@ export const COMPANY_FILTER_PROPERTIES: PropertyDefinition[] = [
     ]
   },
   {
-    id: 'company_state',
+    id: 'state',
     label: 'Company State',
     type: 'multiselect',
     category: 'Location',
@@ -203,7 +203,7 @@ export const COMPANY_FILTER_PROPERTIES: PropertyDefinition[] = [
     ]
   },
   {
-    id: 'company_country',
+    id: 'country',
     label: 'Company Country',
     type: 'multiselect',
     category: 'Location',
@@ -222,7 +222,7 @@ export const COMPANY_FILTER_PROPERTIES: PropertyDefinition[] = [
     ]
   },
   {
-    id: 'company_postal_code',
+    id: 'postalCode',
     label: 'Company Postal Code',
     type: 'text',
     category: 'Location',
@@ -230,7 +230,7 @@ export const COMPANY_FILTER_PROPERTIES: PropertyDefinition[] = [
     placeholder: 'Enter postal code'
   },
   {
-    id: 'company_address',
+    id: 'address',
     label: 'Company Address',
     type: 'text',
     category: 'Location',
@@ -266,7 +266,7 @@ export const COMPANY_FILTER_PROPERTIES: PropertyDefinition[] = [
   
   // Financial Information
   {
-    id: 'total_funding',
+    id: 'totalFunding',
     label: 'Total Funding',
     type: 'currency',
     category: 'Financial Information',
@@ -275,7 +275,7 @@ export const COMPANY_FILTER_PROPERTIES: PropertyDefinition[] = [
     unit: 'USD'
   },
   {
-    id: 'latest_funding',
+    id: 'latestFunding',
     label: 'Latest Funding Stage',
     type: 'multiselect',
     category: 'Financial Information',
@@ -294,7 +294,7 @@ export const COMPANY_FILTER_PROPERTIES: PropertyDefinition[] = [
     ]
   },
   {
-    id: 'latest_funding_amount',
+    id: 'latestFundingAmount',
     label: 'Latest Funding Amount',
     type: 'currency',
     category: 'Financial Information',
@@ -303,7 +303,7 @@ export const COMPANY_FILTER_PROPERTIES: PropertyDefinition[] = [
     unit: 'USD'
   },
   {
-    id: 'last_raised_at',
+    id: 'lastRaisedAt',
     label: 'Last Raised At',
     type: 'date',
     category: 'Financial Information',
@@ -311,7 +311,7 @@ export const COMPANY_FILTER_PROPERTIES: PropertyDefinition[] = [
     placeholder: 'Select date'
   },
   {
-    id: 'annual_revenue',
+    id: 'annualRevenue',
     label: 'Annual Revenue',
     type: 'currency',
     category: 'Financial Information',
@@ -338,7 +338,7 @@ export const COMPANY_FILTER_PROPERTIES: PropertyDefinition[] = [
   
   // Company Profile
   {
-    id: 'founded_year',
+    id: 'foundedYear',
     label: 'Founded Year',
     type: 'number',
     category: 'Company Profile',
@@ -346,14 +346,14 @@ export const COMPANY_FILTER_PROPERTIES: PropertyDefinition[] = [
     placeholder: 'Enter year'
   },
   {
-    id: 'logo_url',
+    id: 'logoUrl',
     label: 'Logo URL',
     type: 'url',
     category: 'Company Profile',
     operators: ['is_empty', 'is_not_empty'],
   },
   {
-    id: 'subsidiary_of',
+    id: 'subsidiaryOf',
     label: 'Subsidiary of',
     type: 'multiselect',
     category: 'Company Profile',
@@ -363,7 +363,7 @@ export const COMPANY_FILTER_PROPERTIES: PropertyDefinition[] = [
   
   // Time-based
   {
-    id: 'added_on',
+    id: 'addedOn',
     label: 'Added on',
     type: 'date',
     category: 'Time-based',
