@@ -43,6 +43,22 @@ function evaluateCondition(record: RecordEntity, condition: FilterCondition): bo
       }
       return !String(value).toLowerCase().includes(String(conditionValue).toLowerCase());
     
+    case 'contains_any':
+      if (!Array.isArray(conditionValue)) return false;
+      if (value == null) return false;
+      const stringValueForContainsAny = String(value).toLowerCase();
+      return conditionValue.some(cv => 
+        stringValueForContainsAny.includes(String(cv).toLowerCase())
+      );
+    
+    case 'not_contains_any':
+      if (!Array.isArray(conditionValue)) return true;
+      if (value == null) return true;
+      const stringValueForNotContainsAny = String(value).toLowerCase();
+      return !conditionValue.some(cv => 
+        stringValueForNotContainsAny.includes(String(cv).toLowerCase())
+      );
+    
     case 'starts_with':
       if (value == null) return false;
       return String(value).toLowerCase().startsWith(String(conditionValue).toLowerCase());

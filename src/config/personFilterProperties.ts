@@ -65,7 +65,7 @@ export const PERSON_FILTER_PROPERTIES: PropertyDefinition[] = [
     label: 'Job Title',
     type: 'tags',
     category: 'Job Information',
-    operators: ['in', 'not_in', 'is_empty', 'is_not_empty'],
+    operators: ['contains_any', 'not_contains_any', 'is_empty', 'is_not_empty'],
     placeholder: 'Type job title and press Enter...'
   },
   {
