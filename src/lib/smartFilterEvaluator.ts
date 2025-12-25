@@ -25,10 +25,22 @@ function evaluateCondition(record: RecordEntity, condition: FilterCondition): bo
     
     case 'contains':
       if (value == null) return false;
+      // Handle array values - check if any element contains the search term
+      if (Array.isArray(value)) {
+        return value.some(v => 
+          String(v).toLowerCase().includes(String(conditionValue).toLowerCase())
+        );
+      }
       return String(value).toLowerCase().includes(String(conditionValue).toLowerCase());
     
     case 'not_contains':
       if (value == null) return true;
+      // Handle array values - check if no element contains the search term
+      if (Array.isArray(value)) {
+        return !value.some(v => 
+          String(v).toLowerCase().includes(String(conditionValue).toLowerCase())
+        );
+      }
       return !String(value).toLowerCase().includes(String(conditionValue).toLowerCase());
     
     case 'starts_with':
@@ -62,6 +74,16 @@ function evaluateCondition(record: RecordEntity, condition: FilterCondition): bo
     
     case 'in':
       if (!Array.isArray(conditionValue)) return false;
+      // If the record value is an array, check if ANY element matches ANY filter value
+      if (Array.isArray(value)) {
+        return value.some(v => 
+          conditionValue.some(cv => 
+            typeof v === 'string' && typeof cv === 'string' 
+              ? v.toLowerCase() === cv.toLowerCase()
+              : v === cv
+          )
+        );
+      }
       if (typeof value === 'string') {
         const lowerValue = value.toLowerCase();
         return conditionValue.some(v => 
@@ -72,6 +94,16 @@ function evaluateCondition(record: RecordEntity, condition: FilterCondition): bo
     
     case 'not_in':
       if (!Array.isArray(conditionValue)) return true;
+      // If the record value is an array, check if NO element matches ANY filter value
+      if (Array.isArray(value)) {
+        return !value.some(v => 
+          conditionValue.some(cv => 
+            typeof v === 'string' && typeof cv === 'string' 
+              ? v.toLowerCase() === cv.toLowerCase()
+              : v === cv
+          )
+        );
+      }
       if (typeof value === 'string') {
         const lowerValue = value.toLowerCase();
         return !conditionValue.some(v => 

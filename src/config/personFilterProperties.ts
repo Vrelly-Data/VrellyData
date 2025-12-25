@@ -53,36 +53,20 @@ export const PERSON_FILTER_PROPERTIES: PropertyDefinition[] = [
   {
     id: 'keywords',
     label: 'Keywords',
-    type: 'multiselect',
+    type: 'text',
     category: 'Basic Information',
-    operators: ['in', 'not_in', 'is_empty', 'is_not_empty'],
-    options: []
+    operators: ['contains', 'not_contains', 'is_empty', 'is_not_empty'],
+    placeholder: 'Search keywords...'
   },
   
   // Job Information
   {
     id: 'title',
     label: 'Job Title',
-    type: 'multiselect',
+    type: 'text',
     category: 'Job Information',
-    operators: ['in', 'not_in', 'is_empty', 'is_not_empty'],
-    options: [
-      { label: 'CEO', value: 'CEO' },
-      { label: 'CTO', value: 'CTO' },
-      { label: 'CFO', value: 'CFO' },
-      { label: 'COO', value: 'COO' },
-      { label: 'CMO', value: 'CMO' },
-      { label: 'VP of Sales', value: 'VP of Sales' },
-      { label: 'VP of Marketing', value: 'VP of Marketing' },
-      { label: 'VP of Engineering', value: 'VP of Engineering' },
-      { label: 'Director', value: 'Director' },
-      { label: 'Manager', value: 'Manager' },
-      { label: 'Software Engineer', value: 'Software Engineer' },
-      { label: 'Product Manager', value: 'Product Manager' },
-      { label: 'Sales Representative', value: 'Sales Representative' },
-      { label: 'Marketing Manager', value: 'Marketing Manager' },
-      { label: 'Account Executive', value: 'Account Executive' },
-    ]
+    operators: ['contains', 'not_contains', 'equals', 'is_empty', 'is_not_empty'],
+    placeholder: 'Search job titles...'
   },
   {
     id: 'seniority',
