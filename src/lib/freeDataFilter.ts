@@ -76,6 +76,75 @@ export function buildFreeDataQuery(
     query = query.or(sizeConditions);
   }
 
+  // Company Revenue filter
+  if (filters.companyRevenue.length > 0) {
+    const revenueConditions = filters.companyRevenue.map(rev => {
+      const escapedRev = rev.replace(/[%_]/g, '\\$&');
+      return `entity_data->revenue.ilike.%${escapedRev}%,` +
+             `entity_data->companyRevenue.ilike.%${escapedRev}%,` +
+             `entity_data->annual_revenue.ilike.%${escapedRev}%,` +
+             `entity_data->annualRevenue.ilike.%${escapedRev}%,` +
+             `entity_data->estimated_annual_revenue.ilike.%${escapedRev}%`;
+    }).join(',');
+    query = query.or(revenueConditions);
+  }
+
+  // Person City filter (person only)
+  if (entityType === 'person' && filters.personCity.length > 0) {
+    const cityConditions = filters.personCity.map(city => {
+      const escapedCity = city.replace(/[%_]/g, '\\$&').toLowerCase();
+      return `entity_data->city.ilike.%${escapedCity}%`;
+    }).join(',');
+    query = query.or(cityConditions);
+  }
+
+  // Person Country filter (person only)
+  if (entityType === 'person' && filters.personCountry.length > 0) {
+    const countryConditions = filters.personCountry.map(country => {
+      const escapedCountry = country.replace(/[%_]/g, '\\$&').toLowerCase();
+      return `entity_data->country.ilike.%${escapedCountry}%`;
+    }).join(',');
+    query = query.or(countryConditions);
+  }
+
+  // Company City filter
+  if (filters.companyCity.length > 0) {
+    const cityConditions = filters.companyCity.map(city => {
+      const escapedCity = city.replace(/[%_]/g, '\\$&').toLowerCase();
+      return `entity_data->city.ilike.%${escapedCity}%,` +
+             `entity_data->companyCity.ilike.%${escapedCity}%`;
+    }).join(',');
+    query = query.or(cityConditions);
+  }
+
+  // Company Country filter
+  if (filters.companyCountry.length > 0) {
+    const countryConditions = filters.companyCountry.map(country => {
+      const escapedCountry = country.replace(/[%_]/g, '\\$&').toLowerCase();
+      return `entity_data->country.ilike.%${escapedCountry}%,` +
+             `entity_data->companyCountry.ilike.%${escapedCountry}%`;
+    }).join(',');
+    query = query.or(countryConditions);
+  }
+
+  // Person Interests filter (person only)
+  if (entityType === 'person' && filters.personInterests.length > 0) {
+    const interestConditions = filters.personInterests.map(interest => {
+      const escapedInterest = interest.replace(/[%_]/g, '\\$&').toLowerCase();
+      return `entity_data->interests.ilike.%${escapedInterest}%`;
+    }).join(',');
+    query = query.or(interestConditions);
+  }
+
+  // Person Skills filter (person only)
+  if (entityType === 'person' && filters.personSkills.length > 0) {
+    const skillConditions = filters.personSkills.map(skill => {
+      const escapedSkill = skill.replace(/[%_]/g, '\\$&').toLowerCase();
+      return `entity_data->skills.ilike.%${escapedSkill}%`;
+    }).join(',');
+    query = query.or(skillConditions);
+  }
+
   // Net Worth filter (person only)
   if (entityType === 'person' && filters.netWorth.length > 0) {
     const netWorthConditions = filters.netWorth.map(nw => 
