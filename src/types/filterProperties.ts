@@ -16,6 +16,8 @@ export type OperatorType =
   | 'not_equals' 
   | 'contains' 
   | 'not_contains'
+  | 'contains_any'
+  | 'not_contains_any'
   | 'starts_with'
   | 'ends_with'
   | 'less_than'
@@ -67,6 +69,8 @@ export const OPERATOR_LABELS: Record<OperatorType, string> = {
   not_equals: 'is not',
   contains: 'contains',
   not_contains: 'does not contain',
+  contains_any: 'contains any of',
+  not_contains_any: 'does not contain any of',
   starts_with: 'starts with',
   ends_with: 'ends with',
   less_than: 'less than',
