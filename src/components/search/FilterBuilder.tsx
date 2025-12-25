@@ -268,19 +268,21 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
             />
           </div>
 
-          {/* Company Revenue */}
-          <div className="space-y-2">
-            <Label>Company Revenue</Label>
-            <MultiSelectDropdown
-              options={attributes.companyRevenueRanges.map(range => ({
-                label: range,
-                value: range
-              }))}
-              selected={filterState.companyRevenue}
-              onChange={(values) => updateFilter('companyRevenue', values)}
-              placeholder="Select revenue ranges..."
-            />
-          </div>
+          {/* Company Revenue - Only show for person entity type since company records don't have revenue data */}
+          {entityType === 'person' && (
+            <div className="space-y-2">
+              <Label>Company Revenue</Label>
+              <MultiSelectDropdown
+                options={attributes.companyRevenueRanges.map(range => ({
+                  label: range,
+                  value: range
+                }))}
+                selected={filterState.companyRevenue}
+                onChange={(values) => updateFilter('companyRevenue', values)}
+                placeholder="Select revenue ranges..."
+              />
+            </div>
+          )}
 
           {/* Company City */}
           <div className="space-y-2">
