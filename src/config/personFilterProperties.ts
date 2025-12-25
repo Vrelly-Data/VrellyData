@@ -307,9 +307,9 @@ export const PERSON_FILTER_PROPERTIES: PropertyDefinition[] = [
   {
     id: 'gender',
     label: 'Gender',
-    type: 'select',
+    type: 'multiselect',
     category: 'Demographics',
-    operators: ['equals', 'not_equals'],
+    operators: ['in', 'not_in', 'is_known', 'is_unknown'],
     options: [
       { label: 'Male', value: 'male' },
       { label: 'Female', value: 'female' },
@@ -365,9 +365,9 @@ export const PERSON_FILTER_PROPERTIES: PropertyDefinition[] = [
   {
     id: 'children',
     label: 'Has Children',
-    type: 'select',
+    type: 'multiselect',
     category: 'Demographics',
-    operators: ['equals', 'not_equals', 'is_known', 'is_unknown'],
+    operators: ['in', 'not_in', 'is_known', 'is_unknown'],
     options: [
       { label: 'Yes', value: 'yes' },
       { label: 'No', value: 'no' },
