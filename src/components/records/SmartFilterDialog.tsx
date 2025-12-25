@@ -114,6 +114,7 @@ export function SmartFilterDialog({
               onAddCondition={addCondition}
               onRemoveCondition={removeCondition}
               onUpdateCondition={updateCondition}
+              onApply={handleApply}
             />
 
             {/* Add AND Group Button */}
