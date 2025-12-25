@@ -29,6 +29,7 @@ import { ComboMultiSelectInput } from './filter-inputs/ComboMultiSelectInput';
 import { BooleanInput } from './filter-inputs/BooleanInput';
 import { CurrencyInput } from './filter-inputs/CurrencyInput';
 import { DateInput } from './filter-inputs/DateInput';
+import { TagsInput } from './filter-inputs/TagsInput';
 import { useState } from 'react';
 import { Check, ChevronsUpDown } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -134,6 +135,14 @@ export function FilterConditionRow({ condition, properties, onUpdate, onRemove, 
           <BooleanInput
             value={condition.value}
             onChange={handleValueChange}
+          />
+        );
+      case 'tags':
+        return (
+          <TagsInput
+            value={condition.value || []}
+            onChange={handleValueChange}
+            placeholder={selectedProperty.placeholder}
           />
         );
       default:

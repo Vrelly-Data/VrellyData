@@ -53,10 +53,10 @@ export const PERSON_FILTER_PROPERTIES: PropertyDefinition[] = [
   {
     id: 'keywords',
     label: 'Keywords',
-    type: 'text',
+    type: 'tags',
     category: 'Basic Information',
-    operators: ['contains', 'not_contains', 'is_empty', 'is_not_empty'],
-    placeholder: 'Search keywords...'
+    operators: ['in', 'not_in', 'is_empty', 'is_not_empty'],
+    placeholder: 'Type keyword and press Enter...'
   },
   
   // Job Information
