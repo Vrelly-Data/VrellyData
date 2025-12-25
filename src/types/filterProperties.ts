@@ -8,7 +8,8 @@ export type PropertyType =
   | 'multiselect' 
   | 'boolean'
   | 'url'
-  | 'currency';
+  | 'currency'
+  | 'tags';
 
 export type OperatorType = 
   | 'equals' 
