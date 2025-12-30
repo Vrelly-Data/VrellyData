@@ -99,19 +99,10 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
   return (
     <Card className="h-full flex flex-col">
       <CardHeader>
-        <div className="flex items-center justify-between">
-          <CardTitle className="flex items-center gap-2">
-            <Filter className="h-5 w-5" />
-            Build Your Audience
-          </CardTitle>
-          <FilterPresetsDropdown
-            entityType={entityType}
-            currentFilters={filterState}
-            onLoadPreset={handleLoadPreset}
-            onClearFilters={handleClearFilters}
-            hasActiveFilters={hasActiveFilters()}
-          />
-        </div>
+        <CardTitle className="flex items-center gap-2">
+          <Filter className="h-5 w-5" />
+          Build Your Audience
+        </CardTitle>
       </CardHeader>
       
       <CardContent className="flex-1 overflow-auto">
@@ -360,14 +351,24 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
       </CardContent>
 
       <div className="p-4 border-t">
-        <Button
-          className="w-full"
-          size="lg"
-          onClick={handleSearchClick}
-        >
-          <Search className="h-4 w-4 mr-2" />
-          Search
-        </Button>
+        <div className="flex">
+          <Button
+            className="flex-1 rounded-r-none"
+            size="lg"
+            onClick={handleSearchClick}
+          >
+            <Search className="h-4 w-4 mr-2" />
+            Search
+          </Button>
+          <FilterPresetsDropdown
+            entityType={entityType}
+            currentFilters={filterState}
+            onLoadPreset={handleLoadPreset}
+            onClearFilters={handleClearFilters}
+            hasActiveFilters={hasActiveFilters()}
+            variant="primary"
+          />
+        </div>
       </div>
     </Card>
   );

@@ -19,6 +19,7 @@ interface FilterPresetsDropdownProps {
   onLoadPreset: (filters: FilterBuilderState) => void;
   onClearFilters: () => void;
   hasActiveFilters: boolean;
+  variant?: 'ghost' | 'primary';
 }
 
 export function FilterPresetsDropdown({
@@ -27,6 +28,7 @@ export function FilterPresetsDropdown({
   onLoadPreset,
   onClearFilters,
   hasActiveFilters,
+  variant = 'ghost',
 }: FilterPresetsDropdownProps) {
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -47,7 +49,11 @@ export function FilterPresetsDropdown({
     <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+          <Button 
+            variant={variant === 'primary' ? 'default' : 'ghost'} 
+            size={variant === 'primary' ? 'lg' : 'sm'} 
+            className={variant === 'primary' ? 'rounded-l-none px-3 border-l border-primary-foreground/20' : 'h-8 w-8 p-0'}
+          >
             <ChevronDown className="h-4 w-4" />
           </Button>
         </DropdownMenuTrigger>
