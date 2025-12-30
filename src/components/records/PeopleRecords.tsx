@@ -22,7 +22,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { PersonEntity } from '@/types/audience';
+import { PersonEntity, CompanyEntity } from '@/types/audience';
 import { RecordsTable } from './RecordsTable';
 import { RecordsFilterDropdown } from './RecordsFilterDropdown';
 import { ColumnCustomizer } from './ColumnCustomizer';
@@ -39,12 +39,13 @@ import { supabase } from '@/integrations/supabase/client';
 
 interface PeopleRecordsProps {
   records: PersonEntity[];
-  setRecords: (records: PersonEntity[]) => void;
+  setRecords: (records: (PersonEntity | CompanyEntity)[]) => void;
+  deleteRecords: (entityIds: string[]) => Promise<boolean>;
   appliedFilter: SmartFilter | null;
   setAppliedFilter: (filter: SmartFilter | null) => void;
 }
 
-export function PeopleRecords({ records, setRecords, appliedFilter, setAppliedFilter }: PeopleRecordsProps) {
+export function PeopleRecords({ records, setRecords, deleteRecords, appliedFilter, setAppliedFilter }: PeopleRecordsProps) {
   const [selectedRecords, setSelectedRecords] = useState<Set<string>>(new Set());
   const [isListDialogOpen, setIsListDialogOpen] = useState(false);
   const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
@@ -138,16 +139,25 @@ export function PeopleRecords({ records, setRecords, appliedFilter, setAppliedFi
     }
   };
 
-  const handleDelete = () => {
-    setRecords(records.filter(record => !selectedRecords.has(record.id)));
-    const deletedCount = selectedRecords.size;
-    setSelectedRecords(new Set());
-    setIsDeleteDialogOpen(false);
-    toast({
-      title: "Records deleted",
-      description: `Successfully deleted ${deletedCount} people record${deletedCount > 1 ? 's' : ''}`,
-      variant: "default",
-    });
+  const handleDelete = async () => {
+    const idsToDelete = Array.from(selectedRecords);
+    const success = await deleteRecords(idsToDelete);
+    
+    if (success) {
+      setSelectedRecords(new Set());
+      setIsDeleteDialogOpen(false);
+      toast({
+        title: "Records deleted",
+        description: `Successfully deleted ${idsToDelete.length} people record${idsToDelete.length > 1 ? 's' : ''}`,
+        variant: "default",
+      });
+    } else {
+      toast({
+        title: "Error deleting records",
+        description: "Failed to delete records from database",
+        variant: "destructive",
+      });
+    }
   };
 
   return (

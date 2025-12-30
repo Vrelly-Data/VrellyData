@@ -16,7 +16,7 @@ import { UserMenu } from '@/components/UserMenu';
 
 export default function People() {
   const navigate = useNavigate();
-  const { records, setRecords, isLoading } = useRecordsFromDatabase('person');
+  const { records, setRecords, isLoading, deleteRecords } = useRecordsFromDatabase('person');
   const [appliedFilter, setAppliedFilter] = useState<SmartFilter | null>(null);
 
   const filteredRecords = useMemo(() => {
@@ -63,6 +63,7 @@ export default function People() {
                   <PeopleRecords 
                     records={records as PersonEntity[]}
                     setRecords={setRecords}
+                    deleteRecords={deleteRecords}
                     appliedFilter={appliedFilter}
                     setAppliedFilter={setAppliedFilter}
                   />
