@@ -19,6 +19,7 @@ export interface FilterBuilderState {
   companyCountry: string[];
   personInterests: string[];
   personSkills: string[];
+  contactFilter: 'all' | 'net_new' | null;
 }
 
 export function convertFilterStateToAudienceLabFormat(state: FilterBuilderState): AudienceLabFilters {

@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 
-import { Filter, Search } from 'lucide-react';
+import { Filter, Search, HelpCircle } from 'lucide-react';
 import { useAudienceAttributes } from '@/hooks/useAudienceAttributes';
 import { useFreeDataSuggestions } from '@/hooks/useFreeDataSuggestions';
 import { FilterBuilderState } from '@/lib/filterConversion';
@@ -11,6 +11,12 @@ import { EntityType } from '@/types/audience';
 import { TagInput } from '@/components/ui/tag-input';
 import { MultiSelectDropdown } from '@/components/search/MultiSelectDropdown';
 import { FilterPresetsDropdown } from '@/components/search/FilterPresetsDropdown';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 
 interface FilterBuilderProps {
   entityType: EntityType;
@@ -40,6 +46,7 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
     companyCountry: [],
     personInterests: [],
     personSkills: [],
+    contactFilter: null,
   });
 
   const [filterState, setFilterState] = useState<FilterBuilderState>(getInitialFilterState());
@@ -70,7 +77,8 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
       filterState.companyCity.length > 0 ||
       filterState.companyCountry.length > 0 ||
       filterState.personInterests.length > 0 ||
-      filterState.personSkills.length > 0
+      filterState.personSkills.length > 0 ||
+      filterState.contactFilter !== null
     );
   };
 
@@ -322,7 +330,7 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
             />
           </div>
 
-          {/* Prospect Data - Person only, at the bottom */}
+          {/* Prospect Data - Person only */}
           {entityType === 'person' && (
             <div className="space-y-2">
               <Label>Prospect Data</Label>
@@ -344,6 +352,48 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
               </p>
             </div>
           )}
+
+          {/* Contact Status Filter */}
+          <div className="space-y-3">
+            <div className="flex items-center gap-1.5">
+              <Label>Contact Status</Label>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <HelpCircle className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-xs">
+                    <p className="font-medium mb-1">Total Contacts</p>
+                    <p className="text-xs text-muted-foreground mb-2">
+                      Shows all matching contacts, including those you've already saved. Saved contacts are displayed unblurred.
+                    </p>
+                    <p className="font-medium mb-1">Net New Contacts</p>
+                    <p className="text-xs text-muted-foreground">
+                      Shows only contacts you haven't saved yet — perfect for expanding your audience without duplicates.
+                    </p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                variant={filterState.contactFilter === 'all' ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => updateFilter('contactFilter', filterState.contactFilter === 'all' ? null : 'all')}
+              >
+                Total Contacts
+              </Button>
+              <Button
+                type="button"
+                variant={filterState.contactFilter === 'net_new' ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => updateFilter('contactFilter', filterState.contactFilter === 'net_new' ? null : 'net_new')}
+              >
+                Net New Contacts
+              </Button>
+            </div>
+          </div>
 
           {/* Hidden submit button for Enter key support */}
           <button type="submit" className="hidden" />
