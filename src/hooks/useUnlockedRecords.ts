@@ -7,6 +7,21 @@ interface UnlockableEntity {
   email?: string;
   linkedin?: string;
   domain?: string;
+  name?: string;
+  company?: string;
+}
+
+// Normalize LinkedIn URL to just the username for matching
+function normalizeLinkedin(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  // Extract username from various LinkedIn URL formats
+  const match = url.match(/linkedin\.com\/in\/([^\/\?#]+)/i);
+  return match ? match[1].toLowerCase() : undefined;
+}
+
+// Check if email is masked (contains dots for hidden characters)
+function isEmailMasked(email: string | undefined): boolean {
+  return !email || email.includes('•');
 }
 
 export function useUnlockedRecords(entityType: EntityType) {
@@ -14,6 +29,7 @@ export function useUnlockedRecords(entityType: EntityType) {
   const [unlockedEmails, setUnlockedEmails] = useState<Set<string>>(new Set());
   const [unlockedLinkedins, setUnlockedLinkedins] = useState<Set<string>>(new Set());
   const [unlockedDomains, setUnlockedDomains] = useState<Set<string>>(new Set());
+  const [unlockedNameCompany, setUnlockedNameCompany] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -42,24 +58,37 @@ export function useUnlockedRecords(entityType: EntityType) {
 
       if (error) throw error;
 
-      // Build lookup sets for ID, email, linkedin, and domain
+      // Build lookup sets for ID, email, linkedin, domain, and name+company
       const idSet = new Set<string>();
       const emailSet = new Set<string>();
       const linkedinSet = new Set<string>();
       const domainSet = new Set<string>();
+      const nameCompanySet = new Set<string>();
 
       data?.forEach(r => {
         idSet.add(r.entity_external_id);
         
         const entityData = r.entity_data as Record<string, any>;
-        if (entityData?.email) {
+        
+        // Add email if not masked
+        if (entityData?.email && !isEmailMasked(entityData.email)) {
           emailSet.add(entityData.email.toLowerCase());
         }
-        if (entityData?.linkedin) {
-          linkedinSet.add(entityData.linkedin.toLowerCase());
+        
+        // Add normalized LinkedIn username
+        const linkedinUsername = normalizeLinkedin(entityData?.linkedin);
+        if (linkedinUsername) {
+          linkedinSet.add(linkedinUsername);
         }
+        
+        // Add domain
         if (entityData?.domain) {
           domainSet.add(entityData.domain.toLowerCase());
+        }
+        
+        // Add name+company combination for fallback matching
+        if (entityData?.name && entityData?.company) {
+          nameCompanySet.add(`${entityData.name.toLowerCase()}|${entityData.company.toLowerCase()}`);
         }
       });
 
@@ -67,6 +96,7 @@ export function useUnlockedRecords(entityType: EntityType) {
       setUnlockedEmails(emailSet);
       setUnlockedLinkedins(linkedinSet);
       setUnlockedDomains(domainSet);
+      setUnlockedNameCompany(nameCompanySet);
     } catch (error) {
       console.error('Error loading unlocked records:', error);
     } finally {
@@ -79,16 +109,23 @@ export function useUnlockedRecords(entityType: EntityType) {
     if (unlockedIds.has(entity.id)) return true;
     
     // Fallback to email matching (for person entities)
-    if (entity.email && unlockedEmails.has(entity.email.toLowerCase())) return true;
+    if (entity.email && !isEmailMasked(entity.email) && unlockedEmails.has(entity.email.toLowerCase())) return true;
     
-    // Fallback to LinkedIn matching
-    if (entity.linkedin && unlockedLinkedins.has(entity.linkedin.toLowerCase())) return true;
+    // Fallback to normalized LinkedIn matching
+    const linkedinUsername = normalizeLinkedin(entity.linkedin);
+    if (linkedinUsername && unlockedLinkedins.has(linkedinUsername)) return true;
     
     // Fallback to domain matching (for company entities)
     if (entity.domain && unlockedDomains.has(entity.domain.toLowerCase())) return true;
     
+    // Fallback to name+company matching
+    if (entity.name && entity.company) {
+      const key = `${entity.name.toLowerCase()}|${entity.company.toLowerCase()}`;
+      if (unlockedNameCompany.has(key)) return true;
+    }
+    
     return false;
-  }, [unlockedIds, unlockedEmails, unlockedLinkedins, unlockedDomains]);
+  }, [unlockedIds, unlockedEmails, unlockedLinkedins, unlockedDomains, unlockedNameCompany]);
 
   async function markAsUnlocked(entityIds: string[], entityData: any[]) {
     try {
@@ -127,27 +164,45 @@ export function useUnlockedRecords(entityType: EntityType) {
         return newSet;
       });
 
-      // Also update email/linkedin/domain sets
+      // Update email set
       setUnlockedEmails(prev => {
         const newSet = new Set(prev);
         entityData.forEach(data => {
-          if (data?.email) newSet.add(data.email.toLowerCase());
+          if (data?.email && !isEmailMasked(data.email)) {
+            newSet.add(data.email.toLowerCase());
+          }
         });
         return newSet;
       });
 
+      // Update linkedin set with normalized usernames
       setUnlockedLinkedins(prev => {
         const newSet = new Set(prev);
         entityData.forEach(data => {
-          if (data?.linkedin) newSet.add(data.linkedin.toLowerCase());
+          const linkedinUsername = normalizeLinkedin(data?.linkedin);
+          if (linkedinUsername) {
+            newSet.add(linkedinUsername);
+          }
         });
         return newSet;
       });
 
+      // Update domains set
       setUnlockedDomains(prev => {
         const newSet = new Set(prev);
         entityData.forEach(data => {
           if (data?.domain) newSet.add(data.domain.toLowerCase());
+        });
+        return newSet;
+      });
+
+      // Update name+company set
+      setUnlockedNameCompany(prev => {
+        const newSet = new Set(prev);
+        entityData.forEach(data => {
+          if (data?.name && data?.company) {
+            newSet.add(`${data.name.toLowerCase()}|${data.company.toLowerCase()}`);
+          }
         });
         return newSet;
       });
