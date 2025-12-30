@@ -25,7 +25,7 @@ import { useState } from 'react';
 interface PreviewTableProps {
   data: (PersonEntity | CompanyEntity)[];
   entityType: 'person' | 'company';
-  isUnlocked: (id: string) => boolean;
+  isUnlocked: (entity: PersonEntity | CompanyEntity) => boolean;
   selectedRecords: Set<string>;
   onSelectionChange: (selected: Set<string>) => void;
   totalResults: number;
@@ -244,10 +244,10 @@ export function PreviewTable({ data, entityType, isUnlocked, selectedRecords, on
                 <TableCell className="sticky left-[50px] bg-background font-medium">{person.name}</TableCell>
                 <TableCell>{person.title || 'N/A'}</TableCell>
                 <TableCell>
-                  <BlurredField value={person.email || 'N/A'} isUnlocked={isUnlocked(person.id)} />
+                  <BlurredField value={person.email || 'N/A'} isUnlocked={isUnlocked(person)} />
                 </TableCell>
                 <TableCell>
-                  <BlurredField value={person.linkedin || 'N/A'} isUnlocked={isUnlocked(person.id)} />
+                  <BlurredField value={person.linkedin || 'N/A'} isUnlocked={isUnlocked(person)} />
                 </TableCell>
                 <TableCell>{person.seniority || 'N/A'}</TableCell>
                 <TableCell>{person.department || 'N/A'}</TableCell>
@@ -367,11 +367,11 @@ export function PreviewTable({ data, entityType, isUnlocked, selectedRecords, on
               <TableCell className="max-w-[300px] truncate">{company.description || 'N/A'}</TableCell>
               <TableCell>{company.location || 'N/A'}</TableCell>
               <TableCell>
-                <BlurredField value={company.linkedin || 'N/A'} isUnlocked={isUnlocked(company.id)} />
+                <BlurredField value={company.linkedin || 'N/A'} isUnlocked={isUnlocked(company)} />
               </TableCell>
               <TableCell>
                 {company.phone ? (
-                  <BlurredField value={company.phone} isUnlocked={isUnlocked(company.id)} />
+                  <BlurredField value={company.phone} isUnlocked={isUnlocked(company)} />
                 ) : (
                   'N/A'
                 )}
