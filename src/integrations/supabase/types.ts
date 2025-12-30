@@ -910,6 +910,19 @@ export type Database = {
         Args: { p_amount: number; p_user_id: string }
         Returns: Json
       }
+      get_all_profiles_admin: {
+        Args: never
+        Returns: {
+          created_at: string
+          credits: number
+          id: string
+          is_admin: boolean
+          name: string
+          plan: string
+          subscription_status: string
+          subscription_tier: string
+        }[]
+      }
       get_filter_suggestions: { Args: never; Returns: Json }
       get_user_team_id: { Args: { _user_id: string }; Returns: string }
       has_role: {

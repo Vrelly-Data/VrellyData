@@ -1,5 +1,8 @@
 project_id = "srartzeqcbxbytfixeiv"
 
+[functions.admin-delete-user]
+verify_jwt = false
+
 [functions.audiencelab-api]
 verify_jwt = true
 

@@ -4,8 +4,9 @@ import { AppSidebar } from '@/components/AppSidebar';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { DataSourceTemplatesTab } from '@/components/admin/DataSourceTemplatesTab';
 import { FreeDataTab } from '@/components/admin/FreeDataTab';
+import { UsersTab } from '@/components/admin/UsersTab';
 import { Button } from '@/components/ui/button';
-import { Database, Upload, Plus } from 'lucide-react';
+import { Database, Upload, Plus, Users } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import vrellyLogo from '@/assets/vrelly-logo.png';
 import { UserMenu } from '@/components/UserMenu';
@@ -62,6 +63,10 @@ export default function Admin() {
                     <Upload className="h-4 w-4" />
                     Uploads
                   </TabsTrigger>
+                  <TabsTrigger value="users" className="flex items-center gap-2">
+                    <Users className="h-4 w-4" />
+                    Users
+                  </TabsTrigger>
                 </TabsList>
 
                 <TabsContent value="templates">
@@ -76,6 +81,10 @@ export default function Admin() {
                     showUploadDialog={showUploadDialog}
                     onCloseUploadDialog={() => setShowUploadDialog(false)}
                   />
+                </TabsContent>
+
+                <TabsContent value="users">
+                  <UsersTab />
                 </TabsContent>
               </Tabs>
             </div>
