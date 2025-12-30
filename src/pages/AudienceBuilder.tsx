@@ -404,6 +404,7 @@ export default function AudienceBuilder() {
         companyCountry: [],
         personInterests: [],
         personSkills: [],
+        contactFilter: null,
       };
       
       for (let page = 1; page <= totalPagesToFetch; page++) {
@@ -463,6 +464,7 @@ export default function AudienceBuilder() {
         companyCountry: [],
         personInterests: [],
         personSkills: [],
+        contactFilter: null,
       };
       
       // Fetch pages until we have enough records
