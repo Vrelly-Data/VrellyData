@@ -10,6 +10,7 @@ import { FilterBuilderState } from '@/lib/filterConversion';
 import { EntityType } from '@/types/audience';
 import { TagInput } from '@/components/ui/tag-input';
 import { MultiSelectDropdown } from '@/components/search/MultiSelectDropdown';
+import { FilterPresetsDropdown } from '@/components/search/FilterPresetsDropdown';
 
 interface FilterBuilderProps {
   entityType: EntityType;
@@ -19,7 +20,8 @@ interface FilterBuilderProps {
 export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
   const { attributes, loading } = useAudienceAttributes();
   const { suggestions } = useFreeDataSuggestions();
-  const [filterState, setFilterState] = useState<FilterBuilderState>({
+  
+  const getInitialFilterState = (): FilterBuilderState => ({
     industries: [],
     cities: [],
     gender: null,
@@ -40,6 +42,8 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
     personSkills: [],
   });
 
+  const [filterState, setFilterState] = useState<FilterBuilderState>(getInitialFilterState());
+
   const updateFilter = <K extends keyof FilterBuilderState>(
     key: K,
     value: FilterBuilderState[K]
@@ -47,28 +51,40 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
     setFilterState(prev => ({ ...prev, [key]: value }));
   };
 
+  const hasActiveFilters = (): boolean => {
+    return (
+      filterState.industries.length > 0 ||
+      filterState.cities.length > 0 ||
+      filterState.gender !== null ||
+      filterState.jobTitles.length > 0 ||
+      filterState.seniority.length > 0 ||
+      filterState.department.length > 0 ||
+      filterState.companySize.length > 0 ||
+      filterState.companyRevenue.length > 0 ||
+      filterState.netWorth.length > 0 ||
+      filterState.income.length > 0 ||
+      filterState.keywords.length > 0 ||
+      (filterState.prospectData?.length || 0) > 0 ||
+      filterState.personCity.length > 0 ||
+      filterState.personCountry.length > 0 ||
+      filterState.companyCity.length > 0 ||
+      filterState.companyCountry.length > 0 ||
+      filterState.personInterests.length > 0 ||
+      filterState.personSkills.length > 0
+    );
+  };
+
+  const handleLoadPreset = (filters: FilterBuilderState) => {
+    setFilterState(filters);
+  };
+
+  const handleClearFilters = () => {
+    setFilterState(getInitialFilterState());
+  };
+
   useEffect(() => {
     // Reset filters when entity type changes
-      setFilterState({
-        industries: [],
-        cities: [],
-        gender: null,
-        jobTitles: [],
-        seniority: [],
-        department: [],
-        companySize: [],
-        companyRevenue: [],
-        netWorth: [],
-        income: [],
-        keywords: [],
-        prospectData: [],
-        personCity: [],
-        personCountry: [],
-        companyCity: [],
-        companyCountry: [],
-        personInterests: [],
-        personSkills: [],
-      });
+    setFilterState(getInitialFilterState());
   }, [entityType]);
 
   const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
@@ -83,10 +99,19 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
   return (
     <Card className="h-full flex flex-col">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Filter className="h-5 w-5" />
-          Build Your Audience
-        </CardTitle>
+        <div className="flex items-center justify-between">
+          <CardTitle className="flex items-center gap-2">
+            <Filter className="h-5 w-5" />
+            Build Your Audience
+          </CardTitle>
+          <FilterPresetsDropdown
+            entityType={entityType}
+            currentFilters={filterState}
+            onLoadPreset={handleLoadPreset}
+            onClearFilters={handleClearFilters}
+            hasActiveFilters={hasActiveFilters()}
+          />
+        </div>
       </CardHeader>
       
       <CardContent className="flex-1 overflow-auto">
