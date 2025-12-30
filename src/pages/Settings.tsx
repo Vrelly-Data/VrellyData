@@ -20,6 +20,7 @@ import { Check } from "lucide-react";
 import { useSubscription } from "@/hooks/useSubscription";
 import { ExternalProjectsSettings } from "@/components/settings/ExternalProjectsSettings";
 import { UserMenu } from "@/components/UserMenu";
+import { SUBSCRIPTION_TIERS, SubscriptionTier } from "@/config/subscriptionTiers";
 
 // Price IDs for subscription tiers - UPDATE THESE AFTER RUNNING create-stripe-products
 const PRICE_IDS = {
@@ -316,7 +317,7 @@ export default function Settings() {
                   )}
                 </div>
 
-                {/* Credit Balance Display - Always visible */}
+                {/* Credit Balance Display */}
                 <div className="border rounded-lg p-4 space-y-3">
                   <div className="flex justify-between items-center">
                     <span className="text-sm font-medium">Credit Balance</span>
@@ -324,44 +325,22 @@ export default function Settings() {
                       {(profile?.credits ?? 0).toLocaleString()}
                     </span>
                   </div>
-                  <p className="text-xs text-muted-foreground">
-                    Total credits available for searches and unlocks
-                  </p>
+                  {(() => {
+                    const tier = (profile?.subscription_tier || 'free') as SubscriptionTier;
+                    const tierConfig = SUBSCRIPTION_TIERS[tier] || SUBSCRIPTION_TIERS.free;
+                    const percentRemaining = tierConfig.credits > 0 
+                      ? ((profile?.credits ?? 0) / tierConfig.credits) * 100 
+                      : 0;
+                    return (
+                      <>
+                        <Progress value={percentRemaining} className="h-2" />
+                        <p className="text-xs text-muted-foreground">
+                          {(profile?.credits ?? 0).toLocaleString()} of {tierConfig.credits.toLocaleString()} credits remaining ({tierConfig.label} plan)
+                        </p>
+                      </>
+                    );
+                  })()}
                 </div>
-
-                {/* Monthly Usage Display - Only if on a paid plan */}
-                {profile && profile.monthly_credit_limit > 0 && (
-                  <div className="border rounded-lg p-4 space-y-3">
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm font-medium">Monthly Credit Allowance</span>
-                      <span className="text-sm font-semibold">
-                        {(profile.credits_used_this_month || 0).toLocaleString()} / {profile.monthly_credit_limit.toLocaleString()}
-                      </span>
-                    </div>
-                    <Progress 
-                      value={(profile.credits_used_this_month || 0) / profile.monthly_credit_limit * 100} 
-                      className="h-2"
-                    />
-                    <div className="flex justify-between items-center text-xs text-muted-foreground">
-                      <span>
-                        {((profile.monthly_credit_limit - (profile.credits_used_this_month || 0)) / profile.monthly_credit_limit * 100).toFixed(0)}% remaining this month
-                      </span>
-                      {profile.billing_period_end && (
-                        <span>
-                          Resets on {format(new Date(profile.billing_period_end), 'MMM dd, yyyy')}
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-2">
-                      Your plan adds {profile.monthly_credit_limit.toLocaleString()} credits to your wallet each month
-                    </p>
-                    {profile.credits_used_this_month >= profile.monthly_credit_limit * 0.9 && (
-                      <p className="text-sm text-destructive">
-                        ⚠️ You're approaching your monthly limit. Consider upgrading your plan.
-                      </p>
-                    )}
-                  </div>
-                )}
 
                 {profile?.billing_period_start && profile?.billing_period_end && (
                   <div className="text-sm text-muted-foreground">
@@ -387,14 +366,14 @@ export default function Settings() {
                       <div>
                         <h3 className="text-xl font-bold">Starter</h3>
                         <div className="mt-2">
-                          <span className="text-3xl font-bold">$99</span>
+                          <span className="text-3xl font-bold">${SUBSCRIPTION_TIERS.starter.price}</span>
                           <span className="text-muted-foreground">/month</span>
                         </div>
                       </div>
                       <ul className="space-y-2 text-sm">
                         <li className="flex items-center gap-2">
                           <Check className="h-4 w-4 text-primary" />
-                          10,000 credits/month
+                          {SUBSCRIPTION_TIERS.starter.credits.toLocaleString()} credits
                         </li>
                         <li className="flex items-center gap-2">
                           <Check className="h-4 w-4 text-primary" />
@@ -416,25 +395,25 @@ export default function Settings() {
                     </Button>
                   </div>
 
-                  {/* Professional Plan */}
+                  {/* Pro Plan */}
                   <div className="border-2 border-primary rounded-lg p-6 flex flex-col h-full relative">
                     <Badge className="absolute -top-3 left-1/2 -translate-x-1/2">Popular</Badge>
                     <div className="space-y-4 flex-1">
                       <div>
                         <h3 className="text-xl font-bold">Pro</h3>
                         <div className="mt-2">
-                          <span className="text-3xl font-bold">$299</span>
+                          <span className="text-3xl font-bold">${SUBSCRIPTION_TIERS.pro.price}</span>
                           <span className="text-muted-foreground">/month</span>
                         </div>
                       </div>
                       <ul className="space-y-2 text-sm">
                         <li className="flex items-center gap-2">
                           <Check className="h-4 w-4 text-primary" />
-                          25,000 credits/month
+                          {SUBSCRIPTION_TIERS.pro.credits.toLocaleString()} credits
                         </li>
                         <li className="flex items-center gap-2">
                           <Check className="h-4 w-4 text-primary" />
-                          Priority email support
+                          Priority support
                         </li>
                         <li className="flex items-center gap-2">
                           <Check className="h-4 w-4 text-primary" />
@@ -448,11 +427,11 @@ export default function Settings() {
                     </div>
                     <Button 
                       className="w-full mt-4" 
-                      variant={profile?.subscription_tier === 'pro' || profile?.subscription_tier === 'professional' ? 'outline' : 'default'}
-                      disabled={profile?.subscription_tier === 'pro' || profile?.subscription_tier === 'professional'}
+                      variant={profile?.subscription_tier === 'pro' ? 'outline' : 'default'}
+                      disabled={profile?.subscription_tier === 'pro'}
                       onClick={() => handleUpgrade('pro')}
                     >
-                      {profile?.subscription_tier === 'pro' || profile?.subscription_tier === 'professional' ? 'Current Plan' : 'Upgrade'}
+                      {profile?.subscription_tier === 'pro' ? 'Current Plan' : 'Upgrade'}
                     </Button>
                   </div>
 
@@ -460,16 +439,16 @@ export default function Settings() {
                   <div className="border rounded-lg p-6 flex flex-col h-full">
                     <div className="space-y-4 flex-1">
                       <div>
-                        <h3 className="text-xl font-bold">Premium</h3>
+                        <h3 className="text-xl font-bold">Enterprise</h3>
                         <div className="mt-2">
-                          <span className="text-3xl font-bold">$499</span>
+                          <span className="text-3xl font-bold">${SUBSCRIPTION_TIERS.enterprise.price}</span>
                           <span className="text-muted-foreground">/month</span>
                         </div>
                       </div>
                       <ul className="space-y-2 text-sm">
                         <li className="flex items-center gap-2">
                           <Check className="h-4 w-4 text-primary" />
-                          75,000 credits/month
+                          {SUBSCRIPTION_TIERS.enterprise.credits.toLocaleString()} credits
                         </li>
                         <li className="flex items-center gap-2">
                           <Check className="h-4 w-4 text-primary" />
@@ -491,11 +470,11 @@ export default function Settings() {
                     </div>
                     <Button 
                       className="w-full mt-4" 
-                      variant={profile?.subscription_tier === 'premium' || profile?.subscription_tier === 'enterprise' ? 'outline' : 'default'}
-                      disabled={profile?.subscription_tier === 'premium' || profile?.subscription_tier === 'enterprise'}
+                      variant={profile?.subscription_tier === 'enterprise' ? 'outline' : 'default'}
+                      disabled={profile?.subscription_tier === 'enterprise'}
                       onClick={() => handleUpgrade('premium')}
                     >
-                      {profile?.subscription_tier === 'premium' || profile?.subscription_tier === 'enterprise' ? 'Current Plan' : 'Upgrade'}
+                      {profile?.subscription_tier === 'enterprise' ? 'Current Plan' : 'Upgrade'}
                     </Button>
                   </div>
                 </div>
