@@ -1,9 +1,19 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
-import { EntityType } from '@/types/audience';
+import { EntityType, PersonEntity, CompanyEntity } from '@/types/audience';
+
+interface UnlockableEntity {
+  id: string;
+  email?: string;
+  linkedin?: string;
+  domain?: string;
+}
 
 export function useUnlockedRecords(entityType: EntityType) {
   const [unlockedIds, setUnlockedIds] = useState<Set<string>>(new Set());
+  const [unlockedEmails, setUnlockedEmails] = useState<Set<string>>(new Set());
+  const [unlockedLinkedins, setUnlockedLinkedins] = useState<Set<string>>(new Set());
+  const [unlockedDomains, setUnlockedDomains] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -26,14 +36,37 @@ export function useUnlockedRecords(entityType: EntityType) {
 
       const { data, error } = await supabase
         .from('unlocked_records')
-        .select('entity_external_id')
+        .select('entity_external_id, entity_data')
         .eq('team_id', membership.team_id)
         .eq('entity_type', entityType);
 
       if (error) throw error;
 
-      const ids = new Set(data?.map(r => r.entity_external_id) || []);
-      setUnlockedIds(ids);
+      // Build lookup sets for ID, email, linkedin, and domain
+      const idSet = new Set<string>();
+      const emailSet = new Set<string>();
+      const linkedinSet = new Set<string>();
+      const domainSet = new Set<string>();
+
+      data?.forEach(r => {
+        idSet.add(r.entity_external_id);
+        
+        const entityData = r.entity_data as Record<string, any>;
+        if (entityData?.email) {
+          emailSet.add(entityData.email.toLowerCase());
+        }
+        if (entityData?.linkedin) {
+          linkedinSet.add(entityData.linkedin.toLowerCase());
+        }
+        if (entityData?.domain) {
+          domainSet.add(entityData.domain.toLowerCase());
+        }
+      });
+
+      setUnlockedIds(idSet);
+      setUnlockedEmails(emailSet);
+      setUnlockedLinkedins(linkedinSet);
+      setUnlockedDomains(domainSet);
     } catch (error) {
       console.error('Error loading unlocked records:', error);
     } finally {
@@ -41,9 +74,21 @@ export function useUnlockedRecords(entityType: EntityType) {
     }
   }
 
-  function isUnlocked(entityId: string): boolean {
-    return unlockedIds.has(entityId);
-  }
+  const isUnlocked = useCallback((entity: UnlockableEntity): boolean => {
+    // Match by ID first
+    if (unlockedIds.has(entity.id)) return true;
+    
+    // Fallback to email matching (for person entities)
+    if (entity.email && unlockedEmails.has(entity.email.toLowerCase())) return true;
+    
+    // Fallback to LinkedIn matching
+    if (entity.linkedin && unlockedLinkedins.has(entity.linkedin.toLowerCase())) return true;
+    
+    // Fallback to domain matching (for company entities)
+    if (entity.domain && unlockedDomains.has(entity.domain.toLowerCase())) return true;
+    
+    return false;
+  }, [unlockedIds, unlockedEmails, unlockedLinkedins, unlockedDomains]);
 
   async function markAsUnlocked(entityIds: string[], entityData: any[]) {
     try {
@@ -75,10 +120,35 @@ export function useUnlockedRecords(entityType: EntityType) {
 
       if (error) throw error;
 
-      // Update local state
+      // Update local state with new IDs and identifiers
       setUnlockedIds(prev => {
         const newSet = new Set(prev);
         entityIds.forEach(id => newSet.add(id));
+        return newSet;
+      });
+
+      // Also update email/linkedin/domain sets
+      setUnlockedEmails(prev => {
+        const newSet = new Set(prev);
+        entityData.forEach(data => {
+          if (data?.email) newSet.add(data.email.toLowerCase());
+        });
+        return newSet;
+      });
+
+      setUnlockedLinkedins(prev => {
+        const newSet = new Set(prev);
+        entityData.forEach(data => {
+          if (data?.linkedin) newSet.add(data.linkedin.toLowerCase());
+        });
+        return newSet;
+      });
+
+      setUnlockedDomains(prev => {
+        const newSet = new Set(prev);
+        entityData.forEach(data => {
+          if (data?.domain) newSet.add(data.domain.toLowerCase());
+        });
         return newSet;
       });
 
