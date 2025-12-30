@@ -513,16 +513,16 @@ export default function AudienceBuilder() {
   };
 
   const handleSaveAudience = async () => {
-    if (totalEstimate === 0) {
+    if (selectedRecords.size === 0) {
       toast({
-        title: 'No audience to save',
-        description: 'Please perform a search first',
+        title: 'No records selected',
+        description: 'Please select records to save',
         variant: 'destructive',
       });
       return;
     }
     
-    // Get remaining credits for today
+    // Get remaining credits
     const remaining = getRemainingCredits();
     setCurrentCreditsForSave(remaining);
     setShowSaveAudienceDialog(true);
@@ -532,59 +532,33 @@ export default function AudienceBuilder() {
     try {
       setLoading(true);
       
-      // Get remaining credits for today
+      // Get selected records from already-loaded results
+      const selectedItems = results.filter(r => selectedRecords.has(r.id));
+      
+      if (selectedItems.length === 0) {
+        toast({
+          title: 'No records selected',
+          description: 'Please select records to save to the audience',
+          variant: 'destructive',
+        });
+        return;
+      }
+      
+      // Get remaining credits
       const remaining = getRemainingCredits();
       
       // Check if enough credits
-      if (remaining < totalEstimate) {
+      if (remaining < selectedItems.length) {
         toast({
           title: 'Insufficient credits',
-          description: 'You have reached your daily credit limit. Please try again tomorrow.',
+          description: 'Not enough credits to save this audience',
           variant: 'destructive',
         });
         return;
       }
 
-      // Fetch ALL results to save
-      const allResults: (PersonEntity | CompanyEntity)[] = [];
-      const totalPagesToFetch = Math.ceil(totalEstimate / perPage);
-      
-      const currentFilterState = filterState || {
-        industries: [],
-        cities: [],
-        gender: null,
-        jobTitles: [],
-        seniority: [],
-        department: [],
-        companySize: [],
-        companyRevenue: [],
-        netWorth: [],
-        income: [],
-        keywords: [],
-        prospectData: [],
-        personCity: [],
-        personCountry: [],
-        companyCity: [],
-        companyCountry: [],
-        personInterests: [],
-        personSkills: [],
-      };
-      
-      for (let page = 1; page <= totalPagesToFetch; page++) {
-        const response = currentType === 'person'
-          ? await searchPeople(currentFilterState, page, perPage)
-          : await searchCompanies(currentFilterState, page, perPage);
-        
-        allResults.push(...response.items);
-      }
-      
-      // Deduplicate results by ID
-      const uniqueResults = Array.from(
-        new Map(allResults.map(r => [r.id, r])).values()
-      );
-
       // Deduct credits (1 credit per contact)
-      const result = await deductCredits(uniqueResults.length, undefined);
+      const result = await deductCredits(selectedItems.length, undefined);
       if (!result.success) {
         toast({
           title: 'Error deducting credits',
@@ -613,14 +587,14 @@ export default function AudienceBuilder() {
           team_id: membership.team_id,
           type: currentType,
           filters: filters || {},
-          result_count: uniqueResults.length,
+          result_count: selectedItems.length,
           created_by: user.id,
         });
 
       if (saveError) throw saveError;
 
       // Save the actual records to people_records/company_records
-      await saveRecords(uniqueResults, currentType, 'export');
+      await saveRecords(selectedItems, currentType, 'export');
 
       // Create a list for this audience
       const { data: newList, error: listError } = await supabase
@@ -639,8 +613,8 @@ export default function AudienceBuilder() {
 
       // Add all records to the list in batches
       const batchSize = 500;
-      for (let i = 0; i < uniqueResults.length; i += batchSize) {
-        const batch = uniqueResults.slice(i, i + batchSize).map(record => ({
+      for (let i = 0; i < selectedItems.length; i += batchSize) {
+        const batch = selectedItems.slice(i, i + batchSize).map(record => ({
           list_id: newList.id,
           entity_external_id: record.id,
           entity_data: JSON.parse(JSON.stringify(record)),
@@ -661,15 +635,16 @@ export default function AudienceBuilder() {
       await logAuditEvent({
         action: 'save_audience',
         entityType: currentType,
-        entityCount: uniqueResults.length,
+        entityCount: selectedItems.length,
         metadata: { audienceName, filters: filters || {}, listId: newList.id },
       });
 
       setShowSaveAudienceDialog(false);
+      setSelectedRecords(new Set());
       
       toast({
         title: 'Audience saved',
-        description: `"${audienceName}" has been saved with ${uniqueResults.length.toLocaleString()} records and added to a new list.`,
+        description: `"${audienceName}" has been saved with ${selectedItems.length.toLocaleString()} records and added to a new list.`,
       });
 
     } catch (error: any) {
@@ -1033,7 +1008,7 @@ export default function AudienceBuilder() {
       <SaveAudienceDialog
         open={showSaveAudienceDialog}
         onOpenChange={setShowSaveAudienceDialog}
-        totalContacts={totalEstimate}
+        totalContacts={selectedRecords.size}
         currentCredits={currentCreditsForSave}
         onConfirm={handleSaveAudienceConfirm}
         onCancel={() => setShowSaveAudienceDialog(false)}
