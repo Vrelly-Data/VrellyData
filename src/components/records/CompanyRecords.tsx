@@ -34,7 +34,7 @@ import { evaluateSmartFilter } from '@/lib/smartFilterEvaluator';
 import { useRecordsFromDatabase } from '@/hooks/useRecordsFromDatabase';
 
 export function CompanyRecords() {
-  const { records: dbRecords } = useRecordsFromDatabase('company');
+  const { records: dbRecords, deleteRecords } = useRecordsFromDatabase('company');
   const [records, setRecords] = useState<CompanyEntity[]>([]);
   
   // Sync with database records
@@ -98,16 +98,25 @@ export function CompanyRecords() {
     }
   };
 
-  const handleDelete = () => {
-    setRecords(prev => prev.filter(record => !selectedRecords.has(record.id)));
-    const deletedCount = selectedRecords.size;
-    setSelectedRecords(new Set());
-    setIsDeleteDialogOpen(false);
-    toast({
-      title: "Records deleted",
-      description: `Successfully deleted ${deletedCount} company record${deletedCount > 1 ? 's' : ''}`,
-      variant: "default",
-    });
+  const handleDelete = async () => {
+    const idsToDelete = Array.from(selectedRecords);
+    const success = await deleteRecords(idsToDelete);
+    
+    if (success) {
+      setSelectedRecords(new Set());
+      setIsDeleteDialogOpen(false);
+      toast({
+        title: "Records deleted",
+        description: `Successfully deleted ${idsToDelete.length} company record${idsToDelete.length > 1 ? 's' : ''}`,
+        variant: "default",
+      });
+    } else {
+      toast({
+        title: "Error deleting records",
+        description: "Failed to delete records from database",
+        variant: "destructive",
+      });
+    }
   };
 
   return (

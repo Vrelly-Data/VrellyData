@@ -62,6 +62,42 @@ export function useRecordsFromDatabase(entityType: EntityType) {
     }
   };
 
+  // Delete records from database
+  const deleteRecords = async (entityIds: string[]): Promise<boolean> => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('Not authenticated');
+
+      const { data: membership } = await supabase
+        .from('team_memberships')
+        .select('team_id')
+        .eq('user_id', user.id)
+        .single();
+
+      if (!membership) throw new Error('No team membership found');
+
+      const tableName = entityType === 'person' ? 'people_records' : 'company_records';
+      
+      const { error } = await supabase
+        .from(tableName)
+        .delete()
+        .eq('team_id', membership.team_id)
+        .in('entity_external_id', entityIds);
+
+      if (error) throw error;
+
+      // Update local state to remove deleted records
+      setRecords(prev => prev.filter(r => !entityIds.includes(r.id)));
+      
+      console.log(`[DATABASE DELETE] Deleted ${entityIds.length} ${entityType} records from database`);
+      
+      return true;
+    } catch (error) {
+      console.error('Error deleting records:', error);
+      return false;
+    }
+  };
+
   // Load on mount
   useEffect(() => {
     loadRecords();
@@ -77,5 +113,6 @@ export function useRecordsFromDatabase(entityType: EntityType) {
     setRecords,
     isLoading,
     refreshRecords,
+    deleteRecords,
   };
 }
