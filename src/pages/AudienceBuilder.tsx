@@ -20,7 +20,7 @@ import { useToast } from '@/hooks/use-toast';
 import { exportPeopleToCSV, exportCompaniesToCSV } from '@/lib/csvExport';
 import { PersonEntity, CompanyEntity } from '@/types/audience';
 import { FilterBuilder } from '@/components/search/FilterBuilder';
-import { CreditBalance } from '@/components/search/CreditBalance';
+import { CreditDisplay } from '@/components/search/CreditDisplay';
 import { PaginationControls } from '@/components/search/PaginationControls';
 import { FilterBuilderState } from '@/lib/filterConversion';
 import { UnlockConfirmDialog } from '@/components/search/UnlockConfirmDialog';
@@ -61,7 +61,7 @@ export default function AudienceBuilder() {
   } = useAudienceStore();
 
   const { isUnlocked, markAsUnlocked } = useUnlockedRecords(currentType);
-  const { hasEnoughCredits, deductCredits, getRemainingCreditsToday } = useCreditCheck();
+  const { hasEnoughCredits, deductCredits, getRemainingCredits } = useCreditCheck();
   const { saveRecords } = usePersistRecords();
   const { analyzeRecords } = useDeduplication(currentType);
   const { logAuditEvent } = useAuditLog();
@@ -75,7 +75,7 @@ export default function AudienceBuilder() {
     newRecords: number;
     creditsRequired: number;
     action: 'export' | 'list' | 'send';
-    remainingCreditsToday: number;
+    remainingCredits: number;
   } | null>(null);
   const [deduplicationAnalysis, setDeduplicationAnalysis] = useState<{
     alreadyOwned: Array<{ id: string; data: any }>;
@@ -185,7 +185,7 @@ export default function AudienceBuilder() {
     
     if (creditsRequired > 0) {
       // Show unlock confirmation dialog with detailed breakdown
-      const remainingToday = await getRemainingCreditsToday();
+      const remainingCredits = getRemainingCredits();
       setUnlockDialogConfig({
         totalRecords: selectedData.length,
         alreadyOwned: analysis.alreadyOwned.length,
@@ -193,7 +193,7 @@ export default function AudienceBuilder() {
         newRecords: analysis.newRecords.length,
         creditsRequired,
         action,
-        remainingCreditsToday: remainingToday,
+        remainingCredits,
       });
       
       // Store project info for send action
@@ -523,7 +523,7 @@ export default function AudienceBuilder() {
     }
     
     // Get remaining credits for today
-    const remaining = await getRemainingCreditsToday();
+    const remaining = getRemainingCredits();
     setCurrentCreditsForSave(remaining);
     setShowSaveAudienceDialog(true);
   };
@@ -533,7 +533,7 @@ export default function AudienceBuilder() {
       setLoading(true);
       
       // Get remaining credits for today
-      const remaining = await getRemainingCreditsToday();
+      const remaining = getRemainingCredits();
       
       // Check if enough credits
       if (remaining < totalEstimate) {
@@ -752,7 +752,7 @@ export default function AudienceBuilder() {
                       )}
                     </div>
                     <div className="flex items-center gap-2">
-                      <CreditBalance />
+                      <CreditDisplay />
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                           <Button 
@@ -885,7 +885,7 @@ export default function AudienceBuilder() {
                       )}
                     </div>
                     <div className="flex items-center gap-2">
-                      <CreditBalance />
+                      <CreditDisplay />
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                           <Button 
@@ -999,7 +999,7 @@ export default function AudienceBuilder() {
           canUpdate={unlockDialogConfig.canUpdate}
           newRecords={unlockDialogConfig.newRecords}
           creditsRequired={unlockDialogConfig.creditsRequired}
-          remainingCreditsToday={unlockDialogConfig.remainingCreditsToday}
+          remainingCredits={unlockDialogConfig.remainingCredits}
           onConfirm={handleUnlockConfirm}
           onCancel={() => setShowUnlockDialog(false)}
           action={unlockDialogConfig.action}

@@ -1,76 +1,26 @@
 import { useState } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAudienceStore } from '@/stores/audienceStore';
+import { useAuthStore } from '@/stores/authStore';
 import { toast } from '@/hooks/use-toast';
-
-const DAILY_LIMIT = 10000;
-
-interface DailyCreditStatus {
-  credits_used_today: number;
-  daily_limit: number;
-  remaining_today: number;
-  last_reset_date: string | null;
-}
 
 interface DeductResult {
   success: boolean;
-  remainingToday: number;
+  remainingCredits: number;
   error?: string;
 }
 
 export function useCreditCheck() {
   const [isDeducting, setIsDeducting] = useState(false);
   const currentType = useAudienceStore(state => state.currentType);
+  const { profile, fetchProfile } = useAuthStore();
 
-  const getDailyCreditStatus = async (): Promise<DailyCreditStatus> => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      return {
-        credits_used_today: 0,
-        daily_limit: DAILY_LIMIT,
-        remaining_today: DAILY_LIMIT,
-        last_reset_date: null,
-      };
-    }
-    
-    try {
-      const { data, error } = await supabase.rpc('get_daily_credit_status', {
-        p_user_id: user.id,
-      });
-      
-      if (error) throw error;
-      
-      // Parse the jsonb response
-      const status = data as unknown as DailyCreditStatus;
-      return status;
-    } catch (err) {
-      console.error('Error getting daily credit status:', err);
-      // Fallback to reading from profile directly with type casting
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', user.id)
-        .single();
-      
-      // Access new columns via type casting since they may not be in generated types yet
-      const profileData = profile as any;
-      const usedToday = profileData?.credits_used_today || 0;
-      return {
-        credits_used_today: usedToday,
-        daily_limit: DAILY_LIMIT,
-        remaining_today: DAILY_LIMIT - usedToday,
-        last_reset_date: profileData?.last_credit_reset_date || null,
-      };
-    }
-  };
-
-  const getRemainingCreditsToday = async (): Promise<number> => {
-    const status = await getDailyCreditStatus();
-    return status.remaining_today;
+  const getRemainingCredits = (): number => {
+    return profile?.credits ?? 0;
   };
 
   const hasEnoughCredits = async (requiredCredits: number): Promise<boolean> => {
-    const remaining = await getRemainingCreditsToday();
+    const remaining = getRemainingCredits();
     return remaining >= requiredCredits;
   };
 
@@ -81,7 +31,22 @@ export function useCreditCheck() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('User not authenticated');
       
-      // Call the updated database function that returns jsonb
+      const currentCredits = profile?.credits ?? 0;
+      
+      if (currentCredits < amount) {
+        toast({
+          title: 'Insufficient Credits',
+          description: `You need ${amount.toLocaleString()} credits but only have ${currentCredits.toLocaleString()}.`,
+          variant: 'destructive',
+        });
+        return { 
+          success: false, 
+          remainingCredits: currentCredits,
+          error: 'Insufficient credits',
+        };
+      }
+      
+      // Call the simplified database function
       const { data, error } = await supabase.rpc('deduct_credits', {
         p_user_id: user.id,
         p_amount: amount,
@@ -89,17 +54,17 @@ export function useCreditCheck() {
       
       if (error) throw error;
       
-      const result = data as unknown as { success: boolean; remaining_today: number; error?: string };
+      const result = data as unknown as { success: boolean; remaining_credits: number; error?: string };
       
       if (!result.success) {
         toast({
-          title: 'Daily Limit Reached',
-          description: result.error || `You can only download ${DAILY_LIMIT.toLocaleString()} contacts per day.`,
+          title: 'Insufficient Credits',
+          description: result.error || 'You do not have enough credits.',
           variant: 'destructive',
         });
         return { 
           success: false, 
-          remainingToday: result.remaining_today,
+          remainingCredits: result.remaining_credits,
           error: result.error,
         };
       }
@@ -113,12 +78,15 @@ export function useCreditCheck() {
         credits_deducted: amount,
       });
       
+      // Refresh profile to update credits in UI
+      await fetchProfile();
+      
       toast({
         title: 'Credits Used',
-        description: `${amount.toLocaleString()} credits used. ${result.remaining_today.toLocaleString()} remaining today.`,
+        description: `${amount.toLocaleString()} credits used. ${result.remaining_credits.toLocaleString()} remaining.`,
       });
       
-      return { success: true, remainingToday: result.remaining_today };
+      return { success: true, remainingCredits: result.remaining_credits };
     } catch (error) {
       console.error('Error deducting credits:', error);
       toast({
@@ -126,7 +94,7 @@ export function useCreditCheck() {
         description: 'Failed to deduct credits',
         variant: 'destructive',
       });
-      return { success: false, remainingToday: 0, error: 'Failed to deduct credits' };
+      return { success: false, remainingCredits: 0, error: 'Failed to deduct credits' };
     } finally {
       setIsDeducting(false);
     }
@@ -135,9 +103,7 @@ export function useCreditCheck() {
   return { 
     hasEnoughCredits, 
     deductCredits, 
-    getDailyCreditStatus,
-    getRemainingCreditsToday,
+    getRemainingCredits,
     isDeducting,
-    DAILY_LIMIT,
   };
 }

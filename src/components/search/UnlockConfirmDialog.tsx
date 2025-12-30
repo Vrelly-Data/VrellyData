@@ -10,8 +10,6 @@ import {
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 
-const DAILY_LIMIT = 10000;
-
 interface UnlockConfirmDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -20,7 +18,7 @@ interface UnlockConfirmDialogProps {
   canUpdate?: number; // Updated data - 1 credit each
   newRecords?: number; // New contacts - 1 credit each
   creditsRequired: number;
-  remainingCreditsToday: number;
+  remainingCredits: number;
   onConfirm: () => void;
   onCancel: () => void;
   action: 'export' | 'list' | 'send';
@@ -34,13 +32,13 @@ export function UnlockConfirmDialog({
   canUpdate = 0,
   newRecords = 0,
   creditsRequired,
-  remainingCreditsToday,
+  remainingCredits,
   onConfirm,
   onCancel,
   action,
 }: UnlockConfirmDialogProps) {
-  const hasEnoughCredits = remainingCreditsToday >= creditsRequired;
-  const creditsAfterAction = remainingCreditsToday - creditsRequired;
+  const hasEnoughCredits = remainingCredits >= creditsRequired;
+  const creditsAfterAction = remainingCredits - creditsRequired;
 
   const actionLabels = {
     export: 'Export',
@@ -132,9 +130,9 @@ export function UnlockConfirmDialog({
 
           <div className="p-3 rounded-lg border">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-medium">Daily Credits Remaining</span>
+              <span className="text-sm font-medium">Credits Available</span>
               <span className={`text-sm font-semibold ${hasEnoughCredits ? 'text-green-600' : 'text-red-600'}`}>
-                {remainingCreditsToday.toLocaleString()} / {DAILY_LIMIT.toLocaleString()}
+                {remainingCredits.toLocaleString()}
               </span>
             </div>
             <div className="flex items-center justify-between">
@@ -149,8 +147,8 @@ export function UnlockConfirmDialog({
             <Alert variant="destructive">
               <AlertCircle className="h-4 w-4" />
               <AlertDescription>
-                Daily limit reached. You need {(creditsRequired - remainingCreditsToday).toLocaleString()} more credits. 
-                Your limit resets at midnight.
+                Insufficient credits. You need {(creditsRequired - remainingCredits).toLocaleString()} more credits. 
+                Please upgrade your plan to continue.
               </AlertDescription>
             </Alert>
           )}
@@ -166,7 +164,7 @@ export function UnlockConfirmDialog({
             </Button>
           ) : (
             <Button disabled variant="secondary">
-              Limit Reached
+              Insufficient Credits
             </Button>
           )}
         </DialogFooter>
