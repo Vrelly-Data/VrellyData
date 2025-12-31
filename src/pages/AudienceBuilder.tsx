@@ -104,19 +104,23 @@ export default function AudienceBuilder() {
       
       if (currentType === 'person') {
         response = await searchPeople(filterState, currentPage, perPage);
-        setResults(response.items);
-        setTotalEstimate(response.totalEstimate);
-        setTotalPages(response.pagination.total_pages);
       } else {
         response = await searchCompanies(filterState, currentPage, perPage);
-        setResults(response.items);
-        setTotalEstimate(response.totalEstimate);
-        setTotalPages(response.pagination.total_pages);
       }
+      
+      // Apply contact filter if "net_new" is selected - exclude already unlocked contacts
+      let filteredItems = response.items;
+      if (filterState.contactFilter === 'net_new') {
+        filteredItems = response.items.filter(item => !isUnlocked(item));
+      }
+      
+      setResults(filteredItems);
+      setTotalEstimate(filterState.contactFilter === 'net_new' ? filteredItems.length : response.totalEstimate);
+      setTotalPages(filterState.contactFilter === 'net_new' ? 1 : response.pagination.total_pages);
       
       toast({
         title: 'Search complete',
-        description: `Found ${response.totalEstimate.toLocaleString()} ${currentType === 'person' ? 'people' : 'companies'}`,
+        description: `Found ${filteredItems.length.toLocaleString()} ${currentType === 'person' ? 'people' : 'companies'}${filterState.contactFilter === 'net_new' ? ' (net new only)' : ''}`,
       });
     } catch (error: any) {
       toast({
