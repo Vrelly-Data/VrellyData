@@ -37,6 +37,7 @@ import { PlatformDataFieldMapper, FieldMapping, initializeMappings } from './Pla
 import { toast } from 'sonner';
 import { PersonEntity } from '@/types/audience';
 import { CSVFieldMapping } from '@/types/csvImport';
+import { generatePersonId, generateCompanyId } from '@/lib/entityIdGenerator';
 
 type UploadStep = 'select-file' | 'map-fields';
 
@@ -142,18 +143,18 @@ export function FreeDataTab({ showUploadDialog, onCloseUploadDialog }: FreeDataT
       // Extract companies from people
       const companyEntities = extractCompaniesFromPeople(personEntities);
       
-      // Prepare person records for upload
-      const personRecords = personEntities.map((person, index) => ({
+      // Prepare person records for upload with deterministic IDs
+      const personRecords = personEntities.map((person) => ({
         entity_type: 'person' as const,
         entity_data: person as Record<string, any>,
-        entity_external_id: person.email || person.linkedin || `person-${Date.now()}-${index}`
+        entity_external_id: generatePersonId(person)
       }));
       
-      // Prepare company records for upload
-      const companyRecords = companyEntities.map((company, index) => ({
+      // Prepare company records for upload with deterministic IDs
+      const companyRecords = companyEntities.map((company) => ({
         entity_type: 'company' as const,
         entity_data: company as Record<string, any>,
-        entity_external_id: company.domain || company.name?.toLowerCase().replace(/[^a-z0-9]/g, '-') || `company-${Date.now()}-${index}`
+        entity_external_id: generateCompanyId(company)
       }));
       
       // Upload both
