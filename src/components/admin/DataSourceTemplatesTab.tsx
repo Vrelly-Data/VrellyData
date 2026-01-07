@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useDataSourceTemplates, ColumnMapping } from '@/hooks/useDataSourceTemplates';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -39,7 +39,6 @@ interface DataSourceTemplatesTabProps {
 
 export function DataSourceTemplatesTab({ showCreateDialog, onCloseCreateDialog }: DataSourceTemplatesTabProps) {
   const { templates, loading, createTemplate, updateTemplate, deleteTemplate } = useDataSourceTemplates();
-  const [showDialog, setShowDialog] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<string | null>(null);
   
   // Form state
@@ -59,12 +58,8 @@ export function DataSourceTemplatesTab({ showCreateDialog, onCloseCreateDialog }
     .sort((a, b) => a.label.localeCompare(b.label))
     .concat([{ id: 'custom', label: 'Custom Field', required: false, aliases: [] }]);
 
-  // Open dialog when parent triggers it
-  useEffect(() => {
-    if (showCreateDialog) {
-      handleOpenCreate();
-    }
-  }, [showCreateDialog]);
+  // Dialog is open when parent says so OR when editing a template
+  const dialogOpen = showCreateDialog || editingTemplate !== null;
 
   const resetForm = () => {
     setName('');
@@ -78,7 +73,7 @@ export function DataSourceTemplatesTab({ showCreateDialog, onCloseCreateDialog }
 
   const handleOpenCreate = () => {
     resetForm();
-    setShowDialog(true);
+    // Dialog opens via showCreateDialog prop from parent
   };
 
   const handleOpenEdit = (templateId: string) => {
@@ -92,7 +87,7 @@ export function DataSourceTemplatesTab({ showCreateDialog, onCloseCreateDialog }
     setMappings(template.column_mappings);
     setCsvHeaders(template.column_mappings.map(m => m.csvHeader).join('\n'));
     setStep('mapping');
-    setShowDialog(true);
+    // Dialog opens via editingTemplate !== null
   };
 
   const handleParseHeaders = () => {
@@ -156,7 +151,6 @@ export function DataSourceTemplatesTab({ showCreateDialog, onCloseCreateDialog }
   };
 
   const handleCloseDialog = () => {
-    setShowDialog(false);
     resetForm();
     onCloseCreateDialog();
   };
@@ -236,7 +230,7 @@ export function DataSourceTemplatesTab({ showCreateDialog, onCloseCreateDialog }
         </Card>
       )}
 
-      <Dialog open={showDialog} onOpenChange={(open) => { if (!open) handleCloseDialog(); }}>
+      <Dialog open={dialogOpen} onOpenChange={(open) => { if (!open) handleCloseDialog(); }}>
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef } from 'react';
 import { useFreeData } from '@/hooks/useFreeData';
 import { useDataSourceTemplates } from '@/hooks/useDataSourceTemplates';
 import { Button } from '@/components/ui/button';
@@ -51,7 +51,6 @@ export function FreeDataTab({ showUploadDialog, onCloseUploadDialog }: FreeDataT
   const { records, loading, totalCount, uploadFreeData, deleteFreeData, refetch } = useFreeData(entityType);
   const { templates, createTemplate } = useDataSourceTemplates();
   
-  const [dialogOpen, setDialogOpen] = useState(false);
   const [uploadStep, setUploadStep] = useState<UploadStep>('select-file');
   const [uploading, setUploading] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -67,13 +66,6 @@ export function FreeDataTab({ showUploadDialog, onCloseUploadDialog }: FreeDataT
   const [templateName, setTemplateName] = useState('');
   
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // Open dialog when parent triggers it
-  useEffect(() => {
-    if (showUploadDialog) {
-      setDialogOpen(true);
-    }
-  }, [showUploadDialog]);
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -188,7 +180,6 @@ export function FreeDataTab({ showUploadDialog, onCloseUploadDialog }: FreeDataT
   };
 
   const handleCloseDialog = () => {
-    setDialogOpen(false);
     setUploadStep('select-file');
     setCsvHeaders([]);
     setCsvRawData([]);
@@ -330,9 +321,8 @@ export function FreeDataTab({ showUploadDialog, onCloseUploadDialog }: FreeDataT
         </Card>
       )}
 
-      <Dialog open={dialogOpen} onOpenChange={(open) => {
+      <Dialog open={showUploadDialog} onOpenChange={(open) => {
         if (!open) handleCloseDialog();
-        else setDialogOpen(true);
       }}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
           <DialogHeader>
