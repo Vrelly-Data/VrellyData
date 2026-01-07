@@ -63,6 +63,12 @@ export function initializeMappings(headers: string[], rawData: any[]): FieldMapp
   });
 }
 
+const getFieldLabel = (fieldId: string | null): string => {
+  if (!fieldId || fieldId === 'skip') return 'Skip this column';
+  const field = ALL_SYSTEM_FIELDS.find(f => f.id === fieldId);
+  return field?.label || fieldId;
+};
+
 export function PlatformDataFieldMapper({ 
   headers, 
   rawData, 
@@ -141,14 +147,16 @@ export function PlatformDataFieldMapper({
                     onValueChange={(value) => handleMappingChange(mapping.csvHeader, value)}
                   >
                     <SelectTrigger className={cn(
-                      "w-[200px]",
+                      "w-[220px]",
                       isMapped 
                         ? "border-green-500 bg-green-50 dark:bg-green-950/30" 
                         : "border-dashed border-muted-foreground/40"
                     )}>
-                      <SelectValue placeholder="Select field..." />
+                      <span className="truncate">
+                        {getFieldLabel(mapping.systemField)}
+                      </span>
                     </SelectTrigger>
-                    <SelectContent>
+                    <SelectContent className="max-h-[300px] z-[100]">
                       <SelectItem value="skip">
                         Skip this column
                       </SelectItem>
