@@ -337,11 +337,15 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
               <MultiSelectDropdown
                 options={[
                   { label: 'Personal Email', value: 'personal_email' },
-                  { label: 'Business Email', value: 'business_email' },
+                  { label: 'Personal Business Email', value: 'business_email' },
                   { label: 'Direct Mobile', value: 'direct_mobile' },
                   { label: 'Personal LinkedIn', value: 'personal_linkedin' },
                   { label: 'Personal Facebook', value: 'personal_facebook' },
                   { label: 'Personal Twitter', value: 'personal_twitter' },
+                  { label: 'Company Phone', value: 'company_phone' },
+                  { label: 'Company LinkedIn', value: 'company_linkedin' },
+                  { label: 'Company Facebook', value: 'company_facebook' },
+                  { label: 'Company Twitter', value: 'company_twitter' },
                 ]}
                 selected={filterState.prospectData || []}
                 onChange={(values) => updateFilter('prospectData', values)}
