@@ -9,7 +9,6 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { PERSON_IMPORT_FIELDS, COMPANY_IMPORT_FIELDS } from '@/config/csvImportFields';
 import { autoMapFields } from '@/lib/csvImportMapper';
 import { Check, Circle, X } from 'lucide-react';
@@ -100,7 +99,7 @@ export function PlatformDataFieldMapper({
         </Badge>
       </div>
       
-      <ScrollArea className="h-[400px] pr-4">
+      <div className="max-h-[400px] overflow-y-auto pr-4">
         <div className="space-y-3">
           {mappings.map((mapping) => {
             const isMapped = !!mapping.systemField;
@@ -136,13 +135,13 @@ export function PlatformDataFieldMapper({
                   )}
                 </div>
                 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-shrink-0">
                   <Select
                     value={mapping.systemField || 'skip'}
                     onValueChange={(value) => handleMappingChange(mapping.csvHeader, value)}
                   >
                   <SelectTrigger className={cn(
-                    "w-[220px]",
+                    "w-[220px] flex-shrink-0",
                     isMapped 
                       ? "border-green-500 bg-green-50 dark:bg-green-950/30" 
                       : "border-dashed border-muted-foreground/40"
@@ -184,7 +183,7 @@ export function PlatformDataFieldMapper({
             );
           })}
         </div>
-      </ScrollArea>
+      </div>
     </div>
   );
 }
