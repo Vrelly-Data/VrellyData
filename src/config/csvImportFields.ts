@@ -209,6 +209,16 @@ export const COMPANY_IMPORT_FIELDS: SystemField[] = [
     aliases: ['linkedin', 'linkedin url', 'linkedin profile', 'li url', 'company linkedin', 'company linkedin url']
   },
   {
+    id: 'companyFacebookUrl',
+    label: 'Company Facebook',
+    aliases: ['company facebook', 'company facebook url', 'company fb', 'organization facebook', 'facebook page', 'fb page']
+  },
+  {
+    id: 'companyTwitterUrl',
+    label: 'Company Twitter',
+    aliases: ['company twitter', 'company twitter url', 'company x', 'organization twitter', 'twitter page', 'x page', 'company x url']
+  },
+  {
     id: 'companyPhoneNumber',
     label: 'Company Phone',
     aliases: ['phone', 'telephone', 'company phone', 'office phone', 'phone number', 'company phone number']

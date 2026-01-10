@@ -108,6 +108,8 @@ export interface CompanyEntity {
   sic?: string;                    // Standard Industrial Classification
   naics?: string;                  // North American Industry Classification
   companyAddress?: string;         // Full street address for the company
+  facebookUrl?: string;            // Company Facebook page URL
+  twitterUrl?: string;             // Company Twitter/X page URL
   keywords?: string[];              // Tags/keywords associated with the company
   customFields?: Record<string, string>; // For unmapped CSV columns
   isUnlocked?: boolean;            // Track if contact info has been unlocked

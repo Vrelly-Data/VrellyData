@@ -526,6 +526,12 @@ export function transformImportData(
           case 'keywords':
             entity.keywords = trimmedValue.split(',').map(k => k.trim()).filter(Boolean);
             break;
+          case 'companyFacebookUrl':
+            entity.facebookUrl = trimmedValue;
+            break;
+          case 'companyTwitterUrl':
+            entity.twitterUrl = trimmedValue;
+            break;
         }
       });
       
