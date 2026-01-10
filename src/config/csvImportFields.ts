@@ -194,8 +194,8 @@ export const COMPANY_IMPORT_FIELDS: SystemField[] = [
     aliases: ['website', 'domain', 'url', 'web', 'site', 'web address']
   },
   {
-    id: 'companyIndustry',
-    label: 'Company Industry',
+    id: 'industry',
+    label: 'Industry',
     aliases: ['industry', 'sector', 'vertical', 'business type', 'company industry']
   },
   {
