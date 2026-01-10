@@ -21,7 +21,7 @@ export const PERSON_IMPORT_FIELDS: SystemField[] = [
   {
     id: 'businessEmail',
     label: 'Person Business Email',
-    aliases: ['business email', 'work email', 'corporate email', 'professional email', 'office email', 'company email address', 'email', 'email address', 'e-mail', 'mail', 'primary email']
+    aliases: ['business email', 'work email', 'corporate email', 'professional email', 'office email', 'company email address', 'email', 'email address', 'e-mail', 'mail', 'primary email', 'person business email']
   },
   {
     id: 'title',
