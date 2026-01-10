@@ -149,7 +149,7 @@ export function PlatformDataFieldMapper({
                   )}>
                     <SelectValue placeholder="Skip this column" />
                   </SelectTrigger>
-                    <SelectContent className="max-h-[300px] z-[100]">
+                    <SelectContent className="max-h-[300px]" position="popper" sideOffset={4} style={{ zIndex: 9999 }}>
                       <SelectItem value="skip">
                         Skip this column
                       </SelectItem>
