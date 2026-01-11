@@ -29,14 +29,22 @@ function parseProspectData(prospectData: string[]): {
   hasLinkedin: boolean;
   hasFacebook: boolean;
   hasTwitter: boolean;
+  hasCompanyPhone: boolean;
+  hasCompanyLinkedin: boolean;
+  hasCompanyFacebook: boolean;
+  hasCompanyTwitter: boolean;
 } {
   return {
     hasPersonalEmail: prospectData.includes('personal_email'),
     hasBusinessEmail: prospectData.includes('business_email'),
-    hasPhone: prospectData.includes('phone'),
-    hasLinkedin: prospectData.includes('linkedin'),
-    hasFacebook: prospectData.includes('facebook'),
-    hasTwitter: prospectData.includes('twitter'),
+    hasPhone: prospectData.includes('direct_mobile'),
+    hasLinkedin: prospectData.includes('personal_linkedin'),
+    hasFacebook: prospectData.includes('personal_facebook'),
+    hasTwitter: prospectData.includes('personal_twitter'),
+    hasCompanyPhone: prospectData.includes('company_phone'),
+    hasCompanyLinkedin: prospectData.includes('company_linkedin'),
+    hasCompanyFacebook: prospectData.includes('company_facebook'),
+    hasCompanyTwitter: prospectData.includes('company_twitter'),
   };
 }
 
@@ -88,6 +96,10 @@ export function useFreeDataSearch() {
         p_person_interests: filterState.personInterests?.length > 0 ? filterState.personInterests : null,
         p_person_skills: filterState.personSkills?.length > 0 ? filterState.personSkills : null,
         p_company_revenue: filterState.companyRevenue?.length > 0 ? filterState.companyRevenue : null,
+        p_has_company_phone: prospectFlags.hasCompanyPhone || null,
+        p_has_company_linkedin: prospectFlags.hasCompanyLinkedin || null,
+        p_has_company_facebook: prospectFlags.hasCompanyFacebook || null,
+        p_has_company_twitter: prospectFlags.hasCompanyTwitter || null,
         p_limit: perPage,
         p_offset: offset,
       });
