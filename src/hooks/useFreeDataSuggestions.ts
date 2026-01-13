@@ -5,6 +5,7 @@ interface FilterSuggestions {
   interests: string[];
   skills: string[];
   industries: string[];
+  technologies: string[];
 }
 
 export function useFreeDataSuggestions() {
@@ -12,6 +13,7 @@ export function useFreeDataSuggestions() {
     interests: [],
     skills: [],
     industries: [],
+    technologies: [],
   });
   const [loading, setLoading] = useState(true);
 
@@ -26,11 +28,12 @@ export function useFreeDataSuggestions() {
         }
 
         if (data) {
-          const parsed = data as { interests?: string[]; skills?: string[]; industries?: string[] };
+          const parsed = data as { interests?: string[]; skills?: string[]; industries?: string[]; technologies?: string[] };
           setSuggestions({
             interests: (parsed.interests || []).filter(Boolean),
             skills: (parsed.skills || []).filter(Boolean),
             industries: (parsed.industries || []).filter(Boolean),
+            technologies: (parsed.technologies || []).filter(Boolean),
           });
         }
       } catch (err) {
