@@ -49,17 +49,17 @@ function parseProspectData(prospectData: string[]): {
 }
 
 // Convert gender value to M/F format for database (returns array for DB function)
-function convertGender(gender: string | undefined): string[] | null {
+function convertGender(gender: string | undefined | null): string[] | null {
   if (!gender) return null;
   if (gender.toLowerCase() === 'male') return ['M'];
   if (gender.toLowerCase() === 'female') return ['F'];
   return [gender];
 }
 
-// Merge arrays, filtering out empty/null values
-function mergeArrays(...arrays: (string[] | undefined | null)[]): string[] | null {
-  const merged = arrays.flatMap(arr => arr || []).filter(Boolean);
-  return merged.length > 0 ? merged : null;
+// Helper to safely convert array to null if empty
+function arrayOrNull(arr: string[] | undefined | null): string[] | null {
+  if (!arr || arr.length === 0) return null;
+  return arr;
 }
 
 export function useFreeDataSearch() {
@@ -77,47 +77,55 @@ export function useFreeDataSearch() {
       const prospectFlags = parseProspectData(filterState.prospectData);
 
       // Merge person and company location filters
-      const combinedCities = mergeArrays(filterState.cities, filterState.personCity, filterState.companyCity);
-      const combinedCountries = mergeArrays(filterState.personCountry, filterState.companyCountry);
+      const combinedCities = [
+        ...(filterState.cities || []),
+        ...(filterState.personCity || []),
+        ...(filterState.companyCity || []),
+      ].filter(Boolean);
+      
+      const combinedCountries = [
+        ...(filterState.personCountry || []),
+        ...(filterState.companyCountry || []),
+      ].filter(Boolean);
 
-      // Use the v2 function with parameters matching the actual database function
-      const { data, error } = await supabase.rpc('search_free_data_with_filters_v2', {
+      // Build parameters for the NEW canonical search function
+      const searchParams = {
         p_entity_type: entityType,
-        p_keywords: filterState.keywords.length > 0 ? filterState.keywords : null,
-        p_job_titles: filterState.jobTitles.length > 0 ? filterState.jobTitles : null,
-        p_seniority_levels: filterState.seniority.length > 0 ? filterState.seniority : null,
-        p_company_size: filterState.companySize.length > 0 ? filterState.companySize[0] : null,
-        p_industries: filterState.industries.length > 0 ? filterState.industries : null,
-        p_locations: null,
-        p_countries: combinedCountries,
-        p_states: null,
-        p_cities: combinedCities,
+        p_keywords: arrayOrNull(filterState.keywords),
+        p_job_titles: arrayOrNull(filterState.jobTitles),
+        p_seniority_levels: arrayOrNull(filterState.seniority),
+        p_company_size_ranges: arrayOrNull(filterState.companySize), // Now supports multi-select!
+        p_industries: arrayOrNull(filterState.industries),
+        p_countries: arrayOrNull(combinedCountries),
+        p_cities: arrayOrNull(combinedCities),
         p_gender: convertGender(filterState.gender),
-        p_net_worth: filterState.netWorth.length > 0 ? filterState.netWorth : null,
-        p_income: filterState.income.length > 0 ? filterState.income : null,
-        p_has_email: prospectFlags.hasPersonalEmail || prospectFlags.hasBusinessEmail || null,
+        p_net_worth: arrayOrNull(filterState.netWorth),
+        p_income: arrayOrNull(filterState.income),
+        p_departments: arrayOrNull(filterState.department),
+        p_company_revenue: arrayOrNull(filterState.companyRevenue),
+        p_person_interests: arrayOrNull(filterState.personInterests),
+        p_person_skills: arrayOrNull(filterState.personSkills),
+        p_has_personal_email: prospectFlags.hasPersonalEmail || null,
+        p_has_business_email: prospectFlags.hasBusinessEmail || null,
         p_has_phone: prospectFlags.hasPhone || null,
         p_has_linkedin: prospectFlags.hasLinkedin || null,
-        p_has_twitter: prospectFlags.hasTwitter || null,
         p_has_facebook: prospectFlags.hasFacebook || null,
-        p_has_website: null,
-        p_departments: filterState.department.length > 0 ? filterState.department : null,
-        p_company_names: null,
-        p_company_types: null,
-        p_founding_years: null,
-        p_revenue_ranges: filterState.companyRevenue?.length > 0 ? filterState.companyRevenue : null,
-        p_employee_ranges: null,
-        p_tech_stacks: null,
-        p_has_revenue: null,
-        p_has_employees: null,
-        p_has_funding: null,
-        p_has_description: null,
+        p_has_twitter: prospectFlags.hasTwitter || null,
+        p_has_company_phone: prospectFlags.hasCompanyPhone || null,
+        p_has_company_linkedin: prospectFlags.hasCompanyLinkedin || null,
+        p_has_company_facebook: prospectFlags.hasCompanyFacebook || null,
+        p_has_company_twitter: prospectFlags.hasCompanyTwitter || null,
         p_limit: perPage,
         p_offset: offset,
-      } as any);
+      };
+
+      console.log('[FreeDataSearch] Calling search_free_data_builder with:', searchParams);
+
+      // Call the NEW canonical Builder search function
+      const { data, error } = await supabase.rpc('search_free_data_builder', searchParams as any);
 
       if (error) {
-        console.error('Error in search_free_data_with_filters_v2 RPC:', error);
+        console.error('Error in search_free_data_builder RPC:', error);
         throw error;
       }
 
