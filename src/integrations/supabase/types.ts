@@ -952,79 +952,42 @@ export type Database = {
         Returns: undefined
       }
       reset_monthly_credits: { Args: never; Returns: undefined }
-      search_free_data_builder:
-        | {
-            Args: {
-              p_entity_type?: string
-              p_filters?: Json
-              p_has_business_email?: boolean
-              p_has_company_facebook?: boolean
-              p_has_company_industry?: boolean
-              p_has_company_linkedin?: boolean
-              p_has_company_location?: boolean
-              p_has_company_name?: boolean
-              p_has_company_phone?: boolean
-              p_has_company_revenue?: boolean
-              p_has_company_size?: boolean
-              p_has_company_twitter?: boolean
-              p_has_company_website?: boolean
-              p_has_department?: boolean
-              p_has_facebook?: boolean
-              p_has_job_title?: boolean
-              p_has_linkedin?: boolean
-              p_has_personal_email?: boolean
-              p_has_phone?: boolean
-              p_has_seniority?: boolean
-              p_has_skills?: boolean
-              p_has_twitter?: boolean
-              p_page?: number
-              p_per_page?: number
-              p_search_query?: string
-              p_sort_direction?: string
-              p_sort_field?: string
-            }
-            Returns: {
-              entity_data: Json
-              entity_external_id: string
-              total_count: number
-            }[]
-          }
-        | {
-            Args: {
-              p_cities?: string[]
-              p_company_revenue?: string[]
-              p_company_size_ranges?: string[]
-              p_countries?: string[]
-              p_departments?: string[]
-              p_entity_type?: string
-              p_gender?: string[]
-              p_has_business_email?: boolean
-              p_has_company_facebook?: boolean
-              p_has_company_linkedin?: boolean
-              p_has_company_phone?: boolean
-              p_has_company_twitter?: boolean
-              p_has_facebook?: boolean
-              p_has_linkedin?: boolean
-              p_has_personal_email?: boolean
-              p_has_phone?: boolean
-              p_has_twitter?: boolean
-              p_income?: string[]
-              p_industries?: string[]
-              p_job_titles?: string[]
-              p_keywords?: string[]
-              p_limit?: number
-              p_net_worth?: string[]
-              p_offset?: number
-              p_person_interests?: string[]
-              p_person_skills?: string[]
-              p_seniority_levels?: string[]
-            }
-            Returns: {
-              entity_data: Json
-              entity_external_id: string
-              total_count: number
-            }[]
-          }
+      search_free_data_builder: {
+        Args: {
+          p_cities?: string[]
+          p_company_revenue?: string[]
+          p_company_size_ranges?: string[]
+          p_countries?: string[]
+          p_departments?: string[]
+          p_entity_type?: string
+          p_gender?: string[]
+          p_has_business_email?: boolean
+          p_has_company_facebook?: boolean
+          p_has_company_linkedin?: boolean
+          p_has_company_phone?: boolean
+          p_has_company_twitter?: boolean
+          p_has_facebook?: boolean
+          p_has_linkedin?: boolean
+          p_has_personal_email?: boolean
+          p_has_phone?: boolean
+          p_has_twitter?: boolean
+          p_income?: string[]
+          p_industries?: string[]
+          p_job_titles?: string[]
+          p_keywords?: string[]
+          p_limit?: number
+          p_net_worth?: string[]
+          p_offset?: number
+          p_person_interests?: string[]
+          p_person_skills?: string[]
+          p_seniority_levels?: string[]
+        }
+        Returns: {
+          entity_data: Json
+          entity_external_id: string
+          total_count: number
+        }[]
+      }
       title_matches_seniority: {
         Args: { p_seniority: string[]; p_title: string }
         Returns: boolean
