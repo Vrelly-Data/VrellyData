@@ -1010,6 +1010,32 @@ export type Database = {
         | {
             Args: {
               p_cities?: string[]
+              p_company_names?: string[]
+              p_company_sizes?: string[]
+              p_countries?: string[]
+              p_departments?: string[]
+              p_entity_type: Database["public"]["Enums"]["entity_type"]
+              p_founding_years?: string[]
+              p_has_company_facebook?: boolean
+              p_has_company_linkedin?: boolean
+              p_has_company_phone?: boolean
+              p_has_company_twitter?: boolean
+              p_has_email?: boolean
+              p_has_linkedin?: boolean
+              p_has_phone?: boolean
+              p_industries?: string[]
+              p_job_titles?: string[]
+              p_keywords?: string[]
+              p_page?: number
+              p_per_page?: number
+              p_revenue_ranges?: string[]
+              p_seniority_levels?: string[]
+            }
+            Returns: Json
+          }
+        | {
+            Args: {
+              p_cities?: string[]
               p_company_city?: string[]
               p_company_country?: string[]
               p_company_revenue?: string[]
