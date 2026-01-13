@@ -706,7 +706,7 @@ export default function AudienceBuilder() {
 
           <div className="flex-1 overflow-auto">
             <TabsContent value="person" className="mt-0 h-full">
-              <div className="grid grid-cols-[380px_1fr] gap-4 h-full p-4">
+              <div className={cn("grid grid-cols-[380px_1fr] gap-4 h-full p-4", previewMode === 'compact' && 'items-start')}>
                 {/* Left: Filter Builder */}
                 <div className="h-full overflow-hidden">
                   <FilterBuilder 
@@ -717,7 +717,7 @@ export default function AudienceBuilder() {
                 
                 <div className={cn(
                   "space-y-4 flex flex-col transition-all duration-200",
-                  previewMode === 'compact' ? 'max-h-[520px]' : 'h-full'
+                  previewMode === 'compact' ? 'self-start max-h-[calc(100vh-180px)] overflow-hidden' : 'h-full'
                 )}>
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-4">
@@ -856,7 +856,7 @@ export default function AudienceBuilder() {
             </TabsContent>
 
             <TabsContent value="company" className="mt-0 h-full">
-              <div className="grid grid-cols-[380px_1fr] gap-4 h-full p-4">
+              <div className={cn("grid grid-cols-[380px_1fr] gap-4 h-full p-4", previewMode === 'compact' && 'items-start')}>
                 {/* Left: Filter Builder */}
                 <div className="h-full overflow-hidden">
                   <FilterBuilder 
@@ -867,7 +867,7 @@ export default function AudienceBuilder() {
                 
                 <div className={cn(
                   "space-y-4 flex flex-col transition-all duration-200",
-                  previewMode === 'compact' ? 'max-h-[520px]' : 'h-full'
+                  previewMode === 'compact' ? 'self-start max-h-[calc(100vh-180px)] overflow-hidden' : 'h-full'
                 )}>
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-4">
