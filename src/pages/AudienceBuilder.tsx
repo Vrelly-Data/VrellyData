@@ -3,7 +3,9 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Save, Download, Users, Building2, Info, ChevronDown, FolderPlus, Send } from 'lucide-react';
+import { Save, Download, Users, Building2, Info, ChevronDown, FolderPlus, Send, ChevronsUpDown } from 'lucide-react';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { cn } from '@/lib/utils';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -93,6 +95,7 @@ export default function AudienceBuilder() {
   const [externalProjects, setExternalProjects] = useState<any[]>([]);
   const [showSaveAudienceDialog, setShowSaveAudienceDialog] = useState(false);
   const [currentCreditsForSave, setCurrentCreditsForSave] = useState(0);
+  const [previewMode, setPreviewMode] = useState<'expanded' | 'compact'>('expanded');
   
   const handleSearch = async (filterState: FilterBuilderState) => {
     setLoading(true);
@@ -712,10 +715,27 @@ export default function AudienceBuilder() {
                   />
                 </div>
                 
-                {/* Right: Results */}
-                <div className="space-y-4 h-full flex flex-col">
+                <div className={cn(
+                  "space-y-4 flex flex-col transition-all duration-200",
+                  previewMode === 'compact' ? 'max-h-[520px]' : 'h-full'
+                )}>
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-4">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            onClick={() => setPreviewMode(prev => prev === 'expanded' ? 'compact' : 'expanded')}
+                          >
+                            <ChevronsUpDown className="h-4 w-4" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          {previewMode === 'expanded' ? 'Collapse preview' : 'Expand preview'}
+                        </TooltipContent>
+                      </Tooltip>
                       {selectedRecords.size > 0 && (
                         <Badge variant="secondary">
                           {selectedRecords.size.toLocaleString()} selected
@@ -845,10 +865,27 @@ export default function AudienceBuilder() {
                   />
                 </div>
                 
-                {/* Right: Results */}
-                <div className="space-y-4 h-full flex flex-col">
+                <div className={cn(
+                  "space-y-4 flex flex-col transition-all duration-200",
+                  previewMode === 'compact' ? 'max-h-[520px]' : 'h-full'
+                )}>
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-4">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            onClick={() => setPreviewMode(prev => prev === 'expanded' ? 'compact' : 'expanded')}
+                          >
+                            <ChevronsUpDown className="h-4 w-4" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          {previewMode === 'expanded' ? 'Collapse preview' : 'Expand preview'}
+                        </TooltipContent>
+                      </Tooltip>
                       {selectedRecords.size > 0 && (
                         <Badge variant="secondary">
                           {selectedRecords.size.toLocaleString()} selected
