@@ -13,12 +13,12 @@ export function buildFreeDataQuery(
   // NOTE: Keyword search is handled separately via the search_free_data_keywords RPC function
   // to properly handle JSONB text extraction with ILIKE
 
-  // Industry filter
+  // Industry filter - use partial matching to support multi-word industries like "health, wellness, and fitness"
   if (filters.industries.length > 0) {
-    // Match any of the selected industries (case-insensitive)
-    const industryConditions = filters.industries.map(industry => 
-      `entity_data->industry.ilike.${industry}`
-    ).join(',');
+    const industryConditions = filters.industries.map(industry => {
+      const escaped = industry.replace(/[%_]/g, '\\$&');
+      return `entity_data->industry.ilike.%${escaped}%`;
+    }).join(',');
     query = query.or(industryConditions);
   }
 

@@ -235,7 +235,13 @@ export function transformImportData(
         
         const value = row[mapping.csvHeader];
         if (!value) return;
-        const trimmedValue = extractFirstValue(String(value).trim());
+        
+        // For certain fields, preserve the full value (don't split on commas)
+        const preserveFullValueFields = ['industry', 'companyIndustry', 'skills', 'interests'];
+        const shouldPreserveFullValue = preserveFullValueFields.includes(mapping.systemField);
+        const trimmedValue = shouldPreserveFullValue 
+          ? String(value).trim() 
+          : extractFirstValue(String(value).trim());
         
         // Handle custom fields
         if (mapping.systemField === 'custom') {
@@ -431,7 +437,13 @@ export function transformImportData(
         
         const value = row[mapping.csvHeader];
         if (!value) return;
-        const trimmedValue = extractFirstValue(String(value).trim());
+        
+        // For certain fields, preserve the full value (don't split on commas)
+        const preserveFullValueFields = ['industry', 'companyIndustry', 'skills', 'interests'];
+        const shouldPreserveFullValue = preserveFullValueFields.includes(mapping.systemField);
+        const trimmedValue = shouldPreserveFullValue 
+          ? String(value).trim() 
+          : extractFirstValue(String(value).trim());
         
         // Handle custom fields
         if (mapping.systemField === 'custom') {
