@@ -988,35 +988,6 @@ export type Database = {
           total_count: number
         }[]
       }
-      search_free_data_with_filters_v2: {
-        Args: {
-          p_cities?: string[]
-          p_company_size?: string
-          p_countries?: string[]
-          p_departments?: string[]
-          p_entity_type: string
-          p_gender?: string[]
-          p_has_email?: boolean
-          p_has_facebook?: boolean
-          p_has_linkedin?: boolean
-          p_has_phone?: boolean
-          p_has_twitter?: boolean
-          p_income?: string[]
-          p_industries?: string[]
-          p_job_titles?: string[]
-          p_keywords?: string[]
-          p_limit?: number
-          p_net_worth?: string[]
-          p_offset?: number
-          p_revenue_ranges?: string[]
-          p_seniority_levels?: string[]
-        }
-        Returns: {
-          entity_data: Json
-          entity_external_id: string
-          total_count: number
-        }[]
-      }
       title_matches_seniority: {
         Args: { p_seniority: string[]; p_title: string }
         Returns: boolean
