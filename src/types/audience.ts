@@ -44,6 +44,8 @@ export interface PersonEntity {
   website?: string;
   companyLinkedin?: string;
   companyPhone?: string;
+  companyFacebookUrl?: string;   // Company Facebook page URL
+  companyTwitterUrl?: string;    // Company Twitter/X page URL
   age?: number;
   gender?: string;
   city?: string;
