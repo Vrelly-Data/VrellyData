@@ -1107,7 +1107,11 @@ export type Database = {
           p_states?: string[]
           p_tech_stacks?: string[]
         }
-        Returns: Json
+        Returns: {
+          entity_data: Json
+          entity_external_id: string
+          total_count: number
+        }[]
       }
       title_matches_seniority: {
         Args: { p_seniority: string[]; p_title: string }
