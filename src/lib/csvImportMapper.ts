@@ -237,7 +237,7 @@ export function transformImportData(
         if (!value) return;
         
         // For certain fields, preserve the full value (don't split on commas)
-        const preserveFullValueFields = ['industry', 'companyIndustry', 'skills', 'interests'];
+        const preserveFullValueFields = ['industry', 'companyIndustry', 'skills', 'interests', 'keywords', 'technologies'];
         const shouldPreserveFullValue = preserveFullValueFields.includes(mapping.systemField);
         const trimmedValue = shouldPreserveFullValue 
           ? String(value).trim() 
@@ -439,7 +439,7 @@ export function transformImportData(
         if (!value) return;
         
         // For certain fields, preserve the full value (don't split on commas)
-        const preserveFullValueFields = ['industry', 'companyIndustry', 'skills', 'interests'];
+        const preserveFullValueFields = ['industry', 'companyIndustry', 'skills', 'interests', 'keywords', 'technologies'];
         const shouldPreserveFullValue = preserveFullValueFields.includes(mapping.systemField);
         const trimmedValue = shouldPreserveFullValue 
           ? String(value).trim() 
