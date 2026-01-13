@@ -105,6 +105,7 @@ export function useFreeDataSearch() {
         p_company_revenue: arrayOrNull(filterState.companyRevenue),
         p_person_interests: arrayOrNull(filterState.personInterests),
         p_person_skills: arrayOrNull(filterState.personSkills),
+        p_technologies: arrayOrNull(filterState.technologies),
         p_has_personal_email: prospectFlags.hasPersonalEmail || null,
         p_has_business_email: prospectFlags.hasBusinessEmail || null,
         p_has_phone: prospectFlags.hasPhone || null,
