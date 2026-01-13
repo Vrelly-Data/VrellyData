@@ -48,12 +48,18 @@ function parseProspectData(prospectData: string[]): {
   };
 }
 
-// Convert gender value to M/F format for database
-function convertGender(gender: string | undefined): string | null {
+// Convert gender value to M/F format for database (returns array for DB function)
+function convertGender(gender: string | undefined): string[] | null {
   if (!gender) return null;
-  if (gender.toLowerCase() === 'male') return 'M';
-  if (gender.toLowerCase() === 'female') return 'F';
-  return gender;
+  if (gender.toLowerCase() === 'male') return ['M'];
+  if (gender.toLowerCase() === 'female') return ['F'];
+  return [gender];
+}
+
+// Merge arrays, filtering out empty/null values
+function mergeArrays(...arrays: (string[] | undefined | null)[]): string[] | null {
+  const merged = arrays.flatMap(arr => arr || []).filter(Boolean);
+  return merged.length > 0 ? merged : null;
 }
 
 export function useFreeDataSearch() {
@@ -70,36 +76,42 @@ export function useFreeDataSearch() {
       const offset = (page - 1) * perPage;
       const prospectFlags = parseProspectData(filterState.prospectData);
 
-      // Use the v2 function with correct entity_type ENUM
+      // Merge person and company location filters
+      const combinedCities = mergeArrays(filterState.cities, filterState.personCity, filterState.companyCity);
+      const combinedCountries = mergeArrays(filterState.personCountry, filterState.companyCountry);
+
+      // Use the v2 function with parameters matching the actual database function
       const { data, error } = await supabase.rpc('search_free_data_with_filters_v2', {
         p_entity_type: entityType,
         p_keywords: filterState.keywords.length > 0 ? filterState.keywords : null,
-        p_industries: filterState.industries.length > 0 ? filterState.industries : null,
-        p_cities: filterState.cities.length > 0 ? filterState.cities : null,
-        p_gender: convertGender(filterState.gender),
         p_job_titles: filterState.jobTitles.length > 0 ? filterState.jobTitles : null,
-        p_seniority: filterState.seniority.length > 0 ? filterState.seniority : null,
-        p_department: filterState.department.length > 0 ? filterState.department : null,
-        p_company_size: filterState.companySize.length > 0 ? filterState.companySize : null,
+        p_seniority_levels: filterState.seniority.length > 0 ? filterState.seniority : null,
+        p_company_size: filterState.companySize.length > 0 ? filterState.companySize[0] : null,
+        p_industries: filterState.industries.length > 0 ? filterState.industries : null,
+        p_locations: null,
+        p_countries: combinedCountries,
+        p_states: null,
+        p_cities: combinedCities,
+        p_gender: convertGender(filterState.gender),
         p_net_worth: filterState.netWorth.length > 0 ? filterState.netWorth : null,
         p_income: filterState.income.length > 0 ? filterState.income : null,
-        p_has_personal_email: prospectFlags.hasPersonalEmail || null,
-        p_has_business_email: prospectFlags.hasBusinessEmail || null,
+        p_has_email: prospectFlags.hasPersonalEmail || prospectFlags.hasBusinessEmail || null,
         p_has_phone: prospectFlags.hasPhone || null,
         p_has_linkedin: prospectFlags.hasLinkedin || null,
-        p_has_facebook: prospectFlags.hasFacebook || null,
         p_has_twitter: prospectFlags.hasTwitter || null,
-        p_person_city: filterState.personCity?.length > 0 ? filterState.personCity : null,
-        p_person_country: filterState.personCountry?.length > 0 ? filterState.personCountry : null,
-        p_company_city: filterState.companyCity?.length > 0 ? filterState.companyCity : null,
-        p_company_country: filterState.companyCountry?.length > 0 ? filterState.companyCountry : null,
-        p_person_interests: filterState.personInterests?.length > 0 ? filterState.personInterests : null,
-        p_person_skills: filterState.personSkills?.length > 0 ? filterState.personSkills : null,
-        p_company_revenue: filterState.companyRevenue?.length > 0 ? filterState.companyRevenue : null,
-        p_has_company_phone: prospectFlags.hasCompanyPhone || null,
-        p_has_company_linkedin: prospectFlags.hasCompanyLinkedin || null,
-        p_has_company_facebook: prospectFlags.hasCompanyFacebook || null,
-        p_has_company_twitter: prospectFlags.hasCompanyTwitter || null,
+        p_has_facebook: prospectFlags.hasFacebook || null,
+        p_has_website: null,
+        p_departments: filterState.department.length > 0 ? filterState.department : null,
+        p_company_names: null,
+        p_company_types: null,
+        p_founding_years: null,
+        p_revenue_ranges: filterState.companyRevenue?.length > 0 ? filterState.companyRevenue : null,
+        p_employee_ranges: null,
+        p_tech_stacks: null,
+        p_has_revenue: null,
+        p_has_employees: null,
+        p_has_funding: null,
+        p_has_description: null,
         p_limit: perPage,
         p_offset: offset,
       } as any);
