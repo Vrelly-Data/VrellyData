@@ -103,7 +103,7 @@ export const PERSON_FILTER_PROPERTIES: PropertyDefinition[] = [
       { label: 'IT', value: 'IT' },
       { label: 'Customer Success', value: 'Customer Success' },
       { label: 'Support', value: 'Support' },
-      { label: 'Executive', value: 'Executive' },
+      { label: 'C-Suite', value: 'C-Suite' },
     ]
   },
   
