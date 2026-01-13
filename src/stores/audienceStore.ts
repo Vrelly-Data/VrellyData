@@ -69,6 +69,7 @@ export const useAudienceStore = create<AudienceState>((set) => ({
     companyCountry: [],
     personInterests: [],
     personSkills: [],
+    technologies: [],
     contactFilter: null,
   },
   filterState: null,

@@ -145,6 +145,16 @@ export function buildFreeDataQuery(
     query = query.or(skillConditions);
   }
 
+  // Technologies filter (both person and company)
+  if (filters.technologies && filters.technologies.length > 0) {
+    const techConditions = filters.technologies.map(tech => {
+      const escapedTech = tech.replace(/[%_]/g, '\\$&').toLowerCase();
+      // Search in technologies array (stored as JSON array) by converting to text
+      return `entity_data->technologies.cs.[\"${escapedTech}\"]`;
+    }).join(',');
+    query = query.or(techConditions);
+  }
+
   // Net Worth filter (person only)
   if (entityType === 'person' && filters.netWorth.length > 0) {
     const netWorthConditions = filters.netWorth.map(nw => 

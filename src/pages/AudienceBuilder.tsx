@@ -411,6 +411,7 @@ export default function AudienceBuilder() {
         companyCountry: [],
         personInterests: [],
         personSkills: [],
+        technologies: [],
         contactFilter: null,
       };
       
@@ -471,6 +472,7 @@ export default function AudienceBuilder() {
         companyCountry: [],
         personInterests: [],
         personSkills: [],
+        technologies: [],
         contactFilter: null,
       };
       

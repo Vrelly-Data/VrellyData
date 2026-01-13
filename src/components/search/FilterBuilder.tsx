@@ -46,6 +46,7 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
     companyCountry: [],
     personInterests: [],
     personSkills: [],
+    technologies: [],
     contactFilter: null,
   });
 
@@ -78,6 +79,7 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
       filterState.companyCountry.length > 0 ||
       filterState.personInterests.length > 0 ||
       filterState.personSkills.length > 0 ||
+      filterState.technologies.length > 0 ||
       filterState.contactFilter !== null
     );
   };
@@ -275,6 +277,17 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
               onChange={(values) => updateFilter('industries', values)}
               placeholder="Type industries and press Enter..."
               suggestions={[...new Set([...attributes.industries, ...suggestions.industries])]}
+            />
+          </div>
+
+          {/* Technologies */}
+          <div className="space-y-2">
+            <Label>Technologies</Label>
+            <TagInput
+              value={filterState.technologies}
+              onChange={(values) => updateFilter('technologies', values)}
+              placeholder="Type technologies and press Enter..."
+              suggestions={suggestions.technologies}
             />
           </div>
 
