@@ -70,8 +70,8 @@ export function useFreeDataSearch() {
       const offset = (page - 1) * perPage;
       const prospectFlags = parseProspectData(filterState.prospectData);
 
-      // Use the comprehensive RPC function for all searches
-      const { data, error } = await supabase.rpc('search_free_data_with_filters', {
+      // Use the v2 function with correct entity_type ENUM
+      const { data, error } = await supabase.rpc('search_free_data_with_filters_v2', {
         p_entity_type: entityType,
         p_keywords: filterState.keywords.length > 0 ? filterState.keywords : null,
         p_industries: filterState.industries.length > 0 ? filterState.industries : null,
@@ -102,19 +102,21 @@ export function useFreeDataSearch() {
         p_has_company_twitter: prospectFlags.hasCompanyTwitter || null,
         p_limit: perPage,
         p_offset: offset,
-      });
+      } as any);
 
       if (error) {
-        console.error('Error in search_free_data_with_filters RPC:', error);
+        console.error('Error in search_free_data_with_filters_v2 RPC:', error);
         throw error;
       }
 
       let items: T[] = [];
       let totalCount = 0;
 
-      if (data && data.length > 0) {
-        totalCount = Number(data[0].total_count) || 0;
-        items = data.map((record: any) => {
+      // Cast to any[] to handle ambiguous RPC return types
+      const results = (data || []) as any[];
+      if (results.length > 0) {
+        totalCount = Number(results[0].total_count) || 0;
+        items = results.map((record: any) => {
           const mappedRecord = {
             entity_external_id: record.entity_external_id,
             entity_data: (record.entity_data || {}) as Record<string, any>,
