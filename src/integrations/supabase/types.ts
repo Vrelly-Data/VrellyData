@@ -1072,86 +1072,43 @@ export type Database = {
               total_count: number
             }[]
           }
-      search_free_data_with_filters_v2:
-        | {
-            Args: {
-              p_company_domains?: string[]
-              p_company_hq_cities?: string[]
-              p_company_hq_country?: string
-              p_company_hq_states?: string[]
-              p_company_names?: string[]
-              p_company_revenue?: string[]
-              p_company_size?: string[]
-              p_company_types?: string[]
-              p_departments?: string[]
-              p_entity_type: Database["public"]["Enums"]["entity_type"]
-              p_has_company_email?: boolean
-              p_has_company_phone?: boolean
-              p_has_email?: boolean
-              p_has_facebook?: boolean
-              p_has_linkedin?: boolean
-              p_has_phone?: boolean
-              p_has_twitter?: boolean
-              p_industries?: string[]
-              p_is_hiring?: boolean
-              p_items_per_page?: number
-              p_job_titles?: string[]
-              p_keywords?: string[]
-              p_page_number?: number
-              p_person_cities?: string[]
-              p_person_countries?: string[]
-              p_person_states?: string[]
-              p_recently_funded?: boolean
-              p_seniority_levels?: string[]
-              p_technologies?: string[]
-            }
-            Returns: {
-              created_at: string
-              entity_data: Json
-              entity_type: Database["public"]["Enums"]["entity_type"]
-              id: string
-              total_count: number
-            }[]
-          }
-        | {
-            Args: {
-              p_cities?: string[]
-              p_company_city?: string[]
-              p_company_country?: string[]
-              p_company_revenue?: string[]
-              p_company_size?: string[]
-              p_department?: string[]
-              p_entity_type: string
-              p_gender?: string
-              p_has_business_email?: boolean
-              p_has_company_facebook?: boolean
-              p_has_company_linkedin?: boolean
-              p_has_company_phone?: boolean
-              p_has_company_twitter?: boolean
-              p_has_facebook?: boolean
-              p_has_linkedin?: boolean
-              p_has_personal_email?: boolean
-              p_has_phone?: boolean
-              p_has_twitter?: boolean
-              p_income?: string[]
-              p_industries?: string[]
-              p_job_titles?: string[]
-              p_keywords?: string[]
-              p_limit?: number
-              p_net_worth?: string[]
-              p_offset?: number
-              p_person_city?: string[]
-              p_person_country?: string[]
-              p_person_interests?: string[]
-              p_person_skills?: string[]
-              p_seniority?: string[]
-            }
-            Returns: {
-              entity_data: Json
-              entity_external_id: string
-              total_count: number
-            }[]
-          }
+      search_free_data_with_filters_v2: {
+        Args: {
+          p_cities?: string[]
+          p_company_names?: string[]
+          p_company_size?: string
+          p_company_types?: string[]
+          p_countries?: string[]
+          p_departments?: string[]
+          p_employee_ranges?: string[]
+          p_entity_type: Database["public"]["Enums"]["entity_type"]
+          p_founding_years?: string[]
+          p_gender?: string[]
+          p_has_description?: boolean
+          p_has_email?: boolean
+          p_has_employees?: boolean
+          p_has_facebook?: boolean
+          p_has_funding?: boolean
+          p_has_linkedin?: boolean
+          p_has_phone?: boolean
+          p_has_revenue?: boolean
+          p_has_twitter?: boolean
+          p_has_website?: boolean
+          p_income?: string[]
+          p_industries?: string[]
+          p_job_titles?: string[]
+          p_keywords?: string[]
+          p_limit?: number
+          p_locations?: string[]
+          p_net_worth?: string[]
+          p_offset?: number
+          p_revenue_ranges?: string[]
+          p_seniority_levels?: string[]
+          p_states?: string[]
+          p_tech_stacks?: string[]
+        }
+        Returns: Json
+      }
       title_matches_seniority: {
         Args: { p_seniority: string[]; p_title: string }
         Returns: boolean
