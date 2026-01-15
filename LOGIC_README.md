@@ -493,6 +493,62 @@ facebookUrl, twitterUrl
 
 ## 9. Guardrails and Change Protocol
 
+### ✅ MANDATORY PRE-CHANGE CHECKLIST
+
+Before **ANY** database function modification, complete this checklist:
+
+```
+[ ] 1. Run health check: Ask AI "run the health check"
+[ ] 2. Confirm 0 duplicates in results
+[ ] 3. Document current function signature (copy from health check output)
+[ ] 4. Verify change is SAFE (internal logic only, no parameter changes)
+[ ] 5. Update LOGIC_README.md with change description BEFORE making changes
+[ ] 6. Run health check AFTER changes to verify no duplicates created
+```
+
+**⚠️ NEVER skip this checklist. Duplicate functions are extremely difficult to debug.**
+
+---
+
+### 🔒 LOCKED FUNCTION SIGNATURE: search_free_data_builder
+
+**This EXACT order and type MUST be preserved. Any deviation creates a duplicate function.**
+
+| # | Parameter | Type | Default |
+|---|-----------|------|---------|
+| 1 | `p_entity_type` | text | 'person' |
+| 2 | `p_keywords` | text[] | NULL |
+| 3 | `p_job_titles` | text[] | NULL |
+| 4 | `p_seniority_levels` | text[] | NULL |
+| 5 | `p_departments` | text[] | NULL |
+| 6 | `p_industries` | text[] | NULL |
+| 7 | `p_company_size_ranges` | text[] | NULL |
+| 8 | `p_company_revenue` | text[] | NULL |
+| 9 | `p_cities` | text[] | NULL |
+| 10 | `p_countries` | text[] | NULL |
+| 11 | `p_gender` | text[] | NULL |
+| 12 | `p_net_worth` | text[] | NULL |
+| 13 | `p_income` | text[] | NULL |
+| 14 | `p_person_interests` | text[] | NULL |
+| 15 | `p_person_skills` | text[] | NULL |
+| 16 | `p_technologies` | text[] | NULL |
+| 17 | `p_has_personal_email` | boolean | NULL |
+| 18 | `p_has_business_email` | boolean | NULL |
+| 19 | `p_has_phone` | boolean | NULL |
+| 20 | `p_has_linkedin` | boolean | NULL |
+| 21 | `p_has_facebook` | boolean | NULL |
+| 22 | `p_has_twitter` | boolean | NULL |
+| 23 | `p_has_company_phone` | boolean | NULL |
+| 24 | `p_has_company_linkedin` | boolean | NULL |
+| 25 | `p_has_company_facebook` | boolean | NULL |
+| 26 | `p_has_company_twitter` | boolean | NULL |
+| 27 | `p_limit` | integer | 50 |
+| 28 | `p_offset` | integer | 0 |
+
+**Total Parameters: 28**
+
+---
+
 ### 🛑 BEFORE Making Any Database Function Changes
 
 1. **Run the Health Check** - Execute `docs/HEALTH_CHECK.sql` to verify current state

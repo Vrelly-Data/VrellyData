@@ -225,5 +225,33 @@ GROUP BY tablename
 ORDER BY tablename;
 
 -- ============================================================
+-- 8. FUNCTION SIGNATURE VALIDATION
+-- Purpose: Verify search_free_data_builder has expected parameter count
+-- Expected: 28 parameters
+-- ============================================================
+SELECT 
+    'search_free_data_builder' as function_name,
+    pronargs as param_count,
+    CASE 
+        WHEN pronargs = 28 THEN '✅ PASS - Expected 28 parameters'
+        ELSE '❌ FAIL - Expected 28, found ' || pronargs || ' (signature may have changed!)'
+    END as status
+FROM pg_proc p
+JOIN pg_namespace n ON p.pronamespace = n.oid
+WHERE n.nspname = 'public' 
+AND p.proname = 'search_free_data_builder';
+
+-- ============================================================
+-- 9. STABLE CHECKPOINT COMPARISON
+-- Purpose: Quick reference to last stable state
+-- Reference: docs/STABLE_CHECKPOINTS.md
+-- ============================================================
+SELECT 
+    'STABLE CHECKPOINT v2.0' as checkpoint,
+    'January 15, 2026' as date,
+    '15 functions, 28 params on search, 0 duplicates' as expected_state,
+    'See docs/STABLE_CHECKPOINTS.md for full details' as reference;
+
+-- ============================================================
 -- END OF HEALTH CHECK
 -- ============================================================
