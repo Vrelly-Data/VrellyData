@@ -189,16 +189,6 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
                 />
               </div>
 
-              {/* Person Address */}
-              <div className="space-y-2">
-                <Label>Person Address</Label>
-                <TagInput
-                  value={filterState.cities}
-                  onChange={(values) => updateFilter('cities', values)}
-                  placeholder="Type addresses and press Enter..."
-                  suggestions={attributes.cities}
-                />
-              </div>
 
               {/* Person Net Worth */}
               <div className="space-y-2">
