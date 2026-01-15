@@ -121,9 +121,13 @@ export default function AudienceBuilder() {
       setTotalEstimate(filterState.contactFilter === 'net_new' ? filteredItems.length : response.totalEstimate);
       setTotalPages(filterState.contactFilter === 'net_new' ? 1 : response.pagination.total_pages);
       
+      const displayTotal = filterState.contactFilter === 'net_new' 
+        ? filteredItems.length 
+        : response.totalEstimate;
+
       toast({
         title: 'Search complete',
-        description: `Found ${filteredItems.length.toLocaleString()} ${currentType === 'person' ? 'people' : 'companies'}${filterState.contactFilter === 'net_new' ? ' (net new only)' : ''}`,
+        description: `Found ${displayTotal.toLocaleString()} ${currentType === 'person' ? 'people' : 'companies'}${filterState.contactFilter === 'net_new' ? ' (net new only)' : ''}`,
       });
     } catch (error: any) {
       toast({
