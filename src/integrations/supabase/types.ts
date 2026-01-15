@@ -959,7 +959,7 @@ export type Database = {
           p_company_size_ranges?: string[]
           p_countries?: string[]
           p_departments?: string[]
-          p_entity_type: string
+          p_entity_type?: string
           p_gender?: string[]
           p_has_business_email?: boolean
           p_has_company_facebook?: boolean
