@@ -1,7 +1,8 @@
 # App Logic Documentation
 
-> **LAST UPDATED:** January 13, 2026  
-> **STATUS:** LOCKED IN - Do not modify core logic without reviewing this document
+> **LAST UPDATED:** January 15, 2026  
+> **STATUS:** LOCKED IN - Do not modify core logic without reviewing this document  
+> **HEALTH CHECK:** Run `docs/HEALTH_CHECK.sql` before any database changes
 
 ---
 
@@ -14,6 +15,8 @@
 6. [DO NOT CHANGE List](#6-do-not-change-list)
 7. [Performance Indexes](#7-performance-indexes)
 8. [Expected Data Field Names](#8-expected-data-field-names)
+9. [Guardrails and Change Protocol](#9-guardrails-and-change-protocol)
+10. [Verification Commands](#10-verification-commands)
 
 ---
 
@@ -488,6 +491,95 @@ facebookUrl, twitterUrl
 
 ---
 
-**Document Version:** 1.0  
+## 9. Guardrails and Change Protocol
+
+### 🛑 BEFORE Making Any Database Function Changes
+
+1. **Run the Health Check** - Execute `docs/HEALTH_CHECK.sql` to verify current state
+2. **Check for duplicates** - Ensure no function overloads exist
+3. **Verify parameter order matches EXACTLY** - PostgreSQL creates overloads if parameters differ
+
+### ⚠️ Function Modification Rules
+
+**When using `CREATE OR REPLACE FUNCTION`:**
+
+```sql
+-- ❌ WRONG: Changing parameter order creates a NEW overloaded function
+CREATE OR REPLACE FUNCTION my_func(p_new_param TEXT, p_old_param TEXT) -- DIFFERENT ORDER!
+
+-- ✅ CORRECT: Keep EXACT parameter order, types, and names
+CREATE OR REPLACE FUNCTION my_func(p_old_param TEXT, p_new_param TEXT) -- SAME ORDER
+```
+
+**NEVER change in `search_free_data_builder`:**
+| Element | Reason |
+|---------|--------|
+| Parameter order | Creates duplicate overload instead of replacing |
+| Parameter types | Creates duplicate overload instead of replacing |
+| Parameter names | May break existing calls |
+| Function name | Creates new function, orphans old one |
+
+**SAFE to change:**
+| Element | Example |
+|---------|---------|
+| Internal logic | Adding OR conditions, fixing comparisons |
+| Normalization mappings | Adding new seniority/department mappings |
+| Field name checks | Adding fallback field names |
+
+### 🔄 Safe Change Protocol
+
+1. **Document the change** - Update LOGIC_README.md first
+2. **Run health check** - Verify no duplicates before
+3. **Make minimal change** - Change only what's needed
+4. **Run health check** - Verify no duplicates after
+5. **Test the specific filter** - Confirm it works
+
+---
+
+## 10. Verification Commands
+
+### Quick Checks (Ask AI to run these)
+
+| Command | Purpose |
+|---------|---------|
+| "Run the health check" | Execute `docs/HEALTH_CHECK.sql` |
+| "Check for duplicate functions" | Run duplicate function query only |
+| "Check filter data availability" | See which filters have data |
+| "Verify search function exists" | Confirm single search function |
+
+### Manual Verification Queries
+
+**Check for function duplicates:**
+```sql
+SELECT proname, COUNT(*) 
+FROM pg_proc p
+JOIN pg_namespace n ON p.pronamespace = n.oid
+WHERE n.nspname = 'public'
+GROUP BY proname
+HAVING COUNT(*) > 1;
+```
+
+**Verify single search function:**
+```sql
+SELECT COUNT(*) as function_count
+FROM pg_proc p
+JOIN pg_namespace n ON p.pronamespace = n.oid
+WHERE n.nspname = 'public' 
+AND p.proname = 'search_free_data_builder';
+-- Expected: 1
+```
+
+**Check current function signature:**
+```sql
+SELECT pg_catalog.pg_get_function_arguments(p.oid) as current_signature
+FROM pg_proc p
+JOIN pg_namespace n ON p.pronamespace = n.oid
+WHERE n.nspname = 'public' 
+AND p.proname = 'search_free_data_builder';
+```
+
+---
+
+**Document Version:** 2.0  
 **Maintained By:** Development Team  
-**Last Review:** January 13, 2026
+**Last Review:** January 15, 2026
