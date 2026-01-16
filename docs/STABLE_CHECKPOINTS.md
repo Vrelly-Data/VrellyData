@@ -5,9 +5,17 @@
 
 ---
 
-## Checkpoint: v2.1 - January 16, 2026
+## Checkpoint: v2.2 - January 16, 2026
 
 ### ✅ Status: STABLE
+
+Fixed Seniority, Department, Income, Net Worth filter logic. Added verification scripts.
+
+---
+
+## Checkpoint: v2.1 - January 16, 2026 (Previous)
+
+### Status: SUPERSEDED BY v2.2
 
 All filters working, seniority normalization fixed, documentation updated.
 
@@ -123,6 +131,7 @@ To return to this stable state:
 
 | Date | Version | Changes |
 |------|---------|---------|
+| Jan 16, 2026 | v2.2 | Fixed Seniority/Department/Income/NetWorth logic, added QUICK_CHECK.sql, added FILTER_DATA_MAPPING.md |
 | Jan 16, 2026 | v2.1 | Fixed seniority normalization (C-Level→138, VP→33), updated filter status for Income/Skills/Interests/NetWorth |
 | Jan 15, 2026 | v2.0 | Initial stable checkpoint with all filters working |
 
