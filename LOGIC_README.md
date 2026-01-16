@@ -1,6 +1,6 @@
 # App Logic Documentation
 
-> **LAST UPDATED:** January 15, 2026  
+> **LAST UPDATED:** January 16, 2026  
 > **STATUS:** LOCKED IN - Do not modify core logic without reviewing this document  
 > **HEALTH CHECK:** Run `docs/HEALTH_CHECK.sql` before any database changes
 
@@ -214,15 +214,16 @@ WHERE entity_data->>'title' ILIKE '%' || job_title || '%'
 ```
 
 #### Seniority Filter (with normalization)
-| Input | Normalized To |
-|-------|---------------|
-| `C-Level` | `c suite`, `c-suite`, `chief` |
-| `VP` | `vp`, `vice president` |
-| `Director` | `director` |
-| `Manager` | `manager` |
-| `Head of` | `head of`, `head` |
-| `President` | `president` |
-| `Individual Contributor` | (no executive keywords) |
+| UI Input | DB Values Matched | Records |
+|----------|-------------------|---------|
+| `C-Level` | `C suite`, `Cxo` | 138 |
+| `VP`, `Vice President` | `Vp` | 33 |
+| `Director` | `Director` | 125 |
+| `Manager` | (title contains "manager") | varies |
+| `Founder` | `Founder` | 4 |
+| `Head of` | (title contains "head of") | varies |
+| `President` | (seniority contains "president") | varies |
+| `Individual Contributor` | (excludes C suite, Cxo, Vp, Director, Founder) | varies |
 
 #### Department Filter (with normalization)
 | Input | Matches |
@@ -283,15 +284,20 @@ entity_data->>'revenue' >= min AND entity_data->>'revenue' <= max
 | Has Phone | ✅ Working | Jan 2026 | Field existence |
 | Industries | ✅ Working | Jan 2026 | ILIKE matching |
 
+### Now Working ✅ (Previously Awaiting Data)
+
+| Filter | Status | Records with Data | Notes |
+|--------|--------|-------------------|-------|
+| Person Interest | ✅ Working | 6 records | `interests` field |
+| Person Skill | ✅ Working | 25 records | `skills` field |
+| Net Worth | ✅ Working | Has data | `netWorth` field |
+| Income | ✅ Working | 84 records | `incomeRange` field |
+
 ### Awaiting Data ⏳
 
 | Filter | Status | Expected Field | Format |
 |--------|--------|----------------|--------|
 | Gender | ⏳ Logic Ready | `gender` | `"male"`, `"female"`, `"other"` |
-| Person Interest | ⏳ Logic Ready | `interests` | Array or comma-separated string |
-| Person Skill | ⏳ Logic Ready | `skills` | Array or comma-separated string |
-| Net Worth | ⏳ Logic Ready | `netWorth` | Range string like `"$1M-$5M"` |
-| Income | ⏳ Logic Ready | `incomeRange` | Range string like `"$100K-$150K"` |
 
 ---
 
@@ -636,6 +642,6 @@ AND p.proname = 'search_free_data_builder';
 
 ---
 
-**Document Version:** 2.0  
+**Document Version:** 2.1  
 **Maintained By:** Development Team  
-**Last Review:** January 15, 2026
+**Last Review:** January 16, 2026
