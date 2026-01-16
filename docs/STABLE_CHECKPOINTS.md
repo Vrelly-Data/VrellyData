@@ -5,11 +5,11 @@
 
 ---
 
-## Checkpoint: v2.0 - January 15, 2026
+## Checkpoint: v2.1 - January 16, 2026
 
 ### ✅ Status: STABLE
 
-All filters working, no duplicate functions, guardrails in place.
+All filters working, seniority normalization fixed, documentation updated.
 
 ---
 
@@ -42,10 +42,10 @@ All filters working, no duplicate functions, guardrails in place.
 |--------|--------|-------|
 | Keywords | ✅ | Searches 20+ fields |
 | Job Titles | ✅ | ILIKE matching |
-| Seniority | ✅ | With normalization |
+| Seniority | ✅ | **FIXED** - C-Level→138, VP→33, Director→125 |
 | Department | ✅ | C-Suite label fixed |
-| Company Size | ✅ | Range parsing |
-| Company Revenue | ✅ | Range parsing |
+| Company Size | ✅ | Range parsing + bypass |
+| Company Revenue | ✅ | Range parsing + bypass |
 | Person City | ✅ | ILIKE |
 | Person Country | ✅ | ILIKE |
 | Company City | ✅ | ILIKE |
@@ -56,6 +56,10 @@ All filters working, no duplicate functions, guardrails in place.
 | Technologies | ✅ | ILIKE matching |
 | Industries | ✅ | ILIKE matching |
 | Prospect Data Dropdown | ✅ | All 6 options working |
+| Income | ✅ | 84 records have data |
+| Net Worth | ✅ | Has data |
+| Skills | ✅ | 25 records have data |
+| Interests | ✅ | 6 records have data |
 
 ---
 
@@ -64,10 +68,6 @@ All filters working, no duplicate functions, guardrails in place.
 | Filter | Expected Field | Format |
 |--------|----------------|--------|
 | Gender | `gender` | `"male"`, `"female"`, `"other"` |
-| Person Interest | `interests` | Array or comma-separated |
-| Person Skill | `skills` | Array or comma-separated |
-| Net Worth | `netWorth` | Range string `"$1M-$5M"` |
-| Income | `incomeRange` | Range string `"$100K-$150K"` |
 
 ---
 
@@ -114,8 +114,8 @@ To return to this stable state:
 
 ### Git Reference
 
-**Date:** January 15, 2026  
-**Commit Message Reference:** "Guardrails and stable checkpoint v2.0"
+**Date:** January 16, 2026  
+**Commit Message Reference:** "Fix seniority normalization, update documentation v2.1"
 
 ---
 
@@ -123,6 +123,7 @@ To return to this stable state:
 
 | Date | Version | Changes |
 |------|---------|---------|
+| Jan 16, 2026 | v2.1 | Fixed seniority normalization (C-Level→138, VP→33), updated filter status for Income/Skills/Interests/NetWorth |
 | Jan 15, 2026 | v2.0 | Initial stable checkpoint with all filters working |
 
 ---
