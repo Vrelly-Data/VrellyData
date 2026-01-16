@@ -1,0 +1,32 @@
+-- Drop the duplicate function that was accidentally created
+-- This is the NEW function with the different parameter order (p_keywords as 2nd param)
+DROP FUNCTION IF EXISTS public.search_free_data_builder(
+  text,           -- p_entity_type
+  text[],         -- p_keywords
+  text[],         -- p_job_titles
+  text[],         -- p_seniority_levels
+  text[],         -- p_departments
+  text[],         -- p_industries
+  text[],         -- p_technologies
+  text[],         -- p_company_size_ranges
+  text[],         -- p_company_revenue
+  text[],         -- p_cities
+  text[],         -- p_countries
+  text[],         -- p_gender
+  text[],         -- p_net_worth
+  text[],         -- p_income
+  text[],         -- p_person_interests
+  text[],         -- p_person_skills
+  boolean,        -- p_has_linkedin
+  boolean,        -- p_has_personal_email
+  boolean,        -- p_has_business_email
+  boolean,        -- p_has_phone
+  boolean,        -- p_has_facebook
+  boolean,        -- p_has_twitter
+  boolean,        -- p_has_company_linkedin
+  boolean,        -- p_has_company_phone
+  boolean,        -- p_has_company_facebook
+  boolean,        -- p_has_company_twitter
+  integer,        -- p_limit
+  integer         -- p_offset
+);
