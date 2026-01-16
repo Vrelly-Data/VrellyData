@@ -44,14 +44,14 @@ All filters working, seniority normalization fixed, documentation updated.
 
 ---
 
-### Working Filters
+### Working Filters (v2.2)
 
 | Filter | Status | Notes |
 |--------|--------|-------|
 | Keywords | ✅ | Searches 20+ fields |
 | Job Titles | ✅ | ILIKE matching |
-| Seniority | ✅ | **FIXED** - C-Level→138, VP→33, Director→125 |
-| Department | ✅ | C-Suite label fixed |
+| Seniority | ✅ | **FIXED v2.2** - Added 'c suite', 'cxo', 'founder' |
+| Department | ✅ | **FIXED v2.2** - Added 'Executive', 'technical' |
 | Company Size | ✅ | Range parsing + bypass |
 | Company Revenue | ✅ | Range parsing + bypass |
 | Person City | ✅ | ILIKE |
@@ -64,8 +64,8 @@ All filters working, seniority normalization fixed, documentation updated.
 | Technologies | ✅ | ILIKE matching |
 | Industries | ✅ | ILIKE matching |
 | Prospect Data Dropdown | ✅ | All 6 options working |
-| Income | ✅ | 84 records have data |
-| Net Worth | ✅ | Has data |
+| Income | ✅ | **FIXED v2.2** - 84 records, parsing corrected |
+| Net Worth | ✅ | **FIXED v2.2** - 87 records, parsing corrected |
 | Skills | ✅ | 25 records have data |
 | Interests | ✅ | 6 records have data |
 
