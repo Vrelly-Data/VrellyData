@@ -1,0 +1,35 @@
+-- Phase 1: Drop ONLY the NEW duplicate overload (OID 129444)
+-- This preserves the OLD working function (OID 129440) with all existing logic intact
+
+-- Drop the new overload by its exact signature (p_entity_type, p_industries, p_cities, p_countries...)
+DROP FUNCTION IF EXISTS public.search_free_data_builder(
+  p_entity_type text,
+  p_industries text[],
+  p_cities text[],
+  p_countries text[],
+  p_job_titles text[],
+  p_seniority_levels text[],
+  p_departments text[],
+  p_company_size_ranges text[],
+  p_company_revenue text[],
+  p_technologies text[],
+  p_keywords text[],
+  p_gender text[],
+  p_net_worth text[],
+  p_income text[],
+  p_person_interests text[],
+  p_person_skills text[],
+  p_has_email boolean,
+  p_has_phone boolean,
+  p_has_linkedin boolean,
+  p_has_facebook boolean,
+  p_has_twitter boolean,
+  p_has_personal_email boolean,
+  p_has_business_email boolean,
+  p_has_company_phone boolean,
+  p_has_company_linkedin boolean,
+  p_has_company_facebook boolean,
+  p_has_company_twitter boolean,
+  p_limit integer,
+  p_offset integer
+);
