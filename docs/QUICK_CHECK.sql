@@ -201,10 +201,91 @@ WHERE n.nspname = 'public'
   AND p.proname = 'search_free_data_builder';
 
 -- ============================================================
--- SECTION 9: SUMMARY
+-- SECTION 9: BUILDER SEARCH SMOKE TEST
+-- ============================================================
+
+SELECT 
+  '=== BUILDER SEARCH SMOKE TEST ===' as section;
+
+-- Smoke Test 1: Basic execution works
+SELECT 
+  'Basic Search' as test,
+  CASE WHEN total_count > 0 THEN '✅ PASS' ELSE '❌ FAIL' END as status,
+  total_count
+FROM search_free_data_builder(p_entity_type := 'person', p_limit := 1)
+LIMIT 1;
+
+-- Smoke Test 2: Income filter works
+SELECT 
+  'Income Filter (Under $50K)' as test,
+  CASE 
+    WHEN total_count BETWEEN 16 AND 26 THEN '✅ PASS' 
+    WHEN total_count > 0 THEN '⚠️ CHECK' 
+    ELSE '❌ FAIL' 
+  END as status,
+  total_count as actual,
+  21 as expected
+FROM search_free_data_builder(p_entity_type := 'person', p_income := ARRAY['Under $50K'], p_limit := 1)
+LIMIT 1;
+
+-- Smoke Test 3: Company Size filter works
+SELECT 
+  'Company Size Filter (1-10)' as test,
+  CASE 
+    WHEN total_count BETWEEN 10 AND 16 THEN '✅ PASS' 
+    WHEN total_count > 0 THEN '⚠️ CHECK' 
+    ELSE '❌ FAIL' 
+  END as status,
+  total_count as actual,
+  13 as expected
+FROM search_free_data_builder(p_entity_type := 'person', p_company_size_ranges := ARRAY['1-10'], p_limit := 1)
+LIMIT 1;
+
+-- Smoke Test 4: Department filter works
+SELECT 
+  'Department Filter (C-Suite)' as test,
+  CASE 
+    WHEN total_count BETWEEN 128 AND 148 THEN '✅ PASS' 
+    WHEN total_count > 0 THEN '⚠️ CHECK' 
+    ELSE '❌ FAIL' 
+  END as status,
+  total_count as actual,
+  138 as expected
+FROM search_free_data_builder(p_entity_type := 'person', p_departments := ARRAY['C-Suite / Leadership'], p_limit := 1)
+LIMIT 1;
+
+-- Smoke Test 5: Prospect Data filter works
+SELECT 
+  'Prospect Filter (Personal Facebook)' as test,
+  CASE 
+    WHEN total_count BETWEEN 10 AND 16 THEN '✅ PASS' 
+    WHEN total_count > 0 THEN '⚠️ CHECK' 
+    ELSE '❌ FAIL' 
+  END as status,
+  total_count as actual,
+  13 as expected
+FROM search_free_data_builder(p_entity_type := 'person', p_has_facebook := true, p_limit := 1)
+LIMIT 1;
+
+-- Smoke Test 6: Company LinkedIn filter works
+SELECT 
+  'Prospect Filter (Company LinkedIn)' as test,
+  CASE 
+    WHEN total_count BETWEEN 190 AND 220 THEN '✅ PASS' 
+    WHEN total_count > 0 THEN '⚠️ CHECK' 
+    ELSE '❌ FAIL' 
+  END as status,
+  total_count as actual,
+  203 as expected
+FROM search_free_data_builder(p_entity_type := 'person', p_has_company_linkedin := true, p_limit := 1)
+LIMIT 1;
+
+-- ============================================================
+-- SECTION 10: SUMMARY
 -- ============================================================
 
 SELECT 
   '=== QUICK CHECK COMPLETE ===' as section,
   'v2.7 - January 17, 2026' as version,
-  'Run docs/HEALTH_CHECK.sql for full audit' as next_step;
+  'Run docs/BUILDER_SEARCH_TEST.sql for comprehensive filter testing' as next_step,
+  'Run docs/HEALTH_CHECK.sql for full infrastructure audit' as alt_step;

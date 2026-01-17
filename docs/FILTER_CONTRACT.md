@@ -119,17 +119,53 @@ RETURNS TABLE(entity_external_id text, entity_data jsonb, total_count bigint)
 
 ---
 
+## 🔧 Builder Search Parameters (29 total)
+
+| # | Parameter | UI Filter | Type | Example Value |
+|---|-----------|-----------|------|---------------|
+| 1 | `p_entity_type` | Entity toggle | enum | `'person'`, `'company'` |
+| 2 | `p_keywords` | Search box | text[] | `ARRAY['CEO', 'tech']` |
+| 3 | `p_industries` | Industry dropdown | text[] | `ARRAY['Technology']` |
+| 4 | `p_cities` | City filter | text[] | `ARRAY['San Francisco']` |
+| 5 | `p_countries` | Country filter | text[] | `ARRAY['United States']` |
+| 6 | `p_job_titles` | Job Title filter | text[] | `ARRAY['CEO', 'Manager']` |
+| 7 | `p_seniority_levels` | Seniority dropdown | text[] | `ARRAY['C-Level', 'VP']` |
+| 8 | `p_departments` | Department dropdown | text[] | `ARRAY['C-Suite / Leadership']` |
+| 9 | `p_company_size_ranges` | Company Size | text[] | `ARRAY['1-10', '11-50']` |
+| 10 | `p_company_revenue` | Revenue filter | text[] | `ARRAY['$1M-$10M']` |
+| 11 | `p_technologies` | Tech stack | text[] | `ARRAY['React', 'AWS']` |
+| 12 | `p_gender` | Gender filter | text[] | `ARRAY['male']`, `ARRAY['female']` |
+| 13 | `p_income` | Income filter | text[] | `ARRAY['Under $50K']` |
+| 14 | `p_net_worth` | Net Worth filter | text[] | `ARRAY['Under $100K']` |
+| 15 | `p_person_skills` | Skills filter | text[] | `ARRAY['Python']` |
+| 16 | `p_person_interests` | Interests filter | text[] | `ARRAY['Golf']` |
+| 17 | `p_has_email` | Has Email toggle | boolean | `true` |
+| 18 | `p_has_phone` | Has Phone toggle | boolean | `true` |
+| 19 | `p_has_linkedin` | Has LinkedIn toggle | boolean | `true` |
+| 20 | `p_has_facebook` | Has Facebook toggle | boolean | `true` |
+| 21 | `p_has_twitter` | Has Twitter toggle | boolean | `true` |
+| 22 | `p_has_personal_email` | Has Personal Email | boolean | `true` |
+| 23 | `p_has_business_email` | Has Business Email | boolean | `true` |
+| 24 | `p_has_company_phone` | Has Company Phone | boolean | `true` |
+| 25 | `p_has_company_linkedin` | Has Company LinkedIn | boolean | `true` |
+| 26 | `p_has_company_facebook` | Has Company Facebook | boolean | `true` |
+| 27 | `p_has_company_twitter` | Has Company Twitter | boolean | `true` |
+| 28 | `p_limit` | Pagination | integer | `50` |
+| 29 | `p_offset` | Pagination | integer | `0` |
+
+---
+
 ## 🔄 Revert Procedure
 
 ### Quick Revert (Say This)
 > **"Revert back to stable state"**
 
 ### What Gets Restored
-- `search_free_data_builder` function from v2.6 baseline
+- `search_free_data_builder` function from v2.7 baseline
 - All filter logic exactly as documented
 
 ### Manual Revert (If Needed)
-1. Find: `supabase/migrations/20260117035653_656c0ab5-a9dc-4159-a5bf-875212e91b06.sql`
+1. Find: `supabase/migrations/20260117040902_352e325d-b578-4cbb-9441-b5b1e246f293.sql`
 2. Copy the `CREATE FUNCTION public.search_free_data_builder` block
 3. Create new migration with `CREATE OR REPLACE FUNCTION`
 
@@ -144,3 +180,4 @@ Before modifying any filter logic, verify:
 - [ ] Migration uses `CREATE OR REPLACE`
 - [ ] Signature stays identical (29 parameters)
 - [ ] Post-change counts verified
+- [ ] Run `docs/BUILDER_SEARCH_TEST.sql` after changes
