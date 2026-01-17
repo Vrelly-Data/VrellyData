@@ -2,27 +2,59 @@
 
 > **PURPOSE:** This document timestamps stable states of the application for easy reference and recovery.  
 > **USAGE:** Reference these checkpoints when the system needs to be restored to a known-good state.
-> **LAST UPDATED:** January 17, 2026 (v2.4)
+> **LAST UPDATED:** January 17, 2026 (v2.6)
 
 ---
 
-## Checkpoint: v2.4 - January 17, 2026
+## 🚨 REVERT INSTRUCTIONS
 
-### ✅ Status: STABLE
+**To revert to stable state, tell the AI:**
+> "Revert back to stable state"
 
-**Fixes Applied:**
-- **Personal Facebook Filter:** Changed field from `facebook` → `facebookUrl` (13 records)
-- **Personal Twitter Filter:** Changed field from `twitter` → `twitterUrl` (7 records)
-- **Company Facebook Filter:** Changed field from `companyFacebook` → `companyFacebookUrl` (147 records)
-- **Company Twitter Filter:** Changed field from `companyTwitter` → `companyTwitterUrl` (141 records)
-- **Company Revenue Filter:** Changed field from `revenue`/`annualRevenue` → `companyRevenue` (150 records)
+The AI will:
+1. Copy the `search_free_data_builder` function from the latest stable migration
+2. Create a new migration to drop and recreate the function
+3. NOT suggest using history panel (it doesn't work reliably)
 
-**Previous fixes preserved from v2.3:**
-- Company Size: Uses `companySize` field
-- Seniority: Includes president, head of patterns
-- Department: Includes executive, customer success, product patterns
-- Income: Only returns records WITH income data
-- Net Worth: Handles negative values
+---
+
+## Checkpoint: v2.6 - January 17, 2026
+
+### ✅ Status: STABLE (Current)
+
+**Base Migration:** `20260117035653_656c0ab5-a9dc-4159-a5bf-875212e91b06.sql`
+
+**Known Issues in v2.6 (inherited from v2.3 revert):**
+- Personal Facebook Filter: Uses `facebook` field but data is in `facebookUrl` (0 results instead of 13)
+- Personal Twitter Filter: Uses `twitter` field but data is in `twitterUrl` (0 results instead of 7)
+- Company Facebook Filter: Uses `companyFacebook` field but data is in `companyFacebookUrl` (0 results instead of 147)
+- Company Twitter Filter: Uses `companyTwitter` field but data is in `companyTwitterUrl` (0 results instead of 141)
+- Company Revenue Filter: Uses `revenue`/`annualRevenue` but data is in `companyRevenue` (0 results instead of 150)
+- Company LinkedIn Filter: Uses `companyLinkedin` (correct - 203 records)
+
+**Working Filters:**
+- ✅ Income (incomeRange): 84 records with data
+- ✅ Net Worth (netWorth): 87 records with data  
+- ✅ Company Size (companySize): 585 records with data
+- ✅ Department (including C-Suite/Leadership): ~138 for C-Suite
+- ✅ Seniority (including president, head of): Working
+- ✅ All other filters
+
+---
+
+## Database Field Reference (Actual Data)
+
+| Category | Correct Field | Wrong Field | Records |
+|----------|--------------|-------------|---------|
+| Personal Facebook | `facebookUrl` | `facebook` | 13 |
+| Personal Twitter | `twitterUrl` | `twitter` | 7 |
+| Company Facebook | `companyFacebookUrl` | `companyFacebook` | 147 |
+| Company Twitter | `companyTwitterUrl` | `companyTwitter` | 141 |
+| Company Revenue | `companyRevenue` | `revenue` | 150 |
+| Company LinkedIn | `companyLinkedin` | - | 203 |
+| Income | `incomeRange` | `income` | 84 |
+| Net Worth | `netWorth` | - | 87 |
+| Company Size | `companySize` | - | 585 |
 
 ---
 
@@ -30,7 +62,7 @@
 
 | Function Name | Parameters | Status |
 |---------------|------------|--------|
-| `search_free_data_builder` | 29 | ✅ Core search - v2.4 STABLE |
+| `search_free_data_builder` | 29 | ✅ Core search - v2.6 |
 | `deduct_credits` | 2 | ✅ Stable |
 | `get_all_profiles_admin` | 0 | ✅ Stable |
 | `get_filter_suggestions` | 0 | ✅ Stable |
@@ -46,83 +78,48 @@
 
 ---
 
-## Working Filters (v2.4 - ALL FILTERS NOW WORKING)
+## Verified Filter Counts (v2.6)
 
-| Filter | Status | Notes |
-|--------|--------|-------|
-| Keywords | ✅ | Searches firstName, lastName, title, company, industry |
-| Prospect Data | ✅ | All boolean filters work |
-| Company Revenue | ✅ FIXED v2.4 | Uses `companyRevenue` field (150 records) |
-| Job Titles | ✅ | ILIKE matching |
-| Seniority | ✅ | President, head of patterns included |
-| Department | ✅ | Executive, customer success, product patterns |
-| Person City | ✅ | Case-insensitive match |
-| Person Country | ✅ | Case-insensitive match |
-| Company City | ✅ | Case-insensitive match |
-| Company Country | ✅ | Case-insensitive match |
-| Technology | ✅ | ILIKE matching |
-| Company Size | ✅ | Uses `companySize` field |
-| Person Interest | ✅ | ILIKE matching |
-| Person Skill | ✅ | ILIKE matching |
-| Gender | ✅ | Case-insensitive exact match |
-| Person Income | ✅ | Only returns records WITH data |
-| Person Net Worth | ✅ | Handles negative values |
-| Personal Facebook | ✅ FIXED v2.4 | Uses `facebookUrl` field (13 records) |
-| Personal Twitter | ✅ FIXED v2.4 | Uses `twitterUrl` field (7 records) |
-| Company Facebook | ✅ FIXED v2.4 | Uses `companyFacebookUrl` field (147 records) |
-| Company Twitter | ✅ FIXED v2.4 | Uses `companyTwitterUrl` field (141 records) |
-| Has LinkedIn | ✅ | Uses `linkedInUrl` |
-| Has Email | ✅ | Checks email, businessEmail, personalEmail |
-| Has Phone | ✅ | Uses `phone` |
-| Personal Email | ✅ | Uses `personalEmail` |
-| Business Email | ✅ | Uses `businessEmail` |
-| Company LinkedIn | ✅ | Uses `companyLinkedInUrl` |
-| Company Phone | ✅ | Uses `companyPhone` |
-
----
-
-## Verified Data Counts (v2.4)
-
-### Prospect Data Fields
-| Field | Records |
-|-------|---------|
-| facebookUrl | 13 |
-| twitterUrl | 7 |
-| companyFacebookUrl | 147 |
-| companyTwitterUrl | 141 |
-| companyRevenue | 150 |
-
-### Company Size (using `companySize` field)
-| Range | Count |
-|-------|-------|
-| 1-10 | 13 |
-| 11-50 | 96 |
-| 51-200 | 81 |
-| 201-500 | 78 |
-
-### Income (84 records total with data)
-| Range | Count |
-|-------|-------|
+### Income (using `incomeRange` field - 84 records total)
+| Range | Expected Count |
+|-------|----------------|
 | Under $50K | 21 |
 | $50K-$100K | 45 |
 | $100K-$200K | 15 |
 | $200K+ | 3 |
 
-### Net Worth (87 records total with data)
-| Range | Count |
-|-------|-------|
+### Net Worth (using `netWorth` field - 87 records total)
+| Range | Expected Count |
+|-------|----------------|
 | Under $100K | 56 |
 | $100K-$500K | 21 |
 | $500K-$1M | 10 |
 
+### Company Size (using `companySize` field - 585 records total)
+| Range | Expected Count |
+|-------|----------------|
+| 1-10 | 13 |
+| 11-50 | 96 |
+| 51-200 | 81 |
+| 201-500 | 78 |
+
+### Department
+| Department | Expected Count |
+|------------|----------------|
+| C-Suite / Leadership | ~138 |
+
 ---
 
-## Health Check Results
+## Health Check Results (v2.6)
 
 ```
 ✅ Function count: 1 (no duplicates)
 ✅ Parameter count: 29
-✅ All 5 fixed fields now return data
+✅ Income filter: Working (21 for Under $50K)
+✅ Net Worth filter: Working (56 for Under $100K)
+✅ Company Size filter: Working (13 for 1-10)
+✅ Department C-Suite: Working (~138, not inflated)
+⚠️ Prospect Data filters: Some use wrong field names (see Known Issues)
 ⚠️ RLS on free_data: Public read access (intentional for free tier)
 ```
 
@@ -130,9 +127,16 @@
 
 ## Recovery Instructions
 
-1. Run `docs/QUICK_CHECK.sql` to verify current state
-2. Compare against this checkpoint
-3. If recovery needed, restore from Git history
+### Automated Revert (Preferred)
+Tell the AI: **"Revert back to stable state"**
+
+### Manual Revert Steps
+1. Find the latest stable migration file (currently `20260117035653`)
+2. Copy the `search_free_data_builder` function
+3. Create new migration with:
+   - `DROP FUNCTION IF EXISTS public.search_free_data_builder(...)`
+   - `CREATE FUNCTION public.search_free_data_builder(...)`
+4. Approve migration
 
 ---
 
@@ -140,7 +144,9 @@
 
 | Date | Version | Changes |
 |------|---------|---------|
-| Jan 17, 2026 | v2.4 | Fixed 5 field names: facebookUrl, twitterUrl, companyFacebookUrl, companyTwitterUrl, companyRevenue |
+| Jan 17, 2026 | v2.6 | Reverted to v2.3 function, documented known issues |
+| Jan 17, 2026 | v2.5 | BROKEN - bad regex for income/net worth/department |
+| Jan 17, 2026 | v2.4 | Fixed 5 field names for prospect data |
 | Jan 16, 2026 | v2.3 | Fixed Company Size, Seniority, Department, Income, Net Worth |
 | Jan 16, 2026 | v2.2 | Fixed Seniority, Department, Income, Net Worth filter logic |
 | Jan 16, 2026 | v2.1 | Added p_has_email parameter |
@@ -163,4 +169,4 @@
 
 ---
 
-**Next Checkpoint:** Create when adding new major features or database changes.
+**Next Step:** Fix Prospect Data field names (facebookUrl, twitterUrl, etc.) to match actual data fields.
