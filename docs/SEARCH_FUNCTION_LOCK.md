@@ -1,7 +1,7 @@
 # 🔒 Search Function Lock Document
 
 **Purpose**: Protect the `search_free_data_builder` function from unintended modifications.  
-**Version**: 3.0  
+**Version**: 3.1  
 **Last Updated**: January 17, 2026
 
 ---
@@ -28,9 +28,9 @@ If anything breaks, the user can say:
 
 ---
 
-## ✅ 17 Verified Working Filters
+## ✅ 18 Verified Working Filters
 
-All of these filters have been tested and confirmed working as of v3.0:
+All of these filters have been tested and confirmed working as of v3.1:
 
 | # | Filter | Status |
 |---|--------|--------|
@@ -38,19 +38,20 @@ All of these filters have been tested and confirmed working as of v3.0:
 | 2 | Prospect Data (all has_* filters) | ✅ |
 | 3 | Company Revenue | ✅ |
 | 4 | Job Titles | ✅ |
-| 5 | Seniority | ✅ |
+| 5 | Seniority (including Individual Contributor) | ✅ |
 | 6 | Department | ✅ |
 | 7 | Person City | ✅ |
 | 8 | Person Country | ✅ |
 | 9 | Company City | ✅ |
 | 10 | Company Country | ✅ |
 | 11 | Technology | ✅ |
-| 12 | Company Size | ✅ |
+| 12 | Company Size (5001-10000, 10000+) | ✅ |
 | 13 | Person Interest | ✅ |
 | 14 | Person Skill | ✅ |
 | 15 | Gender | ✅ |
 | 16 | Person Income | ✅ |
 | 17 | Person Net Worth | ✅ |
+| 18 | Individual Contributor (Staff) | ✅ |
 
 ---
 
@@ -89,22 +90,28 @@ This migration contains:
 Quick checks to verify function is working:
 
 ```sql
--- Should return ~13
+-- Should return 86
 SELECT total_count FROM public.search_free_data_builder(
   p_entity_type := 'person',
-  p_company_size_ranges := ARRAY['1-10']
+  p_company_size_ranges := ARRAY['5001-10000']
 ) LIMIT 1;
 
--- Should return ~42
+-- Should return 8
 SELECT total_count FROM public.search_free_data_builder(
   p_entity_type := 'person',
-  p_company_revenue := ARRAY['$1M - $10M']
+  p_company_size_ranges := ARRAY['10000+']
 ) LIMIT 1;
 
--- Should return ~74
+-- Should return 399 (all company sizes)
 SELECT total_count FROM public.search_free_data_builder(
   p_entity_type := 'person',
-  p_gender := ARRAY['male']
+  p_company_size_ranges := ARRAY['1-10','11-50','51-200','201-500','501-1000','1001-5000','5001-10000','10000+']
+) LIMIT 1;
+
+-- Should return 99
+SELECT total_count FROM public.search_free_data_builder(
+  p_entity_type := 'person',
+  p_seniority_levels := ARRAY['Individual Contributor']
 ) LIMIT 1;
 ```
 
@@ -136,8 +143,8 @@ When user says "Revert to v3.0 stable state":
 
 | What | Value |
 |------|-------|
-| Current Version | v3.0 |
-| Stable Migration | `20260117133021_ab3eead1-e309-4d56-b71d-56f8a549f3e8.sql` |
+| Current Version | v3.1 |
+| v3.1 Changes | Company Size buckets (5001-10000, 10000+) + Individual Contributor |
 | Parameter Count | 29 |
-| Revert Command | "Revert to v3.0 stable state" |
+| Revert Command | "Revert to v3.1 stable state" |
 | Test File | `docs/BUILDER_SEARCH_TEST.sql` |
