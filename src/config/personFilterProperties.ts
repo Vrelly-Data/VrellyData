@@ -80,6 +80,7 @@ export const PERSON_FILTER_PROPERTIES: PropertyDefinition[] = [
       { label: 'Director', value: 'Director' },
       { label: 'Manager', value: 'Manager' },
       { label: 'Senior', value: 'Senior' },
+      { label: 'Individual Contributor', value: 'Individual Contributor' },
       { label: 'Entry Level', value: 'Entry Level' },
       { label: 'Intern', value: 'Intern' },
     ]
