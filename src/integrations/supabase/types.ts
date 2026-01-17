@@ -947,6 +947,10 @@ export type Database = {
         Args: { size_str: string }
         Returns: number
       }
+      parse_revenue_to_numeric: {
+        Args: { revenue_str: string }
+        Returns: number
+      }
       reset_daily_credits_if_needed: {
         Args: { p_user_id: string }
         Returns: undefined
