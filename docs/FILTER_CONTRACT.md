@@ -1,13 +1,16 @@
 # Filter Contract Documentation
 
 **Purpose**: Authoritative reference for filter field names, expected counts, and revert procedures.  
-**Last Updated**: January 17, 2026
+**Last Updated**: January 17, 2026  
+**Version**: 3.0
 
 ---
 
-## 🚨 CRITICAL: Never Change These Field Names
+## 🚨 CRITICAL: DO NOT MODIFY THESE FIELD NAMES
 
 The `search_free_data_builder` function uses these exact field names. Changing them will break filters.
+
+**To revert to stable state, say:** "Revert to v3.0 stable state"
 
 ---
 
@@ -26,10 +29,19 @@ The `search_free_data_builder` function uses these exact field names. Changing t
 | UI Filter | DB Field | Type | Sample Value | Notes |
 |-----------|----------|------|--------------|-------|
 | Job Title | `title` | string | `CEO`, `Manager` | ILIKE match |
-| Seniority | `seniority`, `title` | string | `C-Level` | Regex patterns |
+| Seniority | `seniority`, `title` | string | `C-Level` | Regex patterns via title_matches_seniority |
 | Department | `department` | string | `Executive` | Regex patterns |
 | Company Size | `companySize` | string | `1-10`, `51-200` | Parsed by `parse_employee_count_upper()` |
 | Industry | `industry` | string | `Technology` | Exact match (lowercase) |
+| Company Revenue | `companyRevenue`, `revenue`, `annualRevenue` | string | `$5M`, `$10,000,000` | Parsed by `parse_revenue_to_numeric()` |
+
+### Technology & Skills Filters
+
+| UI Filter | DB Field(s) | Notes |
+|-----------|------------|-------|
+| Technologies | `technologies` | JSONB array or comma-separated string |
+| Person Skills | `skills` | JSONB array or comma-separated string |
+| Person Interests | `interests` | JSONB array or comma-separated string |
 
 ### Prospect Data Filters
 
@@ -38,14 +50,14 @@ The `search_free_data_builder` function uses these exact field names. Changing t
 | Has Email | `email`, `businessEmail`, `personalEmail` | Any non-null matches |
 | Has Phone | `phone`, `mobilePhone` | Any non-null matches |
 | Has LinkedIn | `linkedin`, `linkedinUrl` | Both checked |
-| Has Facebook | `facebook`, `facebookUrl` | **v2.7 fix: Added facebookUrl** |
-| Has Twitter | `twitter`, `twitterUrl` | **v2.7 fix: Added twitterUrl** |
+| Has Facebook | `facebook`, `facebookUrl` | v2.7 fix: Added facebookUrl |
+| Has Twitter | `twitter`, `twitterUrl` | v2.7 fix: Added twitterUrl |
 | Has Personal Email | `personalEmail` | Single field check |
 | Has Business Email | `businessEmail` | Single field check |
 | Has Company Phone | `companyPhone` | Single field check |
 | Has Company LinkedIn | `companyLinkedin` | Single field check |
-| Has Company Facebook | `companyFacebook`, `companyFacebookUrl` | **v2.7 fix: Added Url variant** |
-| Has Company Twitter | `companyTwitter`, `companyTwitterUrl` | **v2.7 fix: Added Url variant** |
+| Has Company Facebook | `companyFacebook`, `companyFacebookUrl` | v2.7 fix: Added Url variant |
+| Has Company Twitter | `companyTwitter`, `companyTwitterUrl` | v2.7 fix: Added Url variant |
 
 ### Location Filters
 
@@ -56,21 +68,42 @@ The `search_free_data_builder` function uses these exact field names. Changing t
 
 ---
 
-## ✅ Verified Filter Counts (v2.7 Baseline)
+## ✅ Verified Filter Counts (v3.0 Baseline)
 
 Use these as regression tests. If counts change unexpectedly, something is broken.
 
+### Company Filters
+```
+Company Size 1-10:        13
+Company Size 11-50:       96
+Company Size 51-200:      81
+Company Size 201-500:     78
+Revenue Under $1M:        3
+Revenue $1M-$10M:         42
+Revenue $10M-$50M:        56
+```
+
+### Person Demographics
 ```
 Income Under $50K:        21
-Income $50K-$100K:        45
+Income $50K - $100K:      45
 Net Worth Under $100K:    56
+Gender Male:              74
+Gender Female:            18
+```
+
+### Professional
+```
 C-Suite Department:       138
-Company Size 1-10:        26
-Company Size 11-50:       191
+```
+
+### Prospect Data
+```
 Personal Facebook:        13
 Personal Twitter:         7
 Company Facebook:         147
 Company Twitter:          141
+Company LinkedIn:         203
 ```
 
 ---
@@ -132,7 +165,7 @@ RETURNS TABLE(entity_external_id text, entity_data jsonb, total_count bigint)
 | 7 | `p_seniority_levels` | Seniority dropdown | text[] | `ARRAY['C-Level', 'VP']` |
 | 8 | `p_departments` | Department dropdown | text[] | `ARRAY['C-Suite / Leadership']` |
 | 9 | `p_company_size_ranges` | Company Size | text[] | `ARRAY['1-10', '11-50']` |
-| 10 | `p_company_revenue` | Revenue filter | text[] | `ARRAY['$1M-$10M']` |
+| 10 | `p_company_revenue` | Revenue filter | text[] | `ARRAY['$1M - $10M']` |
 | 11 | `p_technologies` | Tech stack | text[] | `ARRAY['React', 'AWS']` |
 | 12 | `p_gender` | Gender filter | text[] | `ARRAY['male']`, `ARRAY['female']` |
 | 13 | `p_income` | Income filter | text[] | `ARRAY['Under $50K']` |
@@ -158,15 +191,16 @@ RETURNS TABLE(entity_external_id text, entity_data jsonb, total_count bigint)
 ## 🔄 Revert Procedure
 
 ### Quick Revert (Say This)
-> **"Revert back to stable state"**
+> **"Revert to v3.0 stable state"**
 
 ### What Gets Restored
-- `search_free_data_builder` function from v2.7 baseline
+- `search_free_data_builder` function (29 parameters)
+- `parse_revenue_to_numeric` helper function
 - All filter logic exactly as documented
 
 ### Manual Revert (If Needed)
-1. Find: `supabase/migrations/20260117040902_352e325d-b578-4cbb-9441-b5b1e246f293.sql`
-2. Copy the `CREATE FUNCTION public.search_free_data_builder` block
+1. Find: `supabase/migrations/20260117133021_ab3eead1-e309-4d56-b71d-56f8a549f3e8.sql`
+2. Copy both `CREATE FUNCTION` blocks
 3. Create new migration with `CREATE OR REPLACE FUNCTION`
 
 ---
@@ -175,6 +209,7 @@ RETURNS TABLE(entity_external_id text, entity_data jsonb, total_count bigint)
 
 Before modifying any filter logic, verify:
 
+- [ ] User explicitly requested the change
 - [ ] Current counts match documented baseline
 - [ ] No duplicate functions exist
 - [ ] Migration uses `CREATE OR REPLACE`

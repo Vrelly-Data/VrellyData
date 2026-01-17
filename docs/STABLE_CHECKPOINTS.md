@@ -1,241 +1,149 @@
 # Stable Checkpoints
 
-> **PURPOSE:** This document timestamps stable states of the application for easy reference and recovery.  
-> **USAGE:** Reference these checkpoints when the system needs to be restored to a known-good state.
-> **LAST UPDATED:** January 17, 2026 (v2.7)
+**Purpose**: Document stable states for easy recovery. Say "Revert to v3.0 stable state" to restore.  
+**Last Updated**: January 17, 2026
 
 ---
 
-## 🚨 REVERT INSTRUCTIONS
+## 🚨 CRITICAL: DO NOT MODIFY WITHOUT EXPLICIT INSTRUCTION
 
-**To revert to stable state, tell the AI:**
-> "Revert back to stable state"
+The `search_free_data_builder` function is **LOCKED**. Do NOT modify it unless the user explicitly says:
+- "Modify the search function"
+- "Change filter logic"
+- "Update the builder search"
+
+If in doubt, **ASK FIRST**.
+
+---
+
+## ⏪ Quick Revert Command
+
+Say this to revert to the last known good state:
+
+> **"Revert to v3.0 stable state"**
 
 The AI will:
-1. Copy the `search_free_data_builder` function from the latest stable migration
-2. Create a new migration using `CREATE OR REPLACE FUNCTION` (to avoid duplicates)
-3. Verify counts match the documented baseline values
-4. NOT suggest using history panel (it doesn't work reliably)
+1. Copy functions from migration `20260117133021_ab3eead1-e309-4d56-b71d-56f8a549f3e8.sql`
+2. Create a new migration with `CREATE OR REPLACE FUNCTION`
+3. Verify no duplicate functions exist
+4. Verify baseline counts match v3.0 expectations
 
 ---
 
-## Checkpoint: v2.7 - January 17, 2026
+## ✅ Current Stable: v3.0
 
-### ✅ Status: STABLE (Current)
+**Date**: January 17, 2026  
+**Migration File**: `supabase/migrations/20260117133021_ab3eead1-e309-4d56-b71d-56f8a549f3e8.sql`  
+**Status**: All 17 filters verified working
 
-**Base Migration:** `20260117040902_352e325d-b578-4cbb-9441-b5b1e246f293.sql`  
-**Fallback Migration:** `20260117035653_656c0ab5-a9dc-4159-a5bf-875212e91b06.sql` (v2.6)
+### Confirmed Working Filters (17 total)
 
-**All Filters Now Working:**
-- ✅ Income (incomeRange): Working
-- ✅ Net Worth (netWorth): Working
-- ✅ Company Size (companySize): Working
-- ✅ Department (including C-Suite/Leadership): Working
-- ✅ Seniority: Working
-- ✅ Personal Facebook (facebookUrl): **Fixed in v2.7** - 13 records
-- ✅ Personal Twitter (twitterUrl): **Fixed in v2.7** - 7 records
-- ✅ Company Facebook (companyFacebookUrl): **Fixed in v2.7** - 147 records
-- ✅ Company Twitter (companyTwitterUrl): **Fixed in v2.7** - 141 records
-- ✅ All other filters
-
----
-
-## Database Field Reference (Authoritative)
-
-| Category | Correct Field(s) | Records |
-|----------|-----------------|---------|
-| Income | `incomeRange` | 84+ |
-| Net Worth | `netWorth` | 87+ |
-| Company Size | `companySize` | 500+ |
-| Personal Facebook | `facebook`, `facebookUrl` | 13 |
-| Personal Twitter | `twitter`, `twitterUrl` | 7 |
-| Company Facebook | `companyFacebook`, `companyFacebookUrl` | 147 |
-| Company Twitter | `companyTwitter`, `companyTwitterUrl` | 141 |
-| Company LinkedIn | `companyLinkedin` | 203 |
+| # | Filter | Status | Notes |
+|---|--------|--------|-------|
+| 1 | Keyword Logic | ✅ Working | Searches across multiple fields |
+| 2 | Prospect Data | ✅ Working | All has_* boolean filters |
+| 3 | Company Revenue | ✅ Working | Fixed in v2.10 with parse_revenue_to_numeric |
+| 4 | Job Titles | ✅ Working | ILIKE pattern matching |
+| 5 | Seniority | ✅ Working | Regex-based title matching |
+| 6 | Department | ✅ Working | Regex-based matching |
+| 7 | Person City | ✅ Working | COALESCE fallback to personCity/companyCity |
+| 8 | Person Country | ✅ Working | COALESCE fallback to personCountry/companyCountry |
+| 9 | Company City | ✅ Working | Same as Person City |
+| 10 | Company Country | ✅ Working | Same as Person Country |
+| 11 | Technology | ✅ Working | Array contains matching |
+| 12 | Company Size | ✅ Working | Parsed with parse_employee_count_upper |
+| 13 | Person Interest | ✅ Working | Array/string matching |
+| 14 | Person Skill | ✅ Working | Array/string matching |
+| 15 | Gender | ✅ Working | Case-insensitive exact match |
+| 16 | Person Income | ✅ Working | Numeric range parsing |
+| 17 | Person Net Worth | ✅ Working | Numeric range parsing (supports negatives) |
 
 ---
 
-## Database Functions (15 total)
+## 📊 Verified Baseline Counts (v3.0)
 
-| Function Name | Parameters | Status |
-|---------------|------------|--------|
-| `search_free_data_builder` | 29 | ✅ Core search - v2.7 |
-| `deduct_credits` | 2 | ✅ Stable |
-| `get_all_profiles_admin` | 0 | ✅ Stable |
-| `get_filter_suggestions` | 0 | ✅ Stable |
-| `get_user_team_id` | 1 | ✅ Stable |
-| `handle_new_user` | 0 | ✅ Stable (trigger) |
-| `handle_new_user_team` | 0 | ✅ Stable (trigger) |
-| `has_role` | 3 | ✅ Stable |
-| `is_global_admin` | 1 | ✅ Stable |
-| `log_audit_event` | 4 | ✅ Stable |
-| `parse_employee_count_upper` | 1 | ✅ Stable |
-| `reset_daily_credits_if_needed` | 1 | ✅ Stable |
-| `reset_monthly_credits` | 0 | ✅ Stable |
-| `title_matches_seniority` | 3 | ⚠️ 2 duplicates (harmless) |
-| `update_credits_for_testing` | 2 | ✅ Stable |
-| `update_updated_at_column` | 0 | ✅ Stable (trigger) |
+Use these for regression testing. If counts change unexpectedly, something is broken.
 
-> **Note:** `title_matches_seniority` has 2 function versions due to overloading. Both have identical logic - one with optional parameter, one without. This is harmless and expected.
+### Company Filters
+| Filter | Value | Expected Count |
+|--------|-------|----------------|
+| Company Size | 1-10 | 13 |
+| Company Size | 11-50 | 96 |
+| Company Size | 51-200 | 81 |
+| Company Size | 201-500 | 78 |
+| Company Revenue | Under $1M | 3 |
+| Company Revenue | $1M - $10M | 42 |
+| Company Revenue | $10M - $50M | 56 |
 
----
+### Person Demographics
+| Filter | Value | Expected Count |
+|--------|-------|----------------|
+| Income | Under $50K | 21 |
+| Income | $50K - $100K | 45 |
+| Net Worth | Under $100K | 56 |
+| Gender | Male | 74 |
+| Gender | Female | 18 |
 
-## Verified Filter Counts (v2.7 Baseline)
+### Professional Filters
+| Filter | Value | Expected Count |
+|--------|-------|----------------|
+| Department | C-Suite / Leadership | 138 |
 
-### Income (using `incomeRange` field)
-| Range | Expected Count |
-|-------|----------------|
-| Under $50K | 21 |
-| $50K-$100K | 45 |
-
-### Net Worth (using `netWorth` field)
-| Range | Expected Count |
-|-------|----------------|
-| Under $100K | 56 |
-
-### Company Size (using `companySize` field)
-| Range | Expected Count |
-|-------|----------------|
-| 1-10 | 13 |
-| 11-50 | 96 |
-| 51-200 | 81 |
-| 201-500 | 78 |
-
-### Department
-| Department | Expected Count |
-|------------|----------------|
-| C-Suite / Leadership | 138 |
-
-### Prospect Data (Fixed in v2.7)
-| Filter | Expected Count |
-|--------|----------------|
-| Personal Facebook | 13 |
-| Personal Twitter | 7 |
-| Company Facebook | 147 |
-| Company Twitter | 141 |
-| Company LinkedIn | 203 |
+### Prospect Data
+| Filter | Value | Expected Count |
+|--------|-------|----------------|
+| Personal Facebook | true | 13 |
+| Personal Twitter | true | 7 |
+| Company Facebook | true | 147 |
+| Company Twitter | true | 141 |
+| Company LinkedIn | true | 203 |
 
 ---
 
-## Health Check Results (v2.7)
+## 🔧 Database Functions (v3.0)
 
-```
-✅ Function count: 15 (1 has 2 overloads - harmless)
-✅ search_free_data_builder: 1 version, 29 parameters
-✅ Income filter: Working (21 for Under $50K)
-✅ Net Worth filter: Working (56 for Under $100K)
-✅ Company Size filter: Working (13 for 1-10, 96 for 11-50, 81 for 51-200, 78 for 201-500)
-✅ Department C-Suite: Working (138)
-✅ Personal Facebook: Working (13)
-✅ Personal Twitter: Working (7)
-✅ Company Facebook: Working (147)
-✅ Company Twitter: Working (141)
-⚠️ RLS on free_data: Public read access (intentional for free tier)
-```
+| Function | Parameters | Status |
+|----------|------------|--------|
+| `search_free_data_builder` | 29 | ✅ Single version |
+| `parse_employee_count_upper` | 1 | ✅ Helper |
+| `parse_revenue_to_numeric` | 1 | ✅ Helper (added v2.10) |
+| `title_matches_seniority` | 3 | ✅ Helper |
 
 ---
 
-## Recovery Instructions
+## 📝 Change Log
 
-### Automated Revert (Preferred)
-Tell the AI: **"Revert back to stable state"**
-
-### Manual Revert Steps
-1. Find the stable migration file (`20260117040902_352e325d-b578-4cbb-9441-b5b1e246f293.sql`)
-2. Copy the `search_free_data_builder` function
-3. Create new migration with:
-   - `CREATE OR REPLACE FUNCTION public.search_free_data_builder(...)`
-4. Approve migration
+| Version | Date | Changes |
+|---------|------|---------|
+| v3.0 | 2026-01-17 | Documented all 17 working filters, established revert mechanism |
+| v2.10 | 2026-01-17 | Fixed Company Revenue filter with parse_revenue_to_numeric |
+| v2.7 | 2026-01-17 | Fixed Facebook/Twitter Url variants |
+| v2.6 | 2026-01-17 | Fixed income label format |
+| v2.5 | 2026-01-17 | Fixed company size parsing |
 
 ---
 
-## Change Log
+## 🛡️ Pre-Change Checklist
 
-| Date | Version | Changes |
-|------|---------|---------|
-| Jan 17, 2026 | **v2.7** | **Fixed Prospect Data field names** - added facebookUrl, twitterUrl variants; Updated Company Size counts (13, 96, 81, 78) |
-| Jan 17, 2026 | v2.6 | Reverted to v2.3 function, documented known issues |
-| Jan 17, 2026 | v2.5 | BROKEN - bad regex for income/net worth/department |
-| Jan 17, 2026 | v2.4 | Fixed 5 field names for prospect data |
-| Jan 16, 2026 | v2.3 | Fixed Company Size, Seniority, Department, Income, Net Worth |
-| Jan 16, 2026 | v2.2 | Fixed Seniority, Department, Income, Net Worth filter logic |
-| Jan 16, 2026 | v2.1 | Added p_has_email parameter |
-| Jan 15, 2026 | v2.0 | Initial stable release |
+Before modifying any filter logic:
 
----
-
-## Guardrails to Prevent Duplicate Functions
-
-### Before ANY function modification:
-1. **ALWAYS use `CREATE OR REPLACE FUNCTION`** - not `DROP` + `CREATE`
-2. Keep the EXACT same parameter signature (29 parameters)
-3. Keep the EXACT same return type
-4. Verify after: `SELECT COUNT(*) FROM pg_proc WHERE proname = 'search_free_data_builder'`
-
-### Why duplicates happen:
-- PostgreSQL allows function overloading (same name, different signatures)
-- Changing parameter types/count creates a NEW function
-- Both functions then exist, causing ambiguous calls
+- [ ] User explicitly requested the change
+- [ ] Current counts verified against baseline
+- [ ] Migration uses `CREATE OR REPLACE FUNCTION`
+- [ ] Signature stays identical (29 parameters)
+- [ ] Run `docs/BUILDER_SEARCH_TEST.sql` after changes
+- [ ] No duplicate functions created
+- [ ] Post-change counts verified
 
 ---
 
-## Health Check Files
+## 🔄 Manual Revert Procedure
 
-| File | Purpose | When to Use |
-|------|---------|-------------|
-| `docs/QUICK_CHECK.sql` | Fast infrastructure + smoke test | After any change |
-| `docs/BUILDER_SEARCH_TEST.sql` | Comprehensive filter testing | After filter changes |
-| `docs/HEALTH_CHECK.sql` | Full infrastructure audit | Monthly or after major changes |
+If the quick command doesn't work:
 
----
-
-## Builder Search Function Tests
-
-The `search_free_data_builder` function can be tested by running `docs/BUILDER_SEARCH_TEST.sql`.
-
-### Expected Results (with tolerance)
-
-| Test | Filter Parameter | Expected | Tolerance |
-|------|-----------------|----------|-----------|
-| Basic Search | None | 500+ | - |
-| Income Under $50K | `p_income := ARRAY['Under $50K']` | 21 | ±5 |
-| Income $50K-$100K | `p_income := ARRAY['$50K-$100K']` | 45 | ±5 |
-| Company Size 1-10 | `p_company_size_ranges := ARRAY['1-10']` | 13 | ±3 |
-| Company Size 11-50 | `p_company_size_ranges := ARRAY['11-50']` | 96 | ±10 |
-| Company Size 51-200 | `p_company_size_ranges := ARRAY['51-200']` | 81 | ±10 |
-| Company Size 201-500 | `p_company_size_ranges := ARRAY['201-500']` | 78 | ±10 |
-| C-Suite Department | `p_departments := ARRAY['C-Suite / Leadership']` | 138 | ±10 |
-| Net Worth Under $100K | `p_net_worth := ARRAY['Under $100K']` | 56 | ±6 |
-| Personal Facebook | `p_has_facebook := true` | 13 | ±3 |
-| Personal Twitter | `p_has_twitter := true` | 7 | ±3 |
-| Company Facebook | `p_has_company_facebook := true` | 147 | ±12 |
-| Company Twitter | `p_has_company_twitter := true` | 141 | ±12 |
-| Company LinkedIn | `p_has_company_linkedin := true` | 203 | ±15 |
-
----
-
-## Quick Health Check SQL
-
-```sql
--- Verify no duplicates
-SELECT proname, COUNT(*) FROM pg_proc 
-WHERE pronamespace = 'public'::regnamespace 
-  AND proname = 'search_free_data_builder'
-GROUP BY proname;
--- Expected: 1 row with count = 1
-
--- Verify baseline counts
-SELECT 'Income Under $50K', COUNT(*) FROM free_data 
-WHERE COALESCE(NULLIF(REGEXP_REPLACE(entity_data->>'incomeRange', '[^0-9]', '', 'g'), '')::int, 0) < 50
-  AND entity_data->>'incomeRange' IS NOT NULL;
--- Expected: 21
-
-SELECT 'Personal Facebook', COUNT(*) FROM free_data 
-WHERE entity_data->>'facebookUrl' IS NOT NULL;
--- Expected: 13
-
-SELECT 'Company Size 1-10', COUNT(*) FROM free_data 
-WHERE entity_type = 'person'
-  AND COALESCE(public.parse_employee_count_upper(entity_data->>'companySize'), 0) BETWEEN 1 AND 10;
--- Expected: 13
-```
+1. Find: `supabase/migrations/20260117133021_ab3eead1-e309-4d56-b71d-56f8a549f3e8.sql`
+2. Copy both functions:
+   - `parse_revenue_to_numeric`
+   - `search_free_data_builder`
+3. Create new migration with `CREATE OR REPLACE FUNCTION`
+4. Verify single function exists with 29 parameters
