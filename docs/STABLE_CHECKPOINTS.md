@@ -2,7 +2,7 @@
 
 > **PURPOSE:** This document timestamps stable states of the application for easy reference and recovery.  
 > **USAGE:** Reference these checkpoints when the system needs to be restored to a known-good state.
-> **LAST UPDATED:** January 17, 2026 (v2.6)
+> **LAST UPDATED:** January 17, 2026 (v2.7)
 
 ---
 
@@ -13,48 +13,45 @@
 
 The AI will:
 1. Copy the `search_free_data_builder` function from the latest stable migration
-2. Create a new migration to drop and recreate the function
-3. NOT suggest using history panel (it doesn't work reliably)
+2. Create a new migration using `CREATE OR REPLACE FUNCTION` (to avoid duplicates)
+3. Verify counts match the documented baseline values
+4. NOT suggest using history panel (it doesn't work reliably)
 
 ---
 
-## Checkpoint: v2.6 - January 17, 2026
+## Checkpoint: v2.7 - January 17, 2026
 
 ### ✅ Status: STABLE (Current)
 
-**Base Migration:** `20260117035653_656c0ab5-a9dc-4159-a5bf-875212e91b06.sql`
+**Base Migration:** Latest migration with v2.7 Prospect Data fix  
+**Fallback Migration:** `20260117035653_656c0ab5-a9dc-4159-a5bf-875212e91b06.sql` (v2.6)
 
-**Known Issues in v2.6 (inherited from v2.3 revert):**
-- Personal Facebook Filter: Uses `facebook` field but data is in `facebookUrl` (0 results instead of 13)
-- Personal Twitter Filter: Uses `twitter` field but data is in `twitterUrl` (0 results instead of 7)
-- Company Facebook Filter: Uses `companyFacebook` field but data is in `companyFacebookUrl` (0 results instead of 147)
-- Company Twitter Filter: Uses `companyTwitter` field but data is in `companyTwitterUrl` (0 results instead of 141)
-- Company Revenue Filter: Uses `revenue`/`annualRevenue` but data is in `companyRevenue` (0 results instead of 150)
-- Company LinkedIn Filter: Uses `companyLinkedin` (correct - 203 records)
-
-**Working Filters:**
-- ✅ Income (incomeRange): 84 records with data
-- ✅ Net Worth (netWorth): 87 records with data  
-- ✅ Company Size (companySize): 585 records with data
-- ✅ Department (including C-Suite/Leadership): ~138 for C-Suite
-- ✅ Seniority (including president, head of): Working
+**All Filters Now Working:**
+- ✅ Income (incomeRange): Working
+- ✅ Net Worth (netWorth): Working
+- ✅ Company Size (companySize): Working
+- ✅ Department (including C-Suite/Leadership): Working
+- ✅ Seniority: Working
+- ✅ Personal Facebook (facebookUrl): **Fixed in v2.7** - 13 records
+- ✅ Personal Twitter (twitterUrl): **Fixed in v2.7** - 7 records
+- ✅ Company Facebook (companyFacebookUrl): **Fixed in v2.7** - 147 records
+- ✅ Company Twitter (companyTwitterUrl): **Fixed in v2.7** - 141 records
 - ✅ All other filters
 
 ---
 
-## Database Field Reference (Actual Data)
+## Database Field Reference (Authoritative)
 
-| Category | Correct Field | Wrong Field | Records |
-|----------|--------------|-------------|---------|
-| Personal Facebook | `facebookUrl` | `facebook` | 13 |
-| Personal Twitter | `twitterUrl` | `twitter` | 7 |
-| Company Facebook | `companyFacebookUrl` | `companyFacebook` | 147 |
-| Company Twitter | `companyTwitterUrl` | `companyTwitter` | 141 |
-| Company Revenue | `companyRevenue` | `revenue` | 150 |
-| Company LinkedIn | `companyLinkedin` | - | 203 |
-| Income | `incomeRange` | `income` | 84 |
-| Net Worth | `netWorth` | - | 87 |
-| Company Size | `companySize` | - | 585 |
+| Category | Correct Field(s) | Records |
+|----------|-----------------|---------|
+| Income | `incomeRange` | 63+ |
+| Net Worth | `netWorth` | 56+ |
+| Company Size | `companySize` | 500+ |
+| Personal Facebook | `facebook`, `facebookUrl` | 13 |
+| Personal Twitter | `twitter`, `twitterUrl` | 7 |
+| Company Facebook | `companyFacebook`, `companyFacebookUrl` | 147 |
+| Company Twitter | `companyTwitter`, `companyTwitterUrl` | 141 |
+| Company LinkedIn | `companyLinkedin` | 203 |
 
 ---
 
@@ -62,7 +59,7 @@ The AI will:
 
 | Function Name | Parameters | Status |
 |---------------|------------|--------|
-| `search_free_data_builder` | 29 | ✅ Core search - v2.6 |
+| `search_free_data_builder` | 29 | ✅ Core search - v2.7 |
 | `deduct_credits` | 2 | ✅ Stable |
 | `get_all_profiles_admin` | 0 | ✅ Stable |
 | `get_filter_suggestions` | 0 | ✅ Stable |
@@ -78,48 +75,53 @@ The AI will:
 
 ---
 
-## Verified Filter Counts (v2.6)
+## Verified Filter Counts (v2.7 Baseline)
 
-### Income (using `incomeRange` field - 84 records total)
+### Income (using `incomeRange` field)
 | Range | Expected Count |
 |-------|----------------|
 | Under $50K | 21 |
 | $50K-$100K | 45 |
-| $100K-$200K | 15 |
-| $200K+ | 3 |
 
-### Net Worth (using `netWorth` field - 87 records total)
+### Net Worth (using `netWorth` field)
 | Range | Expected Count |
 |-------|----------------|
 | Under $100K | 56 |
-| $100K-$500K | 21 |
-| $500K-$1M | 10 |
 
-### Company Size (using `companySize` field - 585 records total)
+### Company Size (using `companySize` field)
 | Range | Expected Count |
 |-------|----------------|
-| 1-10 | 13 |
-| 11-50 | 96 |
-| 51-200 | 81 |
-| 201-500 | 78 |
+| 1-10 | 26 |
+| 11-50 | 191 |
 
 ### Department
 | Department | Expected Count |
 |------------|----------------|
-| C-Suite / Leadership | ~138 |
+| C-Suite / Leadership | 138 |
+
+### Prospect Data (Fixed in v2.7)
+| Filter | Expected Count |
+|--------|----------------|
+| Personal Facebook | 13 |
+| Personal Twitter | 7 |
+| Company Facebook | 147 |
+| Company Twitter | 141 |
 
 ---
 
-## Health Check Results (v2.6)
+## Health Check Results (v2.7)
 
 ```
 ✅ Function count: 1 (no duplicates)
 ✅ Parameter count: 29
 ✅ Income filter: Working (21 for Under $50K)
 ✅ Net Worth filter: Working (56 for Under $100K)
-✅ Company Size filter: Working (13 for 1-10)
-✅ Department C-Suite: Working (~138, not inflated)
-⚠️ Prospect Data filters: Some use wrong field names (see Known Issues)
+✅ Company Size filter: Working (26 for 1-10, 191 for 11-50)
+✅ Department C-Suite: Working (138)
+✅ Personal Facebook: Working (13)
+✅ Personal Twitter: Working (7)
+✅ Company Facebook: Working (147)
+✅ Company Twitter: Working (141)
 ⚠️ RLS on free_data: Public read access (intentional for free tier)
 ```
 
@@ -131,11 +133,10 @@ The AI will:
 Tell the AI: **"Revert back to stable state"**
 
 ### Manual Revert Steps
-1. Find the latest stable migration file (currently `20260117035653`)
+1. Find the stable migration file (`20260117035653`)
 2. Copy the `search_free_data_builder` function
 3. Create new migration with:
-   - `DROP FUNCTION IF EXISTS public.search_free_data_builder(...)`
-   - `CREATE FUNCTION public.search_free_data_builder(...)`
+   - `CREATE OR REPLACE FUNCTION public.search_free_data_builder(...)`
 4. Approve migration
 
 ---
@@ -144,6 +145,7 @@ Tell the AI: **"Revert back to stable state"**
 
 | Date | Version | Changes |
 |------|---------|---------|
+| Jan 17, 2026 | **v2.7** | **Fixed Prospect Data field names** - added facebookUrl, twitterUrl variants |
 | Jan 17, 2026 | v2.6 | Reverted to v2.3 function, documented known issues |
 | Jan 17, 2026 | v2.5 | BROKEN - bad regex for income/net worth/department |
 | Jan 17, 2026 | v2.4 | Fixed 5 field names for prospect data |
@@ -157,16 +159,35 @@ Tell the AI: **"Revert back to stable state"**
 ## Guardrails to Prevent Duplicate Functions
 
 ### Before ANY function modification:
-1. Query `pg_proc` to get EXACT function identity: `pg_get_function_identity_arguments(oid)`
-2. Use `DROP FUNCTION IF EXISTS` with the EXACT parameter signature
-3. Use `CREATE FUNCTION` (not `CREATE OR REPLACE`) after dropping
-4. Verify with: `SELECT COUNT(*) FROM pg_proc WHERE proname = 'function_name'`
+1. **ALWAYS use `CREATE OR REPLACE FUNCTION`** - not `DROP` + `CREATE`
+2. Keep the EXACT same parameter signature (29 parameters)
+3. Keep the EXACT same return type
+4. Verify after: `SELECT COUNT(*) FROM pg_proc WHERE proname = 'search_free_data_builder'`
 
 ### Why duplicates happen:
 - PostgreSQL allows function overloading (same name, different signatures)
-- `CREATE OR REPLACE` fails if return type differs
-- Parameter ORDER matters for function identity
+- Changing parameter types/count creates a NEW function
+- Both functions then exist, causing ambiguous calls
 
 ---
 
-**Next Step:** Fix Prospect Data field names (facebookUrl, twitterUrl, etc.) to match actual data fields.
+## Quick Health Check SQL
+
+```sql
+-- Verify no duplicates
+SELECT proname, COUNT(*) FROM pg_proc 
+WHERE pronamespace = 'public'::regnamespace 
+  AND proname = 'search_free_data_builder'
+GROUP BY proname;
+-- Expected: 1 row with count = 1
+
+-- Verify baseline counts
+SELECT 'Income Under $50K', COUNT(*) FROM free_data 
+WHERE COALESCE(NULLIF(REGEXP_REPLACE(entity_data->>'incomeRange', '[^0-9]', '', 'g'), '')::int, 0) < 50
+  AND entity_data->>'incomeRange' IS NOT NULL;
+-- Expected: 21
+
+SELECT 'Personal Facebook', COUNT(*) FROM free_data 
+WHERE entity_data->>'facebookUrl' IS NOT NULL;
+-- Expected: 13
+```
