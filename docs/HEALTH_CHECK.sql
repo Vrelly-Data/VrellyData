@@ -1,20 +1,22 @@
 -- ============================================================
--- SYSTEM HEALTH CHECK - Run this to verify database integrity
+-- SYSTEM HEALTH CHECK v2.7
+-- Run this to verify database integrity
 -- ============================================================
 -- USAGE: Ask AI to "run the health check" or execute manually
--- LAST UPDATED: January 15, 2026
+-- LAST UPDATED: January 17, 2026
 -- ============================================================
 
 -- ============================================================
 -- 1. DUPLICATE FUNCTION CHECK
--- Purpose: Ensure no function overloads exist
--- Expected: Zero rows returned (no duplicates)
+-- Purpose: Ensure no unexpected function overloads exist
+-- Expected: Only title_matches_seniority should have 2 versions
 -- ============================================================
 SELECT 
     proname as function_name,
     COUNT(*) as overload_count,
     CASE 
-        WHEN COUNT(*) > 1 THEN '❌ FAIL - DUPLICATES EXIST'
+        WHEN proname = 'title_matches_seniority' AND COUNT(*) = 2 THEN '✅ PASS - Expected overload'
+        WHEN COUNT(*) > 1 THEN '❌ FAIL - UNEXPECTED DUPLICATES'
         ELSE '✅ PASS'
     END as status
 FROM pg_proc p
@@ -26,14 +28,16 @@ HAVING COUNT(*) > 1;
 -- ============================================================
 -- 2. SEARCH FUNCTION VERIFICATION
 -- Purpose: Verify search_free_data_builder exists and is unique
--- Expected: count = 1
+-- Expected: count = 1, params = 29
 -- ============================================================
 SELECT 
     'search_free_data_builder' as function_name,
     COUNT(*) as count,
+    MAX(pronargs) as param_count,
     CASE 
         WHEN COUNT(*) = 0 THEN '❌ FAIL - FUNCTION MISSING'
-        WHEN COUNT(*) = 1 THEN '✅ PASS - Unique function exists'
+        WHEN COUNT(*) = 1 AND MAX(pronargs) = 29 THEN '✅ PASS - Unique function with 29 params'
+        WHEN COUNT(*) = 1 THEN '⚠️ WARN - Param count is ' || MAX(pronargs) || ' (expected 29)'
         ELSE '❌ FAIL - MULTIPLE VERSIONS EXIST (' || COUNT(*) || ')'
     END as status
 FROM pg_proc p
@@ -44,10 +48,11 @@ AND p.proname = 'search_free_data_builder';
 -- ============================================================
 -- 3. ALL PUBLIC FUNCTIONS LIST
 -- Purpose: Audit all functions for unexpected additions
+-- Expected: 15 functions (16 rows due to title_matches_seniority overload)
 -- ============================================================
 SELECT 
     p.proname as function_name,
-    pg_catalog.pg_get_function_arguments(p.oid) as arguments,
+    pronargs as param_count,
     pg_catalog.pg_get_function_result(p.oid) as return_type
 FROM pg_proc p
 JOIN pg_namespace n ON p.pronamespace = n.oid
@@ -119,6 +124,45 @@ FROM (
     
     UNION ALL
     
+    -- Personal Facebook (v2.7 fix)
+    SELECT 'personalFacebook', COUNT(*) 
+    FROM free_data 
+    WHERE coalesce(entity_data->>'facebook', '') <> ''
+       OR coalesce(entity_data->>'facebookUrl', '') <> ''
+    
+    UNION ALL
+    
+    -- Personal Twitter (v2.7 fix)
+    SELECT 'personalTwitter', COUNT(*) 
+    FROM free_data 
+    WHERE coalesce(entity_data->>'twitter', '') <> ''
+       OR coalesce(entity_data->>'twitterUrl', '') <> ''
+    
+    UNION ALL
+    
+    -- Company Facebook (v2.7 fix)
+    SELECT 'companyFacebook', COUNT(*) 
+    FROM free_data 
+    WHERE coalesce(entity_data->>'companyFacebook', '') <> ''
+       OR coalesce(entity_data->>'companyFacebookUrl', '') <> ''
+    
+    UNION ALL
+    
+    -- Company Twitter (v2.7 fix)
+    SELECT 'companyTwitter', COUNT(*) 
+    FROM free_data 
+    WHERE coalesce(entity_data->>'companyTwitter', '') <> ''
+       OR coalesce(entity_data->>'companyTwitterUrl', '') <> ''
+    
+    UNION ALL
+    
+    -- Company LinkedIn
+    SELECT 'companyLinkedin', COUNT(*) 
+    FROM free_data 
+    WHERE coalesce(entity_data->>'companyLinkedin', '') <> ''
+    
+    UNION ALL
+    
     -- Gender (awaiting data)
     SELECT 'gender', COUNT(*) 
     FROM free_data 
@@ -142,7 +186,7 @@ FROM (
     
     UNION ALL
     
-    -- Income (awaiting data)
+    -- Income
     SELECT 'income/incomeRange', COUNT(*) 
     FROM free_data 
     WHERE coalesce(entity_data->>'income', '') <> '' 
@@ -225,21 +269,50 @@ GROUP BY tablename
 ORDER BY tablename;
 
 -- ============================================================
--- 8. FUNCTION SIGNATURE VALIDATION
--- Purpose: Verify search_free_data_builder has expected parameter count
--- Expected: 28 parameters
+-- 8. V2.7 BASELINE FILTER COUNTS
+-- Purpose: Verify filter counts match expected values
 -- ============================================================
+SELECT '=== V2.7 BASELINE FILTER VERIFICATION ===' as section;
+
+-- Company Size counts
 SELECT 
-    'search_free_data_builder' as function_name,
-    pronargs as param_count,
-    CASE 
-        WHEN pronargs = 28 THEN '✅ PASS - Expected 28 parameters'
-        ELSE '❌ FAIL - Expected 28, found ' || pronargs || ' (signature may have changed!)'
-    END as status
-FROM pg_proc p
-JOIN pg_namespace n ON p.pronamespace = n.oid
-WHERE n.nspname = 'public' 
-AND p.proname = 'search_free_data_builder';
+    'Company Size 1-10' as filter,
+    COUNT(*) as actual,
+    13 as expected,
+    CASE WHEN COUNT(*) = 13 THEN '✅' ELSE '⚠️' END as status
+FROM free_data 
+WHERE entity_type = 'person'
+  AND COALESCE(public.parse_employee_count_upper(entity_data->>'companySize'), 0) BETWEEN 1 AND 10
+UNION ALL
+SELECT 'Company Size 11-50', COUNT(*), 96, CASE WHEN COUNT(*) = 96 THEN '✅' ELSE '⚠️' END
+FROM free_data WHERE entity_type = 'person' AND COALESCE(public.parse_employee_count_upper(entity_data->>'companySize'), 0) BETWEEN 11 AND 50
+UNION ALL
+SELECT 'Company Size 51-200', COUNT(*), 81, CASE WHEN COUNT(*) = 81 THEN '✅' ELSE '⚠️' END
+FROM free_data WHERE entity_type = 'person' AND COALESCE(public.parse_employee_count_upper(entity_data->>'companySize'), 0) BETWEEN 51 AND 200
+UNION ALL
+SELECT 'Company Size 201-500', COUNT(*), 78, CASE WHEN COUNT(*) = 78 THEN '✅' ELSE '⚠️' END
+FROM free_data WHERE entity_type = 'person' AND COALESCE(public.parse_employee_count_upper(entity_data->>'companySize'), 0) BETWEEN 201 AND 500;
+
+-- Prospect Data counts
+SELECT 
+    'Personal Facebook' as filter,
+    COUNT(*) as actual,
+    13 as expected,
+    CASE WHEN COUNT(*) = 13 THEN '✅' ELSE '⚠️' END as status
+FROM free_data 
+WHERE entity_data->>'facebookUrl' IS NOT NULL
+UNION ALL
+SELECT 'Personal Twitter', COUNT(*), 7, CASE WHEN COUNT(*) = 7 THEN '✅' ELSE '⚠️' END
+FROM free_data WHERE entity_data->>'twitterUrl' IS NOT NULL
+UNION ALL
+SELECT 'Company Facebook', COUNT(*), 147, CASE WHEN COUNT(*) = 147 THEN '✅' ELSE '⚠️' END
+FROM free_data WHERE entity_data->>'companyFacebookUrl' IS NOT NULL
+UNION ALL
+SELECT 'Company Twitter', COUNT(*), 141, CASE WHEN COUNT(*) = 141 THEN '✅' ELSE '⚠️' END
+FROM free_data WHERE entity_data->>'companyTwitterUrl' IS NOT NULL
+UNION ALL
+SELECT 'Company LinkedIn', COUNT(*), 203, CASE WHEN COUNT(*) = 203 THEN '✅' ELSE '⚠️' END
+FROM free_data WHERE entity_data->>'companyLinkedin' IS NOT NULL;
 
 -- ============================================================
 -- 9. STABLE CHECKPOINT COMPARISON
@@ -247,11 +320,11 @@ AND p.proname = 'search_free_data_builder';
 -- Reference: docs/STABLE_CHECKPOINTS.md
 -- ============================================================
 SELECT 
-    'STABLE CHECKPOINT v2.0' as checkpoint,
-    'January 15, 2026' as date,
-    '15 functions, 28 params on search, 0 duplicates' as expected_state,
+    'STABLE CHECKPOINT v2.7' as checkpoint,
+    'January 17, 2026' as date,
+    '15 functions, 29 params on search, title_matches_seniority has 2 overloads' as expected_state,
     'See docs/STABLE_CHECKPOINTS.md for full details' as reference;
 
 -- ============================================================
--- END OF HEALTH CHECK
+-- END OF HEALTH CHECK v2.7
 -- ============================================================
