@@ -2,7 +2,7 @@
 
 **Purpose**: Authoritative reference for filter field names, expected counts, and revert procedures.  
 **Last Updated**: January 17, 2026  
-**Version**: 3.0
+**Version**: 3.2
 
 ---
 
@@ -10,7 +10,7 @@
 
 The `search_free_data_builder` function uses these exact field names. Changing them will break filters.
 
-**To revert to stable state, say:** "Revert to v3.0 stable state"
+**To revert to stable state, say:** "Revert to v3.2 stable state"
 
 ---
 
@@ -68,16 +68,25 @@ The `search_free_data_builder` function uses these exact field names. Changing t
 
 ---
 
-## ✅ Verified Filter Counts (v3.0 Baseline)
+## ✅ Verified Filter Counts (v3.2 Baseline)
 
 Use these as regression tests. If counts change unexpectedly, something is broken.
 
+### Data Summary
+```
+Total Records:            724
+Person Records:           400
+Company Records:          324
+```
+
 ### Company Filters
 ```
-Company Size 1-10:        13
+Company Size 1-10:        15
 Company Size 11-50:       96
 Company Size 51-200:      81
 Company Size 201-500:     78
+Company Size 5001-10000:  86
+Company Size 10000+:      8
 Revenue Under $1M:        3
 Revenue $1M-$10M:         42
 Revenue $10M-$50M:        56
@@ -85,7 +94,7 @@ Revenue $10M-$50M:        56
 
 ### Person Demographics
 ```
-Income Under $50K:        21
+Income Under $50K:        55
 Income $50K - $100K:      45
 Net Worth Under $100K:    56
 Gender Male:              74
@@ -95,6 +104,7 @@ Gender Female:            18
 ### Professional
 ```
 C-Suite Department:       138
+Individual Contributor:   99
 ```
 
 ### Prospect Data
@@ -105,6 +115,19 @@ Company Facebook:         147
 Company Twitter:          141
 Company LinkedIn:         203
 ```
+
+---
+
+## 🎨 Frontend Normalization (v3.1.1)
+
+Industry suggestions are normalized in the frontend to handle case variations:
+
+**File**: `src/hooks/useFreeDataSuggestions.ts`
+
+**Behavior**:
+- Converts to Title Case: "retail" → "Retail"
+- Deduplicates: "Retail" and "retail" become single "Retail"
+- Uses Set for deduplication after normalization
 
 ---
 
@@ -191,17 +214,19 @@ RETURNS TABLE(entity_external_id text, entity_data jsonb, total_count bigint)
 ## 🔄 Revert Procedure
 
 ### Quick Revert (Say This)
-> **"Revert to v3.0 stable state"**
+> **"Revert to v3.2 stable state"**
 
 ### What Gets Restored
 - `search_free_data_builder` function (29 parameters)
 - `parse_revenue_to_numeric` helper function
+- Frontend industry normalization
 - All filter logic exactly as documented
 
 ### Manual Revert (If Needed)
-1. Find: `supabase/migrations/20260117133021_ab3eead1-e309-4d56-b71d-56f8a549f3e8.sql`
+1. Find: `supabase/migrations/20260117175524_38595ba8-3317-4946-8c7a-25ee0c6d6037.sql`
 2. Copy both `CREATE FUNCTION` blocks
 3. Create new migration with `CREATE OR REPLACE FUNCTION`
+4. Verify frontend normalization in `src/hooks/useFreeDataSuggestions.ts`
 
 ---
 

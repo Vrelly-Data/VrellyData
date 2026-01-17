@@ -1,7 +1,7 @@
 # 🔒 Search Function Lock Document
 
 **Purpose**: Protect the `search_free_data_builder` function from unintended modifications.  
-**Version**: 3.1  
+**Version**: 3.2  
 **Last Updated**: January 17, 2026
 
 ---
@@ -24,13 +24,13 @@ If you're unsure, **ASK THE USER FIRST**.
 
 If anything breaks, the user can say:
 
-> **"Revert to v3.0 stable state"**
+> **"Revert to v3.2 stable state"**
 
 ---
 
 ## ✅ 18 Verified Working Filters
 
-All of these filters have been tested and confirmed working as of v3.1:
+All of these filters have been tested and confirmed working as of v3.2:
 
 | # | Filter | Status |
 |---|--------|--------|
@@ -51,17 +51,28 @@ All of these filters have been tested and confirmed working as of v3.1:
 | 15 | Gender | ✅ |
 | 16 | Person Income | ✅ |
 | 17 | Person Net Worth | ✅ |
-| 18 | Individual Contributor (Staff) | ✅ |
+| 18 | Industry Suggestions (Frontend Normalized) | ✅ |
 
 ---
 
 ## 📁 Stable Migration Reference
 
-**File**: `supabase/migrations/20260117133021_ab3eead1-e309-4d56-b71d-56f8a549f3e8.sql`
+**File**: `supabase/migrations/20260117175524_38595ba8-3317-4946-8c7a-25ee0c6d6037.sql`
 
 This migration contains:
 1. `parse_revenue_to_numeric()` - Helper for revenue parsing
 2. `search_free_data_builder()` - Main search function (29 parameters)
+
+---
+
+## 🎨 Frontend Normalization (v3.1.1)
+
+**File**: `src/hooks/useFreeDataSuggestions.ts`
+
+Industry suggestions are normalized to Title Case and deduplicated in the frontend:
+- "retail" → "Retail"
+- "HEALTHCARE" → "Healthcare"
+- Duplicates removed via Set
 
 ---
 
@@ -78,7 +89,7 @@ This migration contains:
 
 ### If You Break Something:
 
-1. Tell the user to say: "Revert to v3.0 stable state"
+1. Tell the user to say: "Revert to v3.2 stable state"
 2. Copy functions from the stable migration file
 3. Create new migration with CREATE OR REPLACE
 4. Verify counts match baseline
@@ -102,10 +113,9 @@ SELECT total_count FROM public.search_free_data_builder(
   p_company_size_ranges := ARRAY['10000+']
 ) LIMIT 1;
 
--- Should return 399 (all company sizes)
+-- Should return 400 (all person records)
 SELECT total_count FROM public.search_free_data_builder(
-  p_entity_type := 'person',
-  p_company_size_ranges := ARRAY['1-10','11-50','51-200','201-500','501-1000','1001-5000','5001-10000','10000+']
+  p_entity_type := 'person'
 ) LIMIT 1;
 
 -- Should return 99
@@ -113,20 +123,27 @@ SELECT total_count FROM public.search_free_data_builder(
   p_entity_type := 'person',
   p_seniority_levels := ARRAY['Individual Contributor']
 ) LIMIT 1;
+
+-- Should return 55
+SELECT total_count FROM public.search_free_data_builder(
+  p_entity_type := 'person',
+  p_income := ARRAY['Under $50K']
+) LIMIT 1;
 ```
 
 ---
 
 ## 🔧 What the AI Should Do on Revert
 
-When user says "Revert to v3.0 stable state":
+When user says "Revert to v3.2 stable state":
 
-1. Read migration file: `20260117133021_ab3eead1-e309-4d56-b71d-56f8a549f3e8.sql`
+1. Read migration file: `20260117175524_38595ba8-3317-4946-8c7a-25ee0c6d6037.sql`
 2. Extract `parse_revenue_to_numeric` function
 3. Extract `search_free_data_builder` function
 4. Create new migration with both functions using `CREATE OR REPLACE`
 5. Add assertion block to verify single function with 29 parameters
 6. Run verification queries to confirm baseline counts
+7. Verify frontend normalization in `useFreeDataSuggestions.ts`
 
 ---
 
@@ -136,6 +153,7 @@ When user says "Revert to v3.0 stable state":
 - `docs/FILTER_CONTRACT.md` - Field mappings and parameter reference
 - `docs/BUILDER_SEARCH_TEST.sql` - Automated test suite
 - `docs/FILTER_DATA_MAPPING.md` - UI to database field mapping
+- `docs/V3.2_RELEASE_NOTES.md` - Full release notes
 
 ---
 
@@ -143,8 +161,9 @@ When user says "Revert to v3.0 stable state":
 
 | What | Value |
 |------|-------|
-| Current Version | v3.1 |
-| v3.1 Changes | Company Size buckets (5001-10000, 10000+) + Individual Contributor |
+| Current Version | v3.2 |
+| Total Records | 724 (400 person, 324 company) |
 | Parameter Count | 29 |
-| Revert Command | "Revert to v3.1 stable state" |
+| Revert Command | "Revert to v3.2 stable state" |
 | Test File | `docs/BUILDER_SEARCH_TEST.sql` |
+| Frontend Fix | `src/hooks/useFreeDataSuggestions.ts` (industry normalization) |
