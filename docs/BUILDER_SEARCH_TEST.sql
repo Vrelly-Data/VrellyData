@@ -1,14 +1,14 @@
 -- ============================================================
--- BUILDER SEARCH TEST SUITE v3.0
+-- BUILDER SEARCH TEST SUITE v3.2
 -- ============================================================
 -- Purpose: Verify search_free_data_builder function works correctly
 -- Last Updated: January 17, 2026
--- Stable Migration: 20260117133021_ab3eead1-e309-4d56-b71d-56f8a549f3e8.sql
+-- Stable Migration: 20260117175524_38595ba8-3317-4946-8c7a-25ee0c6d6037.sql
 --
 -- USAGE: Run this entire script in SQL editor after any changes
 -- TOLERANCE: ±5 for all counts (data may change slightly)
 --
--- TO REVERT: Say "Revert to v3.0 stable state"
+-- TO REVERT: Say "Revert to v3.2 stable state"
 -- ============================================================
 
 -- ============================================================
@@ -61,7 +61,7 @@ BEGIN
     p_entity_type := 'person',
     p_company_size_ranges := ARRAY['1-10']
   ) LIMIT 1;
-  expected := 13;
+  expected := 15;
   IF result_count BETWEEN expected - tolerance AND expected + tolerance THEN
     RAISE NOTICE '✅ Company Size 1-10: % (expected ~%)', result_count, expected;
   ELSE
@@ -105,6 +105,32 @@ BEGIN
     RAISE NOTICE '✅ Company Size 201-500: % (expected ~%)', result_count, expected;
   ELSE
     RAISE WARNING '❌ Company Size 201-500: % (expected ~%)', result_count, expected;
+  END IF;
+  
+  -- Test: 5001-10000 employees (NEW in v3.1)
+  SELECT total_count INTO result_count
+  FROM public.search_free_data_builder(
+    p_entity_type := 'person',
+    p_company_size_ranges := ARRAY['5001-10000']
+  ) LIMIT 1;
+  expected := 86;
+  IF result_count BETWEEN expected - tolerance AND expected + tolerance THEN
+    RAISE NOTICE '✅ Company Size 5001-10000: % (expected ~%)', result_count, expected;
+  ELSE
+    RAISE WARNING '❌ Company Size 5001-10000: % (expected ~%)', result_count, expected;
+  END IF;
+  
+  -- Test: 10000+ employees (NEW in v3.1)
+  SELECT total_count INTO result_count
+  FROM public.search_free_data_builder(
+    p_entity_type := 'person',
+    p_company_size_ranges := ARRAY['10000+']
+  ) LIMIT 1;
+  expected := 8;
+  IF result_count BETWEEN expected - tolerance AND expected + tolerance THEN
+    RAISE NOTICE '✅ Company Size 10000+: % (expected ~%)', result_count, expected;
+  ELSE
+    RAISE WARNING '❌ Company Size 10000+: % (expected ~%)', result_count, expected;
   END IF;
 END $$;
 
@@ -172,13 +198,13 @@ DECLARE
 BEGIN
   RAISE NOTICE '--- Income Filter Tests ---';
   
-  -- Test: Under $50K
+  -- Test: Under $50K (UPDATED in v3.2)
   SELECT total_count INTO result_count
   FROM public.search_free_data_builder(
     p_entity_type := 'person',
     p_income := ARRAY['Under $50K']
   ) LIMIT 1;
-  expected := 21;
+  expected := 55;
   IF result_count BETWEEN expected - tolerance AND expected + tolerance THEN
     RAISE NOTICE '✅ Income Under $50K: % (expected ~%)', result_count, expected;
   ELSE
@@ -252,7 +278,33 @@ BEGIN
 END $$;
 
 -- ============================================================
--- SECTION 7: GENDER FILTER TESTS
+-- SECTION 7: SENIORITY FILTER TESTS
+-- ============================================================
+
+DO $$
+DECLARE
+  result_count bigint;
+  expected integer;
+  tolerance integer := 5;
+BEGIN
+  RAISE NOTICE '--- Seniority Filter Tests ---';
+  
+  -- Test: Individual Contributor (NEW in v3.1)
+  SELECT total_count INTO result_count
+  FROM public.search_free_data_builder(
+    p_entity_type := 'person',
+    p_seniority_levels := ARRAY['Individual Contributor']
+  ) LIMIT 1;
+  expected := 99;
+  IF result_count BETWEEN expected - tolerance AND expected + tolerance THEN
+    RAISE NOTICE '✅ Individual Contributor: % (expected ~%)', result_count, expected;
+  ELSE
+    RAISE WARNING '❌ Individual Contributor: % (expected ~%)', result_count, expected;
+  END IF;
+END $$;
+
+-- ============================================================
+-- SECTION 8: GENDER FILTER TESTS
 -- ============================================================
 
 DO $$
@@ -291,7 +343,7 @@ BEGIN
 END $$;
 
 -- ============================================================
--- SECTION 8: PROSPECT DATA FILTER TESTS
+-- SECTION 9: PROSPECT DATA FILTER TESTS
 -- ============================================================
 
 DO $$
@@ -369,7 +421,7 @@ BEGIN
 END $$;
 
 -- ============================================================
--- SECTION 9: COMBINED FILTER TESTS
+-- SECTION 10: COMBINED FILTER TESTS
 -- ============================================================
 
 DO $$
@@ -402,7 +454,7 @@ BEGIN
 END $$;
 
 -- ============================================================
--- SECTION 10: PAGINATION TESTS
+-- SECTION 11: PAGINATION TESTS
 -- ============================================================
 
 DO $$
@@ -446,7 +498,7 @@ BEGIN
 END $$;
 
 -- ============================================================
--- SECTION 11: ENTITY TYPE TESTS
+-- SECTION 12: ENTITY TYPE TESTS
 -- ============================================================
 
 DO $$
@@ -456,20 +508,32 @@ DECLARE
 BEGIN
   RAISE NOTICE '--- Entity Type Tests ---';
   
-  -- Test person entity type
+  -- Test person entity type (should be ~400)
   SELECT total_count INTO person_count
   FROM public.search_free_data_builder(
     p_entity_type := 'person'
   ) LIMIT 1;
   
-  -- Test company entity type
+  -- Test company entity type (should be ~324)
   SELECT total_count INTO company_count
   FROM public.search_free_data_builder(
     p_entity_type := 'company'
   ) LIMIT 1;
   
-  RAISE NOTICE '✅ Person records: %', COALESCE(person_count, 0);
-  RAISE NOTICE '✅ Company records: %', COALESCE(company_count, 0);
+  RAISE NOTICE '✅ Person records: % (expected ~400)', COALESCE(person_count, 0);
+  RAISE NOTICE '✅ Company records: % (expected ~324)', COALESCE(company_count, 0);
+  
+  IF person_count BETWEEN 395 AND 405 THEN
+    RAISE NOTICE '✅ Person count in expected range';
+  ELSE
+    RAISE WARNING '❌ Person count outside expected range (395-405)';
+  END IF;
+  
+  IF company_count BETWEEN 319 AND 329 THEN
+    RAISE NOTICE '✅ Company count in expected range';
+  ELSE
+    RAISE WARNING '❌ Company count outside expected range (319-329)';
+  END IF;
 END $$;
 
 -- ============================================================
@@ -480,8 +544,9 @@ DO $$
 BEGIN
   RAISE NOTICE '';
   RAISE NOTICE '============================================================';
-  RAISE NOTICE 'BUILDER SEARCH TEST SUITE v3.0 COMPLETE';
-  RAISE NOTICE 'Stable Migration: 20260117133021_ab3eead1-e309-4d56-b71d-56f8a549f3e8.sql';
-  RAISE NOTICE 'To revert: Say "Revert to v3.0 stable state"';
+  RAISE NOTICE 'BUILDER SEARCH TEST SUITE v3.2 COMPLETE';
+  RAISE NOTICE 'Total Records: 724 (400 person, 324 company)';
+  RAISE NOTICE 'Stable Migration: 20260117175524_38595ba8-3317-4946-8c7a-25ee0c6d6037.sql';
+  RAISE NOTICE 'To revert: Say "Revert to v3.2 stable state"';
   RAISE NOTICE '============================================================';
 END $$;
