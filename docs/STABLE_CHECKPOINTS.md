@@ -2,20 +2,27 @@
 
 > **PURPOSE:** This document timestamps stable states of the application for easy reference and recovery.  
 > **USAGE:** Reference these checkpoints when the system needs to be restored to a known-good state.
-> **LAST UPDATED:** January 16, 2026 (v2.3)
+> **LAST UPDATED:** January 17, 2026 (v2.4)
 
 ---
 
-## Checkpoint: v2.3 - January 16, 2026
+## Checkpoint: v2.4 - January 17, 2026
 
 ### ✅ Status: STABLE
 
 **Fixes Applied:**
-- **Company Size Filter:** Changed field from `employeeCount` → `companySize`
-- **Seniority Filter:** Added `president` and `head of` pattern matching
-- **Department Filter:** Added `customer success`, `product`, `community and social services` patterns
-- **Income Filter:** Now only returns records WITH income data (84 records total)
-- **Net Worth Filter:** Now only returns records WITH net worth data (87 records), handles negative values
+- **Personal Facebook Filter:** Changed field from `facebook` → `facebookUrl` (13 records)
+- **Personal Twitter Filter:** Changed field from `twitter` → `twitterUrl` (7 records)
+- **Company Facebook Filter:** Changed field from `companyFacebook` → `companyFacebookUrl` (147 records)
+- **Company Twitter Filter:** Changed field from `companyTwitter` → `companyTwitterUrl` (141 records)
+- **Company Revenue Filter:** Changed field from `revenue`/`annualRevenue` → `companyRevenue` (150 records)
+
+**Previous fixes preserved from v2.3:**
+- Company Size: Uses `companySize` field
+- Seniority: Includes president, head of patterns
+- Department: Includes executive, customer success, product patterns
+- Income: Only returns records WITH income data
+- Net Worth: Handles negative values
 
 ---
 
@@ -23,7 +30,7 @@
 
 | Function Name | Parameters | Status |
 |---------------|------------|--------|
-| `search_free_data_builder` | 29 | ✅ Core search - v2.3 STABLE |
+| `search_free_data_builder` | 29 | ✅ Core search - v2.4 STABLE |
 | `deduct_credits` | 2 | ✅ Stable |
 | `get_all_profiles_admin` | 0 | ✅ Stable |
 | `get_filter_suggestions` | 0 | ✅ Stable |
@@ -39,32 +46,51 @@
 
 ---
 
-## Working Filters (v2.3)
+## Working Filters (v2.4 - ALL FILTERS NOW WORKING)
 
 | Filter | Status | Notes |
 |--------|--------|-------|
 | Keywords | ✅ | Searches firstName, lastName, title, company, industry |
 | Prospect Data | ✅ | All boolean filters work |
-| Company Revenue | ✅ | ILIKE matching |
+| Company Revenue | ✅ FIXED v2.4 | Uses `companyRevenue` field (150 records) |
 | Job Titles | ✅ | ILIKE matching |
-| Seniority | ✅ FIXED v2.3 | Added president, head of patterns |
-| Department | ✅ FIXED v2.3 | Added customer success, product patterns |
+| Seniority | ✅ | President, head of patterns included |
+| Department | ✅ | Executive, customer success, product patterns |
 | Person City | ✅ | Case-insensitive match |
 | Person Country | ✅ | Case-insensitive match |
 | Company City | ✅ | Case-insensitive match |
 | Company Country | ✅ | Case-insensitive match |
 | Technology | ✅ | ILIKE matching |
-| Company Size | ✅ FIXED v2.3 | Uses `companySize` field |
+| Company Size | ✅ | Uses `companySize` field |
 | Person Interest | ✅ | ILIKE matching |
 | Person Skill | ✅ | ILIKE matching |
 | Gender | ✅ | Case-insensitive exact match |
-| Person Income | ✅ FIXED v2.3 | Only returns records WITH data |
-| Person Net Worth | ✅ FIXED v2.3 | Handles negative values |
-| Industries | ✅ | Case-insensitive exact match |
+| Person Income | ✅ | Only returns records WITH data |
+| Person Net Worth | ✅ | Handles negative values |
+| Personal Facebook | ✅ FIXED v2.4 | Uses `facebookUrl` field (13 records) |
+| Personal Twitter | ✅ FIXED v2.4 | Uses `twitterUrl` field (7 records) |
+| Company Facebook | ✅ FIXED v2.4 | Uses `companyFacebookUrl` field (147 records) |
+| Company Twitter | ✅ FIXED v2.4 | Uses `companyTwitterUrl` field (141 records) |
+| Has LinkedIn | ✅ | Uses `linkedInUrl` |
+| Has Email | ✅ | Checks email, businessEmail, personalEmail |
+| Has Phone | ✅ | Uses `phone` |
+| Personal Email | ✅ | Uses `personalEmail` |
+| Business Email | ✅ | Uses `businessEmail` |
+| Company LinkedIn | ✅ | Uses `companyLinkedInUrl` |
+| Company Phone | ✅ | Uses `companyPhone` |
 
 ---
 
-## Verified Data Counts (v2.3)
+## Verified Data Counts (v2.4)
+
+### Prospect Data Fields
+| Field | Records |
+|-------|---------|
+| facebookUrl | 13 |
+| twitterUrl | 7 |
+| companyFacebookUrl | 147 |
+| companyTwitterUrl | 141 |
+| companyRevenue | 150 |
 
 ### Company Size (using `companySize` field)
 | Range | Count |
@@ -94,9 +120,9 @@
 ## Health Check Results
 
 ```
-✅ No duplicate functions
-✅ search_free_data_builder has 29 parameters
-✅ All helper functions present
+✅ Function count: 1 (no duplicates)
+✅ Parameter count: 29
+✅ All 5 fixed fields now return data
 ⚠️ RLS on free_data: Public read access (intentional for free tier)
 ```
 
@@ -114,10 +140,26 @@
 
 | Date | Version | Changes |
 |------|---------|---------|
-| Jan 16, 2026 | v2.3 | Fixed Company Size (companySize), Seniority (president/head of), Department (customer success/product), Income (data-only), Net Worth (negative values) |
+| Jan 17, 2026 | v2.4 | Fixed 5 field names: facebookUrl, twitterUrl, companyFacebookUrl, companyTwitterUrl, companyRevenue |
+| Jan 16, 2026 | v2.3 | Fixed Company Size, Seniority, Department, Income, Net Worth |
 | Jan 16, 2026 | v2.2 | Fixed Seniority, Department, Income, Net Worth filter logic |
 | Jan 16, 2026 | v2.1 | Added p_has_email parameter |
 | Jan 15, 2026 | v2.0 | Initial stable release |
+
+---
+
+## Guardrails to Prevent Duplicate Functions
+
+### Before ANY function modification:
+1. Query `pg_proc` to get EXACT function identity: `pg_get_function_identity_arguments(oid)`
+2. Use `DROP FUNCTION IF EXISTS` with the EXACT parameter signature
+3. Use `CREATE FUNCTION` (not `CREATE OR REPLACE`) after dropping
+4. Verify with: `SELECT COUNT(*) FROM pg_proc WHERE proname = 'function_name'`
+
+### Why duplicates happen:
+- PostgreSQL allows function overloading (same name, different signatures)
+- `CREATE OR REPLACE` fails if return type differs
+- Parameter ORDER matters for function identity
 
 ---
 
