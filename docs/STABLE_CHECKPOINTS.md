@@ -179,6 +179,41 @@ Tell the AI: **"Revert back to stable state"**
 
 ---
 
+## Health Check Files
+
+| File | Purpose | When to Use |
+|------|---------|-------------|
+| `docs/QUICK_CHECK.sql` | Fast infrastructure + smoke test | After any change |
+| `docs/BUILDER_SEARCH_TEST.sql` | Comprehensive filter testing | After filter changes |
+| `docs/HEALTH_CHECK.sql` | Full infrastructure audit | Monthly or after major changes |
+
+---
+
+## Builder Search Function Tests
+
+The `search_free_data_builder` function can be tested by running `docs/BUILDER_SEARCH_TEST.sql`.
+
+### Expected Results (with tolerance)
+
+| Test | Filter Parameter | Expected | Tolerance |
+|------|-----------------|----------|-----------|
+| Basic Search | None | 500+ | - |
+| Income Under $50K | `p_income := ARRAY['Under $50K']` | 21 | ±5 |
+| Income $50K-$100K | `p_income := ARRAY['$50K-$100K']` | 45 | ±5 |
+| Company Size 1-10 | `p_company_size_ranges := ARRAY['1-10']` | 13 | ±3 |
+| Company Size 11-50 | `p_company_size_ranges := ARRAY['11-50']` | 96 | ±10 |
+| Company Size 51-200 | `p_company_size_ranges := ARRAY['51-200']` | 81 | ±10 |
+| Company Size 201-500 | `p_company_size_ranges := ARRAY['201-500']` | 78 | ±10 |
+| C-Suite Department | `p_departments := ARRAY['C-Suite / Leadership']` | 138 | ±10 |
+| Net Worth Under $100K | `p_net_worth := ARRAY['Under $100K']` | 56 | ±6 |
+| Personal Facebook | `p_has_facebook := true` | 13 | ±3 |
+| Personal Twitter | `p_has_twitter := true` | 7 | ±3 |
+| Company Facebook | `p_has_company_facebook := true` | 147 | ±12 |
+| Company Twitter | `p_has_company_twitter := true` | 141 | ±12 |
+| Company LinkedIn | `p_has_company_linkedin := true` | 203 | ±15 |
+
+---
+
 ## Quick Health Check SQL
 
 ```sql
