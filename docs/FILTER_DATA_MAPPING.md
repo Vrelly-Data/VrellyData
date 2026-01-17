@@ -1,7 +1,7 @@
 # Filter Data Mapping Documentation
 
 > **PURPOSE:** Documents the expected data formats for each filter field in `free_data.entity_data`  
-> **LAST UPDATED:** January 16, 2026 (v2.2)
+> **LAST UPDATED:** January 16, 2026 (v2.3)
 
 ---
 
@@ -11,21 +11,21 @@ The `entity_data` JSONB column uses **camelCase** field names:
 
 | UI Label | Database Field | Type |
 |----------|----------------|------|
-| Email | `email`, `businessEmail` | string |
+| Email | `email`, `businessEmail`, `personalEmail` | string |
 | LinkedIn | `linkedin`, `linkedinUrl` | string |
 | Phone | `phone`, `mobilePhone` | string |
 | Job Title | `title` | string |
 | Seniority | `seniority` | string |
 | Department | `department` | string |
-| Company | `company` | string |
+| Company | `company`, `companyName` | string |
 | Industry | `industry` | string |
-| Company Size | `employeeCount`, `employees` | string/number |
+| Company Size | `companySize` | string (e.g., "11-50") |
 | Revenue | `revenue`, `annualRevenue` | string |
-| City | `city`, `personCity` | string |
-| Country | `country`, `personCountry` | string |
+| City | `city`, `personCity`, `companyCity` | string |
+| Country | `country`, `personCountry`, `companyCountry` | string |
 | Gender | `gender` | string |
-| Income | `incomeRange` | string |
-| Net Worth | `netWorth` | string |
+| Income | `incomeRange` | string (e.g., "$100") |
+| Net Worth | `netWorth` | string (e.g., "$750", "-$2") |
 | Skills | `skills` | string (comma-separated) |
 | Interests | `interests` | string (comma-separated) |
 | Technologies | `technologies` | string (comma-separated) |
@@ -36,28 +36,20 @@ The `entity_data` JSONB column uses **camelCase** field names:
 
 **Database Field:** `entity_data->>'seniority'`
 
-| UI Option | Database Values (case-insensitive) |
-|-----------|-----------------------------------|
-| C-Level | `C suite`, `Cxo`, `C-Level`, `Chief`, `Founder` |
-| VP | `Vp`, `VP`, `Vice President` |
-| Director | `Director` |
-| Manager | `Manager` |
-| Senior | `Senior` |
-| Entry | `Entry`, `Junior`, `Associate` |
-
-**Sample Data:**
-```
-C suite     → 122 records
-Cxo         → 16 records  
-Vp          → 33 records
-Director    → 125 records
-Manager     → 69 records
-Senior      → 7 records
-```
+| UI Option | Database Values (case-insensitive regex) |
+|-----------|------------------------------------------|
+| C-Level | `c-level`, `c-suite`, `csuite`, `cxo`, `chief`, `founder` |
+| President | `president` (also matches title) |
+| VP | `vp`, `vice president`, `v.p.` |
+| Head of | `head` in seniority, `^head of` in title |
+| Director | `director` |
+| Manager | `manager` |
+| Senior | `senior`, `^sr.` |
+| Entry | `entry`, `junior`, `associate`, `intern` |
 
 **Matching Logic:**
-- C-Level matches: `c-level`, `c-suite`, `csuite`, `c level`, `c suite`, `cxo`, `chief`, `founder`
-- Also checks `title` field for `^(ceo|cfo|cto|coo|cmo|cio|cpo|chief)`
+- Checks both `seniority` field and `title` field
+- Title matching uses regex patterns for accuracy
 
 ---
 
@@ -65,28 +57,48 @@ Senior      → 7 records
 
 **Database Field:** `entity_data->>'department'`
 
-| UI Option | Database Values (case-insensitive) |
-|-----------|-----------------------------------|
-| C-Suite / Leadership | `C-Suite`, `Executive`, `Leadership`, `Founder` |
-| Engineering | `Engineering`, `Engineering & Technical`, `Technical` |
-| Sales | `Sales` |
-| Marketing | `Marketing` |
-| Finance | `Finance`, `Accounting` |
-| HR | `Human Resources`, `HR`, `People` |
-| Operations | `Operations` |
-| Legal | `Legal` |
-| IT | `IT`, `Information Technology` |
+| UI Option | Database Values (case-insensitive regex) |
+|-----------|------------------------------------------|
+| C-Suite / Leadership | `c-suite`, `executive`, `leadership`, `founder`, `owner` |
+| Engineering | `engineering`, `technical`, `development`, `software`, `it` |
+| Sales | `sales` |
+| Marketing | `marketing` |
+| Finance | `finance`, `accounting` |
+| HR | `human resources`, `hr`, `people`, `talent` |
+| Operations | `operations` |
+| Legal | `legal` |
+| IT | `it`, `information technology` |
+| Community and Social Services | `community`, `social services`, `nonprofit`, `ngo` |
+| Customer Success | `customer success`, `customer service`, `support`, `client` |
+| Product | `product`, `product management`, `pm` |
 
-**Sample Data:**
-```
-C-Suite             → 126 records
-Sales               → 54 records
-Engineering         → 42 records
-Marketing           → 36 records
-Finance             → 28 records
-Operations          → 22 records
-Human Resources     → 18 records
-```
+---
+
+## Company Size Values
+
+**Database Field:** `entity_data->>'companySize'`
+
+**Format:** Range string like "11-50" or single number
+
+| UI Option | Parsed Range |
+|-----------|--------------|
+| 1-10 | 1 to 10 employees |
+| 11-50 | 11 to 50 employees |
+| 51-200 | 51 to 200 employees |
+| 201-500 | 201 to 500 employees |
+| 501-1000 | 501 to 1000 employees |
+| 1001-5000 | 1001 to 5000 employees |
+| 5001+ | More than 5000 employees |
+
+**Verified Counts (v2.3):**
+| Range | Count |
+|-------|-------|
+| 1-10 | 13 |
+| 11-50 | 96 |
+| 51-200 | 81 |
+| 201-500 | 78 |
+
+**Parsing Function:** `parse_employee_count_upper(size_str)` extracts the upper bound
 
 ---
 
@@ -96,28 +108,26 @@ Human Resources     → 18 records
 
 **Format:** `$XX` where XX represents thousands (e.g., `$100` = $100,000)
 
-| UI Option | Database Value Pattern |
-|-----------|----------------------|
-| Under $50K | `$20`, `$30`, `$40` |
-| $50K - $100K | `$50`, `$60`, `$70`, `$80`, `$90`, `$100` |
-| $100K - $250K | `$100`, `$125`, `$150`, `$175`, `$200`, `$225`, `$250` |
-| $250K+ | `$250`, `$300`, `$350`, `$400`, `$500+` |
+| UI Option | Parsed Value Range |
+|-----------|-------------------|
+| Under $50K | value < 50 |
+| $50K - $100K | 50 ≤ value ≤ 100 |
+| $100K - $200K | 101 ≤ value ≤ 200 |
+| $200K - $500K | 201 ≤ value ≤ 500 |
+| $500K - $1M | 501 ≤ value ≤ 1000 |
+| $1M+ | value > 1000 |
 
-**Sample Data (84 records):**
-```
-$100   → 22 records ($100K)
-$75    → 18 records ($75K)
-$150   → 15 records ($150K)
-$200   → 12 records ($200K)
-$50    → 10 records ($50K)
-$250   → 7 records ($250K)
-```
+**Verified Counts (v2.3):**
+| Range | Count |
+|-------|-------|
+| Under $50K | 21 |
+| $50K-$100K | 45 |
+| $100K-$200K | 15 |
+| $200K+ | 3 |
 
-**Parsing Logic:**
-```sql
--- Extract numeric value: REGEXP_REPLACE(incomeRange, '[^0-9]', '', 'g')::int
--- $100 → 100 (represents $100K)
-```
+**Total Records with Income Data:** 84
+
+**IMPORTANT:** Filter only returns records that HAVE income data (not all 300 records).
 
 ---
 
@@ -125,31 +135,28 @@ $250   → 7 records ($250K)
 
 **Database Field:** `entity_data->>'netWorth'`
 
-**Format:** `$XXX` where XXX represents thousands (e.g., `$750` = $750,000)
+**Format:** `$XXX` where XXX is thousands. Can be negative (e.g., `-$2` = -$2,000 debt)
 
-| UI Option | Database Value Pattern |
-|-----------|----------------------|
-| Under $100K | `$1` - `$99` |
-| $100K - $500K | `$100` - `$500` |
-| $500K - $1M | `$500` - `$1000` |
-| $1M - $5M | `$1000` - `$5000` (or `$1M` - `$5M`) |
-| $5M+ | `$5000+`, `$10M+` |
+| UI Option | Parsed Value Range |
+|-----------|-------------------|
+| Under $100K | value < 100 (includes negatives) |
+| $100K - $500K | 100 ≤ value ≤ 500 |
+| $500K - $1M | 501 ≤ value ≤ 1000 |
+| $1M - $5M | 1001 ≤ value ≤ 5000 |
+| $5M - $10M | 5001 ≤ value ≤ 10000 |
+| $10M - $50M | 10001 ≤ value ≤ 50000 |
+| $50M+ | value > 50000 |
 
-**Sample Data (87 records):**
-```
-$750   → 24 records ($750K)
-$500   → 19 records ($500K)
-$1000  → 15 records ($1M)
-$250   → 12 records ($250K)
-$2000  → 10 records ($2M)
-$5000  → 7 records ($5M)
-```
+**Verified Counts (v2.3):**
+| Range | Count |
+|-------|-------|
+| Under $100K | 56 |
+| $100K-$500K | 21 |
+| $500K-$1M | 10 |
 
-**Parsing Logic:**
-```sql
--- Extract numeric value: REGEXP_REPLACE(netWorth, '[^0-9]', '', 'g')::int
--- $750 → 750 (represents $750K)
-```
+**Total Records with Net Worth Data:** 87
+
+**IMPORTANT:** Filter only returns records that HAVE net worth data. Negative values are properly handled.
 
 ---
 
@@ -162,8 +169,6 @@ $5000  → 7 records ($5M)
 | Male | `male`, `Male`, `M` |
 | Female | `female`, `Female`, `F` |
 | Other | `other`, `Other`, `non-binary` |
-
-**Current Status:** 0 records with gender data (awaiting data)
 
 ---
 
@@ -179,65 +184,27 @@ $5000  → 7 records ($5M)
 ```
 "JavaScript, Python, React, Node.js"
 "Sales, Negotiation, CRM, Lead Generation"
-"Marketing, SEO, Content Strategy, Analytics"
 ```
-
-**Sample Interests:**
-```
-"Technology, Startups, AI, Blockchain"
-"Finance, Investing, Real Estate"
-```
-
----
-
-## Company Size Values
-
-**Database Fields:** `entity_data->>'employeeCount'` or `entity_data->>'employees'`
-
-| UI Option | Database Value Patterns |
-|-----------|------------------------|
-| 1-10 | `1-10`, `5`, `10` |
-| 11-50 | `11-50`, `25`, `50` |
-| 51-200 | `51-200`, `100`, `200` |
-| 201-500 | `201-500`, `300`, `500` |
-| 501-1000 | `501-1000`, `750`, `1000` |
-| 1001-5000 | `1001-5000`, `2000`, `5000` |
-| 5001+ | `5001-10000`, `10001+`, `10000+` |
-
----
-
-## Revenue Values
-
-**Database Fields:** `entity_data->>'revenue'` or `entity_data->>'annualRevenue'`
-
-| UI Option | Database Value Patterns |
-|-----------|------------------------|
-| Under $1M | `$0-1M`, `$500K`, `< $1M` |
-| $1M - $10M | `$1M-10M`, `$5M`, `$1-10M` |
-| $10M - $50M | `$10M-50M`, `$25M`, `$10-50M` |
-| $50M - $100M | `$50M-100M`, `$75M` |
-| $100M - $500M | `$100M-500M`, `$250M` |
-| $500M+ | `$500M+`, `$1B+`, `> $500M` |
 
 ---
 
 ## Quick Reference: Field Name Lookup
 
 ```javascript
-// Frontend to Database field mapping
+// Frontend to Database field mapping (v2.3)
 const fieldMap = {
-  email: ['email', 'businessEmail'],
+  email: ['email', 'businessEmail', 'personalEmail'],
   linkedin: ['linkedin', 'linkedinUrl'],
   phone: ['phone', 'mobilePhone'],
   title: ['title'],
-  seniority: ['seniority'],
+  seniority: ['seniority', 'title'], // Also checks title
   department: ['department'],
   company: ['company', 'companyName'],
   industry: ['industry'],
-  employeeCount: ['employeeCount', 'employees'],
+  companySize: ['companySize'], // Changed from employeeCount in v2.3
   revenue: ['revenue', 'annualRevenue'],
-  city: ['city', 'personCity'],
-  country: ['country', 'personCountry'],
+  city: ['city', 'personCity', 'companyCity'],
+  country: ['country', 'personCountry', 'companyCountry'],
   gender: ['gender'],
   income: ['incomeRange'],
   netWorth: ['netWorth'],
@@ -253,17 +220,25 @@ const fieldMap = {
 
 ### Filter returns 0 results when data exists
 
-1. Check field name (camelCase vs snake_case)
+1. Check field name (use `companySize` not `employeeCount`)
 2. Check value format (case sensitivity)
 3. Run `docs/QUICK_CHECK.sql` to verify data availability
-4. Check `docs/HEALTH_CHECK.sql` for function status
 
-### Filter returns wrong count
+### Income/Net Worth returns too many results
 
-1. Verify regex patterns match actual data values
-2. Check for alternative field names
-3. Compare with sample data in this document
+Before v2.3, these filters could return all 300 records. Now they only return records that actually have income/netWorth data.
+
+- Income: ~84 records total
+- Net Worth: ~87 records total
+
+### Seniority/Department returns wrong count
+
+v2.3 added missing patterns:
+- Seniority: `president`, `head of`
+- Department: `customer success`, `product`, `community and social services`
 
 ---
 
-**Next Update:** When new data fields are added or formats change
+**Version History:**
+- v2.3: Fixed Company Size, Seniority, Department, Income, Net Worth
+- v2.2: Initial documentation

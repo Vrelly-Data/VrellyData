@@ -2,128 +2,111 @@
 
 > **PURPOSE:** This document timestamps stable states of the application for easy reference and recovery.  
 > **USAGE:** Reference these checkpoints when the system needs to be restored to a known-good state.
+> **LAST UPDATED:** January 16, 2026 (v2.3)
 
 ---
 
-## Checkpoint: v2.2 - January 16, 2026
+## Checkpoint: v2.3 - January 16, 2026
 
 ### ✅ Status: STABLE
 
-Fixed Seniority, Department, Income, Net Worth filter logic. Added verification scripts.
+**Fixes Applied:**
+- **Company Size Filter:** Changed field from `employeeCount` → `companySize`
+- **Seniority Filter:** Added `president` and `head of` pattern matching
+- **Department Filter:** Added `customer success`, `product`, `community and social services` patterns
+- **Income Filter:** Now only returns records WITH income data (84 records total)
+- **Net Worth Filter:** Now only returns records WITH net worth data (87 records), handles negative values
 
 ---
 
-## Checkpoint: v2.1 - January 16, 2026 (Previous)
-
-### Status: SUPERSEDED BY v2.2
-
-All filters working, seniority normalization fixed, documentation updated.
-
----
-
-### Database Functions (15 total, 0 duplicates)
+## Database Functions (13 total, 0 duplicates)
 
 | Function Name | Parameters | Status |
 |---------------|------------|--------|
-| `search_free_data_builder` | 28 | ✅ Core search - LOCKED |
+| `search_free_data_builder` | 29 | ✅ Core search - v2.3 STABLE |
 | `deduct_credits` | 2 | ✅ Stable |
 | `get_all_profiles_admin` | 0 | ✅ Stable |
 | `get_filter_suggestions` | 0 | ✅ Stable |
 | `get_user_team_id` | 1 | ✅ Stable |
-| `handle_new_user` | 0 | ✅ Trigger |
-| `handle_new_user_team` | 0 | ✅ Trigger |
 | `has_role` | 3 | ✅ Stable |
 | `is_global_admin` | 1 | ✅ Stable |
 | `log_audit_event` | 4 | ✅ Stable |
 | `parse_employee_count_upper` | 1 | ✅ Stable |
 | `reset_daily_credits_if_needed` | 1 | ✅ Stable |
 | `reset_monthly_credits` | 0 | ✅ Stable |
-| `title_matches_seniority` | 2 | ✅ Stable |
+| `title_matches_seniority` | 3 | ✅ Stable |
 | `update_credits_for_testing` | 2 | ✅ Stable |
-| `update_updated_at_column` | 0 | ✅ Trigger |
 
 ---
 
-### Working Filters (v2.2)
+## Working Filters (v2.3)
 
 | Filter | Status | Notes |
 |--------|--------|-------|
-| Keywords | ✅ | Searches 20+ fields |
+| Keywords | ✅ | Searches firstName, lastName, title, company, industry |
+| Prospect Data | ✅ | All boolean filters work |
+| Company Revenue | ✅ | ILIKE matching |
 | Job Titles | ✅ | ILIKE matching |
-| Seniority | ✅ | **FIXED v2.2** - Added 'c suite', 'cxo', 'founder' |
-| Department | ✅ | **FIXED v2.2** - Added 'Executive', 'technical' |
-| Company Size | ✅ | Range parsing + bypass |
-| Company Revenue | ✅ | Range parsing + bypass |
-| Person City | ✅ | ILIKE |
-| Person Country | ✅ | ILIKE |
-| Company City | ✅ | ILIKE |
-| Company Country | ✅ | ILIKE |
-| Has LinkedIn | ✅ | Checks `linkedin` + `linkedinUrl` |
-| Has Email | ✅ | Field existence |
-| Has Phone | ✅ | Field existence |
-| Technologies | ✅ | ILIKE matching |
-| Industries | ✅ | ILIKE matching |
-| Prospect Data Dropdown | ✅ | All 6 options working |
-| Income | ✅ | **FIXED v2.2** - 84 records, parsing corrected |
-| Net Worth | ✅ | **FIXED v2.2** - 87 records, parsing corrected |
-| Skills | ✅ | 25 records have data |
-| Interests | ✅ | 6 records have data |
+| Seniority | ✅ FIXED v2.3 | Added president, head of patterns |
+| Department | ✅ FIXED v2.3 | Added customer success, product patterns |
+| Person City | ✅ | Case-insensitive match |
+| Person Country | ✅ | Case-insensitive match |
+| Company City | ✅ | Case-insensitive match |
+| Company Country | ✅ | Case-insensitive match |
+| Technology | ✅ | ILIKE matching |
+| Company Size | ✅ FIXED v2.3 | Uses `companySize` field |
+| Person Interest | ✅ | ILIKE matching |
+| Person Skill | ✅ | ILIKE matching |
+| Gender | ✅ | Case-insensitive exact match |
+| Person Income | ✅ FIXED v2.3 | Only returns records WITH data |
+| Person Net Worth | ✅ FIXED v2.3 | Handles negative values |
+| Industries | ✅ | Case-insensitive exact match |
 
 ---
 
-### Filters Awaiting Data
+## Verified Data Counts (v2.3)
 
-| Filter | Expected Field | Format |
-|--------|----------------|--------|
-| Gender | `gender` | `"male"`, `"female"`, `"other"` |
+### Company Size (using `companySize` field)
+| Range | Count |
+|-------|-------|
+| 1-10 | 13 |
+| 11-50 | 96 |
+| 51-200 | 81 |
+| 201-500 | 78 |
+
+### Income (84 records total with data)
+| Range | Count |
+|-------|-------|
+| Under $50K | 21 |
+| $50K-$100K | 45 |
+| $100K-$200K | 15 |
+| $200K+ | 3 |
+
+### Net Worth (87 records total with data)
+| Range | Count |
+|-------|-------|
+| Under $100K | 56 |
+| $100K-$500K | 21 |
+| $500K-$1M | 10 |
 
 ---
 
-### Table Row Counts
-
-| Table | Count | Status |
-|-------|-------|--------|
-| `free_data` | 388 | ✅ Small |
-| `unlocked_records` | 690 | ✅ Small |
-| `people_records` | 0 | ✅ Empty |
-| `company_records` | 0 | ✅ Empty |
-
----
-
-### Performance Indexes
-
-- `free_data`: 7 indexes (recommend adding more for scale)
-- `unlocked_records`: 4 indexes ✅
-- `people_records`: 4 indexes ✅
-- `company_records`: 4 indexes ✅
-
----
-
-### Health Check Results
+## Health Check Results
 
 ```
 ✅ No duplicate functions
-✅ search_free_data_builder exists and is unique
-✅ All RLS policies in place
-✅ All tables accessible
+✅ search_free_data_builder has 29 parameters
+✅ All helper functions present
+⚠️ RLS on free_data: Public read access (intentional for free tier)
 ```
 
 ---
 
-### Recovery Instructions
+## Recovery Instructions
 
-To return to this stable state:
-
-1. **Check current state:** Run `docs/HEALTH_CHECK.sql`
-2. **Compare against this checkpoint:** Verify function count and signatures match
-3. **If recovery needed:** Restore from Git history to this commit date
-
----
-
-### Git Reference
-
-**Date:** January 16, 2026  
-**Commit Message Reference:** "Fix seniority normalization, update documentation v2.1"
+1. Run `docs/QUICK_CHECK.sql` to verify current state
+2. Compare against this checkpoint
+3. If recovery needed, restore from Git history
 
 ---
 
@@ -131,9 +114,10 @@ To return to this stable state:
 
 | Date | Version | Changes |
 |------|---------|---------|
-| Jan 16, 2026 | v2.2 | Fixed Seniority/Department/Income/NetWorth logic, added QUICK_CHECK.sql, added FILTER_DATA_MAPPING.md |
-| Jan 16, 2026 | v2.1 | Fixed seniority normalization (C-Level→138, VP→33), updated filter status for Income/Skills/Interests/NetWorth |
-| Jan 15, 2026 | v2.0 | Initial stable checkpoint with all filters working |
+| Jan 16, 2026 | v2.3 | Fixed Company Size (companySize), Seniority (president/head of), Department (customer success/product), Income (data-only), Net Worth (negative values) |
+| Jan 16, 2026 | v2.2 | Fixed Seniority, Department, Income, Net Worth filter logic |
+| Jan 16, 2026 | v2.1 | Added p_has_email parameter |
+| Jan 15, 2026 | v2.0 | Initial stable release |
 
 ---
 
