@@ -32,7 +32,14 @@ export function useFreeDataSuggestions() {
           setSuggestions({
             interests: (parsed.interests || []).filter(Boolean),
             skills: (parsed.skills || []).filter(Boolean),
-            industries: (parsed.industries || []).filter(Boolean),
+            industries: [...new Set(
+              (parsed.industries || [])
+                .filter(Boolean)
+                .map(i => i.split(' ')
+                  .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+                  .join(' ')
+                )
+            )],
             technologies: (parsed.technologies || []).filter(Boolean),
           });
         }
