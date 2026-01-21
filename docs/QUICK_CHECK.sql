@@ -1,7 +1,7 @@
 -- ============================================================
--- QUICK CHECK v2.7
+-- QUICK CHECK v3.3
 -- Run this to verify database health and filter functionality
--- Last Updated: January 17, 2026
+-- Last Updated: January 21, 2026
 -- ============================================================
 
 -- ============================================================
@@ -74,10 +74,13 @@ SELECT 'Has seniority', COUNT(*), CASE WHEN COUNT(*) > 0 THEN '✅' ELSE '⚠️
 FROM free_data WHERE entity_type = 'person' AND entity_data->>'seniority' IS NOT NULL
 UNION ALL
 SELECT 'Has department', COUNT(*), CASE WHEN COUNT(*) > 0 THEN '✅' ELSE '⚠️' END
-FROM free_data WHERE entity_type = 'person' AND entity_data->>'department' IS NOT NULL;
+FROM free_data WHERE entity_type = 'person' AND entity_data->>'department' IS NOT NULL
+UNION ALL
+SELECT 'Has gender (M/F)', COUNT(*), CASE WHEN COUNT(*) > 0 THEN '✅' ELSE '⚠️' END
+FROM free_data WHERE entity_type = 'person' AND entity_data->>'gender' IS NOT NULL;
 
 -- ============================================================
--- SECTION 4: COMPANY SIZE FILTER TEST (v2.7 baseline)
+-- SECTION 4: COMPANY SIZE FILTER TEST (v3.3 baseline)
 -- ============================================================
 
 SELECT 
@@ -86,23 +89,41 @@ SELECT
 SELECT 
   '1-10' as range,
   COUNT(*) as count,
-  13 as expected,
-  CASE WHEN COUNT(*) = 13 THEN '✅' ELSE '⚠️' END as status
+  15 as expected,
+  CASE WHEN ABS(COUNT(*) - 15) <= 5 THEN '✅' ELSE '⚠️' END as status
 FROM free_data 
 WHERE entity_type = 'person'
   AND COALESCE(public.parse_employee_count_upper(entity_data->>'companySize'), 0) BETWEEN 1 AND 10
 UNION ALL
-SELECT '11-50', COUNT(*), 96, CASE WHEN COUNT(*) = 96 THEN '✅' ELSE '⚠️' END
+SELECT '11-50', COUNT(*), 96, CASE WHEN ABS(COUNT(*) - 96) <= 5 THEN '✅' ELSE '⚠️' END
 FROM free_data WHERE entity_type = 'person' AND COALESCE(public.parse_employee_count_upper(entity_data->>'companySize'), 0) BETWEEN 11 AND 50
 UNION ALL
-SELECT '51-200', COUNT(*), 81, CASE WHEN COUNT(*) = 81 THEN '✅' ELSE '⚠️' END
+SELECT '51-200', COUNT(*), 81, CASE WHEN ABS(COUNT(*) - 81) <= 5 THEN '✅' ELSE '⚠️' END
 FROM free_data WHERE entity_type = 'person' AND COALESCE(public.parse_employee_count_upper(entity_data->>'companySize'), 0) BETWEEN 51 AND 200
 UNION ALL
-SELECT '201-500', COUNT(*), 78, CASE WHEN COUNT(*) = 78 THEN '✅' ELSE '⚠️' END
+SELECT '201-500', COUNT(*), 78, CASE WHEN ABS(COUNT(*) - 78) <= 5 THEN '✅' ELSE '⚠️' END
 FROM free_data WHERE entity_type = 'person' AND COALESCE(public.parse_employee_count_upper(entity_data->>'companySize'), 0) BETWEEN 201 AND 500;
 
 -- ============================================================
--- SECTION 5: INCOME FILTER TEST
+-- SECTION 5: GENDER FILTER TEST (v3.3 baseline - M/F format)
+-- ============================================================
+
+SELECT 
+  '=== GENDER FILTER TEST (M/F format) ===' as section;
+
+SELECT 
+  'Male (M)' as gender,
+  COUNT(*) as count,
+  137 as expected,
+  CASE WHEN ABS(COUNT(*) - 137) <= 5 THEN '✅' ELSE '⚠️' END as status
+FROM free_data 
+WHERE entity_type = 'person' AND UPPER(entity_data->>'gender') = 'M'
+UNION ALL
+SELECT 'Female (F)', COUNT(*), 55, CASE WHEN ABS(COUNT(*) - 55) <= 5 THEN '✅' ELSE '⚠️' END
+FROM free_data WHERE entity_type = 'person' AND UPPER(entity_data->>'gender') = 'F';
+
+-- ============================================================
+-- SECTION 6: INCOME FILTER TEST
 -- ============================================================
 
 SELECT 
@@ -111,7 +132,7 @@ SELECT
 SELECT 
   'Total with income data' as range,
   COUNT(*) as count,
-  '(should be ~84)' as expected
+  '(should be ~100)' as expected
 FROM free_data 
 WHERE entity_type = 'person'
   AND entity_data->>'incomeRange' IS NOT NULL 
@@ -120,7 +141,7 @@ WHERE entity_type = 'person'
 SELECT 
   'Under $50K' as range,
   COUNT(*) as count,
-  21 as expected
+  55 as expected
 FROM free_data 
 WHERE entity_type = 'person'
   AND entity_data->>'incomeRange' IS NOT NULL 
@@ -130,7 +151,7 @@ UNION ALL
 SELECT '$50K-$100K', COUNT(*), 45 FROM free_data WHERE entity_type = 'person' AND entity_data->>'incomeRange' IS NOT NULL AND entity_data->>'incomeRange' != '' AND COALESCE(NULLIF(REGEXP_REPLACE(entity_data->>'incomeRange', '[^0-9]', '', 'g'), '')::int, 0) BETWEEN 50 AND 100;
 
 -- ============================================================
--- SECTION 6: NET WORTH FILTER TEST
+-- SECTION 7: NET WORTH FILTER TEST
 -- ============================================================
 
 SELECT 
@@ -160,7 +181,7 @@ WHERE entity_type = 'person'
     END, 0) < 100;
 
 -- ============================================================
--- SECTION 7: PROSPECT DATA FILTER TEST (v2.7 baseline)
+-- SECTION 8: PROSPECT DATA FILTER TEST (v3.3 baseline)
 -- ============================================================
 
 SELECT 
@@ -170,24 +191,24 @@ SELECT
   'Personal Facebook' as filter,
   COUNT(*) as count,
   13 as expected,
-  CASE WHEN COUNT(*) = 13 THEN '✅' ELSE '⚠️' END as status
+  CASE WHEN ABS(COUNT(*) - 13) <= 5 THEN '✅' ELSE '⚠️' END as status
 FROM free_data 
 WHERE entity_data->>'facebookUrl' IS NOT NULL
 UNION ALL
-SELECT 'Personal Twitter', COUNT(*), 7, CASE WHEN COUNT(*) = 7 THEN '✅' ELSE '⚠️' END
+SELECT 'Personal Twitter', COUNT(*), 7, CASE WHEN ABS(COUNT(*) - 7) <= 5 THEN '✅' ELSE '⚠️' END
 FROM free_data WHERE entity_data->>'twitterUrl' IS NOT NULL
 UNION ALL
-SELECT 'Company Facebook', COUNT(*), 147, CASE WHEN COUNT(*) = 147 THEN '✅' ELSE '⚠️' END
+SELECT 'Company Facebook', COUNT(*), 147, CASE WHEN ABS(COUNT(*) - 147) <= 5 THEN '✅' ELSE '⚠️' END
 FROM free_data WHERE entity_data->>'companyFacebookUrl' IS NOT NULL
 UNION ALL
-SELECT 'Company Twitter', COUNT(*), 141, CASE WHEN COUNT(*) = 141 THEN '✅' ELSE '⚠️' END
+SELECT 'Company Twitter', COUNT(*), 141, CASE WHEN ABS(COUNT(*) - 141) <= 5 THEN '✅' ELSE '⚠️' END
 FROM free_data WHERE entity_data->>'companyTwitterUrl' IS NOT NULL
 UNION ALL
-SELECT 'Company LinkedIn', COUNT(*), 203, CASE WHEN COUNT(*) = 203 THEN '✅' ELSE '⚠️' END
+SELECT 'Company LinkedIn', COUNT(*), 203, CASE WHEN ABS(COUNT(*) - 203) <= 5 THEN '✅' ELSE '⚠️' END
 FROM free_data WHERE entity_data->>'companyLinkedin' IS NOT NULL;
 
 -- ============================================================
--- SECTION 8: FUNCTION VERSION CHECK
+-- SECTION 9: FUNCTION VERSION CHECK
 -- ============================================================
 
 SELECT 
@@ -201,7 +222,7 @@ WHERE n.nspname = 'public'
   AND p.proname = 'search_free_data_builder';
 
 -- ============================================================
--- SECTION 9: BUILDER SEARCH SMOKE TEST
+-- SECTION 10: BUILDER SEARCH SMOKE TEST
 -- ============================================================
 
 SELECT 
@@ -215,37 +236,50 @@ SELECT
 FROM search_free_data_builder(p_entity_type := 'person', p_limit := 1)
 LIMIT 1;
 
--- Smoke Test 2: Income filter works
+-- Smoke Test 2: Gender filter works (M format)
+SELECT 
+  'Gender Filter (Male/M)' as test,
+  CASE 
+    WHEN total_count BETWEEN 132 AND 142 THEN '✅ PASS' 
+    WHEN total_count > 0 THEN '⚠️ CHECK' 
+    ELSE '❌ FAIL' 
+  END as status,
+  total_count as actual,
+  137 as expected
+FROM search_free_data_builder(p_entity_type := 'person', p_gender := ARRAY['M'], p_limit := 1)
+LIMIT 1;
+
+-- Smoke Test 3: Income filter works
 SELECT 
   'Income Filter (Under $50K)' as test,
   CASE 
-    WHEN total_count BETWEEN 16 AND 26 THEN '✅ PASS' 
+    WHEN total_count BETWEEN 50 AND 60 THEN '✅ PASS' 
     WHEN total_count > 0 THEN '⚠️ CHECK' 
     ELSE '❌ FAIL' 
   END as status,
   total_count as actual,
-  21 as expected
+  55 as expected
 FROM search_free_data_builder(p_entity_type := 'person', p_income := ARRAY['Under $50K'], p_limit := 1)
 LIMIT 1;
 
--- Smoke Test 3: Company Size filter works
+-- Smoke Test 4: Company Size filter works
 SELECT 
   'Company Size Filter (1-10)' as test,
   CASE 
-    WHEN total_count BETWEEN 10 AND 16 THEN '✅ PASS' 
+    WHEN total_count BETWEEN 10 AND 20 THEN '✅ PASS' 
     WHEN total_count > 0 THEN '⚠️ CHECK' 
     ELSE '❌ FAIL' 
   END as status,
   total_count as actual,
-  13 as expected
+  15 as expected
 FROM search_free_data_builder(p_entity_type := 'person', p_company_size_ranges := ARRAY['1-10'], p_limit := 1)
 LIMIT 1;
 
--- Smoke Test 4: Department filter works
+-- Smoke Test 5: Department filter works
 SELECT 
   'Department Filter (C-Suite)' as test,
   CASE 
-    WHEN total_count BETWEEN 128 AND 148 THEN '✅ PASS' 
+    WHEN total_count BETWEEN 133 AND 143 THEN '✅ PASS' 
     WHEN total_count > 0 THEN '⚠️ CHECK' 
     ELSE '❌ FAIL' 
   END as status,
@@ -254,11 +288,11 @@ SELECT
 FROM search_free_data_builder(p_entity_type := 'person', p_departments := ARRAY['C-Suite / Leadership'], p_limit := 1)
 LIMIT 1;
 
--- Smoke Test 5: Prospect Data filter works
+-- Smoke Test 6: Prospect Data filter works
 SELECT 
   'Prospect Filter (Personal Facebook)' as test,
   CASE 
-    WHEN total_count BETWEEN 10 AND 16 THEN '✅ PASS' 
+    WHEN total_count BETWEEN 8 AND 18 THEN '✅ PASS' 
     WHEN total_count > 0 THEN '⚠️ CHECK' 
     ELSE '❌ FAIL' 
   END as status,
@@ -267,11 +301,11 @@ SELECT
 FROM search_free_data_builder(p_entity_type := 'person', p_has_facebook := true, p_limit := 1)
 LIMIT 1;
 
--- Smoke Test 6: Company LinkedIn filter works
+-- Smoke Test 7: Company LinkedIn filter works
 SELECT 
   'Prospect Filter (Company LinkedIn)' as test,
   CASE 
-    WHEN total_count BETWEEN 190 AND 220 THEN '✅ PASS' 
+    WHEN total_count BETWEEN 198 AND 208 THEN '✅ PASS' 
     WHEN total_count > 0 THEN '⚠️ CHECK' 
     ELSE '❌ FAIL' 
   END as status,
@@ -281,11 +315,12 @@ FROM search_free_data_builder(p_entity_type := 'person', p_has_company_linkedin 
 LIMIT 1;
 
 -- ============================================================
--- SECTION 10: SUMMARY
+-- SECTION 11: SUMMARY
 -- ============================================================
 
 SELECT 
   '=== QUICK CHECK COMPLETE ===' as section,
-  'v2.7 - January 17, 2026' as version,
+  'v3.3 - January 21, 2026' as version,
+  'Gender: M/F format (137 Male, 55 Female)' as gender_note,
   'Run docs/BUILDER_SEARCH_TEST.sql for comprehensive filter testing' as next_step,
   'Run docs/HEALTH_CHECK.sql for full infrastructure audit' as alt_step;

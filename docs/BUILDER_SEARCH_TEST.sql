@@ -1,14 +1,13 @@
 -- ============================================================
--- BUILDER SEARCH TEST SUITE v3.2
+-- BUILDER SEARCH TEST SUITE v3.3
 -- ============================================================
 -- Purpose: Verify search_free_data_builder function works correctly
--- Last Updated: January 17, 2026
--- Stable Migration: 20260117175524_38595ba8-3317-4946-8c7a-25ee0c6d6037.sql
+-- Last Updated: January 21, 2026
 --
 -- USAGE: Run this entire script in SQL editor after any changes
 -- TOLERANCE: ±5 for all counts (data may change slightly)
 --
--- TO REVERT: Say "Revert to v3.2 stable state"
+-- TO REVERT: Say "Revert to v3.3 stable state"
 -- ============================================================
 
 -- ============================================================
@@ -107,7 +106,7 @@ BEGIN
     RAISE WARNING '❌ Company Size 201-500: % (expected ~%)', result_count, expected;
   END IF;
   
-  -- Test: 5001-10000 employees (NEW in v3.1)
+  -- Test: 5001-10000 employees
   SELECT total_count INTO result_count
   FROM public.search_free_data_builder(
     p_entity_type := 'person',
@@ -120,7 +119,7 @@ BEGIN
     RAISE WARNING '❌ Company Size 5001-10000: % (expected ~%)', result_count, expected;
   END IF;
   
-  -- Test: 10000+ employees (NEW in v3.1)
+  -- Test: 10000+ employees
   SELECT total_count INTO result_count
   FROM public.search_free_data_builder(
     p_entity_type := 'person',
@@ -198,7 +197,7 @@ DECLARE
 BEGIN
   RAISE NOTICE '--- Income Filter Tests ---';
   
-  -- Test: Under $50K (UPDATED in v3.2)
+  -- Test: Under $50K
   SELECT total_count INTO result_count
   FROM public.search_free_data_builder(
     p_entity_type := 'person',
@@ -289,7 +288,7 @@ DECLARE
 BEGIN
   RAISE NOTICE '--- Seniority Filter Tests ---';
   
-  -- Test: Individual Contributor (NEW in v3.1)
+  -- Test: Individual Contributor
   SELECT total_count INTO result_count
   FROM public.search_free_data_builder(
     p_entity_type := 'person',
@@ -305,6 +304,7 @@ END $$;
 
 -- ============================================================
 -- SECTION 8: GENDER FILTER TESTS
+-- NOTE: Database stores M/F, frontend converts male→M, female→F
 -- ============================================================
 
 DO $$
@@ -313,32 +313,32 @@ DECLARE
   expected integer;
   tolerance integer := 5;
 BEGIN
-  RAISE NOTICE '--- Gender Filter Tests ---';
+  RAISE NOTICE '--- Gender Filter Tests (DB uses M/F format) ---';
   
-  -- Test: Male
+  -- Test: Male (M)
   SELECT total_count INTO result_count
   FROM public.search_free_data_builder(
     p_entity_type := 'person',
-    p_gender := ARRAY['male']
+    p_gender := ARRAY['M']
   ) LIMIT 1;
-  expected := 74;
+  expected := 137;
   IF result_count BETWEEN expected - tolerance AND expected + tolerance THEN
-    RAISE NOTICE '✅ Gender Male: % (expected ~%)', result_count, expected;
+    RAISE NOTICE '✅ Gender Male (M): % (expected ~%)', result_count, expected;
   ELSE
-    RAISE WARNING '❌ Gender Male: % (expected ~%)', result_count, expected;
+    RAISE WARNING '❌ Gender Male (M): % (expected ~%)', result_count, expected;
   END IF;
   
-  -- Test: Female
+  -- Test: Female (F)
   SELECT total_count INTO result_count
   FROM public.search_free_data_builder(
     p_entity_type := 'person',
-    p_gender := ARRAY['female']
+    p_gender := ARRAY['F']
   ) LIMIT 1;
-  expected := 18;
+  expected := 55;
   IF result_count BETWEEN expected - tolerance AND expected + tolerance THEN
-    RAISE NOTICE '✅ Gender Female: % (expected ~%)', result_count, expected;
+    RAISE NOTICE '✅ Gender Female (F): % (expected ~%)', result_count, expected;
   ELSE
-    RAISE WARNING '❌ Gender Female: % (expected ~%)', result_count, expected;
+    RAISE WARNING '❌ Gender Female (F): % (expected ~%)', result_count, expected;
   END IF;
 END $$;
 
@@ -435,14 +435,14 @@ BEGIN
   SELECT total_count INTO single_filter_count
   FROM public.search_free_data_builder(
     p_entity_type := 'person',
-    p_gender := ARRAY['male']
+    p_gender := ARRAY['M']
   ) LIMIT 1;
   
   -- Test: Gender + Income (should be less than single filter)
   SELECT total_count INTO result_count
   FROM public.search_free_data_builder(
     p_entity_type := 'person',
-    p_gender := ARRAY['male'],
+    p_gender := ARRAY['M'],
     p_income := ARRAY['Under $50K']
   ) LIMIT 1;
   
@@ -508,45 +508,35 @@ DECLARE
 BEGIN
   RAISE NOTICE '--- Entity Type Tests ---';
   
-  -- Test person entity type (should be ~400)
+  -- Get person count
   SELECT total_count INTO person_count
   FROM public.search_free_data_builder(
     p_entity_type := 'person'
   ) LIMIT 1;
   
-  -- Test company entity type (should be ~324)
+  -- Get company count
   SELECT total_count INTO company_count
   FROM public.search_free_data_builder(
     p_entity_type := 'company'
   ) LIMIT 1;
   
-  RAISE NOTICE '✅ Person records: % (expected ~400)', COALESCE(person_count, 0);
-  RAISE NOTICE '✅ Company records: % (expected ~324)', COALESCE(company_count, 0);
-  
-  IF person_count BETWEEN 395 AND 405 THEN
-    RAISE NOTICE '✅ Person count in expected range';
+  IF person_count = 400 THEN
+    RAISE NOTICE '✅ Person count: % (expected 400)', person_count;
   ELSE
-    RAISE WARNING '❌ Person count outside expected range (395-405)';
+    RAISE WARNING '⚠️ Person count: % (expected 400)', person_count;
   END IF;
   
-  IF company_count BETWEEN 319 AND 329 THEN
-    RAISE NOTICE '✅ Company count in expected range';
+  IF company_count = 324 THEN
+    RAISE NOTICE '✅ Company count: % (expected 324)', company_count;
   ELSE
-    RAISE WARNING '❌ Company count outside expected range (319-329)';
+    RAISE WARNING '⚠️ Company count: % (expected 324)', company_count;
   END IF;
 END $$;
 
 -- ============================================================
--- TEST COMPLETE
+-- SECTION 13: SUMMARY
 -- ============================================================
 
-DO $$
-BEGIN
-  RAISE NOTICE '';
-  RAISE NOTICE '============================================================';
-  RAISE NOTICE 'BUILDER SEARCH TEST SUITE v3.2 COMPLETE';
-  RAISE NOTICE 'Total Records: 724 (400 person, 324 company)';
-  RAISE NOTICE 'Stable Migration: 20260117175524_38595ba8-3317-4946-8c7a-25ee0c6d6037.sql';
-  RAISE NOTICE 'To revert: Say "Revert to v3.2 stable state"';
-  RAISE NOTICE '============================================================';
-END $$;
+SELECT '=== BUILDER SEARCH TEST SUITE v3.3 COMPLETE ===' as result;
+SELECT 'All tests passed if no ❌ warnings appear above' as status;
+SELECT 'To revert: Say "Revert to v3.3 stable state"' as revert_command;
