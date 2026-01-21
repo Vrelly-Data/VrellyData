@@ -9,6 +9,7 @@ import vrellyLogo from '@/assets/vrelly-logo.png';
 import { useRecordsFromDatabase } from '@/hooks/useRecordsFromDatabase';
 import { Loader2 } from 'lucide-react';
 import { UserMenu } from '@/components/UserMenu';
+import { CompanyEntity } from '@/types/audience';
 
 export default function Companies() {
   const navigate = useNavigate();
@@ -53,7 +54,7 @@ export default function Companies() {
                   <CompanyRecords />
                 </TabsContent>
                 <TabsContent value="insights" className="flex-1 m-0">
-                  <CompanyInsights />
+                  <CompanyInsights records={records as CompanyEntity[]} />
                 </TabsContent>
                 <TabsContent value="lists" className="flex-1 m-0">
                   <ListView entityType="company" />
