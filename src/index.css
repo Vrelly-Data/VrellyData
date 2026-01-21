@@ -36,12 +36,12 @@ All colors MUST be HSL.
     --sidebar-accent-foreground: 240 5.9% 10%;
     --sidebar-border: 220 13% 91%;
     --sidebar-ring: 217.2 91.2% 59.8%;
-    --chart-1: 221.2 83.2% 53.3%;
-    --chart-2: 217.2 91.2% 59.8%;
-    --chart-3: 210 100% 66%;
-    --chart-4: 199 89% 48%;
-    --chart-5: 188 94% 40%;
-    --chart-6: 215 20% 65%;
+    --chart-1: 221 83% 53%;
+    --chart-2: 142 71% 45%;
+    --chart-3: 24 95% 53%;
+    --chart-4: 262 83% 58%;
+    --chart-5: 346 77% 50%;
+    --chart-6: 47 96% 53%;
   }
 
   .dark {
@@ -72,12 +72,12 @@ All colors MUST be HSL.
     --sidebar-accent-foreground: 240 4.8% 95.9%;
     --sidebar-border: 240 3.7% 15.9%;
     --sidebar-ring: 217.2 91.2% 59.8%;
-    --chart-1: 217.2 91.2% 59.8%;
-    --chart-2: 221.2 83.2% 63%;
-    --chart-3: 210 100% 70%;
-    --chart-4: 199 89% 55%;
-    --chart-5: 188 94% 48%;
-    --chart-6: 215 20% 50%;
+    --chart-1: 221 83% 60%;
+    --chart-2: 142 71% 50%;
+    --chart-3: 24 95% 58%;
+    --chart-4: 262 83% 65%;
+    --chart-5: 346 77% 55%;
+    --chart-6: 47 96% 58%;
   }
 }
 
