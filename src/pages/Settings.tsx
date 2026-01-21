@@ -24,12 +24,7 @@ import { ExternalProjectsSettings } from "@/components/settings/ExternalProjects
 import { UserMenu } from "@/components/UserMenu";
 import { SUBSCRIPTION_TIERS, SubscriptionTier } from "@/config/subscriptionTiers";
 
-// Price IDs for subscription tiers - UPDATE THESE AFTER RUNNING create-stripe-products
-const PRICE_IDS = {
-  starter: "price_1SPYhwRvAXonKS41WFHowijk",
-  pro: "price_1SPYjHRvAXonKS41B0eriTUC",
-  premium: "price_1SPYjTRvAXonKS41RdJr9r7I",
-};
+import { PRICE_IDS } from "@/config/subscriptionTiers";
 
 export default function Settings() {
   const location = useLocation();
@@ -421,21 +416,21 @@ export default function Settings() {
                     </Button>
                   </div>
 
-                  {/* Pro Plan */}
+                  {/* Professional Plan */}
                   <div className="border-2 border-primary rounded-lg p-6 flex flex-col h-full relative">
                     <Badge className="absolute -top-3 left-1/2 -translate-x-1/2">Popular</Badge>
                     <div className="space-y-4 flex-1">
                       <div>
-                        <h3 className="text-xl font-bold">Pro</h3>
+                        <h3 className="text-xl font-bold">Professional</h3>
                         <div className="mt-2">
-                          <span className="text-3xl font-bold">${SUBSCRIPTION_TIERS.pro.price}</span>
+                          <span className="text-3xl font-bold">${SUBSCRIPTION_TIERS.professional.price}</span>
                           <span className="text-muted-foreground">/month</span>
                         </div>
                       </div>
                       <ul className="space-y-2 text-sm">
                         <li className="flex items-center gap-2">
                           <Check className="h-4 w-4 text-primary" />
-                          {SUBSCRIPTION_TIERS.pro.credits.toLocaleString()} credits
+                          {SUBSCRIPTION_TIERS.professional.credits.toLocaleString()} credits
                         </li>
                         <li className="flex items-center gap-2">
                           <Check className="h-4 w-4 text-primary" />
@@ -453,11 +448,11 @@ export default function Settings() {
                     </div>
                     <Button 
                       className="w-full mt-4" 
-                      variant={profile?.subscription_tier === 'pro' ? 'outline' : 'default'}
-                      disabled={profile?.subscription_tier === 'pro'}
-                      onClick={() => handleUpgrade('pro')}
+                      variant={profile?.subscription_tier === 'professional' ? 'outline' : 'default'}
+                      disabled={profile?.subscription_tier === 'professional'}
+                      onClick={() => handleUpgrade('professional')}
                     >
-                      {profile?.subscription_tier === 'pro' ? 'Current Plan' : 'Upgrade'}
+                      {profile?.subscription_tier === 'professional' ? 'Current Plan' : 'Upgrade'}
                     </Button>
                   </div>
 
@@ -498,7 +493,7 @@ export default function Settings() {
                       className="w-full mt-4" 
                       variant={profile?.subscription_tier === 'enterprise' ? 'outline' : 'default'}
                       disabled={profile?.subscription_tier === 'enterprise'}
-                      onClick={() => handleUpgrade('premium')}
+                      onClick={() => handleUpgrade('enterprise')}
                     >
                       {profile?.subscription_tier === 'enterprise' ? 'Current Plan' : 'Upgrade'}
                     </Button>
