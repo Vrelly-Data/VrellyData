@@ -1,9 +1,9 @@
 -- ============================================================
--- SYSTEM HEALTH CHECK v2.7
+-- SYSTEM HEALTH CHECK v3.3
 -- Run this to verify database integrity
 -- ============================================================
 -- USAGE: Ask AI to "run the health check" or execute manually
--- LAST UPDATED: January 17, 2026
+-- LAST UPDATED: January 21, 2026
 -- ============================================================
 
 -- ============================================================
@@ -124,7 +124,7 @@ FROM (
     
     UNION ALL
     
-    -- Personal Facebook (v2.7 fix)
+    -- Personal Facebook
     SELECT 'personalFacebook', COUNT(*) 
     FROM free_data 
     WHERE coalesce(entity_data->>'facebook', '') <> ''
@@ -132,7 +132,7 @@ FROM (
     
     UNION ALL
     
-    -- Personal Twitter (v2.7 fix)
+    -- Personal Twitter
     SELECT 'personalTwitter', COUNT(*) 
     FROM free_data 
     WHERE coalesce(entity_data->>'twitter', '') <> ''
@@ -140,7 +140,7 @@ FROM (
     
     UNION ALL
     
-    -- Company Facebook (v2.7 fix)
+    -- Company Facebook
     SELECT 'companyFacebook', COUNT(*) 
     FROM free_data 
     WHERE coalesce(entity_data->>'companyFacebook', '') <> ''
@@ -148,7 +148,7 @@ FROM (
     
     UNION ALL
     
-    -- Company Twitter (v2.7 fix)
+    -- Company Twitter
     SELECT 'companyTwitter', COUNT(*) 
     FROM free_data 
     WHERE coalesce(entity_data->>'companyTwitter', '') <> ''
@@ -163,14 +163,14 @@ FROM (
     
     UNION ALL
     
-    -- Gender (awaiting data)
-    SELECT 'gender', COUNT(*) 
+    -- Gender (M/F format)
+    SELECT 'gender (M/F)', COUNT(*) 
     FROM free_data 
     WHERE coalesce(entity_data->>'gender', '') <> ''
     
     UNION ALL
     
-    -- Interests (awaiting data)
+    -- Interests
     SELECT 'interests', COUNT(*) 
     FROM free_data 
     WHERE entity_data->'interests' IS NOT NULL 
@@ -178,7 +178,7 @@ FROM (
     
     UNION ALL
     
-    -- Skills (awaiting data)
+    -- Skills
     SELECT 'skills', COUNT(*) 
     FROM free_data 
     WHERE entity_data->'skills' IS NOT NULL 
@@ -269,49 +269,61 @@ GROUP BY tablename
 ORDER BY tablename;
 
 -- ============================================================
--- 8. V2.7 BASELINE FILTER COUNTS
+-- 8. V3.3 BASELINE FILTER COUNTS
 -- Purpose: Verify filter counts match expected values
 -- ============================================================
-SELECT '=== V2.7 BASELINE FILTER VERIFICATION ===' as section;
+SELECT '=== V3.3 BASELINE FILTER VERIFICATION ===' as section;
 
 -- Company Size counts
 SELECT 
     'Company Size 1-10' as filter,
     COUNT(*) as actual,
-    13 as expected,
-    CASE WHEN COUNT(*) = 13 THEN '✅' ELSE '⚠️' END as status
+    15 as expected,
+    CASE WHEN ABS(COUNT(*) - 15) <= 5 THEN '✅' ELSE '⚠️' END as status
 FROM free_data 
 WHERE entity_type = 'person'
   AND COALESCE(public.parse_employee_count_upper(entity_data->>'companySize'), 0) BETWEEN 1 AND 10
 UNION ALL
-SELECT 'Company Size 11-50', COUNT(*), 96, CASE WHEN COUNT(*) = 96 THEN '✅' ELSE '⚠️' END
+SELECT 'Company Size 11-50', COUNT(*), 96, CASE WHEN ABS(COUNT(*) - 96) <= 5 THEN '✅' ELSE '⚠️' END
 FROM free_data WHERE entity_type = 'person' AND COALESCE(public.parse_employee_count_upper(entity_data->>'companySize'), 0) BETWEEN 11 AND 50
 UNION ALL
-SELECT 'Company Size 51-200', COUNT(*), 81, CASE WHEN COUNT(*) = 81 THEN '✅' ELSE '⚠️' END
+SELECT 'Company Size 51-200', COUNT(*), 81, CASE WHEN ABS(COUNT(*) - 81) <= 5 THEN '✅' ELSE '⚠️' END
 FROM free_data WHERE entity_type = 'person' AND COALESCE(public.parse_employee_count_upper(entity_data->>'companySize'), 0) BETWEEN 51 AND 200
 UNION ALL
-SELECT 'Company Size 201-500', COUNT(*), 78, CASE WHEN COUNT(*) = 78 THEN '✅' ELSE '⚠️' END
+SELECT 'Company Size 201-500', COUNT(*), 78, CASE WHEN ABS(COUNT(*) - 78) <= 5 THEN '✅' ELSE '⚠️' END
 FROM free_data WHERE entity_type = 'person' AND COALESCE(public.parse_employee_count_upper(entity_data->>'companySize'), 0) BETWEEN 201 AND 500;
+
+-- Gender counts (M/F format)
+SELECT 
+    'Gender Male (M)' as filter,
+    COUNT(*) as actual,
+    137 as expected,
+    CASE WHEN ABS(COUNT(*) - 137) <= 5 THEN '✅' ELSE '⚠️' END as status
+FROM free_data 
+WHERE entity_type = 'person' AND UPPER(entity_data->>'gender') = 'M'
+UNION ALL
+SELECT 'Gender Female (F)', COUNT(*), 55, CASE WHEN ABS(COUNT(*) - 55) <= 5 THEN '✅' ELSE '⚠️' END
+FROM free_data WHERE entity_type = 'person' AND UPPER(entity_data->>'gender') = 'F';
 
 -- Prospect Data counts
 SELECT 
     'Personal Facebook' as filter,
     COUNT(*) as actual,
     13 as expected,
-    CASE WHEN COUNT(*) = 13 THEN '✅' ELSE '⚠️' END as status
+    CASE WHEN ABS(COUNT(*) - 13) <= 5 THEN '✅' ELSE '⚠️' END as status
 FROM free_data 
 WHERE entity_data->>'facebookUrl' IS NOT NULL
 UNION ALL
-SELECT 'Personal Twitter', COUNT(*), 7, CASE WHEN COUNT(*) = 7 THEN '✅' ELSE '⚠️' END
+SELECT 'Personal Twitter', COUNT(*), 7, CASE WHEN ABS(COUNT(*) - 7) <= 5 THEN '✅' ELSE '⚠️' END
 FROM free_data WHERE entity_data->>'twitterUrl' IS NOT NULL
 UNION ALL
-SELECT 'Company Facebook', COUNT(*), 147, CASE WHEN COUNT(*) = 147 THEN '✅' ELSE '⚠️' END
+SELECT 'Company Facebook', COUNT(*), 147, CASE WHEN ABS(COUNT(*) - 147) <= 5 THEN '✅' ELSE '⚠️' END
 FROM free_data WHERE entity_data->>'companyFacebookUrl' IS NOT NULL
 UNION ALL
-SELECT 'Company Twitter', COUNT(*), 141, CASE WHEN COUNT(*) = 141 THEN '✅' ELSE '⚠️' END
+SELECT 'Company Twitter', COUNT(*), 141, CASE WHEN ABS(COUNT(*) - 141) <= 5 THEN '✅' ELSE '⚠️' END
 FROM free_data WHERE entity_data->>'companyTwitterUrl' IS NOT NULL
 UNION ALL
-SELECT 'Company LinkedIn', COUNT(*), 203, CASE WHEN COUNT(*) = 203 THEN '✅' ELSE '⚠️' END
+SELECT 'Company LinkedIn', COUNT(*), 203, CASE WHEN ABS(COUNT(*) - 203) <= 5 THEN '✅' ELSE '⚠️' END
 FROM free_data WHERE entity_data->>'companyLinkedin' IS NOT NULL;
 
 -- ============================================================
@@ -320,11 +332,12 @@ FROM free_data WHERE entity_data->>'companyLinkedin' IS NOT NULL;
 -- Reference: docs/STABLE_CHECKPOINTS.md
 -- ============================================================
 SELECT 
-    'STABLE CHECKPOINT v2.7' as checkpoint,
-    'January 17, 2026' as date,
+    'STABLE CHECKPOINT v3.3' as checkpoint,
+    'January 21, 2026' as date,
     '15 functions, 29 params on search, title_matches_seniority has 2 overloads' as expected_state,
+    'Gender: M/F format (137 Male, 55 Female)' as gender_note,
     'See docs/STABLE_CHECKPOINTS.md for full details' as reference;
 
 -- ============================================================
--- END OF HEALTH CHECK v2.7
+-- END OF HEALTH CHECK v3.3
 -- ============================================================

@@ -1,8 +1,8 @@
 # Stable Checkpoints
 
-**Purpose**: Document stable states for easy recovery. Say "Revert to v3.2 stable state" to restore.  
-**Last Updated**: January 17, 2026  
-**Current Stable Version**: v3.2
+**Purpose**: Document stable states for easy recovery. Say "Revert to v3.3 stable state" to restore.  
+**Last Updated**: January 21, 2026  
+**Current Stable Version**: v3.3
 
 ---
 
@@ -21,21 +21,20 @@ If in doubt, **ASK FIRST**.
 
 Say this to revert to the last known good state:
 
-> **"Revert to v3.2 stable state"**
+> **"Revert to v3.3 stable state"**
 
 The AI will:
-1. Copy functions from migration `20260117175524_38595ba8-3317-4946-8c7a-25ee0c6d6037.sql`
+1. Copy functions from the stable migration
 2. Create a new migration with `CREATE OR REPLACE FUNCTION`
 3. Verify no duplicate functions exist
-4. Verify baseline counts match v3.2 expectations
-5. Restore frontend industry normalization in `useFreeDataSuggestions.ts`
+4. Verify baseline counts match v3.3 expectations
+5. Restore frontend gender conversion in `useFreeDataSearch.ts`
 
 ---
 
-## ✅ Current Stable: v3.2
+## ✅ Current Stable: v3.3
 
-**Date**: January 17, 2026  
-**Migration File**: `supabase/migrations/20260117175524_38595ba8-3317-4946-8c7a-25ee0c6d6037.sql`  
+**Date**: January 21, 2026  
 **Status**: All 18 filters verified working
 
 ### Confirmed Working Filters (18 total)
@@ -56,14 +55,14 @@ The AI will:
 | 12 | Company Size | ✅ Working | Includes 5001-10000 and 10000+ buckets |
 | 13 | Person Interest | ✅ Working | Array/string matching |
 | 14 | Person Skill | ✅ Working | Array/string matching |
-| 15 | Gender | ✅ Working | Case-insensitive exact match |
+| 15 | Gender | ✅ Working | DB stores M/F, frontend converts male/female |
 | 16 | Person Income | ✅ Working | Numeric range parsing |
 | 17 | Person Net Worth | ✅ Working | Numeric range parsing (supports negatives) |
 | 18 | Industry Suggestions | ✅ Working | Frontend Title Case normalization |
 
 ---
 
-## 📊 Verified Baseline Counts (v3.2)
+## 📊 Verified Baseline Counts (v3.3)
 
 Use these for regression testing. If counts change unexpectedly, something is broken.
 
@@ -93,8 +92,8 @@ Use these for regression testing. If counts change unexpectedly, something is br
 | Income | Under $50K | 55 |
 | Income | $50K - $100K | 45 |
 | Net Worth | Under $100K | 56 |
-| Gender | Male | 74 |
-| Gender | Female | 18 |
+| Gender | Male (M) | 137 |
+| Gender | Female (F) | 55 |
 
 ### Professional Filters
 | Filter | Value | Expected Count |
@@ -113,7 +112,17 @@ Use these for regression testing. If counts change unexpectedly, something is br
 
 ---
 
-## 🔧 Database Functions (v3.2)
+## 🎨 Gender Filter Note (v3.3)
+
+The Gender filter stores values as `M` or `F` in the database. The frontend (`src/hooks/useFreeDataSearch.ts`) includes a `convertGender` function that translates:
+- `male` → `M`
+- `female` → `F`
+
+This ensures the UI uses human-readable labels while the database uses short codes.
+
+---
+
+## 🔧 Database Functions (v3.3)
 
 | Function | Parameters | Status |
 |----------|------------|--------|
@@ -129,6 +138,7 @@ Use these for regression testing. If counts change unexpectedly, something is br
 
 | Version | Date | Changes |
 |---------|------|---------|
+| v3.3 | 2026-01-21 | Updated baseline counts, documented Gender M/F format, verified 137 Male / 55 Female |
 | v3.2 | 2026-01-17 | Established stable state with 724 records, 18 filters, updated baselines |
 | v3.1.1 | 2026-01-17 | Frontend industry suggestion normalization (Title Case + dedup) |
 | v3.1 | 2026-01-17 | Added Company Size 5001-10000, 10000+ and Individual Contributor |
@@ -158,10 +168,10 @@ Before modifying any filter logic:
 
 If the quick command doesn't work:
 
-1. Find: `supabase/migrations/20260117175524_38595ba8-3317-4946-8c7a-25ee0c6d6037.sql`
+1. Find the stable migration file
 2. Copy both functions:
    - `parse_revenue_to_numeric`
    - `search_free_data_builder`
 3. Create new migration with `CREATE OR REPLACE FUNCTION`
 4. Verify single function exists with 29 parameters
-5. Restore frontend normalization in `src/hooks/useFreeDataSuggestions.ts`
+5. Restore frontend gender conversion in `src/hooks/useFreeDataSearch.ts`

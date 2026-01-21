@@ -1,8 +1,8 @@
 # Filter Contract Documentation
 
 **Purpose**: Authoritative reference for filter field names, expected counts, and revert procedures.  
-**Last Updated**: January 17, 2026  
-**Version**: 3.2
+**Last Updated**: January 21, 2026  
+**Version**: 3.3
 
 ---
 
@@ -10,7 +10,7 @@
 
 The `search_free_data_builder` function uses these exact field names. Changing them will break filters.
 
-**To revert to stable state, say:** "Revert to v3.2 stable state"
+**To revert to stable state, say:** "Revert to v3.3 stable state"
 
 ---
 
@@ -22,7 +22,7 @@ The `search_free_data_builder` function uses these exact field names. Changing t
 |-----------|----------|------|--------------|-------|
 | Income | `incomeRange` | string | `$45` | Numeric portion used for comparison |
 | Net Worth | `netWorth` | string | `$85` | Supports negative values |
-| Gender | `gender` | string | `male`, `female` | Case-insensitive match |
+| Gender | `gender` | string | `M`, `F` | Frontend converts male→M, female→F |
 
 ### Professional Filters
 
@@ -68,7 +68,7 @@ The `search_free_data_builder` function uses these exact field names. Changing t
 
 ---
 
-## ✅ Verified Filter Counts (v3.2 Baseline)
+## ✅ Verified Filter Counts (v3.3 Baseline)
 
 Use these as regression tests. If counts change unexpectedly, something is broken.
 
@@ -97,8 +97,8 @@ Revenue $10M-$50M:        56
 Income Under $50K:        55
 Income $50K - $100K:      45
 Net Worth Under $100K:    56
-Gender Male:              74
-Gender Female:            18
+Gender Male (M):          137
+Gender Female (F):        55
 ```
 
 ### Professional
@@ -115,6 +115,23 @@ Company Facebook:         147
 Company Twitter:          141
 Company LinkedIn:         203
 ```
+
+---
+
+## 🎨 Gender Field Format (v3.3)
+
+**Database Storage**: `M` or `F`  
+**Frontend Conversion**: `src/hooks/useFreeDataSearch.ts` lines 51-57
+
+```typescript
+const convertGender = (gender: string): string => {
+  if (gender.toLowerCase() === 'male') return 'M';
+  if (gender.toLowerCase() === 'female') return 'F';
+  return gender;
+};
+```
+
+The UI displays "Male" / "Female" but the database query uses "M" / "F".
 
 ---
 
@@ -190,7 +207,7 @@ RETURNS TABLE(entity_external_id text, entity_data jsonb, total_count bigint)
 | 9 | `p_company_size_ranges` | Company Size | text[] | `ARRAY['1-10', '11-50']` |
 | 10 | `p_company_revenue` | Revenue filter | text[] | `ARRAY['$1M - $10M']` |
 | 11 | `p_technologies` | Tech stack | text[] | `ARRAY['React', 'AWS']` |
-| 12 | `p_gender` | Gender filter | text[] | `ARRAY['male']`, `ARRAY['female']` |
+| 12 | `p_gender` | Gender filter | text[] | `ARRAY['M']`, `ARRAY['F']` |
 | 13 | `p_income` | Income filter | text[] | `ARRAY['Under $50K']` |
 | 14 | `p_net_worth` | Net Worth filter | text[] | `ARRAY['Under $100K']` |
 | 15 | `p_person_skills` | Skills filter | text[] | `ARRAY['Python']` |
@@ -214,19 +231,20 @@ RETURNS TABLE(entity_external_id text, entity_data jsonb, total_count bigint)
 ## 🔄 Revert Procedure
 
 ### Quick Revert (Say This)
-> **"Revert to v3.2 stable state"**
+> **"Revert to v3.3 stable state"**
 
 ### What Gets Restored
 - `search_free_data_builder` function (29 parameters)
 - `parse_revenue_to_numeric` helper function
+- Frontend gender conversion
 - Frontend industry normalization
 - All filter logic exactly as documented
 
 ### Manual Revert (If Needed)
-1. Find: `supabase/migrations/20260117175524_38595ba8-3317-4946-8c7a-25ee0c6d6037.sql`
+1. Find the stable migration file
 2. Copy both `CREATE FUNCTION` blocks
 3. Create new migration with `CREATE OR REPLACE FUNCTION`
-4. Verify frontend normalization in `src/hooks/useFreeDataSuggestions.ts`
+4. Verify frontend conversion in `src/hooks/useFreeDataSearch.ts`
 
 ---
 
