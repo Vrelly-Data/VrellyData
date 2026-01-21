@@ -2,19 +2,20 @@ import { useState, useEffect } from 'react';
 import { ChartWithToggle } from './charts/ChartWithToggle';
 import { AnalyticsService, CompanyInsights as Insights } from '@/lib/analytics';
 import { CompanyEntity } from '@/types/audience';
-import { generateMockCompanies } from '@/lib/mockData';
 
-export function CompanyInsights() {
+interface CompanyInsightsProps {
+  records: CompanyEntity[];
+}
+
+export function CompanyInsights({ records }: CompanyInsightsProps) {
   const [insights, setInsights] = useState<Insights | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Mock data for now
-    const mockCompanies: CompanyEntity[] = generateMockCompanies(300);
-    const calculated = AnalyticsService.calculateCompanyInsights(mockCompanies);
+    const calculated = AnalyticsService.calculateCompanyInsights(records);
     setInsights(calculated);
     setLoading(false);
-  }, []);
+  }, [records]);
 
   if (loading || !insights) {
     return <div className="p-6">Loading insights...</div>;
