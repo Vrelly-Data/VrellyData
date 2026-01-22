@@ -33,7 +33,7 @@ export const HeroSection = () => {
         </div>
         
         <h1 className="text-4xl md:text-6xl lg:text-7xl font-bold tracking-tight mb-6">
-          <span className="text-foreground">Audience Intelligence,</span>
+          <span className="text-foreground">Sales Intelligence,</span>
           <br />
           <span className="bg-gradient-to-r from-primary to-primary/60 bg-clip-text text-transparent">
             Reimagined
