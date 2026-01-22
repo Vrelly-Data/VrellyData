@@ -35,7 +35,7 @@ export default function People() {
               src={vrellyLogo} 
               alt="Vrelly Data" 
               className="h-[4.5rem] cursor-pointer" 
-              onClick={() => navigate('/')}
+              onClick={() => navigate('/dashboard')}
             />
             <h1 className="text-lg font-semibold ml-4">People</h1>
             <div className="ml-auto">

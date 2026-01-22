@@ -10,7 +10,7 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from '@/components/ui/sidebar';
-import { Home, Users, Building2, Settings, LogOut, Shield } from 'lucide-react';
+import { Home, Users, Building2, FlaskConical, Settings, LogOut, Shield } from 'lucide-react';
 import { useAuthStore } from '@/stores/authStore';
 import vrellyLogo from '@/assets/vrelly-logo.png';
 
@@ -18,6 +18,7 @@ const navItems = [
   { title: 'Builder', url: '/dashboard', icon: Home },
   { title: 'People', url: '/people', icon: Users },
   { title: 'Companies', url: '/companies', icon: Building2 },
+  { title: 'Data Playground', url: '/playground', icon: FlaskConical },
   { title: 'Settings', url: '/settings', icon: Settings },
 ];
 
