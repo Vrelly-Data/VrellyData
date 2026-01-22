@@ -42,7 +42,7 @@ export const HeroSection = () => {
         
         <p className="text-lg md:text-xl text-muted-foreground max-w-2xl mx-auto mb-10">
           Access fully enriched B2B data with direct phone numbers, visual insights, 
-          and a powerful prospecting playground. Build your perfect audience in minutes.
+          and a powerful prospecting playground. Get access to smart builder based on live insights from your sales data.
         </p>
         
         <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
