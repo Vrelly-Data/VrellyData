@@ -5,7 +5,7 @@ const features = [
   {
     icon: Database,
     title: 'Fully Enriched Data',
-    description: 'Complete B2B profiles with 50+ data points per contact. Get the comprehensive intelligence you need to close deals faster.',
+    description: 'Complete B2B profiles with 20+ data points per contact. Skip trace wireless phone numbers, triple verified email addresses.',
   },
   {
     icon: Phone,
