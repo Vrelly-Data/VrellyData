@@ -20,7 +20,7 @@ export const Navbar = () => {
             <img 
               src={vrellyLogo} 
               alt="Vrelly" 
-              className="h-12 cursor-pointer" 
+              className="h-[4.5rem] cursor-pointer"
               onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
             />
             <div className="hidden md:flex items-center gap-6">
