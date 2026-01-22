@@ -1,4 +1,4 @@
-import { Database, Phone, BarChart3, Sparkles } from 'lucide-react';
+import { Database, Filter, BarChart3, Sparkles } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 
 const features = [
@@ -8,7 +8,7 @@ const features = [
     description: 'Complete B2B profiles with 20+ data points per contact. Skip trace wireless phone numbers, triple verified email addresses.',
   },
   {
-    icon: Phone,
+    icon: Filter,
     title: 'Easy Filters',
     description: 'Easily unlock and create audiences for B2B outreach with easy export.',
   },
