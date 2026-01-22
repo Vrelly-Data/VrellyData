@@ -202,6 +202,69 @@ export type Database = {
         }
         Relationships: []
       }
+      copy_templates: {
+        Row: {
+          body_html: string | null
+          body_text: string | null
+          created_at: string
+          created_by: string
+          id: string
+          is_favorite: boolean | null
+          name: string
+          remix_prompt: string | null
+          source_sequence_id: string | null
+          subject: string | null
+          tags: string[] | null
+          team_id: string
+          updated_at: string
+        }
+        Insert: {
+          body_html?: string | null
+          body_text?: string | null
+          created_at?: string
+          created_by: string
+          id?: string
+          is_favorite?: boolean | null
+          name: string
+          remix_prompt?: string | null
+          source_sequence_id?: string | null
+          subject?: string | null
+          tags?: string[] | null
+          team_id: string
+          updated_at?: string
+        }
+        Update: {
+          body_html?: string | null
+          body_text?: string | null
+          created_at?: string
+          created_by?: string
+          id?: string
+          is_favorite?: boolean | null
+          name?: string
+          remix_prompt?: string | null
+          source_sequence_id?: string | null
+          subject?: string | null
+          tags?: string[] | null
+          team_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "copy_templates_source_sequence_id_fkey"
+            columns: ["source_sequence_id"]
+            isOneToOne: false
+            referencedRelation: "synced_sequences"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "copy_templates_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       credit_transactions: {
         Row: {
           audience_id: string | null
@@ -533,6 +596,59 @@ export type Database = {
         }
         Relationships: []
       }
+      outbound_integrations: {
+        Row: {
+          api_key_encrypted: string
+          created_at: string
+          created_by: string
+          id: string
+          is_active: boolean
+          last_synced_at: string | null
+          name: string
+          platform: string
+          sync_error: string | null
+          sync_status: string | null
+          team_id: string
+          updated_at: string
+        }
+        Insert: {
+          api_key_encrypted: string
+          created_at?: string
+          created_by: string
+          id?: string
+          is_active?: boolean
+          last_synced_at?: string | null
+          name: string
+          platform: string
+          sync_error?: string | null
+          sync_status?: string | null
+          team_id: string
+          updated_at?: string
+        }
+        Update: {
+          api_key_encrypted?: string
+          created_at?: string
+          created_by?: string
+          id?: string
+          is_active?: boolean
+          last_synced_at?: string | null
+          name?: string
+          platform?: string
+          sync_error?: string | null
+          sync_status?: string | null
+          team_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "outbound_integrations_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       people_records: {
         Row: {
           created_at: string | null
@@ -686,6 +802,192 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "suppression_lists_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      synced_campaigns: {
+        Row: {
+          created_at: string
+          external_campaign_id: string
+          id: string
+          integration_id: string
+          name: string
+          raw_data: Json | null
+          stats: Json | null
+          status: string | null
+          team_id: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          external_campaign_id: string
+          id?: string
+          integration_id: string
+          name: string
+          raw_data?: Json | null
+          stats?: Json | null
+          status?: string | null
+          team_id: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          external_campaign_id?: string
+          id?: string
+          integration_id?: string
+          name?: string
+          raw_data?: Json | null
+          stats?: Json | null
+          status?: string | null
+          team_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "synced_campaigns_integration_id_fkey"
+            columns: ["integration_id"]
+            isOneToOne: false
+            referencedRelation: "outbound_integrations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "synced_campaigns_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      synced_contacts: {
+        Row: {
+          campaign_id: string
+          company: string | null
+          created_at: string
+          custom_fields: Json | null
+          email: string
+          engagement_data: Json | null
+          external_contact_id: string | null
+          first_name: string | null
+          id: string
+          job_title: string | null
+          last_name: string | null
+          raw_data: Json | null
+          status: string | null
+          team_id: string
+          updated_at: string
+        }
+        Insert: {
+          campaign_id: string
+          company?: string | null
+          created_at?: string
+          custom_fields?: Json | null
+          email: string
+          engagement_data?: Json | null
+          external_contact_id?: string | null
+          first_name?: string | null
+          id?: string
+          job_title?: string | null
+          last_name?: string | null
+          raw_data?: Json | null
+          status?: string | null
+          team_id: string
+          updated_at?: string
+        }
+        Update: {
+          campaign_id?: string
+          company?: string | null
+          created_at?: string
+          custom_fields?: Json | null
+          email?: string
+          engagement_data?: Json | null
+          external_contact_id?: string | null
+          first_name?: string | null
+          id?: string
+          job_title?: string | null
+          last_name?: string | null
+          raw_data?: Json | null
+          status?: string | null
+          team_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "synced_contacts_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "synced_campaigns"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "synced_contacts_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      synced_sequences: {
+        Row: {
+          body_html: string | null
+          body_text: string | null
+          campaign_id: string
+          created_at: string
+          delay_days: number | null
+          external_sequence_id: string | null
+          id: string
+          raw_data: Json | null
+          stats: Json | null
+          step_number: number
+          subject: string | null
+          team_id: string
+          updated_at: string
+        }
+        Insert: {
+          body_html?: string | null
+          body_text?: string | null
+          campaign_id: string
+          created_at?: string
+          delay_days?: number | null
+          external_sequence_id?: string | null
+          id?: string
+          raw_data?: Json | null
+          stats?: Json | null
+          step_number: number
+          subject?: string | null
+          team_id: string
+          updated_at?: string
+        }
+        Update: {
+          body_html?: string | null
+          body_text?: string | null
+          campaign_id?: string
+          created_at?: string
+          delay_days?: number | null
+          external_sequence_id?: string | null
+          id?: string
+          raw_data?: Json | null
+          stats?: Json | null
+          step_number?: number
+          subject?: string | null
+          team_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "synced_sequences_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "synced_campaigns"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "synced_sequences_team_id_fkey"
             columns: ["team_id"]
             isOneToOne: false
             referencedRelation: "teams"
