@@ -17,6 +17,7 @@ import NotFound from "./pages/NotFound";
 import People from "./pages/People";
 import Companies from "./pages/Companies";
 import Admin from "./pages/Admin";
+import DataPlayground from "./pages/DataPlayground";
 
 const queryClient = new QueryClient();
 
@@ -35,6 +36,7 @@ const App = () => (
                 <Route path="/dashboard" element={<ProtectedRoute><Index /></ProtectedRoute>} />
                 <Route path="/people" element={<ProtectedRoute><People /></ProtectedRoute>} />
                 <Route path="/companies" element={<ProtectedRoute><Companies /></ProtectedRoute>} />
+                <Route path="/playground" element={<ProtectedRoute><DataPlayground /></ProtectedRoute>} />
                 <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
                 <Route path="/billing" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
                 <Route path="/admin" element={<AdminRoute><Admin /></AdminRoute>} />
