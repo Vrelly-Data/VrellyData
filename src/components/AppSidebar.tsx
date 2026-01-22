@@ -15,7 +15,7 @@ import { useAuthStore } from '@/stores/authStore';
 import vrellyLogo from '@/assets/vrelly-logo.png';
 
 const navItems = [
-  { title: 'Builder', url: '/', icon: Home },
+  { title: 'Builder', url: '/dashboard', icon: Home },
   { title: 'People', url: '/people', icon: Users },
   { title: 'Companies', url: '/companies', icon: Building2 },
   { title: 'Settings', url: '/settings', icon: Settings },
@@ -42,7 +42,7 @@ export function AppSidebar() {
               src={vrellyLogo} 
               alt="Vrelly Data" 
               className={`${isCollapsed ? 'h-24 w-24 object-contain' : 'h-36'} cursor-pointer`}
-              onClick={() => navigate('/')}
+              onClick={() => navigate('/dashboard')}
             />
           </div>
           <SidebarGroupContent>

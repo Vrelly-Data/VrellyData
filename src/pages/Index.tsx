@@ -19,7 +19,7 @@ const Index = () => {
               src={vrellyLogo} 
               alt="Vrelly Data" 
               className="h-[4.5rem] cursor-pointer" 
-              onClick={() => navigate('/')}
+              onClick={() => navigate('/dashboard')}
             />
             <div className="ml-auto">
               <UserMenu />
