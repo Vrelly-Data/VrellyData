@@ -23,7 +23,7 @@ export const HeroSection = () => {
       <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-primary/10 rounded-full blur-3xl animate-pulse delay-1000" />
       
       <div className="relative z-10 max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 text-center pt-20">
-        <div className="flex justify-center mb-2">
+        <div className="flex justify-center mb-0">
           <img src={vrellyLogo} alt="Vrelly" className="h-80 md:h-96" />
         </div>
         
