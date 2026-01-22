@@ -9,8 +9,8 @@ const features = [
   },
   {
     icon: Phone,
-    title: 'Direct Phone Numbers',
-    description: 'Verified direct dial numbers for decision makers. Skip the gatekeepers and connect directly with your prospects.',
+    title: 'Easy Filters',
+    description: 'Easily unlock and create audiences for B2B outreach with easy export.',
   },
   {
     icon: BarChart3,
