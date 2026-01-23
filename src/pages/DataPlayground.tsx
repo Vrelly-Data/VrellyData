@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import vrellyLogo from '@/assets/vrelly-logo.png';
 import { UserMenu } from '@/components/UserMenu';
-import { FlaskConical } from 'lucide-react';
+import { PlaygroundDashboard } from '@/components/playground/PlaygroundDashboard';
 
 export default function DataPlayground() {
   const navigate = useNavigate();
@@ -36,14 +36,8 @@ export default function DataPlayground() {
                   <TabsTrigger value="people">People</TabsTrigger>
                 </TabsList>
               </div>
-              <TabsContent value="playground" className="flex-1 m-0 p-6">
-                <div className="flex flex-col items-center justify-center h-full text-center">
-                  <FlaskConical className="h-16 w-16 text-muted-foreground mb-4" />
-                  <h2 className="text-2xl font-semibold mb-2">Welcome to Data Playground</h2>
-                  <p className="text-muted-foreground max-w-md">
-                    Connect your outbound platforms like Reply.io to sync campaigns, sequences, and engagement data.
-                  </p>
-                </div>
+              <TabsContent value="playground" className="flex-1 m-0 p-6 overflow-auto">
+                <PlaygroundDashboard />
               </TabsContent>
               <TabsContent value="copy" className="flex-1 m-0 p-6">
                 <div className="flex flex-col items-center justify-center h-full text-center">
