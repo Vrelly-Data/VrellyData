@@ -108,6 +108,31 @@ export function useOutboundIntegrations() {
     },
   });
 
+  const syncIntegration = useMutation({
+    mutationFn: async (integrationId: string) => {
+      // Optimistically update status
+      queryClient.setQueryData(['outbound-integrations'], (old: OutboundIntegration[] | undefined) => 
+        old?.map(i => i.id === integrationId ? { ...i, sync_status: 'syncing' } : i)
+      );
+
+      const { data, error } = await supabase.functions.invoke('sync-reply-campaigns', {
+        body: { integrationId },
+      });
+
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['outbound-integrations'] });
+      queryClient.invalidateQueries({ queryKey: ['playground-stats'] });
+      toast.success(`Synced ${data.campaigns} campaigns, ${data.contacts} contacts`);
+    },
+    onError: (error) => {
+      queryClient.invalidateQueries({ queryKey: ['outbound-integrations'] });
+      toast.error(`Sync failed: ${error.message}`);
+    },
+  });
+
   return {
     integrations: integrations ?? [],
     isLoading,
@@ -115,5 +140,6 @@ export function useOutboundIntegrations() {
     addIntegration,
     deleteIntegration,
     toggleIntegration,
+    syncIntegration,
   };
 }
