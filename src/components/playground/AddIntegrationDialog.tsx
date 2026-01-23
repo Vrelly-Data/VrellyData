@@ -18,7 +18,8 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { useOutboundIntegrations } from '@/hooks/useOutboundIntegrations';
-import { Eye, EyeOff, Loader2 } from 'lucide-react';
+import { Eye, EyeOff, Loader2, CheckCircle2, XCircle } from 'lucide-react';
+import { toast } from 'sonner';
 
 const PLATFORMS = [
   { value: 'reply.io', label: 'Reply.io', icon: '📧' },
@@ -32,17 +33,77 @@ interface AddIntegrationDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
+async function validateApiKey(platform: string, apiKey: string): Promise<{ valid: boolean; error?: string }> {
+  if (platform === 'reply.io') {
+    try {
+      const response = await fetch('https://api.reply.io/v1/people', {
+        method: 'GET',
+        headers: {
+          'X-Api-Key': apiKey,
+          'Content-Type': 'application/json',
+        },
+      });
+      
+      if (response.status === 401) {
+        return { valid: false, error: 'Invalid API key. Please check your Reply.io API key in Settings → API Key.' };
+      }
+      if (response.status === 403) {
+        return { valid: false, error: 'API key does not have sufficient permissions.' };
+      }
+      if (!response.ok) {
+        return { valid: false, error: `Reply.io API error: ${response.status}` };
+      }
+      return { valid: true };
+    } catch (err) {
+      return { valid: false, error: 'Could not connect to Reply.io. Please check your internet connection.' };
+    }
+  }
+  // For other platforms, skip validation for now
+  return { valid: true };
+}
+
 export function AddIntegrationDialog({ open, onOpenChange }: AddIntegrationDialogProps) {
   const [platform, setPlatform] = useState('');
   const [name, setName] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
+  const [isValidating, setIsValidating] = useState(false);
+  const [validationStatus, setValidationStatus] = useState<'idle' | 'valid' | 'invalid'>('idle');
   const { addIntegration } = useOutboundIntegrations();
+
+  const handleValidate = async () => {
+    if (!platform || !apiKey) return;
+    
+    setIsValidating(true);
+    setValidationStatus('idle');
+    
+    const result = await validateApiKey(platform, apiKey);
+    
+    setIsValidating(false);
+    setValidationStatus(result.valid ? 'valid' : 'invalid');
+    
+    if (!result.valid) {
+      toast.error(result.error || 'Invalid API key');
+    } else {
+      toast.success('API key is valid!');
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!platform || !name || !apiKey) return;
+
+    // Validate before saving
+    setIsValidating(true);
+    const result = await validateApiKey(platform, apiKey);
+    setIsValidating(false);
+    
+    if (!result.valid) {
+      toast.error(result.error || 'Invalid API key');
+      setValidationStatus('invalid');
+      return;
+    }
 
     await addIntegration.mutateAsync({ platform, name, apiKey });
     
@@ -50,6 +111,7 @@ export function AddIntegrationDialog({ open, onOpenChange }: AddIntegrationDialo
     setPlatform('');
     setName('');
     setApiKey('');
+    setValidationStatus('idle');
     onOpenChange(false);
   };
 
@@ -106,26 +168,58 @@ export function AddIntegrationDialog({ open, onOpenChange }: AddIntegrationDialo
                   type={showApiKey ? 'text' : 'password'}
                   placeholder="Enter your API key"
                   value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  className="pr-10"
+                  onChange={(e) => {
+                    setApiKey(e.target.value);
+                    setValidationStatus('idle');
+                  }}
+                  className={`pr-20 ${validationStatus === 'valid' ? 'border-emerald-500 dark:border-emerald-400' : validationStatus === 'invalid' ? 'border-destructive' : ''}`}
                 />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
-                  onClick={() => setShowApiKey(!showApiKey)}
-                >
-                  {showApiKey ? (
-                    <EyeOff className="h-4 w-4 text-muted-foreground" />
-                  ) : (
-                    <Eye className="h-4 w-4 text-muted-foreground" />
+                <div className="absolute right-0 top-0 h-full flex items-center gap-1 pr-2">
+                  {validationStatus === 'valid' && (
+                    <CheckCircle2 className="h-4 w-4 text-emerald-500 dark:text-emerald-400" />
                   )}
-                </Button>
+                  {validationStatus === 'invalid' && (
+                    <XCircle className="h-4 w-4 text-destructive" />
+                  )}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 hover:bg-transparent"
+                    onClick={() => setShowApiKey(!showApiKey)}
+                  >
+                    {showApiKey ? (
+                      <EyeOff className="h-4 w-4 text-muted-foreground" />
+                    ) : (
+                      <Eye className="h-4 w-4 text-muted-foreground" />
+                    )}
+                  </Button>
+                </div>
               </div>
-              <p className="text-xs text-muted-foreground">
-                Your API key will be encrypted and stored securely
-              </p>
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-muted-foreground">
+                  Your API key will be encrypted and stored securely
+                </p>
+                {platform && apiKey && (
+                  <Button
+                    type="button"
+                    variant="link"
+                    size="sm"
+                    className="h-auto p-0 text-xs"
+                    onClick={handleValidate}
+                    disabled={isValidating}
+                  >
+                    {isValidating ? (
+                      <>
+                        <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                        Validating...
+                      </>
+                    ) : (
+                      'Test Connection'
+                    )}
+                  </Button>
+                )}
+              </div>
             </div>
           </div>
 
