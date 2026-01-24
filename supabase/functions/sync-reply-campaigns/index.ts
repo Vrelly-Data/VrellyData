@@ -95,6 +95,57 @@ async function fetchFromReplyio(endpoint: string, apiKey: string, teamId?: strin
   return response.json();
 }
 
+// Paginated fetch helper to get all results across multiple pages
+async function fetchAllPaginated<T>(
+  endpoint: string, 
+  apiKey: string, 
+  resultKey: string,
+  teamId?: string,
+  pageSize: number = 100
+): Promise<T[]> {
+  let allResults: T[] = [];
+  let page = 1;
+  let hasMore = true;
+  
+  while (hasMore) {
+    const separator = endpoint.includes('?') ? '&' : '?';
+    const url = `${endpoint}${separator}limit=${pageSize}&page=${page}`;
+    
+    const response = await fetchFromReplyio(url, apiKey, teamId);
+    const results = response[resultKey] || response || [];
+    
+    if (!Array.isArray(results)) {
+      console.warn(`Expected array for ${resultKey}, got:`, typeof results);
+      break;
+    }
+    
+    allResults = [...allResults, ...results];
+    
+    // Check for more pages using Reply.io's pagination metadata
+    // Reply.io uses different patterns: info.hasMore, hasMore, or check if we got a full page
+    hasMore = response.info?.hasMore || 
+              response.hasMore || 
+              (results.length === pageSize);
+    
+    console.log(`  Page ${page}: fetched ${results.length} ${resultKey}, total: ${allResults.length}, hasMore: ${hasMore}`);
+    
+    page++;
+    
+    // Safety limit to prevent infinite loops
+    if (page > 500) {
+      console.warn(`Reached page limit (500) for ${endpoint}`);
+      break;
+    }
+    
+    // Small delay to avoid rate limiting
+    if (hasMore) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  }
+  
+  return allResults;
+}
+
 Deno.serve(async (req) => {
   // Handle CORS preflight
   if (req.method === "OPTIONS") {
@@ -152,12 +203,16 @@ Deno.serve(async (req) => {
 
     console.log(`Starting sync for integration ${integrationId}`);
 
-    // Fetch campaigns from Reply.io (pass replyTeamId for agency accounts)
+    // Fetch ALL campaigns from Reply.io with pagination
     let campaigns: ReplyioCampaign[] = [];
     try {
-      const campaignsResponse = await fetchFromReplyio("/campaigns", apiKey, replyTeamId || undefined);
-      campaigns = campaignsResponse.campaigns || campaignsResponse || [];
-      console.log(`Fetched ${campaigns.length} campaigns from Reply.io${replyTeamId ? ` for team ${replyTeamId}` : ''}`);
+      campaigns = await fetchAllPaginated<ReplyioCampaign>(
+        "/campaigns",
+        apiKey,
+        "campaigns",
+        replyTeamId || undefined
+      );
+      console.log(`Fetched ${campaigns.length} total campaigns from Reply.io${replyTeamId ? ` for team ${replyTeamId}` : ''}`);
       
       // Debug: Log sample campaign structure for troubleshooting
       if (campaigns.length > 0) {
@@ -173,12 +228,17 @@ Deno.serve(async (req) => {
     let totalSequences = 0;
 
     // Process each campaign
+    let campaignIndex = 0;
     for (const campaign of campaigns) {
+      campaignIndex++;
+      
       // Validate campaign has required fields
       if (!campaign.id || !campaign.name) {
-        console.warn('Skipping campaign with missing id or name:', campaign);
+        console.warn(`[${campaignIndex}/${campaigns.length}] Skipping campaign with missing id or name:`, campaign);
         continue;
       }
+      
+      console.log(`[${campaignIndex}/${campaigns.length}] Processing campaign: ${campaign.name} (ID: ${campaign.id})`)
 
       // Upsert campaign with proper type handling
       const { error: campaignError } = await supabase
@@ -251,10 +311,16 @@ Deno.serve(async (req) => {
         console.error(`Failed to fetch steps for campaign ${campaign.id}:`, error);
       }
 
-      // Fetch and sync contacts (people)
+      // Fetch and sync contacts (people) with pagination
       try {
-        const peopleResponse = await fetchFromReplyio(`/campaigns/${campaign.id}/people`, apiKey, replyTeamId || undefined);
-        const people: ReplyioPerson[] = peopleResponse.people || peopleResponse || [];
+        const people = await fetchAllPaginated<ReplyioPerson>(
+          `/campaigns/${campaign.id}/people`,
+          apiKey,
+          "people",
+          replyTeamId || undefined
+        );
+        
+        console.log(`  - Found ${people.length} contacts in campaign`);
         
         for (const person of people) {
           await supabase
