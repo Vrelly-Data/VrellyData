@@ -30,40 +30,35 @@ export function usePlaygroundStats() {
 
       // Calculate stats from campaigns
       let totalMessagesSent = 0;
+      let totalReplies = 0;
+      let totalContacts = 0;
       let activeCampaigns = 0;
-      let totalSent = 0;
-      let totalDelivered = 0;
+      let totalPeopleFinished = 0;
+      let totalPeopleCount = 0;
 
       campaigns?.forEach((campaign) => {
         const stats = campaign.stats as Record<string, number> | null;
         if (stats) {
-          totalMessagesSent += stats.sent || 0;
-          totalSent += stats.total || stats.sent || 0;
-          totalDelivered += stats.delivered || stats.sent || 0;
+          totalMessagesSent += stats.sent || stats.delivered || 0;
+          totalReplies += stats.replies || 0;
+          totalContacts += stats.peopleCount || 0;
+          totalPeopleFinished += stats.peopleFinished || 0;
+          totalPeopleCount += stats.peopleCount || 0;
         }
         if (campaign.status === 'active') {
           activeCampaigns++;
         }
       });
 
-      // Calculate stats from contacts
-      let totalReplies = 0;
-      contacts?.forEach((contact) => {
-        const engagement = contact.engagement_data as Record<string, boolean | number> | null;
-        if (engagement?.replied) {
-          totalReplies++;
-        }
-      });
-
-      // Calculate completion percentage
-      const completionPercentage = totalSent > 0 
-        ? Math.round((totalDelivered / totalSent) * 100) 
+      // Calculate completion percentage based on people finished vs total people
+      const completionPercentage = totalPeopleCount > 0 
+        ? Math.round((totalPeopleFinished / totalPeopleCount) * 100) 
         : 0;
 
       return {
         totalMessagesSent,
         totalReplies,
-        totalContacts: contacts?.length ?? 0,
+        totalContacts,
         activeCampaigns,
         completionPercentage,
         campaignScore: null, // Placeholder - will be implemented later

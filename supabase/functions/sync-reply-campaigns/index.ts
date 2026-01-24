@@ -10,7 +10,17 @@ const REPLY_API_BASE = "https://api.reply.io/v1";
 interface ReplyioCampaign {
   id: number;
   name: string;
-  status: string;
+  status: string | number;
+  // Stats fields from Reply.io API
+  deliveriesCount?: number;
+  repliesCount?: number;
+  opensCount?: number;
+  bouncesCount?: number;
+  optOutsCount?: number;
+  peopleCount?: number;
+  peopleActive?: number;
+  peopleFinished?: number;
+  // Legacy nested stats (may exist in some responses)
   stats?: {
     sent?: number;
     delivered?: number;
@@ -179,7 +189,17 @@ Deno.serve(async (req) => {
           external_campaign_id: String(campaign.id),
           name: String(campaign.name || 'Unnamed Campaign'),
           status: normalizeStatus(campaign.status),
-          stats: campaign.stats || {},
+          stats: {
+            sent: campaign.deliveriesCount || 0,
+            delivered: campaign.deliveriesCount || 0,
+            replies: campaign.repliesCount || 0,
+            opens: campaign.opensCount || 0,
+            bounces: campaign.bouncesCount || 0,
+            optOuts: campaign.optOutsCount || 0,
+            peopleCount: campaign.peopleCount || 0,
+            peopleActive: campaign.peopleActive || 0,
+            peopleFinished: campaign.peopleFinished || 0,
+          },
           raw_data: campaign,
           updated_at: new Date().toISOString(),
         }, {
