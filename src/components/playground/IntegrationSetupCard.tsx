@@ -2,10 +2,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
-import { Plus, Plug, RefreshCw, Trash2, AlertCircle, Loader2 } from 'lucide-react';
+import { Plus, Plug, RefreshCw, Trash2, AlertCircle, Loader2, Pencil, Building2 } from 'lucide-react';
 import { OutboundIntegration, useOutboundIntegrations } from '@/hooks/useOutboundIntegrations';
 import { useState } from 'react';
 import { AddIntegrationDialog } from './AddIntegrationDialog';
+import { EditIntegrationDialog } from './EditIntegrationDialog';
 import { formatDistanceToNow } from 'date-fns';
 
 const platformIcons: Record<string, string> = {
@@ -36,12 +37,15 @@ interface IntegrationRowProps {
   onToggle: (id: string, isActive: boolean) => void;
   onDelete: (id: string) => void;
   onSync: (id: string) => void;
+  onEdit: (integration: OutboundIntegration) => void;
   isSyncing: boolean;
 }
 
-function IntegrationRow({ integration, onToggle, onDelete, onSync, isSyncing }: IntegrationRowProps) {
+function IntegrationRow({ integration, onToggle, onDelete, onSync, onEdit, isSyncing }: IntegrationRowProps) {
   const icon = platformIcons[integration.platform.toLowerCase()] || '🔌';
   const isCurrentlySyncing = isSyncing || integration.sync_status === 'syncing';
+  // Access reply_team_id from extended integration type
+  const replyTeamId = (integration as OutboundIntegration & { reply_team_id?: string }).reply_team_id;
 
   return (
     <div className="flex items-center justify-between py-3 border-b last:border-0">
@@ -51,6 +55,12 @@ function IntegrationRow({ integration, onToggle, onDelete, onSync, isSyncing }: 
           <div className="flex items-center gap-2">
             <span className="font-medium">{integration.name}</span>
             {getStatusBadge(integration.sync_status, integration.sync_error)}
+            {replyTeamId && (
+              <Badge variant="outline" className="text-xs flex items-center gap-1">
+                <Building2 className="h-3 w-3" />
+                Team: {replyTeamId}
+              </Badge>
+            )}
           </div>
           <p className="text-xs text-muted-foreground capitalize">
             {integration.platform}
@@ -85,6 +95,16 @@ function IntegrationRow({ integration, onToggle, onDelete, onSync, isSyncing }: 
           checked={integration.is_active}
           onCheckedChange={(checked) => onToggle(integration.id, checked)}
         />
+        {integration.platform.toLowerCase() === 'reply.io' && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 text-muted-foreground hover:text-primary"
+            onClick={() => onEdit(integration)}
+          >
+            <Pencil className="h-4 w-4" />
+          </Button>
+        )}
         <Button
           variant="ghost"
           size="icon"
@@ -100,6 +120,8 @@ function IntegrationRow({ integration, onToggle, onDelete, onSync, isSyncing }: 
 
 export function IntegrationSetupCard() {
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [editingIntegration, setEditingIntegration] = useState<OutboundIntegration | null>(null);
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const { integrations, isLoading, toggleIntegration, deleteIntegration, syncIntegration } = useOutboundIntegrations();
 
@@ -118,6 +140,11 @@ export function IntegrationSetupCard() {
     syncIntegration.mutate(id, {
       onSettled: () => setSyncingId(null),
     });
+  };
+
+  const handleEdit = (integration: OutboundIntegration) => {
+    setEditingIntegration(integration);
+    setEditDialogOpen(true);
   };
 
   return (
@@ -159,6 +186,7 @@ export function IntegrationSetupCard() {
                   onToggle={handleToggle}
                   onDelete={handleDelete}
                   onSync={handleSync}
+                  onEdit={handleEdit}
                   isSyncing={syncingId === integration.id}
                 />
               ))}
@@ -168,6 +196,11 @@ export function IntegrationSetupCard() {
       </Card>
 
       <AddIntegrationDialog open={dialogOpen} onOpenChange={setDialogOpen} />
+      <EditIntegrationDialog 
+        open={editDialogOpen} 
+        onOpenChange={setEditDialogOpen} 
+        integration={editingIntegration}
+      />
     </>
   );
 }
