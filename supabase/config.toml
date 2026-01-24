@@ -26,3 +26,6 @@ verify_jwt = false
 
 [functions.validate-api-key]
 verify_jwt = false
+
+[functions.fetch-reply-teams]
+verify_jwt = false

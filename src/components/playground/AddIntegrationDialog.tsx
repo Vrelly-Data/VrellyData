@@ -19,7 +19,7 @@ import {
 } from '@/components/ui/select';
 import { useOutboundIntegrations } from '@/hooks/useOutboundIntegrations';
 import { supabase } from '@/integrations/supabase/client';
-import { Eye, EyeOff, Loader2, CheckCircle2, XCircle } from 'lucide-react';
+import { Eye, EyeOff, Loader2, CheckCircle2, XCircle, Building2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 const PLATFORMS = [
@@ -28,6 +28,11 @@ const PLATFORMS = [
   { value: 'instantly', label: 'Instantly.ai', icon: '⚡' },
   { value: 'lemlist', label: 'Lemlist', icon: '🍋' },
 ];
+
+interface ReplyTeam {
+  id: number;
+  name: string;
+}
 
 interface AddIntegrationDialogProps {
   open: boolean;
@@ -52,6 +57,27 @@ async function validateApiKey(platform: string, apiKey: string): Promise<{ valid
   }
 }
 
+async function fetchReplyTeams(apiKey: string): Promise<{ teams: ReplyTeam[]; isAgencyAccount: boolean }> {
+  try {
+    const { data, error } = await supabase.functions.invoke('fetch-reply-teams', {
+      body: { apiKey }
+    });
+
+    if (error) {
+      console.error('Fetch teams error:', error);
+      return { teams: [], isAgencyAccount: false };
+    }
+
+    return {
+      teams: data.teams || [],
+      isAgencyAccount: data.isAgencyAccount || false
+    };
+  } catch (err) {
+    console.error('Fetch teams error:', err);
+    return { teams: [], isAgencyAccount: false };
+  }
+}
+
 export function AddIntegrationDialog({ open, onOpenChange }: AddIntegrationDialogProps) {
   const [platform, setPlatform] = useState('');
   const [name, setName] = useState('');
@@ -59,6 +85,13 @@ export function AddIntegrationDialog({ open, onOpenChange }: AddIntegrationDialo
   const [showApiKey, setShowApiKey] = useState(false);
   const [isValidating, setIsValidating] = useState(false);
   const [validationStatus, setValidationStatus] = useState<'idle' | 'valid' | 'invalid'>('idle');
+  
+  // Agency account support
+  const [teams, setTeams] = useState<ReplyTeam[]>([]);
+  const [isAgencyAccount, setIsAgencyAccount] = useState(false);
+  const [selectedTeamId, setSelectedTeamId] = useState<string>('');
+  const [isLoadingTeams, setIsLoadingTeams] = useState(false);
+  
   const { addIntegration } = useOutboundIntegrations();
 
   const handleValidate = async () => {
@@ -66,49 +99,95 @@ export function AddIntegrationDialog({ open, onOpenChange }: AddIntegrationDialo
     
     setIsValidating(true);
     setValidationStatus('idle');
+    setTeams([]);
+    setIsAgencyAccount(false);
+    setSelectedTeamId('');
     
     const result = await validateApiKey(platform, apiKey);
     
-    setIsValidating(false);
-    setValidationStatus(result.valid ? 'valid' : 'invalid');
-    
     if (!result.valid) {
+      setIsValidating(false);
+      setValidationStatus('invalid');
       toast.error(result.error || 'Invalid API key');
-    } else {
-      toast.success('API key is valid!');
+      return;
     }
+
+    setValidationStatus('valid');
+    toast.success('API key is valid!');
+    
+    // For Reply.io, check if this is an agency account
+    if (platform === 'reply.io') {
+      setIsLoadingTeams(true);
+      const teamsResult = await fetchReplyTeams(apiKey);
+      setIsLoadingTeams(false);
+      
+      if (teamsResult.isAgencyAccount && teamsResult.teams.length > 0) {
+        setTeams(teamsResult.teams);
+        setIsAgencyAccount(true);
+        toast.info('Agency account detected! Please select a client team.');
+      }
+    }
+    
+    setIsValidating(false);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!platform || !name || !apiKey) return;
-
-    // Validate before saving
-    setIsValidating(true);
-    const result = await validateApiKey(platform, apiKey);
-    setIsValidating(false);
     
-    if (!result.valid) {
-      toast.error(result.error || 'Invalid API key');
-      setValidationStatus('invalid');
+    // For agency accounts, require team selection
+    if (isAgencyAccount && !selectedTeamId) {
+      toast.error('Please select a client team for this agency account');
       return;
     }
 
-    await addIntegration.mutateAsync({ platform, name, apiKey });
+    // Validate before saving if not already validated
+    if (validationStatus !== 'valid') {
+      setIsValidating(true);
+      const result = await validateApiKey(platform, apiKey);
+      setIsValidating(false);
+      
+      if (!result.valid) {
+        toast.error(result.error || 'Invalid API key');
+        setValidationStatus('invalid');
+        return;
+      }
+    }
+
+    await addIntegration.mutateAsync({ 
+      platform, 
+      name, 
+      apiKey,
+      replyTeamId: selectedTeamId || undefined
+    });
     
     // Reset form
+    resetForm();
+    onOpenChange(false);
+  };
+
+  const resetForm = () => {
     setPlatform('');
     setName('');
     setApiKey('');
     setValidationStatus('idle');
-    onOpenChange(false);
+    setTeams([]);
+    setIsAgencyAccount(false);
+    setSelectedTeamId('');
+  };
+
+  const handleOpenChange = (open: boolean) => {
+    if (!open) {
+      resetForm();
+    }
+    onOpenChange(open);
   };
 
   const selectedPlatform = PLATFORMS.find(p => p.value === platform);
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-[425px]">
         <DialogHeader>
           <DialogTitle>Connect Platform</DialogTitle>
@@ -120,7 +199,13 @@ export function AddIntegrationDialog({ open, onOpenChange }: AddIntegrationDialo
           <div className="grid gap-4 py-4">
             <div className="grid gap-2">
               <Label htmlFor="platform">Platform</Label>
-              <Select value={platform} onValueChange={setPlatform}>
+              <Select value={platform} onValueChange={(value) => {
+                setPlatform(value);
+                setValidationStatus('idle');
+                setTeams([]);
+                setIsAgencyAccount(false);
+                setSelectedTeamId('');
+              }}>
                 <SelectTrigger>
                   <SelectValue placeholder="Select a platform" />
                 </SelectTrigger>
@@ -161,6 +246,9 @@ export function AddIntegrationDialog({ open, onOpenChange }: AddIntegrationDialo
                   onChange={(e) => {
                     setApiKey(e.target.value);
                     setValidationStatus('idle');
+                    setTeams([]);
+                    setIsAgencyAccount(false);
+                    setSelectedTeamId('');
                   }}
                   className={`pr-20 ${validationStatus === 'valid' ? 'border-emerald-500 dark:border-emerald-400' : validationStatus === 'invalid' ? 'border-destructive' : ''}`}
                 />
@@ -197,12 +285,12 @@ export function AddIntegrationDialog({ open, onOpenChange }: AddIntegrationDialo
                     size="sm"
                     className="h-auto p-0 text-xs"
                     onClick={handleValidate}
-                    disabled={isValidating}
+                    disabled={isValidating || isLoadingTeams}
                   >
-                    {isValidating ? (
+                    {isValidating || isLoadingTeams ? (
                       <>
                         <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-                        Validating...
+                        {isLoadingTeams ? 'Loading teams...' : 'Validating...'}
                       </>
                     ) : (
                       'Test Connection'
@@ -211,15 +299,40 @@ export function AddIntegrationDialog({ open, onOpenChange }: AddIntegrationDialo
                 )}
               </div>
             </div>
+
+            {/* Team selection for agency accounts */}
+            {isAgencyAccount && teams.length > 0 && (
+              <div className="grid gap-2">
+                <Label htmlFor="team" className="flex items-center gap-2">
+                  <Building2 className="h-4 w-4" />
+                  Client Team
+                </Label>
+                <Select value={selectedTeamId} onValueChange={setSelectedTeamId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a client team" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {teams.map((team) => (
+                      <SelectItem key={team.id} value={String(team.id)}>
+                        {team.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Agency account detected. Select which client's campaigns to sync.
+                </p>
+              </div>
+            )}
           </div>
 
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+            <Button type="button" variant="outline" onClick={() => handleOpenChange(false)}>
               Cancel
             </Button>
             <Button 
               type="submit" 
-              disabled={!platform || !name || !apiKey || addIntegration.isPending}
+              disabled={!platform || !name || !apiKey || addIntegration.isPending || (isAgencyAccount && !selectedTeamId)}
             >
               {addIntegration.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               Connect
