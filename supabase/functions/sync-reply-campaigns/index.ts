@@ -95,6 +95,32 @@ async function fetchFromReplyio(endpoint: string, apiKey: string, teamId?: strin
   return response.json();
 }
 
+// Retry wrapper with exponential backoff for rate limiting
+async function fetchWithRetry(
+  endpoint: string, 
+  apiKey: string, 
+  teamId?: string, 
+  maxRetries: number = 3
+): Promise<unknown> {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await fetchFromReplyio(endpoint, apiKey, teamId);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      
+      // Check if it's a rate limit error
+      if (errorMessage.includes("Too much requests") && attempt < maxRetries) {
+        const waitTime = 10000 * attempt; // 10s, 20s, 30s
+        console.log(`Rate limited on ${endpoint}, waiting ${waitTime/1000}s before retry ${attempt}/${maxRetries}`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error(`Max retries exceeded for ${endpoint}`);
+}
+
 // Paginated fetch helper to get all results across multiple pages
 async function fetchAllPaginated<T>(
   endpoint: string, 
@@ -137,9 +163,9 @@ async function fetchAllPaginated<T>(
       break;
     }
     
-    // Small delay to avoid rate limiting
+    // Increased delay to avoid rate limiting (2 seconds between pages)
     if (hasMore) {
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise(resolve => setTimeout(resolve, 2000));
     }
   }
   
@@ -281,10 +307,10 @@ Deno.serve(async (req) => {
 
       if (!syncedCampaign) continue;
 
-      // Fetch and sync sequences (email steps)
+      // Fetch and sync sequences (email steps) with retry logic
       try {
-        const stepsResponse = await fetchFromReplyio(`/campaigns/${campaign.id}/steps`, apiKey, replyTeamId || undefined);
-        const steps: ReplyioStep[] = stepsResponse.steps || stepsResponse || [];
+        const stepsResponse = await fetchWithRetry(`/campaigns/${campaign.id}/steps`, apiKey, replyTeamId || undefined) as Record<string, unknown>;
+        const steps: ReplyioStep[] = (stepsResponse.steps as ReplyioStep[]) || (Array.isArray(stepsResponse) ? stepsResponse : []);
         
         for (const step of steps) {
           if (step.type !== "email") continue; // Only sync email steps
@@ -351,6 +377,12 @@ Deno.serve(async (req) => {
         }
       } catch (error) {
         console.error(`Failed to fetch people for campaign ${campaign.id}:`, error);
+      }
+      
+      // Add 10 second delay between campaigns to respect Reply.io rate limits
+      if (campaignIndex < campaigns.length) {
+        console.log(`  Waiting 10s before next campaign (rate limit protection)...`);
+        await new Promise(resolve => setTimeout(resolve, 10000));
       }
     }
 
