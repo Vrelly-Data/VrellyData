@@ -13,6 +13,7 @@ export interface OutboundIntegration {
   last_synced_at: string | null;
   created_at: string;
   updated_at: string;
+  reply_team_id?: string | null;
 }
 
 export function useOutboundIntegrations() {
@@ -23,7 +24,7 @@ export function useOutboundIntegrations() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('outbound_integrations')
-        .select('id, team_id, platform, name, is_active, sync_status, sync_error, last_synced_at, created_at, updated_at')
+        .select('id, team_id, platform, name, is_active, sync_status, sync_error, last_synced_at, created_at, updated_at, reply_team_id')
         .order('created_at', { ascending: false });
 
       if (error) throw error;

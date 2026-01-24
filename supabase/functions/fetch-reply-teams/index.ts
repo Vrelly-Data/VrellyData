@@ -1,5 +1,3 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -29,8 +27,12 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Fetch teams from Reply.io
-    const response = await fetch(`${REPLY_API_BASE}/emailAccounts`, {
+    const teams: ReplyTeam[] = [];
+    const seenTeamIds = new Set<number>();
+
+    // Try 1: Fetch email accounts (may contain team info)
+    console.log("Fetching email accounts from Reply.io...");
+    const emailAccountsResponse = await fetch(`${REPLY_API_BASE}/emailAccounts`, {
       method: "GET",
       headers: {
         "X-Api-Key": apiKey,
@@ -38,43 +40,32 @@ Deno.serve(async (req) => {
       },
     });
 
-    if (response.status === 401) {
+    if (emailAccountsResponse.status === 401) {
       return new Response(
         JSON.stringify({ error: "Invalid API key", teams: [] }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error("Reply.io API error:", response.status, errorText);
-      return new Response(
-        JSON.stringify({ error: `Reply.io API error: ${response.status}`, teams: [] }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    const data = await response.json();
-    
-    // For agency accounts, Reply.io returns email accounts with team context
-    // We'll extract unique teams from the response
-    const teams: ReplyTeam[] = [];
-    const seenTeamIds = new Set<number>();
-    
-    // Check if this looks like an agency account (multiple teams/clients)
-    if (Array.isArray(data)) {
-      for (const account of data) {
-        if (account.teamId && !seenTeamIds.has(account.teamId)) {
-          seenTeamIds.add(account.teamId);
-          teams.push({
-            id: account.teamId,
-            name: account.teamName || `Team ${account.teamId}`,
-          });
+    if (emailAccountsResponse.ok) {
+      const emailData = await emailAccountsResponse.json();
+      console.log("Email accounts response:", JSON.stringify(emailData, null, 2));
+      
+      if (Array.isArray(emailData)) {
+        for (const account of emailData) {
+          if (account.teamId && !seenTeamIds.has(account.teamId)) {
+            seenTeamIds.add(account.teamId);
+            teams.push({
+              id: account.teamId,
+              name: account.teamName || `Team ${account.teamId}`,
+            });
+          }
         }
       }
     }
 
-    // Also try the dedicated teams endpoint for agency accounts
+    // Try 2: Dedicated teams endpoint
+    console.log("Trying /teams endpoint...");
     try {
       const teamsResponse = await fetch(`${REPLY_API_BASE}/teams`, {
         method: "GET",
@@ -86,6 +77,8 @@ Deno.serve(async (req) => {
 
       if (teamsResponse.ok) {
         const teamsData = await teamsResponse.json();
+        console.log("Teams endpoint response:", JSON.stringify(teamsData, null, 2));
+        
         if (Array.isArray(teamsData)) {
           for (const team of teamsData) {
             if (team.id && !seenTeamIds.has(team.id)) {
@@ -97,13 +90,85 @@ Deno.serve(async (req) => {
             }
           }
         }
+      } else {
+        console.log("Teams endpoint status:", teamsResponse.status);
       }
     } catch (teamsErr) {
-      // Teams endpoint might not exist for non-agency accounts
       console.log("Teams endpoint not available:", teamsErr);
     }
 
+    // Try 3: Agency clients endpoint (for agency accounts)
+    console.log("Trying /agency/clients endpoint...");
+    try {
+      const agencyResponse = await fetch(`${REPLY_API_BASE}/agency/clients`, {
+        method: "GET",
+        headers: {
+          "X-Api-Key": apiKey,
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (agencyResponse.ok) {
+        const agencyData = await agencyResponse.json();
+        console.log("Agency clients response:", JSON.stringify(agencyData, null, 2));
+        
+        if (Array.isArray(agencyData)) {
+          for (const client of agencyData) {
+            const clientId = client.id || client.teamId || client.clientId;
+            const clientName = client.name || client.teamName || client.companyName || `Client ${clientId}`;
+            if (clientId && !seenTeamIds.has(clientId)) {
+              seenTeamIds.add(clientId);
+              teams.push({
+                id: clientId,
+                name: clientName,
+              });
+            }
+          }
+        }
+      } else {
+        console.log("Agency clients endpoint status:", agencyResponse.status);
+      }
+    } catch (agencyErr) {
+      console.log("Agency clients endpoint not available:", agencyErr);
+    }
+
+    // Try 4: Extract unique owners from campaigns as fallback
+    console.log("Trying /campaigns endpoint for team hints...");
+    try {
+      const campaignsResponse = await fetch(`${REPLY_API_BASE}/campaigns`, {
+        method: "GET",
+        headers: {
+          "X-Api-Key": apiKey,
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (campaignsResponse.ok) {
+        const campaignsData = await campaignsResponse.json();
+        console.log("Campaigns count:", Array.isArray(campaignsData) ? campaignsData.length : 0);
+        
+        // Log first campaign to see available fields
+        if (Array.isArray(campaignsData) && campaignsData.length > 0) {
+          console.log("Sample campaign fields:", Object.keys(campaignsData[0]));
+          
+          // Check for team-related fields
+          const firstCampaign = campaignsData[0];
+          if (firstCampaign.teamId || firstCampaign.team_id || firstCampaign.ownerId) {
+            console.log("Team-related field found:", {
+              teamId: firstCampaign.teamId,
+              team_id: firstCampaign.team_id,
+              ownerId: firstCampaign.ownerId,
+            });
+          }
+        }
+      }
+    } catch (campaignsErr) {
+      console.log("Campaigns endpoint error:", campaignsErr);
+    }
+
     const isAgencyAccount = teams.length > 1;
+
+    console.log("Final teams found:", teams.length, teams);
 
     return new Response(
       JSON.stringify({ 

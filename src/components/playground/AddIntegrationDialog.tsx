@@ -90,6 +90,7 @@ export function AddIntegrationDialog({ open, onOpenChange }: AddIntegrationDialo
   const [teams, setTeams] = useState<ReplyTeam[]>([]);
   const [isAgencyAccount, setIsAgencyAccount] = useState(false);
   const [selectedTeamId, setSelectedTeamId] = useState<string>('');
+  const [manualTeamId, setManualTeamId] = useState('');
   const [isLoadingTeams, setIsLoadingTeams] = useState(false);
   
   const { addIntegration } = useOutboundIntegrations();
@@ -155,11 +156,14 @@ export function AddIntegrationDialog({ open, onOpenChange }: AddIntegrationDialo
       }
     }
 
+    // Use selectedTeamId for agency accounts, or manualTeamId as fallback
+    const teamId = selectedTeamId || manualTeamId || undefined;
+    
     await addIntegration.mutateAsync({ 
       platform, 
       name, 
       apiKey,
-      replyTeamId: selectedTeamId || undefined
+      replyTeamId: teamId
     });
     
     // Reset form
@@ -175,6 +179,7 @@ export function AddIntegrationDialog({ open, onOpenChange }: AddIntegrationDialo
     setTeams([]);
     setIsAgencyAccount(false);
     setSelectedTeamId('');
+    setManualTeamId('');
   };
 
   const handleOpenChange = (open: boolean) => {
@@ -321,6 +326,25 @@ export function AddIntegrationDialog({ open, onOpenChange }: AddIntegrationDialo
                 </Select>
                 <p className="text-xs text-muted-foreground">
                   Agency account detected. Select which client's campaigns to sync.
+                </p>
+              </div>
+            )}
+
+            {/* Manual Team ID input - shown for Reply.io when validated but no teams detected */}
+            {platform === 'reply.io' && validationStatus === 'valid' && !isAgencyAccount && (
+              <div className="grid gap-2">
+                <Label htmlFor="manualTeamId" className="flex items-center gap-2">
+                  <Building2 className="h-4 w-4" />
+                  Team ID (Optional)
+                </Label>
+                <Input
+                  id="manualTeamId"
+                  placeholder="Enter team ID from Reply.io dashboard"
+                  value={manualTeamId}
+                  onChange={(e) => setManualTeamId(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  For agency accounts: find this in Reply.io → Settings → Agency. Leave empty to sync all campaigns.
                 </p>
               </div>
             )}
