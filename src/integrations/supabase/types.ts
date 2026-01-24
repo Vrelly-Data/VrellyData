@@ -606,6 +606,7 @@ export type Database = {
           last_synced_at: string | null
           name: string
           platform: string
+          reply_team_id: string | null
           sync_error: string | null
           sync_status: string | null
           team_id: string
@@ -620,6 +621,7 @@ export type Database = {
           last_synced_at?: string | null
           name: string
           platform: string
+          reply_team_id?: string | null
           sync_error?: string | null
           sync_status?: string | null
           team_id: string
@@ -634,6 +636,7 @@ export type Database = {
           last_synced_at?: string | null
           name?: string
           platform?: string
+          reply_team_id?: string | null
           sync_error?: string | null
           sync_status?: string | null
           team_id?: string

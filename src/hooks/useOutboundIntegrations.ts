@@ -32,7 +32,7 @@ export function useOutboundIntegrations() {
   });
 
   const addIntegration = useMutation({
-    mutationFn: async ({ platform, name, apiKey }: { platform: string; name: string; apiKey: string }) => {
+    mutationFn: async ({ platform, name, apiKey, replyTeamId }: { platform: string; name: string; apiKey: string; replyTeamId?: string }) => {
       // Get user's team_id
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('Not authenticated');
@@ -57,6 +57,7 @@ export function useOutboundIntegrations() {
           created_by: user.id,
           is_active: true,
           sync_status: 'pending',
+          reply_team_id: replyTeamId || null, // For agency accounts
         })
         .select()
         .single();

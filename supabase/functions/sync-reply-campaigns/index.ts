@@ -46,13 +46,18 @@ interface ReplyioPerson {
   };
 }
 
-async function fetchFromReplyio(endpoint: string, apiKey: string) {
-  const response = await fetch(`${REPLY_API_BASE}${endpoint}`, {
-    headers: {
-      "Authorization": `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-  });
+async function fetchFromReplyio(endpoint: string, apiKey: string, teamId?: string) {
+  const headers: Record<string, string> = {
+    "X-Api-Key": apiKey,
+    "Content-Type": "application/json",
+  };
+  
+  // Add team context for agency accounts
+  if (teamId) {
+    headers["X-Reply-Team-Id"] = teamId;
+  }
+  
+  const response = await fetch(`${REPLY_API_BASE}${endpoint}`, { headers });
 
   if (!response.ok) {
     const errorText = await response.text();
@@ -68,11 +73,18 @@ Deno.serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  // Parse body early so we can use integrationId in error handling
+  let integrationId: string | undefined;
+  let authHeader: string | null = null;
+  
   try {
-    const authHeader = req.headers.get("Authorization");
+    authHeader = req.headers.get("Authorization");
     if (!authHeader) {
       throw new Error("Missing authorization header");
     }
+
+    const body = await req.json();
+    integrationId = body.integrationId;
 
     // Create Supabase client with user's auth
     const supabase = createClient(
@@ -80,17 +92,15 @@ Deno.serve(async (req) => {
       Deno.env.get("SUPABASE_ANON_KEY") ?? "",
       { global: { headers: { Authorization: authHeader } } }
     );
-
-    const { integrationId } = await req.json();
     
     if (!integrationId) {
       throw new Error("Missing integrationId");
     }
 
-    // Fetch the integration to get API key
+    // Fetch the integration to get API key and reply_team_id
     const { data: integration, error: integrationError } = await supabase
       .from("outbound_integrations")
-      .select("id, team_id, api_key_encrypted, platform")
+      .select("id, team_id, api_key_encrypted, platform, reply_team_id")
       .eq("id", integrationId)
       .single();
 
@@ -104,6 +114,7 @@ Deno.serve(async (req) => {
 
     const apiKey = integration.api_key_encrypted; // TODO: Decrypt when encryption is implemented
     const teamId = integration.team_id;
+    const replyTeamId = integration.reply_team_id; // For agency accounts
 
     // Update status to syncing
     await supabase
@@ -113,12 +124,12 @@ Deno.serve(async (req) => {
 
     console.log(`Starting sync for integration ${integrationId}`);
 
-    // Fetch campaigns from Reply.io
+    // Fetch campaigns from Reply.io (pass replyTeamId for agency accounts)
     let campaigns: ReplyioCampaign[] = [];
     try {
-      const campaignsResponse = await fetchFromReplyio("/campaigns", apiKey);
+      const campaignsResponse = await fetchFromReplyio("/campaigns", apiKey, replyTeamId || undefined);
       campaigns = campaignsResponse.campaigns || campaignsResponse || [];
-      console.log(`Fetched ${campaigns.length} campaigns from Reply.io`);
+      console.log(`Fetched ${campaigns.length} campaigns from Reply.io${replyTeamId ? ` for team ${replyTeamId}` : ''}`);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       console.error("Failed to fetch campaigns:", err);
@@ -163,7 +174,7 @@ Deno.serve(async (req) => {
 
       // Fetch and sync sequences (email steps)
       try {
-        const stepsResponse = await fetchFromReplyio(`/campaigns/${campaign.id}/steps`, apiKey);
+        const stepsResponse = await fetchFromReplyio(`/campaigns/${campaign.id}/steps`, apiKey, replyTeamId || undefined);
         const steps: ReplyioStep[] = stepsResponse.steps || stepsResponse || [];
         
         for (const step of steps) {
@@ -193,7 +204,7 @@ Deno.serve(async (req) => {
 
       // Fetch and sync contacts (people)
       try {
-        const peopleResponse = await fetchFromReplyio(`/campaigns/${campaign.id}/people`, apiKey);
+        const peopleResponse = await fetchFromReplyio(`/campaigns/${campaign.id}/people`, apiKey, replyTeamId || undefined);
         const people: ReplyioPerson[] = peopleResponse.people || peopleResponse || [];
         
         for (const person of people) {
@@ -254,30 +265,26 @@ Deno.serve(async (req) => {
     const errorMessage = err instanceof Error ? err.message : String(err);
     console.error("Sync error:", err);
 
-    // Try to update integration status to error
-    try {
-      const authHeader = req.headers.get("Authorization");
-      if (authHeader) {
+    // Try to update integration status to error (using integrationId captured at start)
+    if (integrationId && authHeader) {
+      try {
         const supabase = createClient(
           Deno.env.get("SUPABASE_URL") ?? "",
           Deno.env.get("SUPABASE_ANON_KEY") ?? "",
           { global: { headers: { Authorization: authHeader } } }
         );
 
-        const body = await req.clone().json().catch(() => ({}));
-        if (body.integrationId) {
-          await supabase
-            .from("outbound_integrations")
-            .update({
-              sync_status: "error",
-              sync_error: errorMessage,
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", body.integrationId);
-        }
+        await supabase
+          .from("outbound_integrations")
+          .update({
+            sync_status: "error",
+            sync_error: errorMessage,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", integrationId);
+      } catch (updateError) {
+        console.error("Failed to update error status:", updateError);
       }
-    } catch (updateError) {
-      console.error("Failed to update error status:", updateError);
     }
 
     return new Response(
