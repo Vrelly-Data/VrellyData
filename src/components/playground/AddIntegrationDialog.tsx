@@ -18,6 +18,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { useOutboundIntegrations } from '@/hooks/useOutboundIntegrations';
+import { supabase } from '@/integrations/supabase/client';
 import { Eye, EyeOff, Loader2, CheckCircle2, XCircle } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -34,32 +35,21 @@ interface AddIntegrationDialogProps {
 }
 
 async function validateApiKey(platform: string, apiKey: string): Promise<{ valid: boolean; error?: string }> {
-  if (platform === 'reply.io') {
-    try {
-      const response = await fetch('https://api.reply.io/v1/people', {
-        method: 'GET',
-        headers: {
-          'X-Api-Key': apiKey,
-          'Content-Type': 'application/json',
-        },
-      });
-      
-      if (response.status === 401) {
-        return { valid: false, error: 'Invalid API key. Please check your Reply.io API key in Settings → API Key.' };
-      }
-      if (response.status === 403) {
-        return { valid: false, error: 'API key does not have sufficient permissions.' };
-      }
-      if (!response.ok) {
-        return { valid: false, error: `Reply.io API error: ${response.status}` };
-      }
-      return { valid: true };
-    } catch (err) {
-      return { valid: false, error: 'Could not connect to Reply.io. Please check your internet connection.' };
+  try {
+    const { data, error } = await supabase.functions.invoke('validate-api-key', {
+      body: { platform, apiKey }
+    });
+
+    if (error) {
+      console.error('Validation function error:', error);
+      return { valid: false, error: 'Could not validate API key. Please try again.' };
     }
+
+    return data as { valid: boolean; error?: string };
+  } catch (err) {
+    console.error('Validation error:', err);
+    return { valid: false, error: 'Could not validate API key. Please try again.' };
   }
-  // For other platforms, skip validation for now
-  return { valid: true };
 }
 
 export function AddIntegrationDialog({ open, onOpenChange }: AddIntegrationDialogProps) {

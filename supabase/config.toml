@@ -23,3 +23,6 @@ verify_jwt = false
 
 [functions.reset-monthly-credits]
 verify_jwt = false
+
+[functions.validate-api-key]
+verify_jwt = false
