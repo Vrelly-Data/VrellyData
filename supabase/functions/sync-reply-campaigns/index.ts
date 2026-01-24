@@ -46,6 +46,24 @@ interface ReplyioPerson {
   };
 }
 
+// Reply.io returns status as integers: 0=draft, 1=active, 2=paused, 3=completed, 4=archived
+function normalizeStatus(status: unknown): string {
+  if (typeof status === 'string') {
+    return status.toLowerCase();
+  }
+  if (typeof status === 'number') {
+    const statusMap: Record<number, string> = {
+      0: 'draft',
+      1: 'active',
+      2: 'paused',
+      3: 'completed',
+      4: 'archived',
+    };
+    return statusMap[status] || 'unknown';
+  }
+  return 'unknown';
+}
+
 async function fetchFromReplyio(endpoint: string, apiKey: string, teamId?: string) {
   const headers: Record<string, string> = {
     "X-Api-Key": apiKey,
@@ -130,6 +148,11 @@ Deno.serve(async (req) => {
       const campaignsResponse = await fetchFromReplyio("/campaigns", apiKey, replyTeamId || undefined);
       campaigns = campaignsResponse.campaigns || campaignsResponse || [];
       console.log(`Fetched ${campaigns.length} campaigns from Reply.io${replyTeamId ? ` for team ${replyTeamId}` : ''}`);
+      
+      // Debug: Log sample campaign structure for troubleshooting
+      if (campaigns.length > 0) {
+        console.log("Sample campaign structure:", JSON.stringify(campaigns[0], null, 2));
+      }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       console.error("Failed to fetch campaigns:", err);
@@ -141,15 +164,21 @@ Deno.serve(async (req) => {
 
     // Process each campaign
     for (const campaign of campaigns) {
-      // Upsert campaign
+      // Validate campaign has required fields
+      if (!campaign.id || !campaign.name) {
+        console.warn('Skipping campaign with missing id or name:', campaign);
+        continue;
+      }
+
+      // Upsert campaign with proper type handling
       const { error: campaignError } = await supabase
         .from("synced_campaigns")
         .upsert({
           integration_id: integrationId,
           team_id: teamId,
           external_campaign_id: String(campaign.id),
-          name: campaign.name,
-          status: campaign.status?.toLowerCase() || "unknown",
+          name: String(campaign.name || 'Unnamed Campaign'),
+          status: normalizeStatus(campaign.status),
           stats: campaign.stats || {},
           raw_data: campaign,
           updated_at: new Date().toISOString(),
