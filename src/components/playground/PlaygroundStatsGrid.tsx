@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { usePlaygroundStats } from '@/hooks/usePlaygroundStats';
-import { Send, MessageSquare, Users, Zap, Target, Trophy, Loader2 } from 'lucide-react';
+import { Send, MessageSquare, Users, Zap, Target, Trophy, Loader2, Clock } from 'lucide-react';
 import { CampaignListDialog } from './CampaignListDialog';
 import { ContactsListDialog } from './ContactsListDialog';
 
@@ -133,11 +133,10 @@ export function PlaygroundStatsGrid() {
           description="Average across campaigns"
         />
         <StatCard
-          title="Campaign Score"
-          value=""
-          icon={<Trophy className="h-5 w-5 text-muted-foreground" />}
-          description="Proprietary scoring system"
-          isPlaceholder
+          title="Out of Office"
+          value={stats?.outOfOfficeCount ?? 0}
+          icon={<Clock className="h-5 w-5 text-primary" />}
+          description="Auto-replies detected"
         />
       </div>
 

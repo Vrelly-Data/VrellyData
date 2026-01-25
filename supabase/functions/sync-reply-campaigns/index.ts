@@ -17,6 +17,7 @@ interface ReplyioCampaign {
   opensCount?: number;
   bouncesCount?: number;
   optOutsCount?: number;
+  outOfOfficeCount?: number;
   peopleCount?: number;
   peopleActive?: number;
   peopleFinished?: number;
@@ -285,6 +286,7 @@ Deno.serve(async (req) => {
             peopleCount: campaign.peopleCount || 0,
             peopleActive: campaign.peopleActive || 0,
             peopleFinished: campaign.peopleFinished || 0,
+            outOfOffice: campaign.outOfOfficeCount || 0,
           },
           raw_data: campaign,
           updated_at: new Date().toISOString(),
@@ -339,6 +341,7 @@ Deno.serve(async (req) => {
 
       // Fetch and sync contacts (people) with pagination
       try {
+        console.log(`  Fetching people for campaign ${campaign.id}...`);
         const people = await fetchAllPaginated<ReplyioPerson>(
           `/campaigns/${campaign.id}/people`,
           apiKey,
@@ -346,10 +349,18 @@ Deno.serve(async (req) => {
           replyTeamId || undefined
         );
         
-        console.log(`  - Found ${people.length} contacts in campaign`);
+        console.log(`  - Found ${people.length} contacts in campaign ${campaign.id}`);
         
+        // Log sample person structure for debugging
+        if (people.length > 0) {
+          console.log(`  - Sample person structure:`, JSON.stringify(people[0], null, 2));
+        } else {
+          console.log(`  - No people returned from API for campaign ${campaign.id}`);
+        }
+        
+        let campaignContactsSynced = 0;
         for (const person of people) {
-          await supabase
+          const { error: contactError } = await supabase
             .from("synced_contacts")
             .upsert({
               campaign_id: syncedCampaign.id,
@@ -373,8 +384,14 @@ Deno.serve(async (req) => {
               onConflict: "campaign_id,email",
             });
           
-          totalContacts++;
+          if (contactError) {
+            console.error(`    Failed to upsert contact ${person.email}:`, contactError);
+          } else {
+            campaignContactsSynced++;
+            totalContacts++;
+          }
         }
+        console.log(`  - Successfully synced ${campaignContactsSynced} contacts for campaign ${campaign.id}`);
       } catch (error) {
         console.error(`Failed to fetch people for campaign ${campaign.id}:`, error);
       }
