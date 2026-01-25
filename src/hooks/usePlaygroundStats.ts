@@ -7,6 +7,7 @@ export interface PlaygroundStats {
   totalContacts: number;
   activeCampaigns: number;
   completionPercentage: number;
+  outOfOfficeCount: number;
   campaignScore: number | null; // Placeholder for proprietary scoring
 }
 
@@ -35,6 +36,7 @@ export function usePlaygroundStats() {
       let activeCampaigns = 0;
       let totalPeopleFinished = 0;
       let totalPeopleCount = 0;
+      let outOfOfficeCount = 0;
 
       campaigns?.forEach((campaign) => {
         const stats = campaign.stats as Record<string, number> | null;
@@ -44,6 +46,7 @@ export function usePlaygroundStats() {
           totalContacts += stats.peopleCount || 0;
           totalPeopleFinished += stats.peopleFinished || 0;
           totalPeopleCount += stats.peopleCount || 0;
+          outOfOfficeCount += stats.outOfOffice || 0;
         }
         if (campaign.status === 'active') {
           activeCampaigns++;
@@ -61,6 +64,7 @@ export function usePlaygroundStats() {
         totalContacts,
         activeCampaigns,
         completionPercentage,
+        outOfOfficeCount,
         campaignScore: null, // Placeholder - will be implemented later
       };
     },
