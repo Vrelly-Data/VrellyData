@@ -3,6 +3,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { usePlaygroundStats } from '@/hooks/usePlaygroundStats';
 import { Send, MessageSquare, Users, Zap, Target, Trophy, Loader2 } from 'lucide-react';
 import { CampaignListDialog } from './CampaignListDialog';
+import { ContactsListDialog } from './ContactsListDialog';
 
 interface StatCardProps {
   title: string;
@@ -50,6 +51,7 @@ export function PlaygroundStatsGrid() {
   const { data: stats, isLoading, error } = usePlaygroundStats();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogFilter, setDialogFilter] = useState<DialogFilter>(null);
+  const [contactsDialogOpen, setContactsDialogOpen] = useState(false);
 
   const openDialog = (filter: DialogFilter) => {
     setDialogFilter(filter);
@@ -113,7 +115,7 @@ export function PlaygroundStatsGrid() {
           value={stats?.totalContacts.toLocaleString() ?? 0}
           icon={<Users className="h-5 w-5 text-primary" />}
           description="Synced from platforms"
-          onClick={() => openDialog('all')}
+          onClick={() => setContactsDialogOpen(true)}
           clickable
         />
         <StatCard
@@ -144,6 +146,11 @@ export function PlaygroundStatsGrid() {
         onOpenChange={setDialogOpen}
         title={getDialogTitle()}
         statusFilter={dialogFilter === 'all' ? null : dialogFilter}
+      />
+
+      <ContactsListDialog
+        open={contactsDialogOpen}
+        onOpenChange={setContactsDialogOpen}
       />
     </>
   );
