@@ -309,13 +309,21 @@ Deno.serve(async (req) => {
 
       if (!syncedCampaign) continue;
 
-      // Fetch and sync sequences (email steps) with retry logic
+      // Fetch and sync sequences (ALL step types) with retry logic
       try {
         const stepsResponse = await fetchWithRetry(`/campaigns/${campaign.id}/steps`, apiKey, replyTeamId || undefined) as Record<string, unknown>;
         const steps: ReplyioStep[] = (stepsResponse.steps as ReplyioStep[]) || (Array.isArray(stepsResponse) ? stepsResponse : []);
         
+        // Log all step types for debugging
+        const stepTypeSummary = steps.reduce((acc, s) => {
+          acc[s.type] = (acc[s.type] || 0) + 1;
+          return acc;
+        }, {} as Record<string, number>);
+        console.log(`  Step types in campaign ${campaign.id}:`, JSON.stringify(stepTypeSummary));
+        
         for (const step of steps) {
-          if (step.type !== "email") continue; // Only sync email steps
+          // Capture ALL step types (email, linkedin_connect, linkedin_message, linkedin_view_profile, linkedin_inmail, call, manual_task, etc.)
+          console.log(`    Step ${step.number}: type=${step.type}`);
           
           await supabase
             .from("synced_sequences")
@@ -324,6 +332,7 @@ Deno.serve(async (req) => {
               team_id: teamId,
               external_sequence_id: String(step.id),
               step_number: step.number,
+              step_type: step.type, // Store the step type
               subject: step.subject || "",
               body_html: step.body || "",
               delay_days: step.delayDays || 0,

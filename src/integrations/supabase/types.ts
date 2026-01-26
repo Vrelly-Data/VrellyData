@@ -947,6 +947,7 @@ export type Database = {
           raw_data: Json | null
           stats: Json | null
           step_number: number
+          step_type: string | null
           subject: string | null
           team_id: string
           updated_at: string
@@ -962,6 +963,7 @@ export type Database = {
           raw_data?: Json | null
           stats?: Json | null
           step_number: number
+          step_type?: string | null
           subject?: string | null
           team_id: string
           updated_at?: string
@@ -977,6 +979,7 @@ export type Database = {
           raw_data?: Json | null
           stats?: Json | null
           step_number?: number
+          step_type?: string | null
           subject?: string | null
           team_id?: string
           updated_at?: string
