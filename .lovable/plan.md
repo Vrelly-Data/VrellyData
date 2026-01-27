@@ -1,174 +1,309 @@
 
-## Plan: Fix Data Sync and Implement Email vs LinkedIn Metrics
 
-### Investigation Summary
+## Plan: Implement Reply.io Webhooks for Real-Time Data Sync
 
-After running a sync and analyzing the logs, I found:
+### Why Webhooks Solve Our Problem
 
-| Finding | Status | Impact |
-|---------|--------|--------|
-| Unique constraint missing on `synced_contacts` | **Critical** | All contact upserts fail with error 42P10 |
-| Steps endpoint returns 404 for some campaigns | **Moderate** | Can't capture step types for archived campaigns |
-| Reply.io `/people` endpoint lacks LinkedIn engagement fields | **Limitation** | Need alternative approach for LinkedIn metrics |
-| Campaign-level `deliveriesCount` and `repliesCount` are email-only | **Limitation** | LinkedIn metrics require step-based tracking |
+| Current Approach (Polling) | Webhook Approach |
+|---------------------------|------------------|
+| Manual sync button required | Automatic real-time updates |
+| Rate limited by Reply.io API | No rate limits on incoming events |
+| Missing LinkedIn send/reply counts | Full LinkedIn activity data available |
+| `/steps` endpoint returns 404 | Events include step type directly |
 
-### The Reality of Reply.io's API
+### Reply.io Webhook Events We'll Subscribe To
 
-Based on the actual API response, the person data only includes:
-- `linkedInProfile` (URL)
-- `linkedInRecruiterUrl`
-- `salesNavigatorUrl`
-
-It does **not** include `linkedinConnectionStatus` or `linkedinReplyStatus` in the standard `/campaigns/{id}/people` endpoint. These fields may require:
-1. A different API endpoint (`/actions` or `/people/{id}/activities`)
-2. Premium Reply.io API access
-3. Additional query parameters we're not using
+| Event Type | What It Gives Us |
+|------------|------------------|
+| `email_sent` | Email delivery count |
+| `email_replied` | Email reply count |
+| `email_opened` | Email open count |
+| `linkedin_connection_request_sent` | LinkedIn connection requests |
+| `linkedin_message_sent` | LinkedIn messages sent |
+| `linkedin_replied` | LinkedIn replies received |
+| `contact_status_changed` | Status updates for all channels |
 
 ---
 
-### Phase 1: Fix Critical Database Issue
+### Architecture Overview
 
-**Add unique constraint to `synced_contacts`**
+```text
+                                    ┌─────────────────────────────────────┐
+                                    │           Reply.io                  │
+                                    │  (User's campaigns and contacts)    │
+                                    └────────────────┬────────────────────┘
+                                                     │
+                                    Webhook POST to each user's unique URL
+                                                     │
+                                                     ▼
+    ┌────────────────────────────────────────────────────────────────────────┐
+    │                    reply-webhook Edge Function                         │
+    │                                                                        │
+    │  1. Verify HMAC signature using integration's webhook_secret           │
+    │  2. Extract integration_id from URL path                               │
+    │  3. Update synced_campaigns / synced_contacts based on event type      │
+    │  4. Log activity in webhook_events table for debugging                 │
+    └────────────────────────────────────────────────────────────────────────┘
+                                                     │
+                                                     ▼
+                              ┌──────────────────────────────────────┐
+                              │           Supabase Database          │
+                              │                                      │
+                              │  synced_campaigns (updated stats)    │
+                              │  synced_contacts (engagement data)   │
+                              │  webhook_events (activity log)       │
+                              └──────────────────────────────────────┘
+```
 
-Currently the upsert fails because `onConflict: "campaign_id,email"` requires a unique constraint on those columns.
+---
+
+### Phase 1: Database Schema Updates
+
+**Add webhook tracking columns to `outbound_integrations`:**
 
 ```sql
--- Add unique constraint for upsert to work
-ALTER TABLE synced_contacts 
-ADD CONSTRAINT synced_contacts_campaign_email_unique 
-UNIQUE (campaign_id, email);
+ALTER TABLE outbound_integrations 
+ADD COLUMN webhook_subscription_id TEXT,     -- Reply.io webhook subscription ID
+ADD COLUMN webhook_secret TEXT,              -- HMAC secret for verification
+ADD COLUMN webhook_status TEXT DEFAULT 'not_configured';  -- not_configured, active, error
 ```
 
----
+**Create `webhook_events` table for activity logging:**
 
-### Phase 2: Improve Steps Sync Reliability
-
-**Update sync function to handle 404 gracefully**
-
-Some campaigns (especially archived ones) return 404 for the `/steps` endpoint. The sync should:
-1. Log the issue but continue processing
-2. Not increment retry attempts for 404s (it's not a rate limit issue)
-
----
-
-### Phase 3: Calculate Metrics from Available Data
-
-Since we can't get direct LinkedIn reply counts, we'll calculate metrics based on what we have:
-
-**Approach A: Campaign-Level Estimation**
-- `deliveriesCount` = Emails sent only (LinkedIn-only campaigns show 0)
-- `repliesCount` = Likely email replies only
-- Campaigns with name containing "LI" or "LinkedIn" but `deliveriesCount=0` are LinkedIn-only
-
-**Approach B: Step-Type Ratio (after steps sync works)**
-- Count email steps vs LinkedIn steps per campaign
-- Distribute the campaign's `peopleCount` proportionally
-- Use step type ratios to estimate channel breakdown
-
----
-
-### Phase 4: Enhanced Tooltip Display
-
-Update the stat cards to show the breakdown with clear indicators of what's actual vs estimated:
-
-**Total Messages Sent Tooltip:**
-```
-┌──────────────────────────────────────┐
-│  Messages Breakdown                  │
-│  ──────────────────                  │
-│  📧 Emails Sent: 627 (from API)     │
-│  🔗 LinkedIn Steps: X campaigns     │
-│                                      │
-│  Note: Reply.io only tracks email   │
-│  deliveries at campaign level       │
-└──────────────────────────────────────┘
-```
-
-**Total Replies Tooltip:**
-```
-┌──────────────────────────────────────┐
-│  Replies Breakdown                   │
-│  ────────────────                    │
-│  📧 Email Replies: 10 (from API)    │
-│  🔗 LinkedIn Replies: Not available │
-│                                      │
-│  Reply.io API limitation             │
-└──────────────────────────────────────┘
-```
-
----
-
-### Files to Modify
-
-| File | Changes |
-|------|---------|
-| Database migration | Add unique constraint on `synced_contacts(campaign_id, email)` |
-| `supabase/functions/sync-reply-campaigns/index.ts` | Handle 404 errors gracefully for steps, log step types properly |
-| `src/hooks/usePlaygroundStats.ts` | Calculate email-specific metrics from campaigns with `deliveriesCount > 0` |
-| `src/components/playground/PlaygroundStatsGrid.tsx` | Update tooltips to show actual vs estimated metrics with API limitation notes |
-
----
-
-### Technical Details
-
-**Database Migration:**
 ```sql
--- Create unique constraint for synced_contacts upsert
-ALTER TABLE synced_contacts 
-ADD CONSTRAINT synced_contacts_campaign_email_unique 
-UNIQUE (campaign_id, email);
+CREATE TABLE public.webhook_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  integration_id UUID NOT NULL REFERENCES outbound_integrations(id) ON DELETE CASCADE,
+  team_id UUID NOT NULL,
+  event_type TEXT NOT NULL,           -- e.g. 'email_sent', 'linkedin_replied'
+  contact_email TEXT,
+  campaign_external_id TEXT,
+  event_data JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- RLS: Team members can view their webhook events
+CREATE POLICY "Users can view team webhook events" ON webhook_events FOR SELECT
+  USING (team_id = get_user_team_id(auth.uid()));
+
+-- Enable realtime for live dashboard updates
+ALTER PUBLICATION supabase_realtime ADD TABLE webhook_events;
 ```
 
-**Enhanced Stats Calculation:**
+---
+
+### Phase 2: Create Webhook Handler Edge Function
+
+**New file: `supabase/functions/reply-webhook/index.ts`**
+
+This function will:
+1. Parse the integration ID from the URL path (e.g., `/reply-webhook/{integration_id}`)
+2. Verify the HMAC signature using the integration's `webhook_secret`
+3. Route events to appropriate handlers based on `event_type`
+4. Update `synced_campaigns` and `synced_contacts` in real-time
+
+**Webhook URL format:**
+```
+https://srartzeqcbxbytfixeiv.supabase.co/functions/v1/reply-webhook/{integration_id}
+```
+
+**Event handling logic:**
+
 ```typescript
-// Separate email-only campaigns from mixed/LinkedIn campaigns
-const emailOnlyCampaigns = campaigns.filter(c => 
-  (c.stats?.sent || 0) > 0
+switch (eventType) {
+  case 'email_sent':
+    // Increment campaign stats.sent
+    // Update contact engagement_data.lastEmailSent
+    break;
+  
+  case 'email_replied':
+    // Increment campaign stats.replies
+    // Update contact engagement_data.replied = true
+    // Update contact status to 'replied'
+    break;
+    
+  case 'linkedin_connection_request_sent':
+    // Increment campaign stats.linkedinConnectionsSent
+    // Update contact engagement_data.linkedinConnectionSent = true
+    break;
+    
+  case 'linkedin_replied':
+    // Increment campaign stats.linkedinReplies
+    // Update contact engagement_data.linkedinReplied = true
+    break;
+    
+  // ... other events
+}
+```
+
+---
+
+### Phase 3: Webhook Registration on Integration Setup
+
+**When user adds a Reply.io integration:**
+
+1. Generate a random `webhook_secret` (32-byte hex string)
+2. Call Reply.io v3 API to create webhook subscription:
+   ```
+   POST https://api.reply.io/v3/webhooks
+   {
+     "targetUrl": "https://{supabase}/functions/v1/reply-webhook/{integration_id}",
+     "secret": "{webhook_secret}",
+     "eventTypes": [
+       "email_sent", "email_replied", "email_opened",
+       "linkedin_connection_request_sent", "linkedin_message_sent", "linkedin_replied",
+       "contact_status_changed"
+     ],
+     "subscriptionLevel": "account"
+   }
+   ```
+3. Store `webhook_subscription_id` and `webhook_secret` in `outbound_integrations`
+4. Set `webhook_status = 'active'`
+
+**New Edge Function: `supabase/functions/setup-reply-webhook/index.ts`**
+
+This function handles the v3 API call to register the webhook with Reply.io.
+
+---
+
+### Phase 4: Update Stats Aggregation
+
+**Enhanced `synced_campaigns.stats` schema:**
+
+```typescript
+interface CampaignStats {
+  // Email metrics (from API + webhooks)
+  sent: number;
+  delivered: number;
+  opens: number;
+  replies: number;
+  bounces: number;
+  
+  // LinkedIn metrics (from webhooks)
+  linkedinConnectionsSent: number;
+  linkedinConnectionsAccepted: number;
+  linkedinMessagesSent: number;
+  linkedinReplies: number;
+  
+  // General
+  peopleCount: number;
+  peopleFinished: number;
+}
+```
+
+**Update `usePlaygroundStats` to aggregate new fields:**
+
+```typescript
+const linkedinMessagesSent = campaigns.reduce(
+  (sum, c) => sum + (c.stats?.linkedinMessagesSent || 0), 0
 );
-const linkedinCampaigns = campaigns.filter(c => 
-  (c.stats?.sent || 0) === 0 && (c.stats?.peopleCount || 0) > 0
+const linkedinConnectionsSent = campaigns.reduce(
+  (sum, c) => sum + (c.stats?.linkedinConnectionsSent || 0), 0
+);
+const linkedinReplies = campaigns.reduce(
+  (sum, c) => sum + (c.stats?.linkedinReplies || 0), 0
 );
 ```
 
-**Tooltip Update:**
+---
+
+### Phase 5: Update UI to Show Real LinkedIn Metrics
+
+**Updated "Total Messages Sent" tooltip:**
+
+```text
+┌──────────────────────────────────────────┐
+│  Messages Breakdown                      │
+│  ──────────────────                      │
+│                                          │
+│  📧 Emails Sent: 709                     │
+│  🔗 LinkedIn Messages: 234               │
+│  🔗 Connection Requests: 156             │
+│                                          │
+│  ✓ Real-time via webhooks                │
+└──────────────────────────────────────────┘
+```
+
+**Updated "Total Replies" tooltip:**
+
+```text
+┌──────────────────────────────────────────┐
+│  Replies Breakdown                       │
+│  ────────────────                        │
+│                                          │
+│  📧 Email Replies: 10                    │
+│  🔗 LinkedIn Replies: 5                  │
+│                                          │
+│  ✓ Real-time via webhooks                │
+└──────────────────────────────────────────┘
+```
+
+---
+
+### Phase 6: UI for Webhook Management
+
+**Add webhook status indicator to `IntegrationSetupCard`:**
+
+- Show "Webhooks: Active ✓" badge when configured
+- Show "Enable Webhooks" button if not configured
+- Show "Webhooks: Error" with retry button if registration failed
+
+**Webhook status in integration details:**
+
 ```tsx
-const messagesTooltipContent = (
-  <div className="space-y-2 text-sm">
-    <p className="font-medium border-b pb-1">Messages Breakdown</p>
-    <div className="space-y-1">
-      <div className="flex justify-between gap-4">
-        <span className="text-muted-foreground">📧 Emails Delivered:</span>
-        <span className="font-medium">{emailsDelivered}</span>
-      </div>
-      <div className="flex justify-between gap-4">
-        <span className="text-muted-foreground">🔗 LinkedIn Campaigns:</span>
-        <span className="font-medium">{linkedinCampaignCount}</span>
-      </div>
-    </div>
-    <p className="text-xs text-muted-foreground pt-1 border-t">
-      LinkedIn send counts not available via Reply.io API
-    </p>
-  </div>
-);
+{integration.webhook_status === 'active' && (
+  <Badge variant="outline" className="text-green-600 border-green-600">
+    <Zap className="h-3 w-3 mr-1" />
+    Live Updates
+  </Badge>
+)}
 ```
 
 ---
 
-### Future Enhancement: LinkedIn Activities API
+### Files to Create/Modify
 
-To get actual LinkedIn engagement metrics, we could explore:
-
-1. **Reply.io Actions API**: `/actions?type=linkedin_*` may return activity logs
-2. **Person Activities**: `/people/{id}/activities` might have per-contact LinkedIn events
-3. **Webhooks**: Reply.io webhooks can push LinkedIn events in real-time
-
-This would require additional API research and potentially a separate sync process.
+| File | Action | Purpose |
+|------|--------|---------|
+| `supabase/migrations/xxx.sql` | Create | Add webhook columns + webhook_events table |
+| `supabase/functions/reply-webhook/index.ts` | Create | Receive and process Reply.io webhook events |
+| `supabase/functions/setup-reply-webhook/index.ts` | Create | Register webhook with Reply.io v3 API |
+| `supabase/config.toml` | Modify | Add `verify_jwt = false` for reply-webhook |
+| `src/hooks/useOutboundIntegrations.ts` | Modify | Add webhook fields + setup mutation |
+| `src/hooks/usePlaygroundStats.ts` | Modify | Aggregate new LinkedIn metric fields |
+| `src/components/playground/IntegrationSetupCard.tsx` | Modify | Add webhook status indicator |
+| `src/components/playground/PlaygroundStatsGrid.tsx` | Modify | Show actual LinkedIn counts instead of "Not tracked" |
 
 ---
 
-### Isolation Confirmation
+### Implementation Order
 
-All changes remain isolated to Data Playground:
-- Only modifies `synced_*` tables
-- Only touches files in `src/components/playground/` and `src/hooks/usePlayground*.ts`
-- No impact on People, Companies, or Audience Builder features
+1. **Database migration** - Add webhook tracking columns and events table
+2. **reply-webhook Edge Function** - Build the webhook receiver with HMAC verification
+3. **setup-reply-webhook Edge Function** - Register webhook with Reply.io
+4. **Frontend integration** - Trigger webhook setup when adding integration
+5. **Stats aggregation** - Update hooks to use new LinkedIn fields
+6. **UI updates** - Show live LinkedIn metrics with "Real-time" indicator
+
+---
+
+### Security Considerations
+
+- **HMAC Verification**: Every incoming webhook is verified using the integration's `webhook_secret`
+- **Integration-Specific URLs**: Each integration has its own webhook URL with `integration_id` in the path
+- **No JWT Required**: The webhook endpoint uses `verify_jwt = false` since Reply.io can't send JWTs, but HMAC verification provides security
+- **RLS on Events Table**: Team members can only view their team's webhook events
+
+---
+
+### Benefits Over Current Approach
+
+| Metric | Before (Polling) | After (Webhooks) |
+|--------|------------------|------------------|
+| LinkedIn Messages Sent | ❌ Not tracked | ✅ Real count |
+| LinkedIn Connection Requests | ❌ Not tracked | ✅ Real count |
+| LinkedIn Replies | ❌ Not tracked | ✅ Real count |
+| Data freshness | Manual sync | Real-time |
+| API rate limits | Hit frequently | Not applicable |
+| User action required | Click "Sync" | Automatic |
+
