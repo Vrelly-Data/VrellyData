@@ -118,7 +118,7 @@ Deno.serve(async (req) => {
     // If already has a webhook, delete it first
     if (integration.webhook_subscription_id) {
       try {
-        await fetch(`https://api.reply.io/v3/webhooks/${integration.webhook_subscription_id}`, {
+        await fetch(`https://api.reply.io/v2/push/subscriptions/${integration.webhook_subscription_id}`, {
           method: 'DELETE',
           headers: {
             'X-Api-Key': integration.api_key_encrypted,
@@ -139,11 +139,10 @@ Deno.serve(async (req) => {
     const accountId = await discoverAccountId(integration.api_key_encrypted);
     console.log('Discovered account ID:', accountId);
     
-    // Build payload - include accountId if available
-    const webhookPayload: Record<string, unknown> = {
-      targetUrl: webhookUrl,
-      secret: webhookSecret,
-      eventTypes: [
+    // Build payload for v2 Push Subscriptions API
+    const webhookPayload = {
+      url: webhookUrl,
+      events: [
         // Email events
         'email_sent',
         'email_replied', 
@@ -159,19 +158,11 @@ Deno.serve(async (req) => {
         'contact_opted_out',
       ],
     };
-
-    // Only add subscription level and account ID if we discovered one
-    if (accountId) {
-      webhookPayload.subscriptionLevel = 'account';
-      webhookPayload.accountId = accountId;
-    } else {
-      console.log('No account ID found, trying without subscriptionLevel');
-    }
     
-    console.log('Registering webhook with Reply.io v3:', webhookUrl);
+    console.log('Registering webhook with Reply.io v2 Push Subscriptions:', webhookUrl);
     console.log('Webhook payload:', JSON.stringify(webhookPayload));
     
-    let response = await fetch('https://api.reply.io/v3/webhooks', {
+    const response = await fetch('https://api.reply.io/v2/push/subscriptions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -180,27 +171,8 @@ Deno.serve(async (req) => {
       body: JSON.stringify(webhookPayload),
     });
     
-    let responseText = await response.text();
+    const responseText = await response.text();
     console.log('Reply.io webhook response:', response.status, responseText);
-    
-    // If 404 with subscriptionLevel, try without it
-    if (!response.ok && response.status === 404 && webhookPayload.subscriptionLevel) {
-      console.log('Retrying without subscriptionLevel...');
-      delete webhookPayload.subscriptionLevel;
-      delete webhookPayload.accountId;
-      
-      response = await fetch('https://api.reply.io/v3/webhooks', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Api-Key': integration.api_key_encrypted,
-        },
-        body: JSON.stringify(webhookPayload),
-      });
-      
-      responseText = await response.text();
-      console.log('Retry response:', response.status, responseText);
-    }
     
     if (!response.ok) {
       // Update status to error
