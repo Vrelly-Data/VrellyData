@@ -12,46 +12,28 @@ function generateWebhookSecret(): string {
   return Array.from(array).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-// Discover account ID from Reply.io API
+// Discover account ID from Reply.io API (fallback when no team_id)
 async function discoverAccountId(apiKey: string): Promise<number | null> {
-  // Try /v1/accounts endpoint
+  // Try /v1/people endpoint (known to work)
   try {
-    console.log('Trying /v1/accounts endpoint...');
-    const response = await fetch('https://api.reply.io/v1/accounts', {
+    console.log('Trying /v1/people endpoint for account discovery...');
+    const response = await fetch('https://api.reply.io/v1/people?limit=1', {
       headers: { 'X-Api-Key': apiKey }
     });
-    console.log('Accounts endpoint status:', response.status);
+    console.log('People endpoint status:', response.status);
     if (response.ok) {
       const data = await response.json();
-      console.log('Accounts response:', JSON.stringify(data).slice(0, 500));
-      if (Array.isArray(data) && data.length > 0) {
-        return data[0].id || data[0].accountId;
-      }
-      if (data.id || data.accountId) {
-        return data.id || data.accountId;
+      console.log('People response sample:', JSON.stringify(data).slice(0, 500));
+      // Look for accountId in the response
+      if (Array.isArray(data) && data.length > 0 && data[0].accountId) {
+        return data[0].accountId;
       }
     }
   } catch (e) {
-    console.log('Accounts endpoint failed:', e);
-  }
-  
-  // Try /v1/users/me endpoint  
-  try {
-    console.log('Trying /v1/users/me endpoint...');
-    const response = await fetch('https://api.reply.io/v1/users/me', {
-      headers: { 'X-Api-Key': apiKey }
-    });
-    console.log('Users/me endpoint status:', response.status);
-    if (response.ok) {
-      const data = await response.json();
-      console.log('Users/me response:', JSON.stringify(data).slice(0, 500));
-      return data.accountId || data.account_id || data.teamId || data.id;
-    }
-  } catch (e) {
-    console.log('Users/me endpoint failed:', e);
+    console.log('People endpoint failed:', e);
   }
 
-  // Try /v1/emailAccounts endpoint to extract account info
+  // Try /v1/emailAccounts endpoint
   try {
     console.log('Trying /v1/emailAccounts endpoint...');
     const response = await fetch('https://api.reply.io/v1/emailAccounts', {
@@ -61,7 +43,6 @@ async function discoverAccountId(apiKey: string): Promise<number | null> {
     if (response.ok) {
       const data = await response.json();
       console.log('EmailAccounts response sample:', JSON.stringify(data).slice(0, 500));
-      // Look for account ID in email accounts
       if (Array.isArray(data) && data.length > 0) {
         const firstAccount = data[0];
         if (firstAccount.accountId) return firstAccount.accountId;
@@ -94,10 +75,10 @@ Deno.serve(async (req) => {
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
     
-    // Fetch integration details
+    // Fetch integration details including reply_team_id
     const { data: integration, error: integrationError } = await supabase
       .from('outbound_integrations')
-      .select('id, platform, api_key_encrypted, webhook_subscription_id')
+      .select('id, platform, api_key_encrypted, webhook_subscription_id, reply_team_id')
       .eq('id', integrationId)
       .single();
     
@@ -115,34 +96,32 @@ Deno.serve(async (req) => {
       });
     }
     
-    // If already has a webhook, delete it first
+    // If already has a webhook, delete it first using v3 API
     if (integration.webhook_subscription_id) {
       try {
-        await fetch(`https://api.reply.io/v2/push/subscriptions/${integration.webhook_subscription_id}`, {
+        console.log('Deleting existing webhook:', integration.webhook_subscription_id);
+        const deleteResponse = await fetch(`https://api.reply.io/v3/webhooks/${integration.webhook_subscription_id}`, {
           method: 'DELETE',
           headers: {
             'X-Api-Key': integration.api_key_encrypted,
           },
         });
+        console.log('Delete webhook response:', deleteResponse.status);
       } catch (e) {
         console.log('Failed to delete existing webhook, continuing:', e);
       }
     }
     
-    // Generate webhook secret
+    // Generate webhook secret for HMAC verification
     const webhookSecret = generateWebhookSecret();
     
     // Build webhook URL
     const webhookUrl = `${supabaseUrl}/functions/v1/reply-webhook/${integrationId}`;
     
-    // Discover account ID first
-    const accountId = await discoverAccountId(integration.api_key_encrypted);
-    console.log('Discovered account ID:', accountId);
-    
-    // Build payload for v2 Push Subscriptions API
-    const webhookPayload = {
-      url: webhookUrl,
-      events: [
+    // Build v3 webhook payload
+    const webhookPayload: Record<string, unknown> = {
+      targetUrl: webhookUrl,
+      eventTypes: [
         // Email events
         'email_sent',
         'email_replied', 
@@ -157,12 +136,33 @@ Deno.serve(async (req) => {
         'contact_finished',
         'contact_opted_out',
       ],
+      secret: webhookSecret,
     };
     
-    console.log('Registering webhook with Reply.io v2 Push Subscriptions:', webhookUrl);
+    // Check if we have a reply_team_id for team-level subscription (agency accounts)
+    if (integration.reply_team_id) {
+      const teamIdNum = Number(integration.reply_team_id);
+      if (!isNaN(teamIdNum)) {
+        console.log('Using team-level subscription with teamId:', teamIdNum);
+        webhookPayload.subscriptionLevel = 'team';
+        webhookPayload.teamIds = [teamIdNum];
+      }
+    } else {
+      // Try to discover accountId for account-level subscription
+      const accountId = await discoverAccountId(integration.api_key_encrypted);
+      if (accountId) {
+        console.log('Using account-level subscription with accountId:', accountId);
+        webhookPayload.subscriptionLevel = 'account';
+        webhookPayload.accountId = accountId;
+      } else {
+        console.log('No team or account ID available - attempting webhook without scope');
+      }
+    }
+    
+    console.log('Registering webhook with Reply.io v3:', webhookUrl);
     console.log('Webhook payload:', JSON.stringify(webhookPayload));
     
-    const response = await fetch('https://api.reply.io/v2/push/subscriptions', {
+    const response = await fetch('https://api.reply.io/v3/webhooks', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -183,10 +183,23 @@ Deno.serve(async (req) => {
           updated_at: new Date().toISOString(),
         })
         .eq('id', integrationId);
+      
+      // Parse error details for better UI feedback
+      let errorDetails = responseText;
+      try {
+        const errorJson = JSON.parse(responseText);
+        errorDetails = errorJson.message || errorJson.error || responseText;
+      } catch {
+        // Keep raw text if not JSON
+      }
         
       return new Response(JSON.stringify({ 
         error: 'Failed to register webhook with Reply.io',
-        details: responseText,
+        status: response.status,
+        details: errorDetails,
+        hint: !integration.reply_team_id 
+          ? 'For agency accounts, try setting your Team ID first (Edit integration)' 
+          : undefined,
       }), {
         status: response.status,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
