@@ -1,112 +1,175 @@
 
 
-## Fix: Add LinkedIn Events to Webhook Subscriptions
+## Hybrid LinkedIn Tracking: CSV Upload + Real-time Webhooks
 
-### Current State
+### The Problem
+Reply.io's polling API doesn't expose historical LinkedIn metrics, but you can see them in Reply.io's reports/exports. The solution is a **hybrid approach**:
 
-| What | Status |
-|------|--------|
-| Webhook API | Working (v2 at `/api/v2/webhooks`) |
-| Subscriptions Created | `email_replied`, `email_sent` only |
-| LinkedIn Events | NOT subscribed |
-| Webhook IDs | `15041, 15042` |
-
-The reason LinkedIn data isn't populating is simple: we chose "minimal first" and only subscribed to 2 email events. No LinkedIn events are being captured.
+| Data Source | Use Case |
+|-------------|----------|
+| **CSV Upload** | Import historical LinkedIn stats from Reply.io report exports |
+| **Webhooks** | Capture real-time LinkedIn activity as it happens (already set up) |
 
 ---
 
-### Solution
+### Solution Overview
 
-Expand the webhook subscriptions to include LinkedIn events by updating `setup-reply-webhook/index.ts` and re-running "Enable Live":
-
-```typescript
-// Current (minimal)
-const EVENTS_TO_SUBSCRIBE = [
-  'email_replied',
-  'email_sent',
-];
-
-// Expanded (with LinkedIn)
-const EVENTS_TO_SUBSCRIBE = [
-  // Email events
-  'email_replied',
-  'email_sent',
-  'email_opened',
-  'email_bounced',
-  // LinkedIn events  
-  'linkedin_message_sent',
-  'linkedin_message_replied',
-  'linkedin_connection_request_sent',
-  'linkedin_connection_request_accepted',
-  // Lifecycle events
-  'contact_finished',
-  'contact_opted_out',
-];
+```text
++---------------------------+     +---------------------------+
+|   Reply.io Report Export  |     |    Reply.io Webhooks      |
+|   (Historical Data)       |     |    (Real-time Data)       |
++---------------------------+     +---------------------------+
+            |                                  |
+            v                                  v
++---------------------------+     +---------------------------+
+|   CSV Upload Dialog       |     |   reply-webhook function  |
+|   (New Component)         |     |   (Already Built)         |
++---------------------------+     +---------------------------+
+            |                                  |
+            +----------------+-----------------+
+                             |
+                             v
+              +------------------------------+
+              |    synced_campaigns.stats    |
+              |    (linkedinMessagesSent,    |
+              |     linkedinConnectionsSent, |
+              |     linkedinReplies)         |
+              +------------------------------+
+                             |
+                             v
+              +------------------------------+
+              |   PlaygroundStatsGrid        |
+              |   (Dashboard Display)        |
+              +------------------------------+
 ```
 
 ---
 
-### Also: Update Webhook Receiver to Handle LinkedIn Events
+### Implementation Details
 
-The `reply-webhook/index.ts` needs to process LinkedIn event types and store them properly:
+#### 1. New Component: `LinkedInStatsUploadDialog.tsx`
 
+A dialog allowing users to upload a CSV file containing LinkedIn metrics. The dialog will:
+
+- Accept CSV with columns like: `Campaign Name`, `LinkedIn Messages Sent`, `LinkedIn Connection Requests`, `LinkedIn Replies`
+- Auto-match campaign names to existing `synced_campaigns` records
+- Merge uploaded stats into the `stats` JSONB field
+
+**Expected CSV Format (from Reply.io export):**
+
+| Campaign Name | LI Messages Sent | LI Connections | LI Replies |
+|---------------|------------------|----------------|------------|
+| Q1 Outreach   | 500              | 250            | 45         |
+| Tech Founders | 320              | 180            | 28         |
+
+#### 2. Add Upload Button to Dashboard
+
+In `PlaygroundStatsGrid.tsx` or `IntegrationSetupCard.tsx`:
+- Add "Upload LinkedIn Stats" button next to the Sync button
+- Opens the new dialog when clicked
+
+#### 3. Stats Merge Logic
+
+When uploading:
+1. Parse CSV and extract LinkedIn metrics per campaign
+2. Match each row to existing `synced_campaigns` by name
+3. Merge stats into the `stats` JSONB column (additive or replace based on user choice)
+4. Invalidate stats query to refresh dashboard
+
+---
+
+### Files to Create/Modify
+
+| File | Action | Purpose |
+|------|--------|---------|
+| `src/components/playground/LinkedInStatsUploadDialog.tsx` | Create | Dialog for CSV upload + mapping |
+| `src/components/playground/IntegrationSetupCard.tsx` | Modify | Add "Upload LinkedIn Stats" button |
+| `src/hooks/useLinkedInStatsUpload.ts` | Create | Mutation hook for uploading and merging stats |
+
+---
+
+### Detailed Component Design
+
+#### LinkedInStatsUploadDialog.tsx
+
+**State Flow:**
+1. **Upload** - Select CSV file
+2. **Preview** - Show matched campaigns and values to be imported
+3. **Confirm** - User confirms the import
+4. **Success** - Stats merged, dashboard updated
+
+**Key Features:**
+- Uses existing `PapaParse` for CSV parsing (already installed)
+- Campaign matching by exact name or fuzzy match
+- Shows which campaigns matched vs not found
+- Allows "Replace" or "Add to existing" mode
+
+**UI Elements:**
+- File dropzone (similar to existing CSVImportDialog)
+- Preview table showing: Campaign Name, LI Messages, LI Connections, LI Replies, Status (Matched/Not Found)
+- Import button with progress indicator
+
+---
+
+### Expected User Flow
+
+1. User exports LinkedIn report from Reply.io dashboard (CSV)
+2. In Data Playground, clicks "Upload LinkedIn Stats"
+3. Selects the CSV file
+4. Preview shows: "4 campaigns matched, 1 not found"
+5. Clicks "Import"
+6. Dashboard immediately shows LinkedIn metrics
+
+---
+
+### Technical Notes
+
+**CSV Column Aliases (for auto-mapping):**
+
+| Expected Field | Accepted Aliases |
+|----------------|------------------|
+| Campaign Name | `campaign`, `name`, `sequence`, `sequence name` |
+| LinkedIn Messages Sent | `li messages`, `linkedin messages`, `messages sent` |
+| LinkedIn Connections | `li connections`, `connection requests`, `connections sent` |
+| LinkedIn Replies | `li replies`, `linkedin replies` |
+
+**Stats Merge Strategy:**
 ```typescript
-case 'linkedin_message_sent':
-  stats.linkedinMessagesSent = (stats.linkedinMessagesSent || 0) + 1;
-  break;
-case 'linkedin_message_replied':
-  stats.linkedinReplies = (stats.linkedinReplies || 0) + 1;
-  break;
-case 'linkedin_connection_request_sent':
-  stats.linkedinConnectionsSent = (stats.linkedinConnectionsSent || 0) + 1;
-  break;
-case 'linkedin_connection_request_accepted':
-  stats.linkedinConnectionsAccepted = (stats.linkedinConnectionsAccepted || 0) + 1;
-  break;
+// Merge uploaded LinkedIn stats into existing campaign stats
+const mergedStats = {
+  ...existingStats,
+  linkedinMessagesSent: uploadedData.linkedinMessagesSent,
+  linkedinConnectionsSent: uploadedData.linkedinConnectionsSent,
+  linkedinReplies: uploadedData.linkedinReplies,
+  linkedinDataSource: 'csv_upload', // Track source for transparency
+  linkedinDataUploadedAt: new Date().toISOString(),
+};
 ```
 
 ---
 
-### Implementation Steps
+### Webhook Integration (Already Working)
 
-1. **Update `supabase/functions/setup-reply-webhook/index.ts`**
-   - Expand `EVENTS_TO_SUBSCRIBE` array to include all LinkedIn event types
+Once historical data is uploaded via CSV, future LinkedIn activity will be captured automatically via webhooks (already implemented):
 
-2. **Update `supabase/functions/reply-webhook/index.ts`**
-   - Add switch cases for LinkedIn events
-   - Store LinkedIn-specific metrics in campaign stats
+| Event | Stat Updated |
+|-------|--------------|
+| `linkedin_message_sent` | `linkedinMessagesSent` += 1 |
+| `linkedin_connection_request_sent` | `linkedinConnectionsSent` += 1 |
+| `linkedin_message_replied` | `linkedinReplies` += 1 |
+| `linkedin_connection_request_accepted` | `linkedinConnectionsAccepted` += 1 |
 
-3. **Re-deploy edge functions**
-
-4. **Click "Enable Live" again**
-   - This will delete old subscriptions (15041, 15042)
-   - Create new subscriptions for all 10 events
+The numbers will stack: **Historical (CSV) + Real-time (Webhooks) = Total Shown**
 
 ---
 
-### Files to Modify
+### Summary
 
-| File | Change |
-|------|--------|
-| `supabase/functions/setup-reply-webhook/index.ts` | Add LinkedIn + lifecycle events to `EVENTS_TO_SUBSCRIBE` |
-| `supabase/functions/reply-webhook/index.ts` | Add handlers for LinkedIn event types |
+This hybrid approach gives you:
 
----
-
-### Testing After Implementation
-
-1. Click "Enable Live" on your Reply.io integration
-2. Check that webhook_subscription_id now contains ~10 IDs
-3. In Reply.io, trigger a LinkedIn action (send connection request or message)
-4. Check the `webhook_events` table for incoming data
-5. Verify "Total Messages Sent" tooltip shows LinkedIn metrics
-
----
-
-### Important Notes
-
-- Each webhook is created separately (v2 API limitation)
-- LinkedIn events will only capture NEW activity after webhook is set up
-- Historical LinkedIn data is not available via API (Reply.io limitation)
-- The tooltip breakdown will show "Not tracked" until first LinkedIn event arrives
+| Historical Data | Real-time Data |
+|-----------------|----------------|
+| Uploaded via CSV from Reply.io exports | Captured via webhooks (already enabled) |
+| One-time import of past LinkedIn activity | Continuous updates as new activity occurs |
+| Populates immediately after upload | Populates as events happen |
 
