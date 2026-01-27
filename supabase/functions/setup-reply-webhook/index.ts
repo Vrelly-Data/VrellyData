@@ -8,10 +8,21 @@ const corsHeaders = {
 // Reply.io v2 API base - note the /api/ segment!
 const WEBHOOK_API_BASE = 'https://api.reply.io/api/v2/webhooks';
 
-// Minimal events to start with (can expand later)
+// Full set of events including LinkedIn
 const EVENTS_TO_SUBSCRIBE = [
+  // Email events
   'email_replied',
   'email_sent',
+  'email_opened',
+  'email_bounced',
+  // LinkedIn events
+  'linkedin_message_sent',
+  'linkedin_message_replied',
+  'linkedin_connection_request_sent',
+  'linkedin_connection_request_accepted',
+  // Lifecycle events
+  'contact_finished',
+  'contact_opted_out',
 ];
 
 Deno.serve(async (req) => {

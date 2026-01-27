@@ -101,6 +101,18 @@ Deno.serve(async (req) => {
           case 'email_bounced':
             stats.bounces = (stats.bounces || 0) + 1;
             break;
+          case 'linkedin_message_sent':
+            stats.linkedinMessagesSent = (stats.linkedinMessagesSent || 0) + 1;
+            break;
+          case 'linkedin_message_replied':
+            stats.linkedinReplies = (stats.linkedinReplies || 0) + 1;
+            break;
+          case 'linkedin_connection_request_sent':
+            stats.linkedinConnectionsSent = (stats.linkedinConnectionsSent || 0) + 1;
+            break;
+          case 'linkedin_connection_request_accepted':
+            stats.linkedinConnectionsAccepted = (stats.linkedinConnectionsAccepted || 0) + 1;
+            break;
           case 'contact_finished':
             stats.finished = (stats.finished || 0) + 1;
             break;
