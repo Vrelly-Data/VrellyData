@@ -345,7 +345,13 @@ Deno.serve(async (req) => {
           totalSequences++;
         }
       } catch (error) {
-        console.error(`Failed to fetch steps for campaign ${campaign.id}:`, error);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        // Handle 404 gracefully - steps may not be available for archived campaigns
+        if (errorMessage.includes('404')) {
+          console.warn(`  Steps endpoint returned 404 for campaign ${campaign.id} (likely archived) - skipping steps sync`);
+        } else {
+          console.error(`Failed to fetch steps for campaign ${campaign.id}:`, error);
+        }
       }
 
       // Fetch and sync contacts (people) with pagination
