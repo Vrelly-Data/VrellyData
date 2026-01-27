@@ -1,40 +1,60 @@
 
 
-## Fix: Reply.io Webhook Registration - Invalid Event Type Names
+## Fix: Reply.io Webhook API - Correct Endpoint URL
 
-### Root Cause Identified
+### Problem Analysis
 
-Looking at the edge function logs, the webhook payload contains **invalid event type names**:
+Looking at the edge function logs, the key finding is:
 
-```json
-{
-  "eventTypes": [
-    "email_sent",           // Valid
-    "email_replied",        // Valid
-    "email_opened",         // Valid
-    "email_bounced",        // Valid
-    "linkedin_connection_request_sent", // Valid
-    "linkedin_message_sent",            // Valid
-    "linkedin_replied",                 // INVALID - should be linkedin_message_replied
-    "contact_status_changed"            // INVALID - not a valid event type
-  ]
-}
-```
+| Observation | Value |
+|-------------|-------|
+| API Response | `404` with **empty body** |
+| v1 endpoints | Working fine (emailAccounts returns 200) |
+| v3/webhooks | Returns 404 |
 
-According to the Reply.io API documentation:
+An empty 404 response typically means **the endpoint URL itself doesn't exist**, not that the request is invalid.
 
-| Current (Invalid) | Correct Event Type |
-|-------------------|-------------------|
-| `linkedin_replied` | `linkedin_message_replied` |
-| `contact_status_changed` | `contact_finished` or `contact_opted_out` |
+### Root Cause
 
-The v3 API is returning 404 because it doesn't recognize these event type names.
+Based on the Reply.io API documentation link you provided, the webhook endpoint uses a different path structure:
+
+| Current (Wrong) | Correct (Per Docs) |
+|-----------------|-------------------|
+| `POST /v3/webhooks` | `POST /v2/push/subscriptions` |
+
+The Reply.io API uses `/v2/push/subscriptions` for webhook management, not `/v3/webhooks`.
 
 ---
 
 ### Solution
 
-Update the event types array in `setup-reply-webhook` to use the correct names from the Reply.io documentation.
+Update the `setup-reply-webhook` Edge Function to use the correct endpoint:
+
+```text
+FROM: https://api.reply.io/v3/webhooks
+TO:   https://api.reply.io/v2/push/subscriptions
+```
+
+Also update the payload structure to match the v2 API format:
+
+```typescript
+// v2 push/subscriptions format
+const webhookPayload = {
+  url: webhookUrl,           // "url" not "targetUrl"
+  events: [                  // "events" not "eventTypes"
+    'email_sent',
+    'email_replied', 
+    'email_opened',
+    'email_bounced',
+    'linkedin_connection_request_sent',
+    'linkedin_connection_request_accepted',
+    'linkedin_message_sent',
+    'linkedin_message_replied',
+    'contact_finished',
+    'contact_opted_out',
+  ],
+};
+```
 
 ---
 
@@ -42,70 +62,70 @@ Update the event types array in `setup-reply-webhook` to use the correct names f
 
 **File: `supabase/functions/setup-reply-webhook/index.ts`**
 
-Change lines 146-155 from:
+1. **Change endpoint URL** (lines 174, 192):
+   - FROM: `https://api.reply.io/v3/webhooks`
+   - TO: `https://api.reply.io/v2/push/subscriptions`
+
+2. **Update payload field names** (lines 143-161):
+   - Change `targetUrl` to `url`
+   - Change `eventTypes` to `events`
+   - Remove `secret` if not supported by v2 (may need to store locally for verification)
+
+3. **Update DELETE endpoint** (line 121):
+   - FROM: `https://api.reply.io/v3/webhooks/${id}`
+   - TO: `https://api.reply.io/v2/push/subscriptions/${id}`
+
+---
+
+### Updated Payload Structure
 
 ```typescript
-eventTypes: [
-  'email_sent',
-  'email_replied', 
-  'email_opened',
-  'email_bounced',
-  'linkedin_connection_request_sent',
-  'linkedin_message_sent',
-  'linkedin_replied',              // WRONG
-  'contact_status_changed',        // WRONG
-],
-```
-
-To:
-
-```typescript
-eventTypes: [
-  // Email events
-  'email_sent',
-  'email_replied', 
-  'email_opened',
-  'email_bounced',
-  // LinkedIn events
-  'linkedin_connection_request_sent',
-  'linkedin_connection_request_accepted',  // NEW: Track accepts too
-  'linkedin_message_sent',
-  'linkedin_message_replied',              // FIXED: Was linkedin_replied
-  // Contact lifecycle events
-  'contact_finished',                       // FIXED: Was contact_status_changed
-  'contact_opted_out',                      // NEW: Track opt-outs
-],
+const webhookPayload: Record<string, unknown> = {
+  url: webhookUrl,
+  events: [
+    // Email events
+    'email_sent',
+    'email_replied', 
+    'email_opened',
+    'email_bounced',
+    // LinkedIn events
+    'linkedin_connection_request_sent',
+    'linkedin_connection_request_accepted',
+    'linkedin_message_sent',
+    'linkedin_message_replied',
+    // Contact lifecycle events
+    'contact_finished',
+    'contact_opted_out',
+  ],
+};
 ```
 
 ---
 
 ### Files to Modify
 
-| File | Change |
-|------|--------|
-| `supabase/functions/setup-reply-webhook/index.ts` | Fix event type names in lines 146-155 |
-| `supabase/functions/reply-webhook/index.ts` | Update event handlers to match new event names |
+| File | Changes |
+|------|---------|
+| `supabase/functions/setup-reply-webhook/index.ts` | Change v3/webhooks to v2/push/subscriptions, update payload field names |
 
 ---
 
-### Technical Summary
+### Testing After Implementation
 
-The Reply.io v3 Webhooks API strictly validates event type names. The current code uses two invalid names:
-
-1. **`linkedin_replied`** - The correct name per the docs is `linkedin_message_replied`
-2. **`contact_status_changed`** - This event doesn't exist; use `contact_finished` or `contact_opted_out`
-
-Once these are corrected, the webhook should register successfully since:
-- The endpoint URL is correct (`https://api.reply.io/v3/webhooks`)
-- The API key is valid (other endpoints like `/v1/emailAccounts` return 200)
-- The `subscriptionLevel` defaults to `account` when not specified (per docs)
+1. Click "Enable Live" on your Reply.io integration
+2. Check edge function logs for:
+   - `Reply.io webhook response: 200` or `201`
+   - A subscription ID in the response
+3. Verify the "Live" badge appears on the integration card
 
 ---
 
-### After Implementation
+### Technical Notes
 
-1. Deploy the updated edge function
-2. Click "Enable Live" on your Reply.io integration
-3. The webhook should register successfully
-4. You'll see the "Live" badge appear
+The Reply.io API documentation at the link you provided shows the Push Subscription endpoints use:
+- `POST /v2/push/subscriptions` - Create subscription
+- `GET /v2/push/subscriptions` - List subscriptions
+- `DELETE /v2/push/subscriptions/{id}` - Delete subscription
+
+The v3/webhooks path we were using appears to not exist in the Reply.io API, which explains the 404 with empty body.
 
