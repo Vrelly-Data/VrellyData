@@ -826,7 +826,7 @@ export type Database = {
           created_at: string
           external_campaign_id: string
           id: string
-          integration_id: string
+          integration_id: string | null
           name: string
           raw_data: Json | null
           stats: Json | null
@@ -838,7 +838,7 @@ export type Database = {
           created_at?: string
           external_campaign_id: string
           id?: string
-          integration_id: string
+          integration_id?: string | null
           name: string
           raw_data?: Json | null
           stats?: Json | null
@@ -850,7 +850,7 @@ export type Database = {
           created_at?: string
           external_campaign_id?: string
           id?: string
-          integration_id?: string
+          integration_id?: string | null
           name?: string
           raw_data?: Json | null
           stats?: Json | null

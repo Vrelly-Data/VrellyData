@@ -27,7 +27,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Upload, FileSpreadsheet, Check, X, Loader2, Linkedin } from 'lucide-react';
+import { Upload, FileSpreadsheet, Check, Plus, Loader2, Linkedin } from 'lucide-react';
 import { useSyncedCampaigns } from '@/hooks/useSyncedCampaigns';
 import { useLinkedInStatsUpload, LinkedInStatsRow } from '@/hooks/useLinkedInStatsUpload';
 
@@ -299,14 +299,16 @@ export function LinkedInStatsUploadDialog({ open, onOpenChange }: LinkedInStatsU
           <>
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-3">
-                <Badge variant="secondary" className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
-                  <Check className="h-3 w-3 mr-1" />
-                  {matchedCount} matched
-                </Badge>
+                {matchedCount > 0 && (
+                  <Badge variant="secondary" className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
+                    <Check className="h-3 w-3 mr-1" />
+                    {matchedCount} will update
+                  </Badge>
+                )}
                 {unmatchedCount > 0 && (
-                  <Badge variant="secondary" className="bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200">
-                    <X className="h-3 w-3 mr-1" />
-                    {unmatchedCount} not found
+                  <Badge variant="secondary" className="bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">
+                    <Plus className="h-3 w-3 mr-1" />
+                    {unmatchedCount} will create
                   </Badge>
                 )}
               </div>
@@ -338,7 +340,7 @@ export function LinkedInStatsUploadDialog({ open, onOpenChange }: LinkedInStatsU
                 </TableHeader>
                 <TableBody>
                   {parsedStats.map((stat, index) => (
-                    <TableRow key={index} className={!stat.matched ? 'opacity-50' : ''}>
+                    <TableRow key={index}>
                       <TableCell className="font-medium max-w-[180px] truncate">
                         {stat.campaignName}
                       </TableCell>
@@ -350,7 +352,7 @@ export function LinkedInStatsUploadDialog({ open, onOpenChange }: LinkedInStatsU
                         {stat.matched ? (
                           <Check className="h-4 w-4 text-green-600 mx-auto" />
                         ) : (
-                          <X className="h-4 w-4 text-amber-500 mx-auto" />
+                          <Plus className="h-4 w-4 text-blue-500 mx-auto" />
                         )}
                       </TableCell>
                     </TableRow>
@@ -376,9 +378,9 @@ export function LinkedInStatsUploadDialog({ open, onOpenChange }: LinkedInStatsU
               </Button>
               <Button 
                 onClick={handleImport} 
-                disabled={matchedCount === 0}
+                disabled={parsedStats.length === 0}
               >
-                Import {matchedCount} Campaign{matchedCount !== 1 ? 's' : ''}
+                Import {parsedStats.length} Campaign{parsedStats.length !== 1 ? 's' : ''}
               </Button>
             </>
           )}
