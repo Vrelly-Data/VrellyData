@@ -1,69 +1,40 @@
 
 
-## Fix: Reply.io Webhook Registration - Missing Account ID
+## Fix: Reply.io Webhook Registration - Invalid Event Type Names
 
-### Problem Analysis
+### Root Cause Identified
 
-The webhook registration is failing with a **404 error** because the Reply.io v3 API requires specific parameters that are missing:
+Looking at the edge function logs, the webhook payload contains **invalid event type names**:
 
-| Issue | Current State | Required |
-|-------|--------------|----------|
-| `subscriptionLevel` | `'account'` (provided) | Valid value |
-| `accountId` | **Not provided** | **Required when level is 'account'** |
-| Result | 404 Error | Needs account ID |
-
-Looking at your logs, the `fetch-reply-teams` function returns "Final teams found: 0" because your email accounts don't have `teamId` fields. This means we need to discover your account ID through a different method.
-
----
-
-### Solution: Fetch Account ID Before Registering Webhook
-
-We'll modify the `setup-reply-webhook` Edge Function to:
-
-1. **First call `/v1/accounts`** or `/v1/users/me` to get the current user's account ID
-2. **Include that account ID** in the webhook registration payload
-3. **Fall back** to trying without `subscriptionLevel` if account discovery fails
-
----
-
-### Architecture Flow
-
-```text
-┌─────────────────────────────────────────────────────────────────┐
-│                     User clicks "Enable Live"                   │
-└────────────────────────────┬────────────────────────────────────┘
-                             │
-                             ▼
-┌─────────────────────────────────────────────────────────────────┐
-│              Step 1: Fetch Account ID                           │
-│                                                                 │
-│  GET https://api.reply.io/v1/accounts                           │
-│  OR  https://api.reply.io/v1/users/me                           │
-│                                                                 │
-│  Extract: accountId from response                               │
-└────────────────────────────┬────────────────────────────────────┘
-                             │
-                             ▼
-┌─────────────────────────────────────────────────────────────────┐
-│              Step 2: Register Webhook with Account ID           │
-│                                                                 │
-│  POST https://api.reply.io/v3/webhooks                          │
-│  {                                                              │
-│    targetUrl: "...",                                            │
-│    secret: "...",                                               │
-│    subscriptionLevel: "account",                                │
-│    accountId: 12345,           ← NEW: Include account ID        │
-│    eventTypes: [...]                                            │
-│  }                                                              │
-└────────────────────────────┬────────────────────────────────────┘
-                             │
-                             ▼
-┌─────────────────────────────────────────────────────────────────┐
-│              Step 3: Save webhook config to database            │
-│                                                                 │
-│  webhook_subscription_id, webhook_secret, webhook_status        │
-└─────────────────────────────────────────────────────────────────┘
+```json
+{
+  "eventTypes": [
+    "email_sent",           // Valid
+    "email_replied",        // Valid
+    "email_opened",         // Valid
+    "email_bounced",        // Valid
+    "linkedin_connection_request_sent", // Valid
+    "linkedin_message_sent",            // Valid
+    "linkedin_replied",                 // INVALID - should be linkedin_message_replied
+    "contact_status_changed"            // INVALID - not a valid event type
+  ]
+}
 ```
+
+According to the Reply.io API documentation:
+
+| Current (Invalid) | Correct Event Type |
+|-------------------|-------------------|
+| `linkedin_replied` | `linkedin_message_replied` |
+| `contact_status_changed` | `contact_finished` or `contact_opted_out` |
+
+The v3 API is returning 404 because it doesn't recognize these event type names.
+
+---
+
+### Solution
+
+Update the event types array in `setup-reply-webhook` to use the correct names from the Reply.io documentation.
 
 ---
 
@@ -71,159 +42,70 @@ We'll modify the `setup-reply-webhook` Edge Function to:
 
 **File: `supabase/functions/setup-reply-webhook/index.ts`**
 
-**Changes:**
-1. Add a new function to discover the account ID from Reply.io
-2. Try multiple endpoints: `/v1/accounts`, `/v1/users/me`, `/v1/emailAccounts`
-3. Include `accountId` in the webhook payload
-4. Add a fallback path that tries without `subscriptionLevel` if account discovery fails
+Change lines 146-155 from:
 
 ```typescript
-// New function to discover account ID
-async function discoverAccountId(apiKey: string): Promise<number | null> {
-  // Try /v1/accounts endpoint
-  try {
-    const response = await fetch('https://api.reply.io/v1/accounts', {
-      headers: { 'X-Api-Key': apiKey }
-    });
-    if (response.ok) {
-      const data = await response.json();
-      // Return first account ID found
-      if (Array.isArray(data) && data.length > 0) {
-        return data[0].id || data[0].accountId;
-      }
-      if (data.id || data.accountId) {
-        return data.id || data.accountId;
-      }
-    }
-  } catch (e) {
-    console.log('Accounts endpoint failed:', e);
-  }
-  
-  // Try /v1/users/me endpoint  
-  try {
-    const response = await fetch('https://api.reply.io/v1/users/me', {
-      headers: { 'X-Api-Key': apiKey }
-    });
-    if (response.ok) {
-      const data = await response.json();
-      return data.accountId || data.account_id || data.teamId;
-    }
-  } catch (e) {
-    console.log('Users/me endpoint failed:', e);
-  }
-  
-  return null;
-}
+eventTypes: [
+  'email_sent',
+  'email_replied', 
+  'email_opened',
+  'email_bounced',
+  'linkedin_connection_request_sent',
+  'linkedin_message_sent',
+  'linkedin_replied',              // WRONG
+  'contact_status_changed',        // WRONG
+],
 ```
 
-**Updated webhook payload logic:**
+To:
 
 ```typescript
-// Discover account ID first
-const accountId = await discoverAccountId(integration.api_key_encrypted);
-console.log('Discovered account ID:', accountId);
-
-// Build payload - include accountId if available
-const webhookPayload: Record<string, unknown> = {
-  targetUrl: webhookUrl,
-  secret: webhookSecret,
-  eventTypes: [
-    'email_sent',
-    'email_replied', 
-    'email_opened',
-    'email_bounced',
-    'linkedin_connection_request_sent',
-    'linkedin_message_sent',
-    'linkedin_replied',
-    'contact_status_changed',
-  ],
-};
-
-// Only add subscription level and account ID if we discovered one
-if (accountId) {
-  webhookPayload.subscriptionLevel = 'account';
-  webhookPayload.accountId = accountId;
-} else {
-  // Try without subscription level - let API default
-  console.log('No account ID found, trying without subscriptionLevel');
-}
-```
-
----
-
-### Fallback Strategy
-
-If the v3 API still fails, we'll add a fallback to try:
-
-1. **Without `subscriptionLevel`** - Let the API use its default
-2. **Different event type names** - In case v3 uses different naming
-3. **Log detailed error response** - For debugging
-
-```typescript
-if (!response.ok) {
-  // Log full error for debugging
-  console.error('Webhook registration failed:', {
-    status: response.status,
-    body: responseText,
-    payload: webhookPayload,
-  });
-  
-  // If 404 with subscriptionLevel, try without it
-  if (response.status === 404 && webhookPayload.subscriptionLevel) {
-    console.log('Retrying without subscriptionLevel...');
-    delete webhookPayload.subscriptionLevel;
-    delete webhookPayload.accountId;
-    
-    // Retry the request
-    const retryResponse = await fetch('https://api.reply.io/v3/webhooks', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Api-Key': integration.api_key_encrypted,
-      },
-      body: JSON.stringify(webhookPayload),
-    });
-    
-    // Handle retry response...
-  }
-}
+eventTypes: [
+  // Email events
+  'email_sent',
+  'email_replied', 
+  'email_opened',
+  'email_bounced',
+  // LinkedIn events
+  'linkedin_connection_request_sent',
+  'linkedin_connection_request_accepted',  // NEW: Track accepts too
+  'linkedin_message_sent',
+  'linkedin_message_replied',              // FIXED: Was linkedin_replied
+  // Contact lifecycle events
+  'contact_finished',                       // FIXED: Was contact_status_changed
+  'contact_opted_out',                      // NEW: Track opt-outs
+],
 ```
 
 ---
 
 ### Files to Modify
 
-| File | Changes |
-|------|---------|
-| `supabase/functions/setup-reply-webhook/index.ts` | Add account discovery, include `accountId` in payload, add fallback logic |
+| File | Change |
+|------|--------|
+| `supabase/functions/setup-reply-webhook/index.ts` | Fix event type names in lines 146-155 |
+| `supabase/functions/reply-webhook/index.ts` | Update event handlers to match new event names |
 
 ---
 
-### Testing After Implementation
+### Technical Summary
 
-1. Click "Enable Live" again
-2. Check edge function logs for:
-   - "Discovered account ID: X" - Shows if we found an account ID
-   - "Registering webhook with Reply.io v3: ..." - The webhook URL
-   - Success or detailed error message
+The Reply.io v3 Webhooks API strictly validates event type names. The current code uses two invalid names:
+
+1. **`linkedin_replied`** - The correct name per the docs is `linkedin_message_replied`
+2. **`contact_status_changed`** - This event doesn't exist; use `contact_finished` or `contact_opted_out`
+
+Once these are corrected, the webhook should register successfully since:
+- The endpoint URL is correct (`https://api.reply.io/v3/webhooks`)
+- The API key is valid (other endpoints like `/v1/emailAccounts` return 200)
+- The `subscriptionLevel` defaults to `account` when not specified (per docs)
 
 ---
 
-### Technical Details
+### After Implementation
 
-**New Account Discovery Logic:**
-- Tries `/v1/accounts` endpoint first
-- Falls back to `/v1/users/me` 
-- Extracts `id`, `accountId`, or `teamId` from response
-- Returns `null` if no account ID can be determined
-
-**Enhanced Error Handling:**
-- Logs full payload and response for debugging
-- Implements retry logic without `subscriptionLevel`
-- Provides clear error messages to the user
-
-**Backward Compatibility:**
-- Works with agency accounts that have team IDs
-- Works with single accounts that have account IDs
-- Falls back gracefully if neither is available
+1. Deploy the updated edge function
+2. Click "Enable Live" on your Reply.io integration
+3. The webhook should register successfully
+4. You'll see the "Live" badge appear
 
