@@ -88,45 +88,13 @@ export function PlaygroundStatsGrid() {
     }
   };
 
-  // Calculate estimated channel breakdown based on step ratios
-  // Note: Until we have per-step delivery data, these are estimates based on step counts
-  const emailRatio = channelMetrics && (channelMetrics.totalEmailSteps + channelMetrics.totalLinkedInSteps) > 0
-    ? channelMetrics.totalEmailSteps / (channelMetrics.totalEmailSteps + channelMetrics.totalLinkedInSteps)
-    : 1;
-  
-  const estimatedEmailsSent = Math.round((stats?.totalMessagesSent ?? 0) * emailRatio);
-  const estimatedLinkedInSent = (stats?.totalMessagesSent ?? 0) - estimatedEmailsSent;
-  
-  const estimatedEmailReplies = Math.round((stats?.totalReplies ?? 0) * emailRatio);
-  const estimatedLinkedInReplies = (stats?.totalReplies ?? 0) - estimatedEmailReplies;
+  // Use actual email-specific data from Reply.io API
+  const emailsDelivered = stats?.emailDeliveries ?? 0;
+  const emailReplies = stats?.emailReplies ?? 0;
+  const linkedinCampaignCount = stats?.linkedinCampaignCount ?? 0;
 
-  if (isLoading) {
-    return (
-      <TooltipProvider>
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <Card key={i}>
-              <CardContent className="pt-6">
-                <div className="flex items-center justify-center py-4">
-                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      </TooltipProvider>
-    );
-  }
-
-  if (error) {
-    return (
-      <Card>
-        <CardContent className="pt-6 text-center text-destructive">
-          Failed to load stats. Please try again.
-        </CardContent>
-      </Card>
-    );
-  }
+  // Check if we have LinkedIn steps from the channel metrics hook
+  const hasLinkedInSteps = channelMetrics && channelMetrics.totalLinkedInSteps > 0;
 
   const messagesTooltipContent = (
     <div className="space-y-2 text-sm">
@@ -135,41 +103,45 @@ export function PlaygroundStatsGrid() {
         <div className="flex items-center justify-between gap-4">
           <span className="flex items-center gap-1.5 text-muted-foreground">
             <Mail className="h-3.5 w-3.5" />
-            Emails Sent:
+            Emails Delivered:
           </span>
-          <span className="font-medium">{estimatedEmailsSent.toLocaleString()}</span>
+          <span className="font-medium">{emailsDelivered.toLocaleString()}</span>
         </div>
-        {channelMetrics && channelMetrics.linkedinConnectSteps > 0 && (
-          <div className="flex items-center justify-between gap-4">
-            <span className="flex items-center gap-1.5 text-muted-foreground">
-              <Linkedin className="h-3.5 w-3.5" />
-              Connection Requests:
-            </span>
-            <span className="font-medium">—</span>
-          </div>
+        {hasLinkedInSteps && (
+          <>
+            {channelMetrics.linkedinConnectSteps > 0 && (
+              <div className="flex items-center justify-between gap-4">
+                <span className="flex items-center gap-1.5 text-muted-foreground">
+                  <Linkedin className="h-3.5 w-3.5" />
+                  Connection Requests:
+                </span>
+                <span className="font-medium text-muted-foreground">—</span>
+              </div>
+            )}
+            {channelMetrics.linkedinMessageSteps > 0 && (
+              <div className="flex items-center justify-between gap-4">
+                <span className="flex items-center gap-1.5 text-muted-foreground">
+                  <Linkedin className="h-3.5 w-3.5" />
+                  LinkedIn Messages:
+                </span>
+                <span className="font-medium text-muted-foreground">—</span>
+              </div>
+            )}
+          </>
         )}
-        {channelMetrics && channelMetrics.linkedinMessageSteps > 0 && (
+        {linkedinCampaignCount > 0 && (
           <div className="flex items-center justify-between gap-4">
             <span className="flex items-center gap-1.5 text-muted-foreground">
               <Linkedin className="h-3.5 w-3.5" />
-              LinkedIn Messages:
+              LinkedIn-only Campaigns:
             </span>
-            <span className="font-medium">—</span>
-          </div>
-        )}
-        {estimatedLinkedInSent > 0 && (
-          <div className="flex items-center justify-between gap-4">
-            <span className="flex items-center gap-1.5 text-muted-foreground">
-              <Linkedin className="h-3.5 w-3.5" />
-              LinkedIn (est.):
-            </span>
-            <span className="font-medium">{estimatedLinkedInSent.toLocaleString()}</span>
+            <span className="font-medium">{linkedinCampaignCount}</span>
           </div>
         )}
       </div>
-      {channelMetrics && channelMetrics.totalLinkedInSteps > 0 && (
+      {hasLinkedInSteps && (
         <p className="text-xs text-muted-foreground pt-1 border-t">
-          Based on {channelMetrics.totalEmailSteps} email steps & {channelMetrics.totalLinkedInSteps} LinkedIn steps
+          Reply.io API only reports email delivery counts
         </p>
       )}
     </div>
@@ -184,19 +156,21 @@ export function PlaygroundStatsGrid() {
             <Mail className="h-3.5 w-3.5" />
             Email Replies:
           </span>
-          <span className="font-medium">{estimatedEmailReplies.toLocaleString()}</span>
+          <span className="font-medium">{emailReplies.toLocaleString()}</span>
         </div>
-        <div className="flex items-center justify-between gap-4">
-          <span className="flex items-center gap-1.5 text-muted-foreground">
-            <Linkedin className="h-3.5 w-3.5" />
-            LinkedIn Replies:
-          </span>
-          <span className="font-medium">{estimatedLinkedInReplies.toLocaleString()}</span>
-        </div>
+        {hasLinkedInSteps && (
+          <div className="flex items-center justify-between gap-4">
+            <span className="flex items-center gap-1.5 text-muted-foreground">
+              <Linkedin className="h-3.5 w-3.5" />
+              LinkedIn Replies:
+            </span>
+            <span className="font-medium text-muted-foreground">—</span>
+          </div>
+        )}
       </div>
-      {channelMetrics && channelMetrics.totalLinkedInSteps > 0 && (
+      {hasLinkedInSteps && (
         <p className="text-xs text-muted-foreground pt-1 border-t">
-          Estimated based on step type distribution
+          LinkedIn reply data not available via Reply.io API
         </p>
       )}
     </div>

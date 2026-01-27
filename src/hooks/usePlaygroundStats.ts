@@ -8,7 +8,11 @@ export interface PlaygroundStats {
   activeCampaigns: number;
   completionPercentage: number;
   outOfOfficeCount: number;
-  campaignScore: number | null; // Placeholder for proprietary scoring
+  campaignScore: number | null;
+  // Separated metrics for Email vs LinkedIn breakdown
+  emailDeliveries: number;
+  emailReplies: number;
+  linkedinCampaignCount: number;
 }
 
 export function usePlaygroundStats() {
@@ -37,16 +41,34 @@ export function usePlaygroundStats() {
       let totalPeopleFinished = 0;
       let totalPeopleCount = 0;
       let outOfOfficeCount = 0;
+      
+      // Email-specific metrics (Reply.io only reports email deliveries at campaign level)
+      let emailDeliveries = 0;
+      let emailReplies = 0;
+      let linkedinCampaignCount = 0;
 
       campaigns?.forEach((campaign) => {
         const stats = campaign.stats as Record<string, number> | null;
         if (stats) {
-          totalMessagesSent += stats.sent || stats.delivered || 0;
-          totalReplies += stats.replies || 0;
+          const sent = stats.sent || stats.delivered || 0;
+          const replies = stats.replies || 0;
+          
+          totalMessagesSent += sent;
+          totalReplies += replies;
           totalContacts += stats.peopleCount || 0;
           totalPeopleFinished += stats.peopleFinished || 0;
           totalPeopleCount += stats.peopleCount || 0;
           outOfOfficeCount += stats.outOfOffice || 0;
+          
+          // Track email-specific metrics
+          // deliveriesCount in Reply.io is email-only
+          emailDeliveries += sent;
+          emailReplies += replies;
+          
+          // Identify LinkedIn-focused campaigns (have people but no email deliveries)
+          if (sent === 0 && (stats.peopleCount || 0) > 0) {
+            linkedinCampaignCount++;
+          }
         }
         if (campaign.status === 'active') {
           activeCampaigns++;
@@ -65,7 +87,10 @@ export function usePlaygroundStats() {
         activeCampaigns,
         completionPercentage,
         outOfOfficeCount,
-        campaignScore: null, // Placeholder - will be implemented later
+        campaignScore: null,
+        emailDeliveries,
+        emailReplies,
+        linkedinCampaignCount,
       };
     },
   });
