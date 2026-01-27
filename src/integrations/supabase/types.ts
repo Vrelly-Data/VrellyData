@@ -611,6 +611,9 @@ export type Database = {
           sync_status: string | null
           team_id: string
           updated_at: string
+          webhook_secret: string | null
+          webhook_status: string | null
+          webhook_subscription_id: string | null
         }
         Insert: {
           api_key_encrypted: string
@@ -626,6 +629,9 @@ export type Database = {
           sync_status?: string | null
           team_id: string
           updated_at?: string
+          webhook_secret?: string | null
+          webhook_status?: string | null
+          webhook_subscription_id?: string | null
         }
         Update: {
           api_key_encrypted?: string
@@ -641,6 +647,9 @@ export type Database = {
           sync_status?: string | null
           team_id?: string
           updated_at?: string
+          webhook_secret?: string | null
+          webhook_status?: string | null
+          webhook_subscription_id?: string | null
         }
         Relationships: [
           {
@@ -1167,6 +1176,47 @@ export type Database = {
             columns: ["team_id"]
             isOneToOne: false
             referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      webhook_events: {
+        Row: {
+          campaign_external_id: string | null
+          contact_email: string | null
+          created_at: string
+          event_data: Json | null
+          event_type: string
+          id: string
+          integration_id: string
+          team_id: string
+        }
+        Insert: {
+          campaign_external_id?: string | null
+          contact_email?: string | null
+          created_at?: string
+          event_data?: Json | null
+          event_type: string
+          id?: string
+          integration_id: string
+          team_id: string
+        }
+        Update: {
+          campaign_external_id?: string | null
+          contact_email?: string | null
+          created_at?: string
+          event_data?: Json | null
+          event_type?: string
+          id?: string
+          integration_id?: string
+          team_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "webhook_events_integration_id_fkey"
+            columns: ["integration_id"]
+            isOneToOne: false
+            referencedRelation: "outbound_integrations"
             referencedColumns: ["id"]
           },
         ]

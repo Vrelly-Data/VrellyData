@@ -14,6 +14,8 @@ export interface OutboundIntegration {
   created_at: string;
   updated_at: string;
   reply_team_id?: string | null;
+  webhook_status?: string | null;
+  webhook_subscription_id?: string | null;
 }
 
 export function useOutboundIntegrations() {
@@ -24,7 +26,7 @@ export function useOutboundIntegrations() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('outbound_integrations')
-        .select('id, team_id, platform, name, is_active, sync_status, sync_error, last_synced_at, created_at, updated_at, reply_team_id')
+        .select('id, team_id, platform, name, is_active, sync_status, sync_error, last_synced_at, created_at, updated_at, reply_team_id, webhook_status, webhook_subscription_id')
         .order('created_at', { ascending: false });
 
       if (error) throw error;
@@ -135,6 +137,25 @@ export function useOutboundIntegrations() {
     },
   });
 
+  const setupWebhook = useMutation({
+    mutationFn: async (integrationId: string) => {
+      const { data, error } = await supabase.functions.invoke('setup-reply-webhook', {
+        body: { integrationId },
+      });
+
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['outbound-integrations'] });
+      toast.success('Webhook configured successfully - live updates enabled!');
+    },
+    onError: (error) => {
+      queryClient.invalidateQueries({ queryKey: ['outbound-integrations'] });
+      toast.error(`Failed to setup webhook: ${error.message}`);
+    },
+  });
+
   return {
     integrations: integrations ?? [],
     isLoading,
@@ -143,5 +164,6 @@ export function useOutboundIntegrations() {
     deleteIntegration,
     toggleIntegration,
     syncIntegration,
+    setupWebhook,
   };
 }

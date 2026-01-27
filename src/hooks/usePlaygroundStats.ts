@@ -13,6 +13,10 @@ export interface PlaygroundStats {
   emailDeliveries: number;
   emailReplies: number;
   linkedinCampaignCount: number;
+  // LinkedIn-specific metrics from webhooks
+  linkedinMessagesSent: number;
+  linkedinConnectionsSent: number;
+  linkedinReplies: number;
 }
 
 export function usePlaygroundStats() {
@@ -46,6 +50,11 @@ export function usePlaygroundStats() {
       let emailDeliveries = 0;
       let emailReplies = 0;
       let linkedinCampaignCount = 0;
+      
+      // LinkedIn metrics from webhooks
+      let linkedinMessagesSent = 0;
+      let linkedinConnectionsSent = 0;
+      let linkedinReplies = 0;
 
       campaigns?.forEach((campaign) => {
         const stats = campaign.stats as Record<string, number> | null;
@@ -61,9 +70,13 @@ export function usePlaygroundStats() {
           outOfOfficeCount += stats.outOfOffice || 0;
           
           // Track email-specific metrics
-          // deliveriesCount in Reply.io is email-only
           emailDeliveries += sent;
           emailReplies += replies;
+          
+          // LinkedIn metrics from webhooks
+          linkedinMessagesSent += stats.linkedinMessagesSent || 0;
+          linkedinConnectionsSent += stats.linkedinConnectionsSent || 0;
+          linkedinReplies += stats.linkedinReplies || 0;
           
           // Identify LinkedIn-focused campaigns (have people but no email deliveries)
           if (sent === 0 && (stats.peopleCount || 0) > 0) {
@@ -74,6 +87,10 @@ export function usePlaygroundStats() {
           activeCampaigns++;
         }
       });
+      
+      // Add LinkedIn messages to total
+      totalMessagesSent += linkedinMessagesSent + linkedinConnectionsSent;
+      totalReplies += linkedinReplies;
 
       // Calculate completion percentage based on people finished vs total people
       const completionPercentage = totalPeopleCount > 0 
@@ -91,6 +108,9 @@ export function usePlaygroundStats() {
         emailDeliveries,
         emailReplies,
         linkedinCampaignCount,
+        linkedinMessagesSent,
+        linkedinConnectionsSent,
+        linkedinReplies,
       };
     },
   });
