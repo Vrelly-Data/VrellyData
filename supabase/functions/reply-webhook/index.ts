@@ -2,29 +2,8 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-reply-signature',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
-
-// Verify HMAC signature from Reply.io
-async function verifySignature(payload: string, signature: string, secret: string): Promise<boolean> {
-  if (!signature || !secret) return false;
-  
-  const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign']
-  );
-  
-  const signatureBuffer = await crypto.subtle.sign('HMAC', key, encoder.encode(payload));
-  const expectedSignature = Array.from(new Uint8Array(signatureBuffer))
-    .map(b => b.toString(16).padStart(2, '0'))
-    .join('');
-  
-  return signature.toLowerCase() === expectedSignature.toLowerCase();
-}
 
 Deno.serve(async (req) => {
   // Handle CORS preflight
@@ -46,17 +25,17 @@ Deno.serve(async (req) => {
     }
 
     const payload = await req.text();
-    const signature = req.headers.get('x-reply-signature') || '';
+    console.log('Received webhook payload:', payload);
     
     // Initialize Supabase with service role for database updates
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
     
-    // Fetch integration to get webhook secret
+    // Fetch integration to verify it exists
     const { data: integration, error: integrationError } = await supabase
       .from('outbound_integrations')
-      .select('id, team_id, webhook_secret, is_active')
+      .select('id, team_id, is_active')
       .eq('id', integrationId)
       .single();
     
@@ -68,19 +47,18 @@ Deno.serve(async (req) => {
       });
     }
     
-    // Verify HMAC signature
-    if (integration.webhook_secret) {
-      const isValid = await verifySignature(payload, signature, integration.webhook_secret);
-      if (!isValid) {
-        console.error('Invalid webhook signature for integration:', integrationId);
-        return new Response(JSON.stringify({ error: 'Invalid signature' }), {
-          status: 401,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      }
+    // Parse the event (v2 API sends simpler payloads)
+    let event;
+    try {
+      event = JSON.parse(payload);
+    } catch {
+      console.error('Failed to parse webhook payload');
+      return new Response(JSON.stringify({ error: 'Invalid payload' }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
     
-    const event = JSON.parse(payload);
     const eventType = event.event || event.type || 'unknown';
     const contactEmail = event.email || event.contact?.email || event.data?.email;
     const campaignId = event.campaignId || event.campaign_id || event.data?.campaignId;
@@ -97,7 +75,7 @@ Deno.serve(async (req) => {
       event_data: event,
     });
     
-    // Process event based on type
+    // Process event based on type - update campaign stats
     if (campaignId) {
       const { data: campaign } = await supabase
         .from('synced_campaigns')
@@ -119,18 +97,6 @@ Deno.serve(async (req) => {
             break;
           case 'email_replied':
             stats.replies = (stats.replies || 0) + 1;
-            break;
-          case 'linkedin_connection_request_sent':
-            stats.linkedinConnectionsSent = (stats.linkedinConnectionsSent || 0) + 1;
-            break;
-          case 'linkedin_connection_request_accepted':
-            stats.linkedinConnectionsAccepted = (stats.linkedinConnectionsAccepted || 0) + 1;
-            break;
-          case 'linkedin_message_sent':
-            stats.linkedinMessagesSent = (stats.linkedinMessagesSent || 0) + 1;
-            break;
-          case 'linkedin_message_replied':
-            stats.linkedinReplies = (stats.linkedinReplies || 0) + 1;
             break;
           case 'email_bounced':
             stats.bounces = (stats.bounces || 0) + 1;
@@ -175,22 +141,6 @@ Deno.serve(async (req) => {
             engagement.replied = true;
             engagement.repliedAt = new Date().toISOString();
             break;
-          case 'linkedin_connection_request_sent':
-            engagement.linkedinConnectionSent = true;
-            engagement.linkedinConnectionSentAt = new Date().toISOString();
-            break;
-          case 'linkedin_connection_request_accepted':
-            engagement.linkedinConnectionAccepted = true;
-            engagement.linkedinConnectionAcceptedAt = new Date().toISOString();
-            break;
-          case 'linkedin_message_sent':
-            engagement.linkedinMessageSent = true;
-            engagement.linkedinMessageSentAt = new Date().toISOString();
-            break;
-          case 'linkedin_message_replied':
-            engagement.linkedinReplied = true;
-            engagement.linkedinRepliedAt = new Date().toISOString();
-            break;
           case 'contact_opted_out':
             engagement.optedOut = true;
             engagement.optedOutAt = new Date().toISOString();
@@ -202,7 +152,7 @@ Deno.serve(async (req) => {
           .update({ 
             engagement_data: engagement, 
             updated_at: new Date().toISOString(),
-            status: eventType.includes('replied') ? 'replied' : undefined,
+            status: eventType === 'email_replied' ? 'replied' : undefined,
           })
           .eq('id', contact.id);
       }
