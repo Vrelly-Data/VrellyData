@@ -1,164 +1,112 @@
 
 
-## Fix: Reply.io Webhook API v2 - Correct Endpoint Path and Single-Event Subscriptions
+## Fix: Add LinkedIn Events to Webhook Subscriptions
 
-### Root Cause Found
+### Current State
 
-The Reply.io API documentation shows the webhook endpoint is:
+| What | Status |
+|------|--------|
+| Webhook API | Working (v2 at `/api/v2/webhooks`) |
+| Subscriptions Created | `email_replied`, `email_sent` only |
+| LinkedIn Events | NOT subscribed |
+| Webhook IDs | `15041, 15042` |
 
-| Current (WRONG) | Correct (per API docs) |
-|-----------------|------------------------|
-| `https://api.reply.io/v3/webhooks` | `https://api.reply.io/api/v2/webhooks` |
-
-Notice the `/api/` segment in the path that was missing! Also, v2 uses **one event per subscription**, not an array.
-
-### Current Logs
-
-```
-"Reply.io webhook response: 404 " (empty body)
-```
-
-This is because `/v3/webhooks` doesn't exist - it should be `/api/v2/webhooks`.
+The reason LinkedIn data isn't populating is simple: we chose "minimal first" and only subscribed to 2 email events. No LinkedIn events are being captured.
 
 ---
 
 ### Solution
 
-Rewrite `setup-reply-webhook` to use the correct v2 API:
+Expand the webhook subscriptions to include LinkedIn events by updating `setup-reply-webhook/index.ts` and re-running "Enable Live":
 
-1. **Correct endpoint**: `POST https://api.reply.io/api/v2/webhooks`
-2. **Single event per call**: Create multiple subscriptions (one per event type)
-3. **v2 payload format**:
-   ```json
-   {
-     "event": "email_replied",
-     "url": "https://...webhook-url..."
-   }
-   ```
-4. **For minimal approach (per your preference)**: Start with just 2 events:
-   - `email_replied`
-   - `linkedin_message_replied` (if supported)
+```typescript
+// Current (minimal)
+const EVENTS_TO_SUBSCRIBE = [
+  'email_replied',
+  'email_sent',
+];
 
-5. **Store webhook IDs**: Save all created subscription IDs (comma-separated) in `webhook_subscription_id`
-
----
-
-### Implementation Changes
-
-#### File: `supabase/functions/setup-reply-webhook/index.ts`
-
-1. **Change base URL**:
-   - FROM: `https://api.reply.io/v3/webhooks`
-   - TO: `https://api.reply.io/api/v2/webhooks`
-
-2. **Change delete URL**:
-   - FROM: `https://api.reply.io/v3/webhooks/{id}`
-   - TO: `https://api.reply.io/api/v2/webhooks/{id}` (may be DELETE or different endpoint)
-
-3. **Change payload to v2 format** (single event):
-   ```typescript
-   // v2 format - one event per subscription
-   const webhookPayload = {
-     event: 'email_replied',
-     url: webhookUrl,
-   };
-   ```
-
-4. **Create multiple subscriptions** (minimal set first):
-   - Loop through events and create one subscription per event
-   - Store all subscription IDs
-
-5. **Remove v3-specific fields**:
-   - Remove `targetUrl` (use `url`)
-   - Remove `eventTypes` (use `event`)
-   - Remove `secret` (v2 doesn't support HMAC)
-   - Remove `subscriptionLevel`, `teamIds`, `accountId`
-
-6. **Simplify webhook receiver**:
-   - Remove HMAC signature verification (v2 doesn't support it)
-   - Keep basic event processing
+// Expanded (with LinkedIn)
+const EVENTS_TO_SUBSCRIBE = [
+  // Email events
+  'email_replied',
+  'email_sent',
+  'email_opened',
+  'email_bounced',
+  // LinkedIn events  
+  'linkedin_message_sent',
+  'linkedin_message_replied',
+  'linkedin_connection_request_sent',
+  'linkedin_connection_request_accepted',
+  // Lifecycle events
+  'contact_finished',
+  'contact_opted_out',
+];
+```
 
 ---
 
-### Simplified Payload Comparison
+### Also: Update Webhook Receiver to Handle LinkedIn Events
 
-| v3 (Wrong) | v2 (Correct) |
-|------------|--------------|
-| `targetUrl` | `url` |
-| `eventTypes: [...]` | `event: "..."` (single string) |
-| `secret` | Not supported |
-| `subscriptionLevel` | Not applicable |
+The `reply-webhook/index.ts` needs to process LinkedIn event types and store them properly:
+
+```typescript
+case 'linkedin_message_sent':
+  stats.linkedinMessagesSent = (stats.linkedinMessagesSent || 0) + 1;
+  break;
+case 'linkedin_message_replied':
+  stats.linkedinReplies = (stats.linkedinReplies || 0) + 1;
+  break;
+case 'linkedin_connection_request_sent':
+  stats.linkedinConnectionsSent = (stats.linkedinConnectionsSent || 0) + 1;
+  break;
+case 'linkedin_connection_request_accepted':
+  stats.linkedinConnectionsAccepted = (stats.linkedinConnectionsAccepted || 0) + 1;
+  break;
+```
+
+---
+
+### Implementation Steps
+
+1. **Update `supabase/functions/setup-reply-webhook/index.ts`**
+   - Expand `EVENTS_TO_SUBSCRIBE` array to include all LinkedIn event types
+
+2. **Update `supabase/functions/reply-webhook/index.ts`**
+   - Add switch cases for LinkedIn events
+   - Store LinkedIn-specific metrics in campaign stats
+
+3. **Re-deploy edge functions**
+
+4. **Click "Enable Live" again**
+   - This will delete old subscriptions (15041, 15042)
+   - Create new subscriptions for all 10 events
 
 ---
 
 ### Files to Modify
 
-| File | Changes |
-|------|---------|
-| `supabase/functions/setup-reply-webhook/index.ts` | Use `/api/v2/webhooks`, v2 payload format, loop for multiple events |
-| `supabase/functions/reply-webhook/index.ts` | Remove HMAC verification (optional simplification) |
-
----
-
-### Code Structure (Minimal Approach)
-
-```typescript
-const WEBHOOK_API_BASE = 'https://api.reply.io/api/v2/webhooks';
-
-// Minimal events for debugging
-const eventsToSubscribe = [
-  'email_replied',
-  'email_sent',  // Optional: add more later
-];
-
-const webhookIds: string[] = [];
-
-for (const event of eventsToSubscribe) {
-  const response = await fetch(WEBHOOK_API_BASE, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Api-Key': apiKey,
-    },
-    body: JSON.stringify({
-      event,
-      url: webhookUrl,
-    }),
-  });
-  
-  if (response.ok) {
-    const data = await response.json();
-    webhookIds.push(data.id);
-  }
-}
-
-// Store all IDs
-await supabase
-  .from('outbound_integrations')
-  .update({
-    webhook_subscription_id: webhookIds.join(','),
-    webhook_status: webhookIds.length > 0 ? 'active' : 'error',
-  })
-  .eq('id', integrationId);
-```
+| File | Change |
+|------|--------|
+| `supabase/functions/setup-reply-webhook/index.ts` | Add LinkedIn + lifecycle events to `EVENTS_TO_SUBSCRIBE` |
+| `supabase/functions/reply-webhook/index.ts` | Add handlers for LinkedIn event types |
 
 ---
 
 ### Testing After Implementation
 
 1. Click "Enable Live" on your Reply.io integration
-2. Check edge function logs for:
-   - `Reply.io webhook response: 201` (created)
-   - Subscription ID in response
-3. Verify the "Live" badge appears
-4. Once working, expand to include more events
+2. Check that webhook_subscription_id now contains ~10 IDs
+3. In Reply.io, trigger a LinkedIn action (send connection request or message)
+4. Check the `webhook_events` table for incoming data
+5. Verify "Total Messages Sent" tooltip shows LinkedIn metrics
 
 ---
 
-### Technical Notes
+### Important Notes
 
-- v2 API requires the `/api/` path segment
-- Each subscription is for a single event
-- No HMAC signature support in v2 (per your preference for no verification)
-- Team ID not required for basic webhook registration
+- Each webhook is created separately (v2 API limitation)
+- LinkedIn events will only capture NEW activity after webhook is set up
+- Historical LinkedIn data is not available via API (Reply.io limitation)
+- The tooltip breakdown will show "Not tracked" until first LinkedIn event arrives
 
