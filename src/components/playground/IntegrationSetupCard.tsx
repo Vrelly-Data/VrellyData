@@ -2,7 +2,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
-import { Plus, Plug, RefreshCw, Trash2, AlertCircle, Loader2, Pencil, Building2 } from 'lucide-react';
+import { Plus, Plug, RefreshCw, Trash2, AlertCircle, Loader2, Pencil, Building2, Zap } from 'lucide-react';
 import { OutboundIntegration, useOutboundIntegrations } from '@/hooks/useOutboundIntegrations';
 import { useState } from 'react';
 import { AddIntegrationDialog } from './AddIntegrationDialog';
@@ -38,14 +38,18 @@ interface IntegrationRowProps {
   onDelete: (id: string) => void;
   onSync: (id: string) => void;
   onEdit: (integration: OutboundIntegration) => void;
+  onSetupWebhook: (id: string) => void;
   isSyncing: boolean;
+  isSettingUpWebhook: boolean;
 }
 
-function IntegrationRow({ integration, onToggle, onDelete, onSync, onEdit, isSyncing }: IntegrationRowProps) {
+function IntegrationRow({ integration, onToggle, onDelete, onSync, onEdit, onSetupWebhook, isSyncing, isSettingUpWebhook }: IntegrationRowProps) {
   const icon = platformIcons[integration.platform.toLowerCase()] || '🔌';
   const isCurrentlySyncing = isSyncing || integration.sync_status === 'syncing';
   // Access reply_team_id from extended integration type
   const replyTeamId = (integration as OutboundIntegration & { reply_team_id?: string }).reply_team_id;
+  const webhookStatus = integration.webhook_status;
+  const isReplyIo = integration.platform.toLowerCase() === 'reply.io';
 
   return (
     <div className="flex items-center justify-between py-3 border-b last:border-0">
@@ -59,6 +63,12 @@ function IntegrationRow({ integration, onToggle, onDelete, onSync, onEdit, isSyn
               <Badge variant="outline" className="text-xs flex items-center gap-1">
                 <Building2 className="h-3 w-3" />
                 Team: {replyTeamId}
+              </Badge>
+            )}
+            {isReplyIo && webhookStatus === 'active' && (
+              <Badge variant="outline" className="text-xs flex items-center gap-1 text-green-600 border-green-600">
+                <Zap className="h-3 w-3" />
+                Live
               </Badge>
             )}
           </div>
@@ -77,6 +87,22 @@ function IntegrationRow({ integration, onToggle, onDelete, onSync, onEdit, isSyn
         </div>
       </div>
       <div className="flex items-center gap-3">
+        {isReplyIo && webhookStatus !== 'active' && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => onSetupWebhook(integration.id)}
+            disabled={isSettingUpWebhook || !integration.is_active}
+            className="h-8"
+          >
+            {isSettingUpWebhook ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Zap className="h-4 w-4" />
+            )}
+            <span className="ml-1.5">{isSettingUpWebhook ? 'Setting up...' : 'Enable Live'}</span>
+          </Button>
+        )}
         <Button
           variant="outline"
           size="sm"
@@ -123,7 +149,8 @@ export function IntegrationSetupCard() {
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editingIntegration, setEditingIntegration] = useState<OutboundIntegration | null>(null);
   const [syncingId, setSyncingId] = useState<string | null>(null);
-  const { integrations, isLoading, toggleIntegration, deleteIntegration, syncIntegration } = useOutboundIntegrations();
+  const [webhookSetupId, setWebhookSetupId] = useState<string | null>(null);
+  const { integrations, isLoading, toggleIntegration, deleteIntegration, syncIntegration, setupWebhook } = useOutboundIntegrations();
 
   const handleToggle = (id: string, isActive: boolean) => {
     toggleIntegration.mutate({ id, isActive });
@@ -139,6 +166,13 @@ export function IntegrationSetupCard() {
     setSyncingId(id);
     syncIntegration.mutate(id, {
       onSettled: () => setSyncingId(null),
+    });
+  };
+
+  const handleSetupWebhook = (id: string) => {
+    setWebhookSetupId(id);
+    setupWebhook.mutate(id, {
+      onSettled: () => setWebhookSetupId(null),
     });
   };
 
@@ -187,7 +221,9 @@ export function IntegrationSetupCard() {
                   onDelete={handleDelete}
                   onSync={handleSync}
                   onEdit={handleEdit}
+                  onSetupWebhook={handleSetupWebhook}
                   isSyncing={syncingId === integration.id}
+                  isSettingUpWebhook={webhookSetupId === integration.id}
                 />
               ))}
             </div>

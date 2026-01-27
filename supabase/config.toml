@@ -29,3 +29,9 @@ verify_jwt = false
 
 [functions.fetch-reply-teams]
 verify_jwt = false
+
+[functions.reply-webhook]
+verify_jwt = false
+
+[functions.setup-reply-webhook]
+verify_jwt = true

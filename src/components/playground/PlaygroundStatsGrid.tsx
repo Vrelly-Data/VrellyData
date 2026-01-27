@@ -92,6 +92,12 @@ export function PlaygroundStatsGrid() {
   const emailsDelivered = stats?.emailDeliveries ?? 0;
   const emailReplies = stats?.emailReplies ?? 0;
   const linkedinCampaignCount = stats?.linkedinCampaignCount ?? 0;
+  
+  // LinkedIn metrics from webhooks
+  const linkedinMessagesSent = stats?.linkedinMessagesSent ?? 0;
+  const linkedinConnectionsSent = stats?.linkedinConnectionsSent ?? 0;
+  const linkedinReplies = stats?.linkedinReplies ?? 0;
+  const hasWebhookData = linkedinMessagesSent > 0 || linkedinConnectionsSent > 0 || linkedinReplies > 0;
 
   // Check if we have LinkedIn steps from the channel metrics hook
   const hasLinkedInSteps = channelMetrics && channelMetrics.totalLinkedInSteps > 0;
@@ -103,45 +109,44 @@ export function PlaygroundStatsGrid() {
         <div className="flex items-center justify-between gap-4">
           <span className="flex items-center gap-1.5 text-muted-foreground">
             <Mail className="h-3.5 w-3.5" />
-            Emails Delivered:
+            Emails Sent:
           </span>
           <span className="font-medium">{emailsDelivered.toLocaleString()}</span>
         </div>
-        {hasLinkedInSteps && (
-          <>
-            {channelMetrics.linkedinConnectSteps > 0 && (
-              <div className="flex items-center justify-between gap-4">
-                <span className="flex items-center gap-1.5 text-muted-foreground">
-                  <Linkedin className="h-3.5 w-3.5" />
-                  Connection Requests:
-                </span>
-                <span className="font-medium text-muted-foreground">—</span>
-              </div>
-            )}
-            {channelMetrics.linkedinMessageSteps > 0 && (
-              <div className="flex items-center justify-between gap-4">
-                <span className="flex items-center gap-1.5 text-muted-foreground">
-                  <Linkedin className="h-3.5 w-3.5" />
-                  LinkedIn Messages:
-                </span>
-                <span className="font-medium text-muted-foreground">—</span>
-              </div>
-            )}
-          </>
-        )}
-        {linkedinCampaignCount > 0 && (
-          <div className="flex items-center justify-between gap-4">
+        <div className="flex items-center justify-between gap-4">
+          <span className="flex items-center gap-1.5 text-muted-foreground">
+            <Linkedin className="h-3.5 w-3.5" />
+            LinkedIn Messages:
+          </span>
+          <span className="font-medium">
+            {hasWebhookData ? linkedinMessagesSent.toLocaleString() : 'Not tracked'}
+          </span>
+        </div>
+        <div className="flex items-center justify-between gap-4">
+          <span className="flex items-center gap-1.5 text-muted-foreground">
+            <Linkedin className="h-3.5 w-3.5" />
+            Connection Requests:
+          </span>
+          <span className="font-medium">
+            {hasWebhookData ? linkedinConnectionsSent.toLocaleString() : 'Not tracked'}
+          </span>
+        </div>
+        {linkedinCampaignCount > 0 && !hasWebhookData && (
+          <div className="flex items-center justify-between gap-4 pt-1 border-t">
             <span className="flex items-center gap-1.5 text-muted-foreground">
-              <Linkedin className="h-3.5 w-3.5" />
               LinkedIn-only Campaigns:
             </span>
             <span className="font-medium">{linkedinCampaignCount}</span>
           </div>
         )}
       </div>
-      {hasLinkedInSteps && (
+      {hasWebhookData ? (
+        <p className="text-xs text-green-600 pt-1 border-t flex items-center gap-1">
+          <Zap className="h-3 w-3" /> Real-time via webhooks
+        </p>
+      ) : (
         <p className="text-xs text-muted-foreground pt-1 border-t">
-          Reply.io API only reports email delivery counts
+          Enable webhooks for LinkedIn tracking
         </p>
       )}
     </div>
@@ -158,19 +163,23 @@ export function PlaygroundStatsGrid() {
           </span>
           <span className="font-medium">{emailReplies.toLocaleString()}</span>
         </div>
-        {hasLinkedInSteps && (
-          <div className="flex items-center justify-between gap-4">
-            <span className="flex items-center gap-1.5 text-muted-foreground">
-              <Linkedin className="h-3.5 w-3.5" />
-              LinkedIn Replies:
-            </span>
-            <span className="font-medium text-muted-foreground">—</span>
-          </div>
-        )}
+        <div className="flex items-center justify-between gap-4">
+          <span className="flex items-center gap-1.5 text-muted-foreground">
+            <Linkedin className="h-3.5 w-3.5" />
+            LinkedIn Replies:
+          </span>
+          <span className="font-medium">
+            {hasWebhookData ? linkedinReplies.toLocaleString() : 'Not tracked'}
+          </span>
+        </div>
       </div>
-      {hasLinkedInSteps && (
+      {hasWebhookData ? (
+        <p className="text-xs text-green-600 pt-1 border-t flex items-center gap-1">
+          <Zap className="h-3 w-3" /> Real-time via webhooks
+        </p>
+      ) : (
         <p className="text-xs text-muted-foreground pt-1 border-t">
-          LinkedIn reply data not available via Reply.io API
+          Enable webhooks for LinkedIn tracking
         </p>
       )}
     </div>
