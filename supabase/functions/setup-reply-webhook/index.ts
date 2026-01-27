@@ -55,7 +55,7 @@ Deno.serve(async (req) => {
     // If already has a webhook, delete it first
     if (integration.webhook_subscription_id) {
       try {
-        await fetch(`https://api.reply.io/v2/webhooks/${integration.webhook_subscription_id}`, {
+        await fetch(`https://api.reply.io/v3/webhooks/${integration.webhook_subscription_id}`, {
           method: 'DELETE',
           headers: {
             'X-Api-Key': integration.api_key_encrypted,
@@ -72,11 +72,11 @@ Deno.serve(async (req) => {
     // Build webhook URL
     const webhookUrl = `${supabaseUrl}/functions/v1/reply-webhook/${integrationId}`;
     
-    // Register webhook with Reply.io v2 API
-    // Note: Reply.io v2 uses different event naming
+    // Register webhook with Reply.io v3 API
     const webhookPayload = {
       targetUrl: webhookUrl,
       secret: webhookSecret,
+      subscriptionLevel: 'account',
       eventTypes: [
         'email_sent',
         'email_replied', 
@@ -89,9 +89,9 @@ Deno.serve(async (req) => {
       ],
     };
     
-    console.log('Registering webhook with Reply.io:', webhookUrl);
+    console.log('Registering webhook with Reply.io v3:', webhookUrl);
     
-    const response = await fetch('https://api.reply.io/v2/webhooks', {
+    const response = await fetch('https://api.reply.io/v3/webhooks', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
