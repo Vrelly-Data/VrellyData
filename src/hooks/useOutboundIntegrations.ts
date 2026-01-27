@@ -143,7 +143,21 @@ export function useOutboundIntegrations() {
         body: { integrationId },
       });
 
-      if (error) throw error;
+      if (error) {
+        // Try to extract detailed error from response
+        const errorData = data as { error?: string; details?: string; hint?: string; status?: number } | null;
+        const details = errorData?.details || errorData?.error || error.message;
+        const hint = errorData?.hint;
+        const status = errorData?.status;
+        
+        const fullMessage = hint 
+          ? `${details} (${hint})`
+          : status 
+            ? `Reply.io error ${status}: ${details}`
+            : details;
+        
+        throw new Error(fullMessage);
+      }
       return data;
     },
     onSuccess: () => {

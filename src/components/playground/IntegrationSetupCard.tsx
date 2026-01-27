@@ -88,20 +88,25 @@ function IntegrationRow({ integration, onToggle, onDelete, onSync, onEdit, onSet
       </div>
       <div className="flex items-center gap-3">
         {isReplyIo && webhookStatus !== 'active' && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => onSetupWebhook(integration.id)}
-            disabled={isSettingUpWebhook || !integration.is_active}
-            className="h-8"
-          >
-            {isSettingUpWebhook ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Zap className="h-4 w-4" />
+          <div className="flex items-center gap-2">
+            {webhookStatus === 'error' && !replyTeamId && (
+              <span className="text-xs text-amber-600 dark:text-amber-400">Set Team ID first →</span>
             )}
-            <span className="ml-1.5">{isSettingUpWebhook ? 'Setting up...' : 'Enable Live'}</span>
-          </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onSetupWebhook(integration.id)}
+              disabled={isSettingUpWebhook || !integration.is_active}
+              className="h-8"
+            >
+              {isSettingUpWebhook ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Zap className="h-4 w-4" />
+              )}
+              <span className="ml-1.5">{isSettingUpWebhook ? 'Setting up...' : 'Enable Live'}</span>
+            </Button>
+          </div>
         )}
         <Button
           variant="outline"
