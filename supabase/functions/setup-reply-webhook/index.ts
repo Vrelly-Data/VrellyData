@@ -144,14 +144,19 @@ Deno.serve(async (req) => {
       targetUrl: webhookUrl,
       secret: webhookSecret,
       eventTypes: [
+        // Email events
         'email_sent',
         'email_replied', 
         'email_opened',
         'email_bounced',
+        // LinkedIn events
         'linkedin_connection_request_sent',
+        'linkedin_connection_request_accepted',
         'linkedin_message_sent',
-        'linkedin_replied',
-        'contact_status_changed',
+        'linkedin_message_replied',
+        // Contact lifecycle events
+        'contact_finished',
+        'contact_opted_out',
       ],
     };
 
