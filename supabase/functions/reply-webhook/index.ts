@@ -123,14 +123,23 @@ Deno.serve(async (req) => {
           case 'linkedin_connection_request_sent':
             stats.linkedinConnectionsSent = (stats.linkedinConnectionsSent || 0) + 1;
             break;
+          case 'linkedin_connection_request_accepted':
+            stats.linkedinConnectionsAccepted = (stats.linkedinConnectionsAccepted || 0) + 1;
+            break;
           case 'linkedin_message_sent':
             stats.linkedinMessagesSent = (stats.linkedinMessagesSent || 0) + 1;
             break;
-          case 'linkedin_replied':
+          case 'linkedin_message_replied':
             stats.linkedinReplies = (stats.linkedinReplies || 0) + 1;
             break;
           case 'email_bounced':
             stats.bounces = (stats.bounces || 0) + 1;
+            break;
+          case 'contact_finished':
+            stats.finished = (stats.finished || 0) + 1;
+            break;
+          case 'contact_opted_out':
+            stats.optedOut = (stats.optedOut || 0) + 1;
             break;
         }
         
@@ -170,13 +179,21 @@ Deno.serve(async (req) => {
             engagement.linkedinConnectionSent = true;
             engagement.linkedinConnectionSentAt = new Date().toISOString();
             break;
+          case 'linkedin_connection_request_accepted':
+            engagement.linkedinConnectionAccepted = true;
+            engagement.linkedinConnectionAcceptedAt = new Date().toISOString();
+            break;
           case 'linkedin_message_sent':
             engagement.linkedinMessageSent = true;
             engagement.linkedinMessageSentAt = new Date().toISOString();
             break;
-          case 'linkedin_replied':
+          case 'linkedin_message_replied':
             engagement.linkedinReplied = true;
             engagement.linkedinRepliedAt = new Date().toISOString();
+            break;
+          case 'contact_opted_out':
+            engagement.optedOut = true;
+            engagement.optedOutAt = new Date().toISOString();
             break;
         }
         
