@@ -380,7 +380,7 @@ export function LinkedInStatsUploadDialog({ open, onOpenChange }: LinkedInStatsU
                 onClick={handleImport} 
                 disabled={parsedStats.length === 0}
               >
-                Import {parsedStats.length} Campaign{parsedStats.length !== 1 ? 's' : ''}
+                Import LinkedIn Data
               </Button>
             </>
           )}
