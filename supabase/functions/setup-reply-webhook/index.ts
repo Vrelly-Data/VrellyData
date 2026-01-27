@@ -12,6 +12,69 @@ function generateWebhookSecret(): string {
   return Array.from(array).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+// Discover account ID from Reply.io API
+async function discoverAccountId(apiKey: string): Promise<number | null> {
+  // Try /v1/accounts endpoint
+  try {
+    console.log('Trying /v1/accounts endpoint...');
+    const response = await fetch('https://api.reply.io/v1/accounts', {
+      headers: { 'X-Api-Key': apiKey }
+    });
+    console.log('Accounts endpoint status:', response.status);
+    if (response.ok) {
+      const data = await response.json();
+      console.log('Accounts response:', JSON.stringify(data).slice(0, 500));
+      if (Array.isArray(data) && data.length > 0) {
+        return data[0].id || data[0].accountId;
+      }
+      if (data.id || data.accountId) {
+        return data.id || data.accountId;
+      }
+    }
+  } catch (e) {
+    console.log('Accounts endpoint failed:', e);
+  }
+  
+  // Try /v1/users/me endpoint  
+  try {
+    console.log('Trying /v1/users/me endpoint...');
+    const response = await fetch('https://api.reply.io/v1/users/me', {
+      headers: { 'X-Api-Key': apiKey }
+    });
+    console.log('Users/me endpoint status:', response.status);
+    if (response.ok) {
+      const data = await response.json();
+      console.log('Users/me response:', JSON.stringify(data).slice(0, 500));
+      return data.accountId || data.account_id || data.teamId || data.id;
+    }
+  } catch (e) {
+    console.log('Users/me endpoint failed:', e);
+  }
+
+  // Try /v1/emailAccounts endpoint to extract account info
+  try {
+    console.log('Trying /v1/emailAccounts endpoint...');
+    const response = await fetch('https://api.reply.io/v1/emailAccounts', {
+      headers: { 'X-Api-Key': apiKey }
+    });
+    console.log('EmailAccounts endpoint status:', response.status);
+    if (response.ok) {
+      const data = await response.json();
+      console.log('EmailAccounts response sample:', JSON.stringify(data).slice(0, 500));
+      // Look for account ID in email accounts
+      if (Array.isArray(data) && data.length > 0) {
+        const firstAccount = data[0];
+        if (firstAccount.accountId) return firstAccount.accountId;
+        if (firstAccount.userId) return firstAccount.userId;
+      }
+    }
+  } catch (e) {
+    console.log('EmailAccounts endpoint failed:', e);
+  }
+  
+  return null;
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -72,11 +135,14 @@ Deno.serve(async (req) => {
     // Build webhook URL
     const webhookUrl = `${supabaseUrl}/functions/v1/reply-webhook/${integrationId}`;
     
-    // Register webhook with Reply.io v3 API
-    const webhookPayload = {
+    // Discover account ID first
+    const accountId = await discoverAccountId(integration.api_key_encrypted);
+    console.log('Discovered account ID:', accountId);
+    
+    // Build payload - include accountId if available
+    const webhookPayload: Record<string, unknown> = {
       targetUrl: webhookUrl,
       secret: webhookSecret,
-      subscriptionLevel: 'account',
       eventTypes: [
         'email_sent',
         'email_replied', 
@@ -88,10 +154,19 @@ Deno.serve(async (req) => {
         'contact_status_changed',
       ],
     };
+
+    // Only add subscription level and account ID if we discovered one
+    if (accountId) {
+      webhookPayload.subscriptionLevel = 'account';
+      webhookPayload.accountId = accountId;
+    } else {
+      console.log('No account ID found, trying without subscriptionLevel');
+    }
     
     console.log('Registering webhook with Reply.io v3:', webhookUrl);
+    console.log('Webhook payload:', JSON.stringify(webhookPayload));
     
-    const response = await fetch('https://api.reply.io/v3/webhooks', {
+    let response = await fetch('https://api.reply.io/v3/webhooks', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -100,8 +175,27 @@ Deno.serve(async (req) => {
       body: JSON.stringify(webhookPayload),
     });
     
-    const responseText = await response.text();
+    let responseText = await response.text();
     console.log('Reply.io webhook response:', response.status, responseText);
+    
+    // If 404 with subscriptionLevel, try without it
+    if (!response.ok && response.status === 404 && webhookPayload.subscriptionLevel) {
+      console.log('Retrying without subscriptionLevel...');
+      delete webhookPayload.subscriptionLevel;
+      delete webhookPayload.accountId;
+      
+      response = await fetch('https://api.reply.io/v3/webhooks', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Api-Key': integration.api_key_encrypted,
+        },
+        body: JSON.stringify(webhookPayload),
+      });
+      
+      responseText = await response.text();
+      console.log('Retry response:', response.status, responseText);
+    }
     
     if (!response.ok) {
       // Update status to error
