@@ -2,11 +2,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
-import { Plus, Plug, RefreshCw, Trash2, AlertCircle, Loader2, Pencil, Building2, Zap } from 'lucide-react';
+import { Plus, Plug, RefreshCw, Trash2, AlertCircle, Loader2, Pencil, Building2, Zap, Upload } from 'lucide-react';
 import { OutboundIntegration, useOutboundIntegrations } from '@/hooks/useOutboundIntegrations';
 import { useState } from 'react';
 import { AddIntegrationDialog } from './AddIntegrationDialog';
 import { EditIntegrationDialog } from './EditIntegrationDialog';
+import { LinkedInStatsUploadDialog } from './LinkedInStatsUploadDialog';
 import { formatDistanceToNow } from 'date-fns';
 
 const platformIcons: Record<string, string> = {
@@ -152,6 +153,7 @@ function IntegrationRow({ integration, onToggle, onDelete, onSync, onEdit, onSet
 export function IntegrationSetupCard() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [linkedInUploadOpen, setLinkedInUploadOpen] = useState(false);
   const [editingIntegration, setEditingIntegration] = useState<OutboundIntegration | null>(null);
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [webhookSetupId, setWebhookSetupId] = useState<string | null>(null);
@@ -199,10 +201,16 @@ export function IntegrationSetupCard() {
               Connect your outbound tools to sync campaign data
             </CardDescription>
           </div>
-          <Button onClick={() => setDialogOpen(true)} size="sm">
-            <Plus className="h-4 w-4 mr-2" />
-            Connect Platform
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={() => setLinkedInUploadOpen(true)}>
+              <Upload className="h-4 w-4 mr-2" />
+              Upload LinkedIn Stats
+            </Button>
+            <Button onClick={() => setDialogOpen(true)} size="sm">
+              <Plus className="h-4 w-4 mr-2" />
+              Connect Platform
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
           {isLoading ? (
@@ -241,6 +249,10 @@ export function IntegrationSetupCard() {
         open={editDialogOpen} 
         onOpenChange={setEditDialogOpen} 
         integration={editingIntegration}
+      />
+      <LinkedInStatsUploadDialog 
+        open={linkedInUploadOpen} 
+        onOpenChange={setLinkedInUploadOpen}
       />
     </>
   );
