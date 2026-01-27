@@ -7,6 +7,7 @@ export interface LinkedInStatsRow {
   linkedinMessagesSent: number;
   linkedinConnectionsSent: number;
   linkedinReplies: number;
+  linkedinConnectionsAccepted: number;
   matched: boolean;
   campaignId?: string;
 }
@@ -47,11 +48,13 @@ export function useLinkedInStatsUpload() {
         let newLinkedinMessagesSent = stat.linkedinMessagesSent;
         let newLinkedinConnectionsSent = stat.linkedinConnectionsSent;
         let newLinkedinReplies = stat.linkedinReplies;
+        let newLinkedinConnectionsAccepted = stat.linkedinConnectionsAccepted;
 
         if (mode === 'add') {
           newLinkedinMessagesSent += (existingStats.linkedinMessagesSent as number) || 0;
           newLinkedinConnectionsSent += (existingStats.linkedinConnectionsSent as number) || 0;
           newLinkedinReplies += (existingStats.linkedinReplies as number) || 0;
+          newLinkedinConnectionsAccepted += (existingStats.linkedinConnectionsAccepted as number) || 0;
         }
 
         const mergedStats = {
@@ -59,6 +62,7 @@ export function useLinkedInStatsUpload() {
           linkedinMessagesSent: newLinkedinMessagesSent,
           linkedinConnectionsSent: newLinkedinConnectionsSent,
           linkedinReplies: newLinkedinReplies,
+          linkedinConnectionsAccepted: newLinkedinConnectionsAccepted,
           linkedinDataSource: 'csv_upload',
           linkedinDataUploadedAt: new Date().toISOString(),
         };

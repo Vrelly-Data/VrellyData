@@ -38,11 +38,25 @@ interface LinkedInStatsUploadDialogProps {
 
 type UploadStep = 'upload' | 'preview' | 'importing';
 
-// Column aliases for auto-mapping
+// Column aliases for auto-mapping (aggregated format)
 const CAMPAIGN_NAME_ALIASES = ['campaign', 'name', 'sequence', 'sequence name', 'campaign name'];
 const LI_MESSAGES_ALIASES = ['li messages', 'linkedin messages', 'messages sent', 'linkedin messages sent', 'li messages sent'];
 const LI_CONNECTIONS_ALIASES = ['li connections', 'connection requests', 'connections sent', 'linkedin connections', 'linkedin connection requests'];
 const LI_REPLIES_ALIASES = ['li replies', 'linkedin replies', 'replies', 'linkedin message replies'];
+
+// Column aliases for action-based format
+const ACTION_COLUMN_ALIASES = ['action', 'activity', 'step', 'action type'];
+
+// Action value to metric mapping
+type LinkedInMetric = 'linkedinMessagesSent' | 'linkedinConnectionsSent' | 'linkedinReplies' | 'linkedinConnectionsAccepted';
+
+const ACTION_MAPPINGS: Record<string, LinkedInMetric> = {
+  'replied auto connection note': 'linkedinReplies',
+  'replied auto message': 'linkedinReplies',
+  'accepted auto connection': 'linkedinConnectionsAccepted',
+  'sent auto connection note': 'linkedinConnectionsSent',
+  'sent auto message': 'linkedinMessagesSent',
+};
 
 function normalizeHeader(header: string): string {
   return header.toLowerCase().trim();
@@ -66,6 +80,32 @@ function parseNumber(value: unknown): number {
     return isNaN(parsed) ? 0 : parsed;
   }
   return 0;
+}
+
+function normalizeAction(action: unknown): string {
+  if (typeof action !== 'string') return '';
+  return action.toLowerCase().trim();
+}
+
+function getMetricForAction(action: string): LinkedInMetric | null {
+  const normalized = normalizeAction(action);
+  return ACTION_MAPPINGS[normalized] || null;
+}
+
+interface AggregatedStats {
+  linkedinMessagesSent: number;
+  linkedinConnectionsSent: number;
+  linkedinReplies: number;
+  linkedinConnectionsAccepted: number;
+}
+
+function createEmptyStats(): AggregatedStats {
+  return {
+    linkedinMessagesSent: 0,
+    linkedinConnectionsSent: 0,
+    linkedinReplies: 0,
+    linkedinConnectionsAccepted: 0,
+  };
 }
 
 export function LinkedInStatsUploadDialog({ open, onOpenChange }: LinkedInStatsUploadDialogProps) {
@@ -103,47 +143,89 @@ export function LinkedInStatsUploadDialog({ open, onOpenChange }: LinkedInStatsU
       complete: (results) => {
         const headers = results.meta.fields || [];
         
-        // Find column mappings
+        // Detect format: action-based or aggregated
+        const actionCol = findMatchingColumn(headers, ACTION_COLUMN_ALIASES);
         const campaignCol = findMatchingColumn(headers, CAMPAIGN_NAME_ALIASES);
-        const messagesCol = findMatchingColumn(headers, LI_MESSAGES_ALIASES);
-        const connectionsCol = findMatchingColumn(headers, LI_CONNECTIONS_ALIASES);
-        const repliesCol = findMatchingColumn(headers, LI_REPLIES_ALIASES);
 
         if (!campaignCol) {
-          setError('Could not find campaign name column. Expected columns: ' + CAMPAIGN_NAME_ALIASES.join(', '));
+          setError('Could not find campaign/sequence name column. Expected columns: ' + CAMPAIGN_NAME_ALIASES.join(', '));
           return;
         }
 
-        if (!messagesCol && !connectionsCol && !repliesCol) {
-          setError('Could not find any LinkedIn metric columns. Expected at least one of: LI Messages, LI Connections, or LI Replies');
-          return;
-        }
+        let stats: LinkedInStatsRow[];
 
-        // Parse rows and match to campaigns
-        const stats: LinkedInStatsRow[] = results.data.map((row: Record<string, unknown>) => {
-          const campaignName = String(row[campaignCol] || '').trim();
-          const linkedinMessagesSent = messagesCol ? parseNumber(row[messagesCol]) : 0;
-          const linkedinConnectionsSent = connectionsCol ? parseNumber(row[connectionsCol]) : 0;
-          const linkedinReplies = repliesCol ? parseNumber(row[repliesCol]) : 0;
+        if (actionCol) {
+          // ACTION-BASED FORMAT: Aggregate rows by campaign
+          const campaignStats = new Map<string, AggregatedStats>();
 
-          // Try to match campaign by name (case-insensitive)
-          const matchedCampaign = campaigns.find(
-            c => c.name.toLowerCase() === campaignName.toLowerCase()
-          );
+          for (const row of results.data as Record<string, unknown>[]) {
+            const campaignName = String(row[campaignCol] || '').trim();
+            if (!campaignName) continue;
 
-          return {
-            campaignName,
-            linkedinMessagesSent,
-            linkedinConnectionsSent,
-            linkedinReplies,
-            matched: !!matchedCampaign,
-            campaignId: matchedCampaign?.id,
-          };
-        }).filter(s => s.campaignName); // Filter out empty rows
+            const action = String(row[actionCol] || '');
+            const metric = getMetricForAction(action);
 
-        if (stats.length === 0) {
-          setError('No valid data rows found in CSV');
-          return;
+            if (metric) {
+              const existing = campaignStats.get(campaignName) || createEmptyStats();
+              existing[metric] += 1;
+              campaignStats.set(campaignName, existing);
+            }
+          }
+
+          // Convert Map to array
+          stats = Array.from(campaignStats.entries()).map(([campaignName, metrics]) => {
+            const matchedCampaign = campaigns.find(
+              c => c.name.toLowerCase() === campaignName.toLowerCase()
+            );
+
+            return {
+              campaignName,
+              ...metrics,
+              matched: !!matchedCampaign,
+              campaignId: matchedCampaign?.id,
+            };
+          });
+
+          if (stats.length === 0) {
+            setError('No LinkedIn actions found in CSV. Expected action values: ' + Object.keys(ACTION_MAPPINGS).join(', '));
+            return;
+          }
+        } else {
+          // AGGREGATED FORMAT: Original parsing logic
+          const messagesCol = findMatchingColumn(headers, LI_MESSAGES_ALIASES);
+          const connectionsCol = findMatchingColumn(headers, LI_CONNECTIONS_ALIASES);
+          const repliesCol = findMatchingColumn(headers, LI_REPLIES_ALIASES);
+
+          if (!messagesCol && !connectionsCol && !repliesCol) {
+            setError('Could not find any LinkedIn metric columns. Expected at least one of: LI Messages, LI Connections, LI Replies, or an Action column');
+            return;
+          }
+
+          stats = (results.data as Record<string, unknown>[]).map((row) => {
+            const campaignName = String(row[campaignCol] || '').trim();
+            const linkedinMessagesSent = messagesCol ? parseNumber(row[messagesCol]) : 0;
+            const linkedinConnectionsSent = connectionsCol ? parseNumber(row[connectionsCol]) : 0;
+            const linkedinReplies = repliesCol ? parseNumber(row[repliesCol]) : 0;
+
+            const matchedCampaign = campaigns.find(
+              c => c.name.toLowerCase() === campaignName.toLowerCase()
+            );
+
+            return {
+              campaignName,
+              linkedinMessagesSent,
+              linkedinConnectionsSent,
+              linkedinReplies,
+              linkedinConnectionsAccepted: 0,
+              matched: !!matchedCampaign,
+              campaignId: matchedCampaign?.id,
+            };
+          }).filter(s => s.campaignName);
+
+          if (stats.length === 0) {
+            setError('No valid data rows found in CSV');
+            return;
+          }
         }
 
         setParsedStats(stats);
@@ -248,7 +330,8 @@ export function LinkedInStatsUploadDialog({ open, onOpenChange }: LinkedInStatsU
                   <TableRow>
                     <TableHead>Campaign</TableHead>
                     <TableHead className="text-right">Messages</TableHead>
-                    <TableHead className="text-right">Connections</TableHead>
+                    <TableHead className="text-right">Conn. Sent</TableHead>
+                    <TableHead className="text-right">Conn. Accepted</TableHead>
                     <TableHead className="text-right">Replies</TableHead>
                     <TableHead className="text-center">Status</TableHead>
                   </TableRow>
@@ -256,11 +339,12 @@ export function LinkedInStatsUploadDialog({ open, onOpenChange }: LinkedInStatsU
                 <TableBody>
                   {parsedStats.map((stat, index) => (
                     <TableRow key={index} className={!stat.matched ? 'opacity-50' : ''}>
-                      <TableCell className="font-medium max-w-[200px] truncate">
+                      <TableCell className="font-medium max-w-[180px] truncate">
                         {stat.campaignName}
                       </TableCell>
                       <TableCell className="text-right">{stat.linkedinMessagesSent}</TableCell>
                       <TableCell className="text-right">{stat.linkedinConnectionsSent}</TableCell>
+                      <TableCell className="text-right">{stat.linkedinConnectionsAccepted}</TableCell>
                       <TableCell className="text-right">{stat.linkedinReplies}</TableCell>
                       <TableCell className="text-center">
                         {stat.matched ? (
