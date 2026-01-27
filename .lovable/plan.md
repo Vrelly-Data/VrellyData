@@ -1,199 +1,174 @@
 
+## Plan: Fix Data Sync and Implement Email vs LinkedIn Metrics
 
-## Plan: Enhance Data Playground with LinkedIn vs Email Metric Differentiation
+### Investigation Summary
 
-### Overview
+After running a sync and analyzing the logs, I found:
 
-This plan adds the ability to differentiate between LinkedIn and Email activities in the Data Playground. We'll capture step-level data from Reply.io, add hover tooltips to show breakdowns, and ensure no changes affect other parts of the app.
+| Finding | Status | Impact |
+|---------|--------|--------|
+| Unique constraint missing on `synced_contacts` | **Critical** | All contact upserts fail with error 42P10 |
+| Steps endpoint returns 404 for some campaigns | **Moderate** | Can't capture step types for archived campaigns |
+| Reply.io `/people` endpoint lacks LinkedIn engagement fields | **Limitation** | Need alternative approach for LinkedIn metrics |
+| Campaign-level `deliveriesCount` and `repliesCount` are email-only | **Limitation** | LinkedIn metrics require step-based tracking |
 
-### Current Data Reality
+### The Reality of Reply.io's API
 
-Based on the synced data from Reply.io:
+Based on the actual API response, the person data only includes:
+- `linkedInProfile` (URL)
+- `linkedInRecruiterUrl`
+- `salesNavigatorUrl`
 
-| Metric | Current Source | Limitation |
-|--------|---------------|------------|
-| `deliveriesCount` | Campaign API | Email-only (LinkedIn campaigns show 0) |
-| `repliesCount` | Campaign API | Likely email-only |
-| `outOfOfficeCount` | Campaign API | Already available and working |
-| LinkedIn stats | Not captured | Need to fetch from steps/actions API |
+It does **not** include `linkedinConnectionStatus` or `linkedinReplyStatus` in the standard `/campaigns/{id}/people` endpoint. These fields may require:
+1. A different API endpoint (`/actions` or `/people/{id}/activities`)
+2. Premium Reply.io API access
+3. Additional query parameters we're not using
 
-### Phase 1: Database Schema Update
+---
 
-**Add `step_type` column to `synced_sequences`**
+### Phase 1: Fix Critical Database Issue
+
+**Add unique constraint to `synced_contacts`**
+
+Currently the upsert fails because `onConflict: "campaign_id,email"` requires a unique constraint on those columns.
 
 ```sql
-ALTER TABLE synced_sequences 
-ADD COLUMN step_type TEXT;
-```
-
-This allows storing step types like: `email`, `linkedin_connect`, `linkedin_message`, `linkedin_view_profile`, `linkedin_inmail`, etc.
-
----
-
-### Phase 2: Update Sync Function to Capture All Step Types
-
-**File: `supabase/functions/sync-reply-campaigns/index.ts`**
-
-1. Remove the email-only filter at line 318
-2. Store ALL step types with their `step.type` value
-3. Add logging to see what step types exist in the data
-
-```typescript
-// BEFORE
-for (const step of steps) {
-  if (step.type !== "email") continue; // Remove this
-
-// AFTER  
-for (const step of steps) {
-  console.log(`  Step ${step.number}: type=${step.type}`);
-  // Store step_type in the upsert
+-- Add unique constraint for upsert to work
+ALTER TABLE synced_contacts 
+ADD CONSTRAINT synced_contacts_campaign_email_unique 
+UNIQUE (campaign_id, email);
 ```
 
 ---
 
-### Phase 3: Calculate Channel-Specific Metrics
+### Phase 2: Improve Steps Sync Reliability
 
-**New file: `src/hooks/useChannelMetrics.ts`**
+**Update sync function to handle 404 gracefully**
 
-Query `synced_sequences` to calculate:
-- Email steps count
-- LinkedIn Connection Request steps count
-- LinkedIn Message steps count
-- LinkedIn InMail steps count
+Some campaigns (especially archived ones) return 404 for the `/steps` endpoint. The sync should:
+1. Log the issue but continue processing
+2. Not increment retry attempts for 404s (it's not a rate limit issue)
 
-```typescript
-interface ChannelMetrics {
-  emailSteps: number;
-  linkedinConnectSteps: number;
-  linkedinMessageSteps: number;
-  linkedinViewSteps: number;
-}
+---
+
+### Phase 3: Calculate Metrics from Available Data
+
+Since we can't get direct LinkedIn reply counts, we'll calculate metrics based on what we have:
+
+**Approach A: Campaign-Level Estimation**
+- `deliveriesCount` = Emails sent only (LinkedIn-only campaigns show 0)
+- `repliesCount` = Likely email replies only
+- Campaigns with name containing "LI" or "LinkedIn" but `deliveriesCount=0` are LinkedIn-only
+
+**Approach B: Step-Type Ratio (after steps sync works)**
+- Count email steps vs LinkedIn steps per campaign
+- Distribute the campaign's `peopleCount` proportionally
+- Use step type ratios to estimate channel breakdown
+
+---
+
+### Phase 4: Enhanced Tooltip Display
+
+Update the stat cards to show the breakdown with clear indicators of what's actual vs estimated:
+
+**Total Messages Sent Tooltip:**
+```
+┌──────────────────────────────────────┐
+│  Messages Breakdown                  │
+│  ──────────────────                  │
+│  📧 Emails Sent: 627 (from API)     │
+│  🔗 LinkedIn Steps: X campaigns     │
+│                                      │
+│  Note: Reply.io only tracks email   │
+│  deliveries at campaign level       │
+└──────────────────────────────────────┘
+```
+
+**Total Replies Tooltip:**
+```
+┌──────────────────────────────────────┐
+│  Replies Breakdown                   │
+│  ────────────────                    │
+│  📧 Email Replies: 10 (from API)    │
+│  🔗 LinkedIn Replies: Not available │
+│                                      │
+│  Reply.io API limitation             │
+└──────────────────────────────────────┘
 ```
 
 ---
 
-### Phase 4: Add Hover Tooltips to Stat Cards
+### Files to Modify
 
-**File: `src/components/playground/PlaygroundStatsGrid.tsx`**
-
-Wrap stat cards with `Tooltip` to show breakdowns on hover:
-
-**Total Replies Card:**
-```
-┌───────────────────────────────┐
-│  Total Replies: 10            │
-│  ─────────────────            │
-│  Hover shows:                 │
-│  • Email Replies: 8           │
-│  • LinkedIn Replies: 2        │
-└───────────────────────────────┘
-```
-
-**Total Messages Sent Card:**
-```
-┌───────────────────────────────┐
-│  Total Messages Sent: 962     │
-│  ─────────────────────────    │
-│  Hover shows:                 │
-│  • Emails Sent: 627           │
-│  • Connection Requests: 200   │
-│  • LinkedIn Messages: 135     │
-│  • Connections Accepted: ???  │
-└───────────────────────────────┘
-```
-
----
-
-### Phase 5: Update Stats Hook with Channel Breakdown
-
-**File: `src/hooks/usePlaygroundStats.ts`**
-
-Add new fields to `PlaygroundStats`:
-
-```typescript
-interface PlaygroundStats {
-  // Existing
-  totalMessagesSent: number;
-  totalReplies: number;
-  // New breakdowns
-  emailsSent: number;
-  emailReplies: number;
-  linkedinConnectionsSent: number;
-  linkedinMessagesSent: number;
-  linkedinReplies: number;
-  connectionsAccepted: number; // May need additional API endpoint
-}
-```
-
----
-
-### Known Limitations & Next Steps
-
-**Reply.io API Limitations:**
-- The `/campaigns` endpoint doesn't provide LinkedIn-specific metrics at the campaign level
-- `connectionsAccepted` may require calling a different API endpoint (e.g., `/people/{id}/activities` or `/actions`)
-- We need to run a sync and check the logs to see what `step.type` values Reply.io returns
-
-**Investigation Needed:**
-After implementing Phase 2 and running a sync, we'll see the actual step types in the logs. Common Reply.io step types include:
-- `email`
-- `linkedin_connect` 
-- `linkedin_message`
-- `linkedin_view_profile`
-- `linkedin_inmail`
-- `call`
-- `manual_task`
-
----
-
-### Files to Create/Modify
-
-| File | Action | Purpose |
-|------|--------|---------|
-| Database migration | Create | Add `step_type` column to `synced_sequences` |
-| `supabase/functions/sync-reply-campaigns/index.ts` | Modify | Capture all step types, log what we find |
-| `src/hooks/useChannelMetrics.ts` | Create | Calculate channel-specific counts from sequences |
-| `src/hooks/usePlaygroundStats.ts` | Modify | Add channel breakdown fields |
-| `src/components/playground/PlaygroundStatsGrid.tsx` | Modify | Add tooltips showing channel breakdowns |
-
----
-
-### Isolation Confirmation
-
-All changes are isolated to the Data Playground feature:
-- Only touches `synced_*` tables (not `people_records`, `company_records`)
-- Only modifies files in `src/components/playground/` and `src/hooks/usePlayground*.ts`
-- Edge function `sync-reply-campaigns` is specific to Data Playground
-- No changes to main app navigation, authentication, or core features
+| File | Changes |
+|------|---------|
+| Database migration | Add unique constraint on `synced_contacts(campaign_id, email)` |
+| `supabase/functions/sync-reply-campaigns/index.ts` | Handle 404 errors gracefully for steps, log step types properly |
+| `src/hooks/usePlaygroundStats.ts` | Calculate email-specific metrics from campaigns with `deliveriesCount > 0` |
+| `src/components/playground/PlaygroundStatsGrid.tsx` | Update tooltips to show actual vs estimated metrics with API limitation notes |
 
 ---
 
 ### Technical Details
 
-**Tooltip Implementation:**
-```tsx
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-
-<TooltipProvider>
-  <Tooltip>
-    <TooltipTrigger asChild>
-      <Card className="cursor-pointer hover:bg-accent/50">
-        {/* StatCard content */}
-      </Card>
-    </TooltipTrigger>
-    <TooltipContent>
-      <div className="space-y-1 text-sm">
-        <div className="flex justify-between gap-4">
-          <span>Email Replies:</span>
-          <span className="font-medium">{stats.emailReplies}</span>
-        </div>
-        <div className="flex justify-between gap-4">
-          <span>LinkedIn Replies:</span>
-          <span className="font-medium">{stats.linkedinReplies}</span>
-        </div>
-      </div>
-    </TooltipContent>
-  </Tooltip>
-</TooltipProvider>
+**Database Migration:**
+```sql
+-- Create unique constraint for synced_contacts upsert
+ALTER TABLE synced_contacts 
+ADD CONSTRAINT synced_contacts_campaign_email_unique 
+UNIQUE (campaign_id, email);
 ```
 
+**Enhanced Stats Calculation:**
+```typescript
+// Separate email-only campaigns from mixed/LinkedIn campaigns
+const emailOnlyCampaigns = campaigns.filter(c => 
+  (c.stats?.sent || 0) > 0
+);
+const linkedinCampaigns = campaigns.filter(c => 
+  (c.stats?.sent || 0) === 0 && (c.stats?.peopleCount || 0) > 0
+);
+```
+
+**Tooltip Update:**
+```tsx
+const messagesTooltipContent = (
+  <div className="space-y-2 text-sm">
+    <p className="font-medium border-b pb-1">Messages Breakdown</p>
+    <div className="space-y-1">
+      <div className="flex justify-between gap-4">
+        <span className="text-muted-foreground">📧 Emails Delivered:</span>
+        <span className="font-medium">{emailsDelivered}</span>
+      </div>
+      <div className="flex justify-between gap-4">
+        <span className="text-muted-foreground">🔗 LinkedIn Campaigns:</span>
+        <span className="font-medium">{linkedinCampaignCount}</span>
+      </div>
+    </div>
+    <p className="text-xs text-muted-foreground pt-1 border-t">
+      LinkedIn send counts not available via Reply.io API
+    </p>
+  </div>
+);
+```
+
+---
+
+### Future Enhancement: LinkedIn Activities API
+
+To get actual LinkedIn engagement metrics, we could explore:
+
+1. **Reply.io Actions API**: `/actions?type=linkedin_*` may return activity logs
+2. **Person Activities**: `/people/{id}/activities` might have per-contact LinkedIn events
+3. **Webhooks**: Reply.io webhooks can push LinkedIn events in real-time
+
+This would require additional API research and potentially a separate sync process.
+
+---
+
+### Isolation Confirmation
+
+All changes remain isolated to Data Playground:
+- Only modifies `synced_*` tables
+- Only touches files in `src/components/playground/` and `src/hooks/usePlayground*.ts`
+- No impact on People, Companies, or Audience Builder features
