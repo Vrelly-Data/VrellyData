@@ -1,175 +1,165 @@
 
 
-## Hybrid LinkedIn Tracking: CSV Upload + Real-time Webhooks
+## Fix: Support Reply.io Action-Based CSV Format
 
 ### The Problem
-Reply.io's polling API doesn't expose historical LinkedIn metrics, but you can see them in Reply.io's reports/exports. The solution is a **hybrid approach**:
 
-| Data Source | Use Case |
-|-------------|----------|
-| **CSV Upload** | Import historical LinkedIn stats from Reply.io report exports |
-| **Webhooks** | Capture real-time LinkedIn activity as it happens (already set up) |
-
----
-
-### Solution Overview
-
-```text
-+---------------------------+     +---------------------------+
-|   Reply.io Report Export  |     |    Reply.io Webhooks      |
-|   (Historical Data)       |     |    (Real-time Data)       |
-+---------------------------+     +---------------------------+
-            |                                  |
-            v                                  v
-+---------------------------+     +---------------------------+
-|   CSV Upload Dialog       |     |   reply-webhook function  |
-|   (New Component)         |     |   (Already Built)         |
-+---------------------------+     +---------------------------+
-            |                                  |
-            +----------------+-----------------+
-                             |
-                             v
-              +------------------------------+
-              |    synced_campaigns.stats    |
-              |    (linkedinMessagesSent,    |
-              |     linkedinConnectionsSent, |
-              |     linkedinReplies)         |
-              +------------------------------+
-                             |
-                             v
-              +------------------------------+
-              |   PlaygroundStatsGrid        |
-              |   (Dashboard Display)        |
-              +------------------------------+
-```
-
----
-
-### Implementation Details
-
-#### 1. New Component: `LinkedInStatsUploadDialog.tsx`
-
-A dialog allowing users to upload a CSV file containing LinkedIn metrics. The dialog will:
-
-- Accept CSV with columns like: `Campaign Name`, `LinkedIn Messages Sent`, `LinkedIn Connection Requests`, `LinkedIn Replies`
-- Auto-match campaign names to existing `synced_campaigns` records
-- Merge uploaded stats into the `stats` JSONB field
-
-**Expected CSV Format (from Reply.io export):**
-
+The current CSV parser expects this format (aggregated per campaign):
 | Campaign Name | LI Messages Sent | LI Connections | LI Replies |
 |---------------|------------------|----------------|------------|
 | Q1 Outreach   | 500              | 250            | 45         |
-| Tech Founders | 320              | 180            | 28         |
 
-#### 2. Add Upload Button to Dashboard
+But Reply.io exports this format (one row per action):
+| Sequence | Action | ... |
+|----------|--------|-----|
+| Q1 Outreach | Sent auto message | ... |
+| Q1 Outreach | Sent auto connection note | ... |
+| Q1 Outreach | Replied auto message | ... |
 
-In `PlaygroundStatsGrid.tsx` or `IntegrationSetupCard.tsx`:
-- Add "Upload LinkedIn Stats" button next to the Sync button
-- Opens the new dialog when clicked
+### Solution
 
-#### 3. Stats Merge Logic
+Update `LinkedInStatsUploadDialog.tsx` to detect and support BOTH formats:
 
-When uploading:
-1. Parse CSV and extract LinkedIn metrics per campaign
-2. Match each row to existing `synced_campaigns` by name
-3. Merge stats into the `stats` JSONB column (additive or replace based on user choice)
-4. Invalidate stats query to refresh dashboard
+1. **Format Detection**: Check if the CSV has an "action" column
+2. **Action Parsing**: Map action values to LinkedIn metric categories
+3. **Aggregation**: Group rows by campaign and count actions per category
 
----
+### Action Value Mappings
 
-### Files to Create/Modify
+| Action Value (case-insensitive) | Metric |
+|---------------------------------|--------|
+| `replied auto connection note` | `linkedinReplies` |
+| `replied auto message` | `linkedinReplies` |
+| `accepted auto connection` | `linkedinConnectionsAccepted` |
+| `sent auto connection note` | `linkedinConnectionsSent` |
+| `sent auto message` | `linkedinMessagesSent` |
 
-| File | Action | Purpose |
-|------|--------|---------|
-| `src/components/playground/LinkedInStatsUploadDialog.tsx` | Create | Dialog for CSV upload + mapping |
-| `src/components/playground/IntegrationSetupCard.tsx` | Modify | Add "Upload LinkedIn Stats" button |
-| `src/hooks/useLinkedInStatsUpload.ts` | Create | Mutation hook for uploading and merging stats |
+### Implementation Details
 
----
+#### 1. Add Action Column Detection
 
-### Detailed Component Design
-
-#### LinkedInStatsUploadDialog.tsx
-
-**State Flow:**
-1. **Upload** - Select CSV file
-2. **Preview** - Show matched campaigns and values to be imported
-3. **Confirm** - User confirms the import
-4. **Success** - Stats merged, dashboard updated
-
-**Key Features:**
-- Uses existing `PapaParse` for CSV parsing (already installed)
-- Campaign matching by exact name or fuzzy match
-- Shows which campaigns matched vs not found
-- Allows "Replace" or "Add to existing" mode
-
-**UI Elements:**
-- File dropzone (similar to existing CSVImportDialog)
-- Preview table showing: Campaign Name, LI Messages, LI Connections, LI Replies, Status (Matched/Not Found)
-- Import button with progress indicator
-
----
-
-### Expected User Flow
-
-1. User exports LinkedIn report from Reply.io dashboard (CSV)
-2. In Data Playground, clicks "Upload LinkedIn Stats"
-3. Selects the CSV file
-4. Preview shows: "4 campaigns matched, 1 not found"
-5. Clicks "Import"
-6. Dashboard immediately shows LinkedIn metrics
-
----
-
-### Technical Notes
-
-**CSV Column Aliases (for auto-mapping):**
-
-| Expected Field | Accepted Aliases |
-|----------------|------------------|
-| Campaign Name | `campaign`, `name`, `sequence`, `sequence name` |
-| LinkedIn Messages Sent | `li messages`, `linkedin messages`, `messages sent` |
-| LinkedIn Connections | `li connections`, `connection requests`, `connections sent` |
-| LinkedIn Replies | `li replies`, `linkedin replies` |
-
-**Stats Merge Strategy:**
 ```typescript
-// Merge uploaded LinkedIn stats into existing campaign stats
-const mergedStats = {
-  ...existingStats,
-  linkedinMessagesSent: uploadedData.linkedinMessagesSent,
-  linkedinConnectionsSent: uploadedData.linkedinConnectionsSent,
-  linkedinReplies: uploadedData.linkedinReplies,
-  linkedinDataSource: 'csv_upload', // Track source for transparency
-  linkedinDataUploadedAt: new Date().toISOString(),
+// New aliases for action-based format
+const ACTION_COLUMN_ALIASES = ['action', 'activity', 'step', 'action type'];
+const SEQUENCE_NAME_ALIASES = ['sequence', 'sequence name', 'campaign', 'campaign name'];
+
+// Action value to metric mapping
+const ACTION_MAPPINGS: Record<string, keyof LinkedInStats> = {
+  'replied auto connection note': 'linkedinReplies',
+  'replied auto message': 'linkedinReplies',
+  'accepted auto connection': 'linkedinConnectionsAccepted',
+  'sent auto connection note': 'linkedinConnectionsSent',
+  'sent auto message': 'linkedinMessagesSent',
 };
 ```
 
----
+#### 2. Update Parsing Logic
 
-### Webhook Integration (Already Working)
+When an "action" column is detected:
+1. Loop through all rows
+2. For each row, identify the action type and campaign name
+3. Aggregate counts per campaign per metric type
+4. Convert aggregated data to the existing `LinkedInStatsRow[]` format
 
-Once historical data is uploaded via CSV, future LinkedIn activity will be captured automatically via webhooks (already implemented):
+```typescript
+// Pseudocode for action-based parsing
+const campaignStats = new Map<string, {
+  linkedinMessagesSent: number;
+  linkedinConnectionsSent: number;
+  linkedinReplies: number;
+  linkedinConnectionsAccepted: number;
+}>();
 
-| Event | Stat Updated |
-|-------|--------------|
-| `linkedin_message_sent` | `linkedinMessagesSent` += 1 |
-| `linkedin_connection_request_sent` | `linkedinConnectionsSent` += 1 |
-| `linkedin_message_replied` | `linkedinReplies` += 1 |
-| `linkedin_connection_request_accepted` | `linkedinConnectionsAccepted` += 1 |
+for (const row of results.data) {
+  const campaignName = row[sequenceCol];
+  const action = normalizeAction(row[actionCol]);
+  const metric = ACTION_MAPPINGS[action];
+  
+  if (metric && campaignName) {
+    const stats = campaignStats.get(campaignName) || { ... };
+    stats[metric] += 1;
+    campaignStats.set(campaignName, stats);
+  }
+}
+```
 
-The numbers will stack: **Historical (CSV) + Real-time (Webhooks) = Total Shown**
+#### 3. Update Hook to Support Connection Acceptances
 
----
+Add `linkedinConnectionsAccepted` to the stats merge in `useLinkedInStatsUpload.ts`.
+
+### Files to Modify
+
+| File | Changes |
+|------|---------|
+| `src/components/playground/LinkedInStatsUploadDialog.tsx` | Add action-based CSV format detection and parsing |
+| `src/hooks/useLinkedInStatsUpload.ts` | Add `linkedinConnectionsAccepted` to the interface and merge logic |
+
+### Updated User Flow
+
+1. User uploads Reply.io action report CSV
+2. Parser detects "action" column format
+3. Rows are aggregated by campaign:
+   - "Q1 Outreach": 50 messages, 30 connections, 12 replies
+4. Preview shows aggregated stats per campaign
+5. User clicks Import
+6. Stats merged into `synced_campaigns.stats`
+
+### Technical Details
+
+#### Format Detection Logic
+
+```typescript
+function detectCSVFormat(headers: string[]): 'aggregated' | 'action-based' {
+  const hasActionCol = findMatchingColumn(headers, ACTION_COLUMN_ALIASES);
+  return hasActionCol ? 'action-based' : 'aggregated';
+}
+```
+
+#### Action Normalization
+
+```typescript
+function normalizeAction(action: unknown): string {
+  if (typeof action !== 'string') return '';
+  return action.toLowerCase().trim();
+}
+
+function getMetricForAction(action: string): keyof LinkedInStats | null {
+  const normalized = normalizeAction(action);
+  return ACTION_MAPPINGS[normalized] || null;
+}
+```
+
+#### Aggregation Structure
+
+```typescript
+interface AggregatedCampaignStats {
+  campaignName: string;
+  linkedinMessagesSent: number;
+  linkedinConnectionsSent: number;
+  linkedinReplies: number;
+  linkedinConnectionsAccepted: number;
+}
+
+// After parsing, convert Map to array for preview
+const stats: LinkedInStatsRow[] = Array.from(campaignStats.entries()).map(
+  ([campaignName, metrics]) => ({
+    campaignName,
+    ...metrics,
+    matched: !!campaigns.find(c => c.name.toLowerCase() === campaignName.toLowerCase()),
+    campaignId: campaigns.find(c => c.name.toLowerCase() === campaignName.toLowerCase())?.id,
+  })
+);
+```
+
+### Preview Table Update
+
+Add a new column for "Connections Accepted" in the preview table to show all 4 metrics.
 
 ### Summary
 
-This hybrid approach gives you:
-
-| Historical Data | Real-time Data |
-|-----------------|----------------|
-| Uploaded via CSV from Reply.io exports | Captured via webhooks (already enabled) |
-| One-time import of past LinkedIn activity | Continuous updates as new activity occurs |
-| Populates immediately after upload | Populates as events happen |
+This update makes the CSV upload support Reply.io's native action-based export format by:
+1. Detecting the format automatically (action column vs. aggregated columns)
+2. Mapping action values to LinkedIn metric categories
+3. Aggregating individual actions into per-campaign totals
+4. Displaying and importing the aggregated stats
 
