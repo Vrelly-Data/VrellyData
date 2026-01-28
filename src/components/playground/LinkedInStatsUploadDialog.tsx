@@ -261,8 +261,8 @@ export function LinkedInStatsUploadDialog({ open, onOpenChange }: LinkedInStatsU
             <Linkedin className="h-5 w-5 text-[#0A66C2]" />
             Upload LinkedIn Stats
           </DialogTitle>
-          <DialogDescription>
-            Import historical LinkedIn metrics from a Reply.io report CSV
+        <DialogDescription>
+            Import or update LinkedIn metrics. Use 'Replace' to overwrite existing stats with fresh data.
           </DialogDescription>
         </DialogHeader>
 
@@ -312,17 +312,24 @@ export function LinkedInStatsUploadDialog({ open, onOpenChange }: LinkedInStatsU
                   </Badge>
                 )}
               </div>
-              <div className="flex items-center gap-2">
-                <Label htmlFor="mode" className="text-sm">Mode:</Label>
-                <Select value={mode} onValueChange={(v: 'replace' | 'add') => setMode(v)}>
-                  <SelectTrigger id="mode" className="w-[140px]">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="replace">Replace</SelectItem>
-                    <SelectItem value="add">Add to existing</SelectItem>
-                  </SelectContent>
-                </Select>
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-2">
+                  <Label htmlFor="mode" className="text-sm">Mode:</Label>
+                  <Select value={mode} onValueChange={(v: 'replace' | 'add') => setMode(v)}>
+                    <SelectTrigger id="mode" className="w-[180px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="replace">Replace LinkedIn Stats</SelectItem>
+                      <SelectItem value="add">Add to Existing Stats</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {mode === 'replace' 
+                    ? 'Overwrites existing LinkedIn stats with values from this CSV. Email stats are preserved.'
+                    : 'Adds CSV values on top of existing LinkedIn stats (for cumulative updates).'}
+                </p>
               </div>
             </div>
 
@@ -373,6 +380,11 @@ export function LinkedInStatsUploadDialog({ open, onOpenChange }: LinkedInStatsU
         <DialogFooter>
           {step === 'preview' && (
             <>
+              {mode === 'replace' && matchedCount > 0 && (
+                <p className="text-xs text-muted-foreground mr-auto">
+                  This will overwrite LinkedIn stats for {matchedCount} existing campaign{matchedCount > 1 ? 's' : ''}.
+                </p>
+              )}
               <Button variant="outline" onClick={() => setStep('upload')}>
                 Back
               </Button>
