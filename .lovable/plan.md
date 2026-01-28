@@ -1,96 +1,93 @@
 
 
-## Fix Campaign Fetching: Remove Team ID Filter Option
+## Fix: Fetch Campaigns Across ALL Agency Teams
 
-### Problem
-Your integration is filtering to team ID `383171`, showing only 62 campaigns. If your Reply.io account has campaigns across multiple teams/workspaces, or if the team discovery is incomplete, you're missing campaigns.
+### Root Cause
 
-### Solution: Allow "All Campaigns" Option
+For Reply.io agency accounts, the V1 `/campaigns` endpoint returns campaigns scoped to the authenticated context. Even when we omit the `X-Reply-Team-Id` header, the API only returns campaigns for the "default" team (383171 in your case - 62 campaigns).
 
-Give users the ability to fetch campaigns **without** the team filter to see all accessible campaigns.
+To see all 200+ campaigns across your agency, we need to:
+1. Discover ALL team IDs in your agency account
+2. Fetch campaigns from EACH team separately
+3. Merge the results
 
-### Changes Required
+### Solution: Multi-Team Campaign Aggregation
 
-**1. Update Edge Function: `fetch-available-campaigns`**
+Update the `fetch-available-campaigns` edge function to:
+1. First call `fetch-reply-teams` logic to discover all teams
+2. Loop through each team and fetch their campaigns
+3. Combine all campaigns with their team context
+4. Return the merged list to the UI
 
-Add an optional `skipTeamFilter` parameter that bypasses the `X-Reply-Team-Id` header:
+### Technical Implementation
 
-```typescript
-// If user requests all campaigns, don't filter by team
-const campaigns = await fetchAllCampaigns(
-  apiKey, 
-  skipTeamFilter ? undefined : (replyTeamId || undefined)
-);
-```
+**1. Update `fetch-available-campaigns/index.ts`**
 
-**2. Update UI: `ManageCampaignsDialog.tsx`**
-
-Add a toggle or button to "Show all campaigns" that refetches without the team filter:
+When `skipTeamFilter` is true:
+- Use V3 `/sequences` endpoint to discover all unique teamIds/ownerIds
+- For each discovered team, call `/campaigns?limit=100` with that team's `X-Reply-Team-Id`
+- Merge all campaign results
+- Add a `teamId` field to each campaign so users know which team it belongs to
 
 ```text
-+-----------------------------------------------------------+
-| Manage Campaigns                               [X] Close   |
-+-----------------------------------------------------------+
-| [Search campaigns...]                                      |
-| [✓] Select All  [  ] Deselect All                          |
-|                                                            |
-| ⚠️ Showing 62 campaigns for team "383171"                  |
-| [Show All Campaigns] ← Fetch without team filter           |
-+-----------------------------------------------------------+
++-------------------+     +----------------------+     +-------------------+
+| skipTeamFilter=   |---->| Discover all teams   |---->| Fetch campaigns   |
+| true              |     | via V3 /sequences    |     | for EACH team     |
++-------------------+     +----------------------+     +-------------------+
+                                                              |
+                          +-------------------------------+   |
+                          | Merge all campaigns           |<--+
+                          | Add team context to each      |
+                          +-------------------------------+
+                                      |
+                                      v
+                          +-------------------------------+
+                          | Return 200+ campaigns         |
+                          | from all agency teams         |
+                          +-------------------------------+
 ```
 
-**3. Update Integration Settings: Allow Clearing Team ID**
+**2. Update UI to Show Team Context**
 
-In `EditIntegrationDialog.tsx`, allow users to clear the Team ID field to disable filtering entirely.
+In `ManageCampaignsDialog.tsx`, when showing all campaigns:
+- Display which team each campaign belongs to
+- Allow filtering by team
+- Show grouped count (e.g., "62 from Team A, 80 from Team B, 60 from Team C")
 
-**4. Alternative: Improve Team Discovery**
+**3. Handle Rate Limits**
 
-Update `fetch-reply-teams` to:
-- Paginate through ALL sequences (not just 100)
-- Also check the V1 `/campaigns` endpoint directly for unique owners
-- Provide better visibility into what the API key has access to
+Reply.io has rate limits, so when fetching from multiple teams:
+- Add small delays between team fetches (300ms)
+- Show progress in UI ("Fetching from team 1 of 4...")
+- Handle partial failures gracefully
 
 ### Files to Modify
 
 | File | Change |
 |------|--------|
-| `supabase/functions/fetch-available-campaigns/index.ts` | Add `skipTeamFilter` option |
-| `src/components/playground/ManageCampaignsDialog.tsx` | Add "Show All" toggle/button |
-| `src/hooks/useAvailableCampaigns.ts` | Add refetch option with no filter |
-| `src/components/playground/EditIntegrationDialog.tsx` | Allow clearing Team ID |
+| `supabase/functions/fetch-available-campaigns/index.ts` | Add multi-team discovery and aggregation |
+| `src/components/playground/ManageCampaignsDialog.tsx` | Show team badges on campaigns when showing all |
+| `src/hooks/useAvailableCampaigns.ts` | Update types to include team context |
 
-### Alternative Quick Fix
+### Expected Result
 
-If you want to immediately see all campaigns, you can:
-1. Edit your integration and clear the Team ID field (set to empty)
-2. Refresh the Manage Campaigns dialog
+After implementation:
+- With team filter ON: 62 campaigns (current team only)
+- With team filter OFF: 200+ campaigns (all teams aggregated)
 
-This will fetch campaigns without the team filter.
+### Trade-offs
 
-### Technical Details
+**Pros:**
+- See ALL campaigns across your agency
+- No manual team switching needed
+- Can link campaigns from any team
 
-**Current behavior:**
-```
-GET /v1/campaigns?limit=100&page=1
-Headers: X-Reply-Team-Id: 383171  ← Filters to one team
-Response: 62 campaigns
-```
+**Cons:**
+- Initial "Show All" fetch takes longer (multiple API calls)
+- May hit rate limits with very large accounts (10+ teams)
+- Edge function timeout risk for accounts with 500+ campaigns across 10+ teams
 
-**Proposed "Show All" behavior:**
-```
-GET /v1/campaigns?limit=100&page=1
-Headers: (no team filter)
-Response: All campaigns accessible by API key
-```
+### Alternative: Team Selector Dropdown
 
-### Recommended Approach
-
-**Option A: Quick Fix** - Let users clear Team ID in Edit dialog
-- Fastest to implement
-- User manually controls filtering
-
-**Option B: Toggle in Dialog** - "Show All Campaigns" button
-- Better UX
-- More explicit about what filtering is happening
-- Shows warning about team filter being applied
+Instead of auto-fetching all teams, we could add a team dropdown that lets you switch between teams manually. This would be faster but requires more clicks.
 
