@@ -1,45 +1,45 @@
-# Campaign Linking Flow - IMPLEMENTED ✅
 
-## What Was Built
 
-### Database
-- Added `is_linked` boolean column to `synced_campaigns` table (default: false)
-- Added index for efficient filtering of linked campaigns
+## Fix: Campaign List Not Scrolling/Showing All Campaigns
 
-### New Edge Function: `fetch-available-campaigns`
-- Lightweight fetch of ALL campaigns from Reply.io (just names/IDs/status)
-- Stores campaigns in database with `is_linked` status
-- Returns campaigns with current link status for UI
+### Problem Identified
+The `ManageCampaignsDialog` is correctly fetching all 62 campaigns from the API, but only a few are visible because the `ScrollArea` component doesn't have a proper height constraint for scrolling to work.
 
-### New UI Components
-- `ManageCampaignsDialog.tsx` - Campaign selection dialog with:
-  - Search/filter by name
-  - Select All / Deselect All buttons
-  - Checkbox per campaign
-  - Shows status and contact count
-  - Save button to persist changes
+### Root Cause
+The Radix UI `ScrollArea` component requires an explicit height to create a scrollable container. Currently, `flex-1` is used, but this doesn't provide a bounded height in this dialog layout context, so the scroll viewport has no limit and content overflows or gets cut off without being scrollable.
 
-### New Hook: `useAvailableCampaigns.ts`
-- Fetches available campaigns from edge function
-- Manages linking/unlinking mutations
-- Bulk update support for efficiency
+### Solution
+Add an explicit height to the `ScrollArea` to ensure all 62 campaigns are accessible via scrolling.
 
-### Updated Components
-- `IntegrationSetupCard.tsx` - Added "Manage Campaigns" button for Reply.io integrations
-- `CampaignsTable.tsx` - Now shows only linked campaigns
-- `useSyncedCampaigns.ts` - Filters to linked campaigns by default
+### File to Modify
 
-## Flow
-1. Connect Reply.io integration
-2. Click "Manage Campaigns" button
-3. Dialog fetches ALL campaigns (fast, lightweight)
-4. Select which campaigns to track
-5. Click Save → campaigns marked as `is_linked = true`
-6. Sync only processes linked campaigns
-7. Dashboard shows only linked campaign data
+**`src/components/playground/ManageCampaignsDialog.tsx`**
 
-## Next Steps (Future)
-- Update `sync-reply-campaigns` to only sync campaigns where `is_linked = true`
-- Add comprehensive webhook event capture
-- Add on-demand sequence content sync for AI copy generation
+Change the ScrollArea from:
+```tsx
+<ScrollArea className="flex-1 border rounded-md">
+```
+
+To:
+```tsx
+<ScrollArea className="h-[400px] border rounded-md">
+```
+
+This gives the ScrollArea a fixed 400px height, which:
+- Provides enough space to show approximately 8-10 campaigns at once
+- Enables vertical scrolling to access all 62 campaigns
+- Works reliably within the dialog's max-height constraint
+
+### Alternative Approach (if fixed height is undesirable)
+If you prefer a responsive approach that uses available dialog space, we could use:
+```tsx
+<ScrollArea className="flex-1 min-h-[200px] max-h-[400px] border rounded-md">
+```
+
+This provides a minimum height of 200px, maximum of 400px, with flex to fill available space between.
+
+### Technical Details
+- The Radix UI ScrollArea viewport needs a bounded container to calculate scroll dimensions
+- Without explicit height, the viewport's `h-full` has nothing to reference
+- The fix ensures the scroll thumb appears and users can scroll through all campaigns
 
