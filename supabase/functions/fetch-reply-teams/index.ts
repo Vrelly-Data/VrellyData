@@ -132,10 +132,10 @@ Deno.serve(async (req) => {
       console.log("Agency clients endpoint not available:", agencyErr);
     }
 
-    // Try 4: Extract unique owners from campaigns as fallback
-    console.log("Trying /campaigns endpoint for team hints...");
+    // Try 4: Extract unique owners from campaigns as fallback (ACTUALLY add them)
+    console.log("Trying /campaigns endpoint to extract unique owners...");
     try {
-      const campaignsResponse = await fetch(`${REPLY_API_BASE}/campaigns`, {
+      const campaignsResponse = await fetch(`${REPLY_API_BASE}/campaigns?limit=100`, {
         method: "GET",
         headers: {
           "X-Api-Key": apiKey,
@@ -147,18 +147,23 @@ Deno.serve(async (req) => {
         const campaignsData = await campaignsResponse.json();
         console.log("Campaigns count:", Array.isArray(campaignsData) ? campaignsData.length : 0);
         
-        // Log first campaign to see available fields
         if (Array.isArray(campaignsData) && campaignsData.length > 0) {
           console.log("Sample campaign fields:", Object.keys(campaignsData[0]));
           
-          // Check for team-related fields
-          const firstCampaign = campaignsData[0];
-          if (firstCampaign.teamId || firstCampaign.team_id || firstCampaign.ownerId) {
-            console.log("Team-related field found:", {
-              teamId: firstCampaign.teamId,
-              team_id: firstCampaign.team_id,
-              ownerId: firstCampaign.ownerId,
-            });
+          // Extract unique owners from campaigns
+          for (const campaign of campaignsData) {
+            // Reply.io campaigns have ownerId and ownerName fields
+            const ownerId = campaign.ownerId || campaign.owner_id;
+            const ownerName = campaign.ownerName || campaign.owner_name || campaign.ownerEmail;
+            
+            if (ownerId && !seenTeamIds.has(ownerId)) {
+              seenTeamIds.add(ownerId);
+              teams.push({
+                id: ownerId,
+                name: ownerName || `User ${ownerId}`,
+              });
+              console.log("Found owner from campaign:", { id: ownerId, name: ownerName });
+            }
           }
         }
       }
