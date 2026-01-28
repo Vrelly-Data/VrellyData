@@ -6,12 +6,18 @@ const corsHeaders = {
 };
 
 const REPLY_API_BASE = "https://api.reply.io/v1";
+const REPLY_API_V3_BASE = "https://api.reply.io/v3";
 
 interface ReplyioCampaign {
   id: number;
   name: string;
   status: string | number;
   peopleCount?: number;
+}
+
+interface DiscoveredTeam {
+  teamId: string;
+  teamName?: string;
 }
 
 // Reply.io returns status as integers: 0=draft, 1=active, 2=paused, 3=completed, 4=archived
@@ -52,7 +58,168 @@ async function fetchFromReplyio(endpoint: string, apiKey: string, teamId?: strin
   return response.json();
 }
 
-// Paginated fetch for campaigns only - lightweight
+async function fetchFromReplyioV3(endpoint: string, apiKey: string) {
+  const headers: Record<string, string> = {
+    "X-Api-Key": apiKey,
+    "Content-Type": "application/json",
+  };
+  
+  const response = await fetch(`${REPLY_API_V3_BASE}${endpoint}`, { headers });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Reply.io V3 API error (${response.status}): ${errorText}`);
+  }
+
+  return response.json();
+}
+
+// Discover all team IDs from V3 /sequences endpoint
+async function discoverAllTeams(apiKey: string): Promise<DiscoveredTeam[]> {
+  const teamsMap = new Map<string, DiscoveredTeam>();
+  let page = 1;
+  const pageSize = 100;
+  let hasMore = true;
+  
+  console.log("Discovering all teams from V3 /sequences...");
+  
+  while (hasMore) {
+    try {
+      const url = `/sequences?limit=${pageSize}&page=${page}`;
+      const response = await fetchFromReplyioV3(url, apiKey);
+      const sequences = response.sequences || response || [];
+      
+      if (!Array.isArray(sequences) || sequences.length === 0) {
+        break;
+      }
+      
+      for (const seq of sequences) {
+        // Extract teamId and ownerId from each sequence
+        const teamId = seq.teamId?.toString() || seq.ownerId?.toString();
+        if (teamId && !teamsMap.has(teamId)) {
+          teamsMap.set(teamId, {
+            teamId,
+            teamName: seq.teamName || `Team ${teamId}`,
+          });
+        }
+      }
+      
+      hasMore = sequences.length === pageSize;
+      page++;
+      
+      // Safety limit
+      if (page > 20) {
+        console.warn("Reached page limit (20) during team discovery");
+        break;
+      }
+      
+      if (hasMore) {
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+    } catch (err) {
+      console.error(`Error discovering teams at page ${page}:`, err);
+      break;
+    }
+  }
+  
+  const teams = Array.from(teamsMap.values());
+  console.log(`Discovered ${teams.length} unique teams:`, teams.map(t => t.teamId).join(', '));
+  return teams;
+}
+
+// Fetch campaigns for a single team
+async function fetchCampaignsForTeam(
+  apiKey: string, 
+  teamId: string,
+  pageSize: number = 100
+): Promise<{ campaigns: ReplyioCampaign[], teamId: string }> {
+  let allCampaigns: ReplyioCampaign[] = [];
+  let page = 1;
+  let hasMore = true;
+  
+  while (hasMore) {
+    try {
+      const url = `/campaigns?limit=${pageSize}&page=${page}`;
+      const response = await fetchFromReplyio(url, apiKey, teamId) as Record<string, unknown>;
+      const campaigns = (response.campaigns || response || []) as ReplyioCampaign[];
+      
+      if (!Array.isArray(campaigns)) {
+        console.warn(`Expected array for campaigns (team ${teamId}), got:`, typeof campaigns);
+        break;
+      }
+      
+      allCampaigns = [...allCampaigns, ...campaigns];
+      
+      const info = response.info as { hasMore?: boolean } | undefined;
+      hasMore = info?.hasMore || (response.hasMore as boolean) || (campaigns.length === pageSize);
+      
+      page++;
+      
+      if (page > 50) {
+        console.warn(`Reached page limit (50) for team ${teamId}`);
+        break;
+      }
+      
+      if (hasMore) {
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+    } catch (err) {
+      console.error(`Error fetching campaigns for team ${teamId} at page ${page}:`, err);
+      break;
+    }
+  }
+  
+  return { campaigns: allCampaigns, teamId };
+}
+
+// Fetch all campaigns across all discovered teams (for agency accounts)
+async function fetchAllTeamsCampaigns(apiKey: string): Promise<{ 
+  campaigns: (ReplyioCampaign & { teamId: string })[], 
+  teamsCount: number 
+}> {
+  // Step 1: Discover all teams
+  const teams = await discoverAllTeams(apiKey);
+  
+  if (teams.length === 0) {
+    console.warn("No teams discovered, falling back to default fetch");
+    const result = await fetchCampaignsForTeam(apiKey, "");
+    return { 
+      campaigns: result.campaigns.map(c => ({ ...c, teamId: "default" })),
+      teamsCount: 1 
+    };
+  }
+  
+  // Step 2: Fetch campaigns from each team sequentially (to respect rate limits)
+  const allCampaigns: (ReplyioCampaign & { teamId: string })[] = [];
+  
+  for (let i = 0; i < teams.length; i++) {
+    const team = teams[i];
+    console.log(`Fetching campaigns for team ${team.teamId} (${i + 1}/${teams.length})...`);
+    
+    try {
+      const result = await fetchCampaignsForTeam(apiKey, team.teamId);
+      const campaignsWithTeam = result.campaigns.map(c => ({ 
+        ...c, 
+        teamId: team.teamId 
+      }));
+      allCampaigns.push(...campaignsWithTeam);
+      console.log(`Got ${result.campaigns.length} campaigns from team ${team.teamId}`);
+    } catch (err) {
+      console.error(`Failed to fetch campaigns for team ${team.teamId}:`, err);
+      // Continue with other teams
+    }
+    
+    // Rate limit delay between teams
+    if (i < teams.length - 1) {
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
+  }
+  
+  console.log(`Total: ${allCampaigns.length} campaigns from ${teams.length} teams`);
+  return { campaigns: allCampaigns, teamsCount: teams.length };
+}
+
+// Paginated fetch for campaigns from a single team
 async function fetchAllCampaigns(
   apiKey: string, 
   teamId?: string,
@@ -86,7 +253,6 @@ async function fetchAllCampaigns(
       break;
     }
     
-    // Small delay between pages
     if (hasMore) {
       await new Promise(resolve => setTimeout(resolve, 300));
     }
@@ -138,14 +304,29 @@ Deno.serve(async (req) => {
     const teamId = integration.team_id;
     const replyTeamId = integration.reply_team_id;
 
-    // If skipTeamFilter is true, don't apply the team filter
-    const effectiveTeamId = skipTeamFilter ? undefined : (replyTeamId || undefined);
-    console.log(`Fetching campaigns for integration ${integrationId}${effectiveTeamId ? ` (team: ${effectiveTeamId})` : ' (all teams)'}`);
+    let campaigns: (ReplyioCampaign & { teamId?: string })[];
+    let teamsCount = 1;
+    let teamFiltered: boolean;
+    let effectiveTeamId: string | null;
 
-    // Fetch ALL campaigns from Reply.io (lightweight - just names/IDs/status)
-    const campaigns = await fetchAllCampaigns(apiKey, effectiveTeamId);
+    if (skipTeamFilter) {
+      // Fetch from ALL teams (agency mode)
+      console.log(`Fetching campaigns from ALL teams for integration ${integrationId}`);
+      const result = await fetchAllTeamsCampaigns(apiKey);
+      campaigns = result.campaigns;
+      teamsCount = result.teamsCount;
+      teamFiltered = false;
+      effectiveTeamId = null;
+    } else {
+      // Fetch from single team only
+      effectiveTeamId = replyTeamId || null;
+      console.log(`Fetching campaigns for integration ${integrationId}${effectiveTeamId ? ` (team: ${effectiveTeamId})` : ' (default team)'}`);
+      const singleTeamCampaigns = await fetchAllCampaigns(apiKey, effectiveTeamId ?? undefined);
+      campaigns = singleTeamCampaigns.map(c => ({ ...c, teamId: effectiveTeamId ?? "default" }));
+      teamFiltered = true;
+    }
     
-    console.log(`Found ${campaigns.length} campaigns from Reply.io`);
+    console.log(`Found ${campaigns.length} campaigns from Reply.io (${teamsCount} teams)`);
 
     // Get existing linked status from database
     const { data: existingCampaigns } = await supabase
@@ -165,7 +346,10 @@ Deno.serve(async (req) => {
       external_campaign_id: String(campaign.id),
       name: String(campaign.name || 'Unnamed Campaign'),
       status: normalizeStatus(campaign.status),
-      stats: { peopleCount: campaign.peopleCount || 0 },
+      stats: { 
+        peopleCount: campaign.peopleCount || 0,
+        replyTeamId: campaign.teamId || null,
+      },
       is_linked: linkedMap.get(String(campaign.id)) ?? false,
       updated_at: new Date().toISOString(),
     }));
@@ -183,13 +367,14 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Return campaigns with linked status for UI
+    // Return campaigns with linked status and team context for UI
     const result = campaigns.map(campaign => ({
       id: String(campaign.id),
       name: campaign.name,
       status: normalizeStatus(campaign.status),
       peopleCount: campaign.peopleCount || 0,
       isLinked: linkedMap.get(String(campaign.id)) ?? false,
+      replyTeamId: campaign.teamId || null,
     }));
 
     return new Response(
@@ -197,7 +382,8 @@ Deno.serve(async (req) => {
         success: true,
         campaigns: result,
         total: result.length,
-        teamFiltered: !!effectiveTeamId,
+        teamsCount,
+        teamFiltered,
         teamId: effectiveTeamId || null,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }

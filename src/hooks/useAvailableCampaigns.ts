@@ -9,12 +9,14 @@ export interface AvailableCampaign {
   status: string;
   peopleCount: number;
   isLinked: boolean;
+  replyTeamId: string | null;
 }
 
 export interface CampaignFetchResult {
   campaigns: AvailableCampaign[];
   teamFiltered: boolean;
   teamId: string | null;
+  teamsCount: number;
 }
 
 export function useAvailableCampaigns(integrationId: string | null) {
@@ -24,7 +26,7 @@ export function useAvailableCampaigns(integrationId: string | null) {
   const fetchCampaigns = useQuery({
     queryKey: ['available-campaigns', integrationId, skipTeamFilter],
     queryFn: async (): Promise<CampaignFetchResult> => {
-      if (!integrationId) return { campaigns: [], teamFiltered: false, teamId: null };
+      if (!integrationId) return { campaigns: [], teamFiltered: false, teamId: null, teamsCount: 0 };
 
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error('Not authenticated');
@@ -41,6 +43,7 @@ export function useAvailableCampaigns(integrationId: string | null) {
         campaigns: response.data.campaigns || [],
         teamFiltered: response.data.teamFiltered ?? false,
         teamId: response.data.teamId ?? null,
+        teamsCount: response.data.teamsCount ?? 1,
       };
     },
     enabled: !!integrationId,
@@ -151,6 +154,7 @@ export function useAvailableCampaigns(integrationId: string | null) {
     campaigns: fetchCampaigns.data?.campaigns || [],
     teamFiltered: fetchCampaigns.data?.teamFiltered ?? false,
     teamId: fetchCampaigns.data?.teamId ?? null,
+    teamsCount: fetchCampaigns.data?.teamsCount ?? 1,
     skipTeamFilter,
     toggleTeamFilter,
     isLoading: fetchCampaigns.isLoading,
