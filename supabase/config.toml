@@ -38,3 +38,6 @@ verify_jwt = true
 
 [functions.fetch-integration-teams]
 verify_jwt = false
+
+[functions.fetch-available-campaigns]
+verify_jwt = false
