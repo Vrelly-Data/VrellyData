@@ -35,3 +35,6 @@ verify_jwt = false
 
 [functions.setup-reply-webhook]
 verify_jwt = true
+
+[functions.fetch-integration-teams]
+verify_jwt = false
