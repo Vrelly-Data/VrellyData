@@ -86,10 +86,15 @@ async function discoverAllTeams(apiKey: string): Promise<DiscoveredTeam[]> {
   while (hasMore) {
     try {
       const url = `/sequences?limit=${pageSize}&page=${page}`;
-      const response = await fetchFromReplyioV3(url, apiKey);
-      const sequences = response.sequences || response || [];
+      const response = await fetchFromReplyioV3(url, apiKey) as Record<string, unknown>;
+      
+      // V3 API returns items array, not sequences
+      const sequences = (response.items || []) as Array<Record<string, unknown>>;
+      
+      console.log(`V3 /sequences page ${page}: got ${sequences.length} items`);
       
       if (!Array.isArray(sequences) || sequences.length === 0) {
+        console.log("No more sequences found, stopping discovery");
         break;
       }
       
@@ -99,12 +104,15 @@ async function discoverAllTeams(apiKey: string): Promise<DiscoveredTeam[]> {
         if (teamId && !teamsMap.has(teamId)) {
           teamsMap.set(teamId, {
             teamId,
-            teamName: seq.teamName || `Team ${teamId}`,
+            teamName: (seq.teamName as string) || `Team ${teamId}`,
           });
+          console.log(`Discovered team: ${teamId}`);
         }
       }
       
-      hasMore = sequences.length === pageSize;
+      // V3 API uses info.hasMore for pagination
+      const info = response.info as { hasMore?: boolean } | undefined;
+      hasMore = info?.hasMore ?? (sequences.length === pageSize);
       page++;
       
       // Safety limit
@@ -377,15 +385,25 @@ Deno.serve(async (req) => {
       replyTeamId: campaign.teamId || null,
     }));
 
+    // Build response with debug info when fetching all teams
+    const responsePayload: Record<string, unknown> = {
+      success: true,
+      campaigns: result,
+      total: result.length,
+      teamsCount,
+      teamFiltered,
+      teamId: effectiveTeamId || null,
+    };
+
+    // Add discovered team IDs for debugging when showing all teams
+    if (!teamFiltered) {
+      const discoveredTeamIds = [...new Set(campaigns.map(c => c.teamId).filter(Boolean))];
+      responsePayload.discoveredTeamIds = discoveredTeamIds.slice(0, 50);
+      responsePayload.discoveredTeamsCount = discoveredTeamIds.length;
+    }
+
     return new Response(
-      JSON.stringify({
-        success: true,
-        campaigns: result,
-        total: result.length,
-        teamsCount,
-        teamFiltered,
-        teamId: effectiveTeamId || null,
-      }),
+      JSON.stringify(responsePayload),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (err) {

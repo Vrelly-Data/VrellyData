@@ -17,6 +17,8 @@ export interface CampaignFetchResult {
   teamFiltered: boolean;
   teamId: string | null;
   teamsCount: number;
+  discoveredTeamIds?: string[];
+  discoveredTeamsCount?: number;
 }
 
 export function useAvailableCampaigns(integrationId: string | null) {
@@ -44,6 +46,8 @@ export function useAvailableCampaigns(integrationId: string | null) {
         teamFiltered: response.data.teamFiltered ?? false,
         teamId: response.data.teamId ?? null,
         teamsCount: response.data.teamsCount ?? 1,
+        discoveredTeamIds: response.data.discoveredTeamIds,
+        discoveredTeamsCount: response.data.discoveredTeamsCount,
       };
     },
     enabled: !!integrationId,
@@ -155,6 +159,8 @@ export function useAvailableCampaigns(integrationId: string | null) {
     teamFiltered: fetchCampaigns.data?.teamFiltered ?? false,
     teamId: fetchCampaigns.data?.teamId ?? null,
     teamsCount: fetchCampaigns.data?.teamsCount ?? 1,
+    discoveredTeamIds: fetchCampaigns.data?.discoveredTeamIds,
+    discoveredTeamsCount: fetchCampaigns.data?.discoveredTeamsCount,
     skipTeamFilter,
     toggleTeamFilter,
     isLoading: fetchCampaigns.isLoading,

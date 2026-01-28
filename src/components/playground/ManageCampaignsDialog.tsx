@@ -37,6 +37,8 @@ export function ManageCampaignsDialog({ open, onOpenChange, integrationId }: Man
     teamFiltered, 
     teamId, 
     teamsCount,
+    discoveredTeamIds,
+    discoveredTeamsCount,
     skipTeamFilter, 
     toggleTeamFilter, 
     isLoading, 
@@ -189,7 +191,10 @@ export function ManageCampaignsDialog({ open, onOpenChange, integrationId }: Man
               <div className="flex items-center gap-2">
                 <Globe className="h-4 w-4 text-primary shrink-0" />
                 <span className="text-sm font-medium flex-1">
-                  Showing {campaigns.length} campaigns from {teamsCount} teams
+                  {discoveredTeamsCount !== undefined 
+                    ? `Discovered ${discoveredTeamsCount} teams, showing ${campaigns.length} campaigns`
+                    : `Showing ${campaigns.length} campaigns from ${teamsCount} teams`
+                  }
                 </span>
                 <Button
                   variant="outline"
@@ -201,6 +206,15 @@ export function ManageCampaignsDialog({ open, onOpenChange, integrationId }: Man
                   Filter by Team
                 </Button>
               </div>
+              {/* Warning if only 1 team discovered */}
+              {discoveredTeamsCount !== undefined && discoveredTeamsCount <= 1 && (
+                <div className="flex items-center gap-2 text-xs text-warning">
+                  <AlertTriangle className="h-3 w-3 shrink-0" />
+                  <span>
+                    Only detected 1 team. If you expect multiple client teams, team discovery may be failing.
+                  </span>
+                </div>
+              )}
               {/* Team breakdown */}
               {uniqueTeams.length > 1 && (
                 <div className="flex flex-wrap gap-1.5 mt-1">
