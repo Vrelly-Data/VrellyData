@@ -57,7 +57,7 @@ async function validateApiKey(platform: string, apiKey: string): Promise<{ valid
   }
 }
 
-async function fetchReplyTeams(apiKey: string): Promise<{ teams: ReplyTeam[]; isAgencyAccount: boolean }> {
+async function fetchReplyTeams(apiKey: string): Promise<{ teams: ReplyTeam[]; isAgencyAccount: boolean; recommendedTeamId: string | null }> {
   try {
     const { data, error } = await supabase.functions.invoke('fetch-reply-teams', {
       body: { apiKey }
@@ -65,16 +65,17 @@ async function fetchReplyTeams(apiKey: string): Promise<{ teams: ReplyTeam[]; is
 
     if (error) {
       console.error('Fetch teams error:', error);
-      return { teams: [], isAgencyAccount: false };
+      return { teams: [], isAgencyAccount: false, recommendedTeamId: null };
     }
 
     return {
       teams: data.teams || [],
-      isAgencyAccount: data.isAgencyAccount || false
+      isAgencyAccount: data.isAgencyAccount || false,
+      recommendedTeamId: data.recommendedTeamId || null
     };
   } catch (err) {
     console.error('Fetch teams error:', err);
-    return { teams: [], isAgencyAccount: false };
+    return { teams: [], isAgencyAccount: false, recommendedTeamId: null };
   }
 }
 
@@ -116,16 +117,21 @@ export function AddIntegrationDialog({ open, onOpenChange }: AddIntegrationDialo
     setValidationStatus('valid');
     toast.success('API key is valid!');
     
-    // For Reply.io, check if this is an agency account
+    // For Reply.io, check if this is an agency account or get recommended team ID
     if (platform === 'reply.io') {
       setIsLoadingTeams(true);
       const teamsResult = await fetchReplyTeams(apiKey);
       setIsLoadingTeams(false);
       
       if (teamsResult.isAgencyAccount && teamsResult.teams.length > 0) {
+        // Multiple teams - show dropdown
         setTeams(teamsResult.teams);
         setIsAgencyAccount(true);
         toast.info('Agency account detected! Please select a client team.');
+      } else if (teamsResult.recommendedTeamId) {
+        // Single team detected - auto-fill the manual field
+        setManualTeamId(teamsResult.recommendedTeamId);
+        toast.success(`Team ID ${teamsResult.recommendedTeamId} detected and auto-filled for reliable sync.`);
       }
     }
     

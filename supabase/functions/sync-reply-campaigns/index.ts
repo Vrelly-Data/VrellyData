@@ -32,31 +32,6 @@ interface ReplyioCampaign {
   };
 }
 
-interface ReplyioStep {
-  id: number;
-  number: number;
-  type: string;
-  subject?: string;
-  body?: string;
-  delayDays?: number;
-}
-
-interface ReplyioPerson {
-  id: number;
-  email: string;
-  firstName?: string;
-  lastName?: string;
-  company?: string;
-  title?: string;
-  status?: string;
-  stats?: {
-    opened?: boolean;
-    clicked?: boolean;
-    replied?: boolean;
-    bounced?: boolean;
-  };
-}
-
 // Reply.io returns status as integers: 0=draft, 1=active, 2=paused, 3=completed, 4=archived
 function normalizeStatus(status: unknown): string {
   if (typeof status === 'string') {
@@ -111,7 +86,7 @@ async function fetchWithRetry(
       
       // Check if it's a rate limit error
       if (errorMessage.includes("Too much requests") && attempt < maxRetries) {
-        const waitTime = 10000 * attempt; // 10s, 20s, 30s
+        const waitTime = 5000 * attempt; // 5s, 10s, 15s (reduced from 10/20/30)
         console.log(`Rate limited on ${endpoint}, waiting ${waitTime/1000}s before retry ${attempt}/${maxRetries}`);
         await new Promise(resolve => setTimeout(resolve, waitTime));
         continue;
@@ -122,8 +97,7 @@ async function fetchWithRetry(
   throw new Error(`Max retries exceeded for ${endpoint}`);
 }
 
-// Paginated fetch helper to get all results across multiple pages
-// Now uses fetchWithRetry for rate limit resilience
+// Paginated fetch helper - optimized for fast sync (no delays between pages)
 async function fetchAllPaginated<T>(
   endpoint: string, 
   apiKey: string, 
@@ -139,7 +113,6 @@ async function fetchAllPaginated<T>(
     const separator = endpoint.includes('?') ? '&' : '?';
     const url = `${endpoint}${separator}limit=${pageSize}&page=${page}`;
     
-    // Use fetchWithRetry instead of fetchFromReplyio for rate limit handling
     const response = await fetchWithRetry(url, apiKey, teamId) as Record<string, unknown>;
     const results = (response[resultKey] || response || []) as T[];
     
@@ -150,26 +123,25 @@ async function fetchAllPaginated<T>(
     
     allResults = [...allResults, ...results];
     
-    // Check for more pages using Reply.io's pagination metadata
-    // Reply.io uses different patterns: info.hasMore, hasMore, or check if we got a full page
+    // Check for more pages
     const info = response.info as { hasMore?: boolean } | undefined;
     hasMore = info?.hasMore || 
               (response.hasMore as boolean) || 
               (results.length === pageSize);
     
-    console.log(`  Page ${page}: fetched ${results.length} ${resultKey}, total: ${allResults.length}, hasMore: ${hasMore}`);
+    console.log(`  Page ${page}: fetched ${results.length} ${resultKey}, total: ${allResults.length}`);
     
     page++;
     
-    // Safety limit to prevent infinite loops
-    if (page > 500) {
-      console.warn(`Reached page limit (500) for ${endpoint}`);
+    // Safety limit
+    if (page > 100) {
+      console.warn(`Reached page limit (100) for ${endpoint}`);
       break;
     }
     
-    // Increased delay to avoid rate limiting (2 seconds between pages)
+    // Minimal delay between pages (500ms) for rate limit protection
     if (hasMore) {
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await new Promise(resolve => setTimeout(resolve, 500));
     }
   }
   
@@ -182,15 +154,10 @@ Deno.serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
-  // Parse body early so we can use integrationId in error handling
   let integrationId: string | undefined;
   let authHeader: string | null = null;
-  
-  // Track sync progress for partial success reporting
   let campaignsProcessed = 0;
   let campaignsFailed = 0;
-  let totalContacts = 0;
-  let totalSequences = 0;
   
   try {
     authHeader = req.headers.get("Authorization");
@@ -201,7 +168,6 @@ Deno.serve(async (req) => {
     const body = await req.json();
     integrationId = body.integrationId;
 
-    // Create Supabase client with user's auth
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL") ?? "",
       Deno.env.get("SUPABASE_ANON_KEY") ?? "",
@@ -212,7 +178,7 @@ Deno.serve(async (req) => {
       throw new Error("Missing integrationId");
     }
 
-    // Fetch the integration to get API key and reply_team_id
+    // Fetch the integration
     const { data: integration, error: integrationError } = await supabase
       .from("outbound_integrations")
       .select("id, team_id, api_key_encrypted, platform, reply_team_id")
@@ -227,9 +193,9 @@ Deno.serve(async (req) => {
       throw new Error("This function only supports Reply.io integrations");
     }
 
-    const apiKey = integration.api_key_encrypted; // TODO: Decrypt when encryption is implemented
+    const apiKey = integration.api_key_encrypted;
     const teamId = integration.team_id;
-    const replyTeamId = integration.reply_team_id; // For agency accounts
+    const replyTeamId = integration.reply_team_id;
 
     // Update status to syncing
     await supabase
@@ -237,9 +203,9 @@ Deno.serve(async (req) => {
       .update({ sync_status: "syncing", sync_error: null })
       .eq("id", integrationId);
 
-    console.log(`Starting sync for integration ${integrationId}`);
+    console.log(`Starting FAST sync for integration ${integrationId}${replyTeamId ? ` (team: ${replyTeamId})` : ''}`);
 
-    // Fetch ALL campaigns from Reply.io with pagination
+    // Fetch ALL campaigns from Reply.io
     let campaigns: ReplyioCampaign[] = [];
     try {
       campaigns = await fetchAllPaginated<ReplyioCampaign>(
@@ -248,34 +214,26 @@ Deno.serve(async (req) => {
         "campaigns",
         replyTeamId || undefined
       );
-      console.log(`Fetched ${campaigns.length} total campaigns from Reply.io${replyTeamId ? ` for team ${replyTeamId}` : ''}`);
-      
-      // Debug: Log sample campaign structure for troubleshooting
-      if (campaigns.length > 0) {
-        console.log("Sample campaign structure:", JSON.stringify(campaigns[0], null, 2));
-      }
+      console.log(`Fetched ${campaigns.length} campaigns from Reply.io`);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       console.error("Failed to fetch campaigns:", err);
       throw new Error(`Failed to fetch campaigns: ${errorMessage}`);
     }
 
-    // Process each campaign - wrapped in try-catch to continue on individual failures
-    let campaignIndex = 0;
+    // FAST SYNC: Only process campaign metadata and stats
+    // No steps, no contacts, no delays between campaigns
     for (const campaign of campaigns) {
-      campaignIndex++;
-      
       try {
-        // Validate campaign has required fields
         if (!campaign.id || !campaign.name) {
-          console.warn(`[${campaignIndex}/${campaigns.length}] Skipping campaign with missing id or name:`, campaign);
+          console.warn(`Skipping campaign with missing id or name`);
           campaignsFailed++;
           continue;
         }
         
-        console.log(`[${campaignIndex}/${campaigns.length}] Processing campaign: ${campaign.name} (ID: ${campaign.id})`)
+        console.log(`Processing campaign: ${campaign.name} (ID: ${campaign.id})`);
 
-        // Upsert campaign with proper type handling
+        // Upsert campaign with stats
         const { error: campaignError } = await supabase
           .from("synced_campaigns")
           .upsert({
@@ -308,140 +266,15 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        // Get the synced campaign ID for foreign key reference
-        const { data: syncedCampaign } = await supabase
-          .from("synced_campaigns")
-          .select("id")
-          .eq("integration_id", integrationId)
-          .eq("external_campaign_id", String(campaign.id))
-          .single();
-
-        if (!syncedCampaign) {
-          campaignsFailed++;
-          continue;
-        }
-
-        // Fetch and sync sequences (ALL step types) with retry logic
-        try {
-          const stepsResponse = await fetchWithRetry(`/campaigns/${campaign.id}/steps`, apiKey, replyTeamId || undefined) as Record<string, unknown>;
-          const steps: ReplyioStep[] = (stepsResponse.steps as ReplyioStep[]) || (Array.isArray(stepsResponse) ? stepsResponse : []);
-          
-          // Log all step types for debugging
-          const stepTypeSummary = steps.reduce((acc, s) => {
-            acc[s.type] = (acc[s.type] || 0) + 1;
-            return acc;
-          }, {} as Record<string, number>);
-          console.log(`  Step types in campaign ${campaign.id}:`, JSON.stringify(stepTypeSummary));
-          
-          for (const step of steps) {
-            // Capture ALL step types (email, linkedin_connect, linkedin_message, linkedin_view_profile, linkedin_inmail, call, manual_task, etc.)
-            console.log(`    Step ${step.number}: type=${step.type}`);
-            
-            await supabase
-              .from("synced_sequences")
-              .upsert({
-                campaign_id: syncedCampaign.id,
-                team_id: teamId,
-                external_sequence_id: String(step.id),
-                step_number: step.number,
-                step_type: step.type, // Store the step type
-                subject: step.subject || "",
-                body_html: step.body || "",
-                delay_days: step.delayDays || 0,
-                raw_data: step,
-                updated_at: new Date().toISOString(),
-              }, {
-                onConflict: "campaign_id,step_number",
-              });
-            
-            totalSequences++;
-          }
-        } catch (error) {
-          const errorMessage = error instanceof Error ? error.message : String(error);
-          // Handle 404 gracefully - steps may not be available for archived campaigns
-          if (errorMessage.includes('404')) {
-            console.warn(`  Steps endpoint returned 404 for campaign ${campaign.id} (likely archived) - skipping steps sync`);
-          } else {
-            console.error(`Failed to fetch steps for campaign ${campaign.id}:`, error);
-          }
-          // Continue to contacts even if steps failed
-        }
-
-        // Fetch and sync contacts (people) with pagination
-        try {
-          console.log(`  Fetching people for campaign ${campaign.id}...`);
-          const people = await fetchAllPaginated<ReplyioPerson>(
-            `/campaigns/${campaign.id}/people`,
-            apiKey,
-            "people",
-            replyTeamId || undefined
-          );
-          
-          console.log(`  - Found ${people.length} contacts in campaign ${campaign.id}`);
-          
-          // Log sample person structure for debugging
-          if (people.length > 0) {
-            console.log(`  - Sample person structure:`, JSON.stringify(people[0], null, 2));
-          } else {
-            console.log(`  - No people returned from API for campaign ${campaign.id}`);
-          }
-          
-          let campaignContactsSynced = 0;
-          for (const person of people) {
-            const { error: contactError } = await supabase
-              .from("synced_contacts")
-              .upsert({
-                campaign_id: syncedCampaign.id,
-                team_id: teamId,
-                external_contact_id: String(person.id),
-                email: person.email,
-                first_name: person.firstName || null,
-                last_name: person.lastName || null,
-                company: person.company || null,
-                job_title: person.title || null,
-                status: person.status || null,
-                engagement_data: {
-                  opened: person.stats?.opened || false,
-                  clicked: person.stats?.clicked || false,
-                  replied: person.stats?.replied || false,
-                  bounced: person.stats?.bounced || false,
-                },
-                raw_data: person,
-                updated_at: new Date().toISOString(),
-              }, {
-                onConflict: "campaign_id,email",
-              });
-            
-            if (contactError) {
-              console.error(`    Failed to upsert contact ${person.email}:`, contactError);
-            } else {
-              campaignContactsSynced++;
-              totalContacts++;
-            }
-          }
-          console.log(`  - Successfully synced ${campaignContactsSynced} contacts for campaign ${campaign.id}`);
-        } catch (error) {
-          // Log error but continue to next campaign
-          console.error(`Failed to fetch people for campaign ${campaign.id}:`, error);
-        }
-        
-        // Campaign processed successfully (even if some sub-items failed)
         campaignsProcessed++;
         
       } catch (campaignError) {
-        // Catch any unexpected errors for this campaign and continue
-        console.error(`[${campaignIndex}/${campaigns.length}] Unexpected error processing campaign ${campaign.id}:`, campaignError);
+        console.error(`Error processing campaign ${campaign.id}:`, campaignError);
         campaignsFailed++;
-      }
-      
-      // Add 10 second delay between campaigns to respect Reply.io rate limits
-      if (campaignIndex < campaigns.length) {
-        console.log(`  Waiting 10s before next campaign (rate limit protection)...`);
-        await new Promise(resolve => setTimeout(resolve, 10000));
       }
     }
 
-    // Always update integration status at the end - even with partial success
+    // Update integration status
     const finalStatus = campaignsFailed > 0 && campaignsProcessed === 0 ? "error" : "synced";
     const syncError = campaignsFailed > 0 
       ? `Synced ${campaignsProcessed}/${campaigns.length} campaigns (${campaignsFailed} failed)` 
@@ -457,15 +290,14 @@ Deno.serve(async (req) => {
       })
       .eq("id", integrationId);
 
-    console.log(`Sync complete: ${campaignsProcessed}/${campaigns.length} campaigns processed, ${campaignsFailed} failed, ${totalSequences} sequences, ${totalContacts} contacts`);
+    console.log(`Fast sync complete: ${campaignsProcessed}/${campaigns.length} campaigns processed`);
 
     return new Response(
       JSON.stringify({
         success: true,
         campaigns: campaignsProcessed,
         campaignsFailed,
-        sequences: totalSequences,
-        contacts: totalContacts,
+        mode: "fast",
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
@@ -473,7 +305,7 @@ Deno.serve(async (req) => {
     const errorMessage = err instanceof Error ? err.message : String(err);
     console.error("Sync error:", err);
 
-    // Try to update integration status to error (using integrationId captured at start)
+    // Update integration status to error
     if (integrationId && authHeader) {
       try {
         const supabase = createClient(
