@@ -1,73 +1,49 @@
 
-## Fix "Syncing" Status Getting Stuck
 
-### Root Cause
-The `sync-reply-campaigns` edge function encountered a Reply.io rate limit error while processing campaign 16 of 62. When this error occurred:
-1. The function threw an exception
-2. The catch block attempted to update `sync_status` to `"error"`
-3. But this update appears to have failed, leaving the status stuck at `"syncing"`
+## Test with Single Client First
 
-Meanwhile, **17 campaigns were successfully synced** before the error, so the data is partially populated.
+### Current Situation
+Your integration has `reply_team_id = null`, which means it tries to sync all 62 campaigns across all clients. This causes timeouts.
 
-### Solution Overview
-Two improvements are needed:
-1. **Immediate Fix**: Manually reset the stuck integration status so the UI reflects reality
-2. **Code Improvement**: Make the edge function more resilient so individual campaign failures don't crash the entire sync
+### Two-Step Testing Plan
 
-### Changes Required
+#### Step 1: Reset Stuck Status and Set Team ID (Manual)
+First, we need to:
+1. **Reset the stuck "syncing" status** in the database
+2. **Set a specific Team ID** for your integration to isolate to one client
 
-#### 1. Reset Stuck Integration Status (Database Fix)
-Run a query to update the stuck integration:
+**Database update to run:**
 ```sql
 UPDATE outbound_integrations 
-SET sync_status = 'synced', 
+SET sync_status = 'pending',
     sync_error = NULL,
-    last_synced_at = NOW()
-WHERE sync_status = 'syncing';
+    updated_at = NOW()
+WHERE id = 'ac749820-fa6d-4a85-8955-039d328bec97';
 ```
 
-#### 2. Improve Edge Function Error Handling
-Update `supabase/functions/sync-reply-campaigns/index.ts` to:
-- Continue processing other campaigns when one fails (don't throw on rate limit)
-- Track partial success/failure counts
-- Always update the status at the end (even with partial failures)
+Then use the **Edit button** (pencil icon) in the UI to set your Team ID.
 
-**Key changes:**
-```typescript
-// Instead of throwing on rate limit errors during people fetch:
-} catch (error) {
-  console.error(`Failed to fetch people for campaign ${campaign.id}:`, error);
-  // Continue to next campaign instead of throwing
-}
+#### Step 2: Find Your Reply.io Team ID
+To get the Team ID for your test client, you can either:
+- **Option A**: Check Reply.io dashboard → Settings → Agency/Clients → Copy the client's team ID
+- **Option B**: After resetting, I can call the `fetch-reply-teams` edge function to list available teams from your API key
 
-// At the end, mark as "synced" even if some campaigns had errors
-// (or use a new status like "partial" if you prefer)
-```
-
-#### 3. UI Improvement (Optional)
-Add a "Reset" button or auto-recovery in `IntegrationSetupCard.tsx` to handle stuck syncing states:
-- After X minutes of "syncing", show a warning
-- Allow manual reset to "pending" status
+### What This Fixes
+With a Team ID set, the sync will:
+- Only fetch campaigns for that specific client (maybe 5-10 instead of 62)
+- Complete within the timeout window
+- Allow proper testing before we optimize for all clients
 
 ### Files to Modify
 
-| File | Changes |
-|------|---------|
-| Database (manual) | Reset stuck `sync_status` from `syncing` to `synced` |
-| `supabase/functions/sync-reply-campaigns/index.ts` | Wrap individual campaign processing in try-catch, continue on failure |
-| `src/components/playground/IntegrationSetupCard.tsx` (optional) | Add stuck state detection and reset button |
+| File | Change |
+|------|--------|
+| Database | Reset `sync_status` to `pending` for your integration |
+| UI (manual) | Enter Team ID via Edit dialog |
 
-### Why This Happened
-The Reply.io API has strict rate limits (1 request per 10 seconds for some endpoints). The function has retry logic, but when retries are exhausted on the `people` endpoint, it throws an error that bubbles up and crashes the sync.
+### After Testing Works
+Once single-client sync works reliably, we can:
+1. Add the "Reset Stuck Sync" button for self-service recovery
+2. Optimize the edge function for handling many campaigns (campaigns-only mode)
+3. Consider separate integrations per client if needed
 
-The sync function at line 410-411 shows:
-```typescript
-} catch (error) {
-  console.error(`Failed to fetch people for campaign ${campaign.id}:`, error);
-}
-```
-
-This SHOULD just log and continue, but the earlier `fetchAllPaginated` call (line 360) uses `fetchFromReplyio` directly without the `fetchWithRetry` wrapper, so rate limit errors aren't caught properly.
-
-### Immediate User Experience Fix
-After resetting the database status, the UI will show "Synced" and display the 17 campaigns that were successfully imported. The user can then re-sync later to get the remaining campaigns, or simply upload LinkedIn stats via CSV for any missing campaigns.
