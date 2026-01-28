@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
+import { useState, useCallback } from 'react';
 
 export interface AvailableCampaign {
   id: string;
@@ -10,30 +11,45 @@ export interface AvailableCampaign {
   isLinked: boolean;
 }
 
+export interface CampaignFetchResult {
+  campaigns: AvailableCampaign[];
+  teamFiltered: boolean;
+  teamId: string | null;
+}
+
 export function useAvailableCampaigns(integrationId: string | null) {
   const queryClient = useQueryClient();
+  const [skipTeamFilter, setSkipTeamFilter] = useState(false);
 
   const fetchCampaigns = useQuery({
-    queryKey: ['available-campaigns', integrationId],
-    queryFn: async (): Promise<AvailableCampaign[]> => {
-      if (!integrationId) return [];
+    queryKey: ['available-campaigns', integrationId, skipTeamFilter],
+    queryFn: async (): Promise<CampaignFetchResult> => {
+      if (!integrationId) return { campaigns: [], teamFiltered: false, teamId: null };
 
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error('Not authenticated');
 
       const response = await supabase.functions.invoke('fetch-available-campaigns', {
-        body: { integrationId },
+        body: { integrationId, skipTeamFilter },
       });
 
       if (response.error) {
         throw new Error(response.error.message || 'Failed to fetch campaigns');
       }
 
-      return response.data.campaigns || [];
+      return {
+        campaigns: response.data.campaigns || [],
+        teamFiltered: response.data.teamFiltered ?? false,
+        teamId: response.data.teamId ?? null,
+      };
     },
     enabled: !!integrationId,
     staleTime: 30000, // 30 seconds
   });
+
+  const toggleTeamFilter = useCallback(() => {
+    setSkipTeamFilter(prev => !prev);
+  }, []);
 
   const updateLinkedCampaigns = useMutation({
     mutationFn: async ({ campaignIds, isLinked }: { campaignIds: string[], isLinked: boolean }) => {
@@ -132,7 +148,11 @@ export function useAvailableCampaigns(integrationId: string | null) {
   };
 
   return {
-    campaigns: fetchCampaigns.data || [],
+    campaigns: fetchCampaigns.data?.campaigns || [],
+    teamFiltered: fetchCampaigns.data?.teamFiltered ?? false,
+    teamId: fetchCampaigns.data?.teamId ?? null,
+    skipTeamFilter,
+    toggleTeamFilter,
     isLoading: fetchCampaigns.isLoading,
     error: fetchCampaigns.error,
     refetch: fetchCampaigns.refetch,
