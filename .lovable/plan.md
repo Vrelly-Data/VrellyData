@@ -1,111 +1,154 @@
 
-Goal
-- Make Reply “Test Connection” provide a usable Team ID (dropdown when multiple teams; auto-fill when only one is detectable), and make “Sync” stop hanging by ensuring the sync function finishes within backend runtime limits.
 
-What changed previously (in plain English)
-- We updated the backend “team discovery” function to look at Reply’s newer API (/v3/sequences) because it contains team identifiers. However, for your account it’s only finding a single team, so the UI correctly shows “Team ID (Optional)” instead of a dropdown. The bigger issue is that clicking “Sync” currently runs an extremely long sync (includes contacts + 10s delay per campaign), so on large accounts it effectively never finishes.
+## Campaign Linking Flow Redesign
 
-Root causes found
-1) No dropdown is expected when the backend only finds 1 team
-- AddIntegrationDialog only shows the dropdown when fetch-reply-teams returns:
-  - isAgencyAccount = true AND teams.length > 0
-- isAgencyAccount is currently computed as teams.length > 1, so if only 1 team is detected, the dropdown won’t show.
+### Current Problem
+- Current flow blindly syncs ALL campaigns from Reply.io
+- For agency accounts (60+ campaigns), this causes timeouts and syncs irrelevant data
+- Users have no control over which campaigns are tracked
 
-2) “Sync” hangs because sync-reply-campaigns is guaranteed to exceed runtime for large accounts
-- It fetches all campaigns, then for every campaign:
-  - fetches steps
-  - fetches all people (paginated)
-  - then waits 10 seconds between campaigns
-- With 50+ campaigns, the fixed 10s delay alone can exceed 8–10 minutes, so the backend execution will time out and the UI can remain stuck in “syncing”.
+### New Flow: "Link Campaigns First, Then Sync"
 
-Implementation plan (backend + UI)
+```text
++------------------+    +---------------------+    +------------------+
+|  1. Connect      |    |  2. Fetch Campaign  |    |  3. Link         |
+|     Platform     |--->|     List (Fast)     |--->|     Campaigns    |
+|                  |    |     ~5 seconds      |    |     (Select)     |
++------------------+    +---------------------+    +------------------+
+                                                            |
+                                                            v
++------------------+    +---------------------+    +------------------+
+|  5. View Stats   |<---|  4. Sync Only       |<---|  Linked          |
+|     & Content    |    |     Linked Campaigns|    |  Campaigns       |
++------------------+    +---------------------+    +------------------+
+```
 
-A) Make “Test Connection” always produce a usable Team ID (even if only one)
-Files:
-- supabase/functions/fetch-reply-teams/index.ts
-- src/components/playground/AddIntegrationDialog.tsx
+### Database Changes
 
-1) Update fetch-reply-teams response to include a “recommendedTeamId”
-- Keep the current V3 /sequences probe.
-- Track:
-  - distinctTeamIds (Set)
-  - sequencesCount
-- Behavior:
-  - If distinctTeamIds.size > 1:
-    - Return teams[] (as today) and isAgencyAccount: true
-  - If distinctTeamIds.size === 1:
-    - Return teams: [] (or a single-item list) but ALSO return recommendedTeamId with that one ID and isAgencyAccount: false
-  - If V3 fails and we fall back to V1 /campaigns ownerEmail:
-    - Return recommendedTeamId as null and teams as discovered emails (only as a last-resort diagnostic)
+**Add `is_linked` column to `synced_campaigns`:**
 
-Why
-- Your UI currently only “helps” when there are multiple teams. For large accounts, we still need to scope sync. If Reply exposes only one teamId, we can at least auto-fill it so the integration saves with reply_team_id set.
+| Column | Type | Default | Purpose |
+|--------|------|---------|---------|
+| `is_linked` | boolean | false | Whether user wants to track this campaign |
 
-2) Update AddIntegrationDialog to auto-fill the Team ID field when recommendedTeamId is present
-- After “Test Connection” succeeds:
-  - Call fetch-reply-teams
-  - If multiple teams → show dropdown (existing behavior)
-  - Else if recommendedTeamId exists → pre-fill manualTeamId with it and show a short message like:
-    - “We detected your Team ID and filled it in. This helps large account sync finish reliably.”
-- This keeps the “normal user” flow simple:
-  - They still just click Test Connection → Connect
-  - No confusing dropdown unless there are truly multiple teams
+This allows:
+- Store ALL campaigns from Reply.io (just names/IDs - fast)
+- Only sync detailed data for linked campaigns
+- User can link/unlink at any time
 
-B) Make Sync complete reliably for large accounts (stop timeouts)
-Files:
-- supabase/functions/sync-reply-campaigns/index.ts
-- (optional UI tweaks) src/hooks/useOutboundIntegrations.ts, src/components/playground/IntegrationSetupCard.tsx
+### New User Experience
 
-3) Change sync-reply-campaigns to a “fast sync” by default
-Current: campaigns + steps + contacts + 10s delay per campaign
-New default: campaigns only (no per-campaign people/steps), which is enough to populate:
-- Synced Campaigns table
-- Most dashboard stats (deliveries, replies, opens, peopleCount) come from campaign.stats
+**Step 1: Connect Platform** (unchanged)
+- Enter API key → Test Connection → Connect
 
-Details
-- Keep:
-  - fetchAllPaginated("/campaigns", ...)
-  - upsert into synced_campaigns with stats/raw_data
-- Remove/skip by default:
-  - /campaigns/{id}/steps
-  - /campaigns/{id}/people
-  - The fixed 10s delay loop (delete it entirely)
+**Step 2: Fetch Available Campaigns** (new)
+- After connecting, show a "Manage Campaigns" button
+- Opens a dialog showing ALL campaigns from Reply.io
+- Checkboxes for each campaign
+- "Select All" / "Deselect All" buttons
+- Search/filter by name
 
-Why this fixes “Sync spinning forever”
-- Campaign-only sync should finish quickly even for 50–200 campaigns, staying within the backend timeout. The UI will get a response and will stop showing “syncing”.
+**Step 3: Link Campaigns**
+- User checks campaigns they want to track
+- Clicks "Save" → updates `is_linked` in database
 
-4) (Optional but recommended) Add a separate “Deep Sync Contacts” pathway
-If you still need contacts/steps:
-- Add a second backend function later (or add a parameter to the same one) to sync:
-  - steps and/or contacts
-  - but only for a limited subset (e.g. active campaigns, or last 10 updated campaigns)
-This prevents reintroducing the timeout problem.
+**Step 4: Sync**
+- Sync button only processes campaigns where `is_linked = true`
+- Much faster for large accounts
 
-5) Improve stuck-state recovery in UI
-Even after making sync faster, we should harden UX:
-- If a request fails, make sure integration status is refreshed immediately (already does invalidateQueries on error).
-- Add a “Reset stuck sync” option when sync_status === "syncing" for too long (can be determined using updated_at without schema changes).
-This prevents permanent “syncing…” states if an execution is interrupted.
+**Step 5: Manage Over Time**
+- "Manage Campaigns" button always available
+- Can add/remove campaigns from tracking anytime
+- Unlinked campaigns stay in database but aren't synced
 
-Testing checklist (end-to-end)
-1) On /playground → Connect Platform → Reply.io:
-   - Enter API key → Test Connection
-   - Expected:
-     - If multiple teams exist: dropdown appears
-     - If only one team is detectable: Team ID field auto-fills with the detected ID (still labeled optional/recommended)
-2) Click Connect
-   - Confirm integration row shows “Team: <id>” badge (reply_team_id saved)
-3) Click Sync
-   - Expected:
-     - Sync finishes within seconds to ~1 minute (depending on number of campaigns)
-     - Status changes to “Synced”
-     - Campaigns appear in “Synced Campaigns”
-4) Confirm no infinite spinner; confirm errors surface as a toast and sync_status becomes “error” if anything fails.
+### Technical Implementation
 
-Risks / edge cases
-- If Reply’s API truly exposes only one teamId for your key, we can’t show multiple “clients” via dropdown. Auto-filling the detected teamId still improves reliability and consistency.
-- If contacts are essential for your workflow, we’ll implement Deep Sync as a separate, bounded operation so it cannot wedge the main Sync button.
+**1. Database Migration**
+- Add `is_linked` boolean column to `synced_campaigns` table
+- Default: `false`
 
-Scope boundaries (kept)
-- No changes to core app data (people/company records). Data Playground remains isolated.
-- No changes required to authentication logic; we only adjust these integration-related functions and UI components.
+**2. New Edge Function: `fetch-available-campaigns`**
+- Lightweight fetch: only campaign ID, name, status from Reply.io
+- No contacts, no steps, no delays
+- Returns list for UI to display
+
+**3. New Dialog: `ManageCampaignsDialog.tsx`**
+- Shows all available campaigns with checkboxes
+- Select All / Deselect All
+- Search filter
+- Save button updates `is_linked` status
+
+**4. Update `sync-reply-campaigns`**
+- Only sync campaigns where `is_linked = true`
+- Skip unlinked campaigns entirely
+
+**5. Update `CampaignsTable.tsx`**
+- Only show linked campaigns
+- Add "Manage Campaigns" action
+
+**6. New Hook: `useAvailableCampaigns.ts`**
+- Fetches available campaigns from edge function
+- Manages linking/unlinking mutations
+
+### UI Mockup
+
+```text
++-----------------------------------------------------------+
+| Connected Platforms                    [Manage Campaigns] |
++-----------------------------------------------------------+
+| 📧 Reply.io Account                                       |
+|    Status: Synced · Last synced 2 minutes ago             |
+|    Tracking: 5 of 62 campaigns                            |
+|    [Sync] [Enable Live] [...]                             |
++-----------------------------------------------------------+
+
++-- Manage Campaigns Dialog --------------------------------+
+| Manage Campaigns                              [X] Close   |
++-----------------------------------------------------------+
+| [Search campaigns...]                                     |
+| [✓] Select All  [  ] Deselect All                         |
++-----------------------------------------------------------+
+| [✓] Sales Outreach Q1        Active    245 contacts       |
+| [✓] Follow-up Sequence       Active    120 contacts       |
+| [  ] Old Campaign 2023       Archived   50 contacts       |
+| [✓] Enterprise Demo Flow     Active     80 contacts       |
+| [  ] Test Campaign           Draft       5 contacts       |
+| ...                                                       |
++-----------------------------------------------------------+
+| Linked: 3 campaigns                     [Cancel] [Save]   |
++-----------------------------------------------------------+
+```
+
+### Files to Create/Modify
+
+| File | Action | Purpose |
+|------|--------|---------|
+| `supabase/functions/fetch-available-campaigns/index.ts` | Create | Lightweight campaign list fetch |
+| `src/components/playground/ManageCampaignsDialog.tsx` | Create | Campaign selection UI |
+| `src/hooks/useAvailableCampaigns.ts` | Create | Hook for fetching/linking campaigns |
+| `supabase/functions/sync-reply-campaigns/index.ts` | Modify | Only sync linked campaigns |
+| `src/components/playground/IntegrationSetupCard.tsx` | Modify | Add "Manage Campaigns" button |
+| `src/components/playground/CampaignsTable.tsx` | Modify | Show linked count |
+| `src/hooks/useSyncedCampaigns.ts` | Modify | Filter to linked only |
+
+### Database Migration
+
+```sql
+-- Add is_linked column to synced_campaigns
+ALTER TABLE synced_campaigns 
+ADD COLUMN is_linked boolean NOT NULL DEFAULT false;
+
+-- Add index for filtering
+CREATE INDEX idx_synced_campaigns_is_linked 
+ON synced_campaigns(team_id, is_linked) 
+WHERE is_linked = true;
+```
+
+### Benefits
+
+1. **No More Timeouts**: Fetch campaign list is fast (no contacts/steps)
+2. **User Control**: Choose exactly which campaigns to track
+3. **Scalable**: Works for 5 or 500 campaigns
+4. **Flexible**: Add/remove campaigns anytime
+5. **Accurate Data**: Only tracking what matters
+
