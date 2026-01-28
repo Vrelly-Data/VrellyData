@@ -827,6 +827,7 @@ export type Database = {
           external_campaign_id: string
           id: string
           integration_id: string | null
+          is_linked: boolean
           name: string
           raw_data: Json | null
           stats: Json | null
@@ -839,6 +840,7 @@ export type Database = {
           external_campaign_id: string
           id?: string
           integration_id?: string | null
+          is_linked?: boolean
           name: string
           raw_data?: Json | null
           stats?: Json | null
@@ -851,6 +853,7 @@ export type Database = {
           external_campaign_id?: string
           id?: string
           integration_id?: string | null
+          is_linked?: boolean
           name?: string
           raw_data?: Json | null
           stats?: Json | null

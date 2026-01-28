@@ -17,14 +17,20 @@ export interface SyncedCampaign {
   external_campaign_id: string;
 }
 
-export function useSyncedCampaigns() {
+export function useSyncedCampaigns(onlyLinked: boolean = true) {
   return useQuery({
-    queryKey: ['synced-campaigns'],
+    queryKey: ['synced-campaigns', onlyLinked],
     queryFn: async (): Promise<SyncedCampaign[]> => {
-      const { data, error } = await supabase
+      let query = supabase
         .from('synced_campaigns')
-        .select('id, name, status, stats, updated_at, external_campaign_id')
-        .order('updated_at', { ascending: false });
+        .select('id, name, status, stats, updated_at, external_campaign_id');
+
+      // Filter to only linked campaigns if requested
+      if (onlyLinked) {
+        query = query.eq('is_linked', true);
+      }
+
+      const { data, error } = await query.order('updated_at', { ascending: false });
 
       if (error) throw error;
 

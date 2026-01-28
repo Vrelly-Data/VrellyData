@@ -45,7 +45,7 @@ export function CampaignsTable() {
   if (!campaigns || campaigns.length === 0) {
     return (
       <div className="text-center py-8 text-muted-foreground">
-        No campaigns synced yet. Connect an integration and sync to see campaigns here.
+        No linked campaigns yet. Use "Manage Campaigns" to select which campaigns to track.
       </div>
     );
   }

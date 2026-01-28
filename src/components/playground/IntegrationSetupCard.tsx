@@ -2,12 +2,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
-import { Plus, Plug, RefreshCw, Trash2, AlertCircle, Loader2, Pencil, Building2, Zap, Upload } from 'lucide-react';
+import { Plus, Plug, RefreshCw, Trash2, AlertCircle, Loader2, Pencil, Building2, Zap, Upload, Settings2 } from 'lucide-react';
 import { OutboundIntegration, useOutboundIntegrations } from '@/hooks/useOutboundIntegrations';
 import { useState } from 'react';
 import { AddIntegrationDialog } from './AddIntegrationDialog';
 import { EditIntegrationDialog } from './EditIntegrationDialog';
 import { LinkedInStatsUploadDialog } from './LinkedInStatsUploadDialog';
+import { ManageCampaignsDialog } from './ManageCampaignsDialog';
 import { formatDistanceToNow } from 'date-fns';
 
 const platformIcons: Record<string, string> = {
@@ -44,11 +45,12 @@ interface IntegrationRowProps {
   onEdit: (integration: OutboundIntegration) => void;
   onSetupWebhook: (id: string) => void;
   onResetSync: (id: string) => void;
+  onManageCampaigns: (integration: OutboundIntegration) => void;
   isSyncing: boolean;
   isSettingUpWebhook: boolean;
 }
 
-function IntegrationRow({ integration, onToggle, onDelete, onSync, onEdit, onSetupWebhook, onResetSync, isSyncing, isSettingUpWebhook }: IntegrationRowProps) {
+function IntegrationRow({ integration, onToggle, onDelete, onSync, onEdit, onSetupWebhook, onResetSync, onManageCampaigns, isSyncing, isSettingUpWebhook }: IntegrationRowProps) {
   const icon = platformIcons[integration.platform.toLowerCase()] || '🔌';
   const isCurrentlySyncing = isSyncing || integration.sync_status === 'syncing';
   // Access reply_team_id from extended integration type
@@ -96,6 +98,18 @@ function IntegrationRow({ integration, onToggle, onDelete, onSync, onEdit, onSet
         </div>
       </div>
       <div className="flex items-center gap-3">
+        {isReplyIo && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => onManageCampaigns(integration)}
+            disabled={!integration.is_active}
+            className="h-8"
+          >
+            <Settings2 className="h-4 w-4" />
+            <span className="ml-1.5">Manage Campaigns</span>
+          </Button>
+        )}
         {isReplyIo && webhookStatus !== 'active' && (
           <div className="flex items-center gap-2">
             {webhookStatus === 'error' && !replyTeamId && (
@@ -174,7 +188,9 @@ export function IntegrationSetupCard() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [linkedInUploadOpen, setLinkedInUploadOpen] = useState(false);
+  const [manageCampaignsOpen, setManageCampaignsOpen] = useState(false);
   const [editingIntegration, setEditingIntegration] = useState<OutboundIntegration | null>(null);
+  const [managingIntegration, setManagingIntegration] = useState<OutboundIntegration | null>(null);
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [webhookSetupId, setWebhookSetupId] = useState<string | null>(null);
   const { integrations, isLoading, toggleIntegration, deleteIntegration, syncIntegration, setupWebhook, resetSyncStatus } = useOutboundIntegrations();
@@ -210,6 +226,11 @@ export function IntegrationSetupCard() {
 
   const handleResetSync = (id: string) => {
     resetSyncStatus.mutate(id);
+  };
+
+  const handleManageCampaigns = (integration: OutboundIntegration) => {
+    setManagingIntegration(integration);
+    setManageCampaignsOpen(true);
   };
 
   return (
@@ -260,6 +281,7 @@ export function IntegrationSetupCard() {
                   onEdit={handleEdit}
                   onSetupWebhook={handleSetupWebhook}
                   onResetSync={handleResetSync}
+                  onManageCampaigns={handleManageCampaigns}
                   isSyncing={syncingId === integration.id}
                   isSettingUpWebhook={webhookSetupId === integration.id}
                 />
@@ -278,6 +300,11 @@ export function IntegrationSetupCard() {
       <LinkedInStatsUploadDialog 
         open={linkedInUploadOpen} 
         onOpenChange={setLinkedInUploadOpen}
+      />
+      <ManageCampaignsDialog
+        open={manageCampaignsOpen}
+        onOpenChange={setManageCampaignsOpen}
+        integrationId={managingIntegration?.id ?? null}
       />
     </>
   );
