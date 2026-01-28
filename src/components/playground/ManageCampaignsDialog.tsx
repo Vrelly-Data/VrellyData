@@ -5,9 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Switch } from '@/components/ui/switch';
-import { Label } from '@/components/ui/label';
-import { Loader2, Search, Users, AlertTriangle, Globe } from 'lucide-react';
+import { Loader2, Search, Users, AlertTriangle, Globe, Building2 } from 'lucide-react';
 import { useAvailableCampaigns, AvailableCampaign } from '@/hooks/useAvailableCampaigns';
 
 interface ManageCampaignsDialogProps {
@@ -38,6 +36,7 @@ export function ManageCampaignsDialog({ open, onOpenChange, integrationId }: Man
     campaigns, 
     teamFiltered, 
     teamId, 
+    teamsCount,
     skipTeamFilter, 
     toggleTeamFilter, 
     isLoading, 
@@ -72,6 +71,25 @@ export function ManageCampaignsDialog({ open, onOpenChange, integrationId }: Man
       setHasChanges(false);
     }
   }, [open, integrationId]);
+
+  // Get unique teams from campaigns
+  const uniqueTeams = useMemo(() => {
+    const teams = new Set<string>();
+    campaigns.forEach(c => {
+      if (c.replyTeamId) teams.add(c.replyTeamId);
+    });
+    return Array.from(teams);
+  }, [campaigns]);
+
+  // Count campaigns per team
+  const campaignsPerTeam = useMemo(() => {
+    const counts: Record<string, number> = {};
+    campaigns.forEach(c => {
+      const teamKey = c.replyTeamId || 'default';
+      counts[teamKey] = (counts[teamKey] || 0) + 1;
+    });
+    return counts;
+  }, [campaigns]);
 
   const filteredCampaigns = useMemo(() => {
     if (!searchQuery.trim()) return campaigns;
@@ -146,7 +164,7 @@ export function ManageCampaignsDialog({ open, onOpenChange, integrationId }: Man
             />
           </div>
 
-          {/* Team Filter Toggle */}
+          {/* Team Filter Toggle - Show when filtered to single team */}
           {teamFiltered && !skipTeamFilter && (
             <div className="flex items-center gap-2 p-3 bg-muted/50 rounded-md border border-border">
               <AlertTriangle className="h-4 w-4 text-warning shrink-0" />
@@ -160,25 +178,39 @@ export function ManageCampaignsDialog({ open, onOpenChange, integrationId }: Man
                 className="shrink-0"
               >
                 <Globe className="h-4 w-4 mr-1" />
-                Show All Campaigns
+                Show All Teams
               </Button>
             </div>
           )}
 
+          {/* Multi-team view when showing all */}
           {skipTeamFilter && (
-            <div className="flex items-center gap-2 p-3 bg-primary/10 rounded-md border border-primary/20">
-              <Globe className="h-4 w-4 text-primary shrink-0" />
-              <span className="text-sm text-muted-foreground flex-1">
-                Showing all {campaigns.length} campaigns (no team filter)
-              </span>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={toggleTeamFilter}
-                className="shrink-0"
-              >
-                Filter by Team
-              </Button>
+            <div className="flex flex-col gap-2 p-3 bg-primary/10 rounded-md border border-primary/20">
+              <div className="flex items-center gap-2">
+                <Globe className="h-4 w-4 text-primary shrink-0" />
+                <span className="text-sm font-medium flex-1">
+                  Showing {campaigns.length} campaigns from {teamsCount} teams
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={toggleTeamFilter}
+                  className="shrink-0"
+                >
+                  <Building2 className="h-4 w-4 mr-1" />
+                  Filter by Team
+                </Button>
+              </div>
+              {/* Team breakdown */}
+              {uniqueTeams.length > 1 && (
+                <div className="flex flex-wrap gap-1.5 mt-1">
+                  {uniqueTeams.map(teamId => (
+                    <Badge key={teamId} variant="secondary" className="text-xs">
+                      Team {teamId}: {campaignsPerTeam[teamId]} campaigns
+                    </Badge>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
@@ -210,9 +242,18 @@ export function ManageCampaignsDialog({ open, onOpenChange, integrationId }: Man
           {/* Campaign List */}
           <ScrollArea className="h-[400px] border rounded-md">
             {isLoading ? (
-              <div className="flex items-center justify-center py-12">
+              <div className="flex flex-col items-center justify-center py-12">
                 <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                <span className="ml-2 text-muted-foreground">Loading campaigns...</span>
+                <span className="mt-2 text-muted-foreground">
+                  {skipTeamFilter 
+                    ? "Loading campaigns from all teams..." 
+                    : "Loading campaigns..."}
+                </span>
+                {skipTeamFilter && (
+                  <span className="text-xs text-muted-foreground mt-1">
+                    This may take a moment for agency accounts
+                  </span>
+                )}
               </div>
             ) : error ? (
               <div className="text-center py-12 text-destructive">
@@ -230,6 +271,7 @@ export function ManageCampaignsDialog({ open, onOpenChange, integrationId }: Man
                     campaign={campaign}
                     isChecked={localSelections.get(campaign.id) ?? false}
                     onToggle={() => handleToggle(campaign.id)}
+                    showTeamId={skipTeamFilter && uniqueTeams.length > 1}
                   />
                 ))}
               </div>
@@ -261,9 +303,10 @@ interface CampaignRowProps {
   campaign: AvailableCampaign;
   isChecked: boolean;
   onToggle: () => void;
+  showTeamId?: boolean;
 }
 
-function CampaignRow({ campaign, isChecked, onToggle }: CampaignRowProps) {
+function CampaignRow({ campaign, isChecked, onToggle, showTeamId }: CampaignRowProps) {
   return (
     <div
       className="flex items-center gap-3 px-4 py-3 hover:bg-muted/50 cursor-pointer"
@@ -276,6 +319,11 @@ function CampaignRow({ campaign, isChecked, onToggle }: CampaignRowProps) {
       />
       <div className="flex-1 min-w-0">
         <div className="font-medium truncate">{campaign.name}</div>
+        {showTeamId && campaign.replyTeamId && (
+          <div className="text-xs text-muted-foreground">
+            Team {campaign.replyTeamId}
+          </div>
+        )}
       </div>
       {getStatusBadge(campaign.status)}
       <div className="flex items-center gap-1 text-sm text-muted-foreground">
