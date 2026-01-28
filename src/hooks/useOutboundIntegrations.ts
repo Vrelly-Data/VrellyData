@@ -129,7 +129,7 @@ export function useOutboundIntegrations() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['outbound-integrations'] });
       queryClient.invalidateQueries({ queryKey: ['playground-stats'] });
-      toast.success(`Synced ${data.campaigns} campaigns, ${data.contacts} contacts`);
+      toast.success(`Synced ${data.campaigns} campaigns`);
     },
     onError: (error) => {
       queryClient.invalidateQueries({ queryKey: ['outbound-integrations'] });
@@ -170,6 +170,28 @@ export function useOutboundIntegrations() {
     },
   });
 
+  const resetSyncStatus = useMutation({
+    mutationFn: async (integrationId: string) => {
+      const { error } = await supabase
+        .from('outbound_integrations')
+        .update({ 
+          sync_status: 'pending', 
+          sync_error: null,
+          updated_at: new Date().toISOString() 
+        })
+        .eq('id', integrationId);
+
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['outbound-integrations'] });
+      toast.success('Sync status reset');
+    },
+    onError: (error) => {
+      toast.error(`Failed to reset sync status: ${error.message}`);
+    },
+  });
+
   return {
     integrations: integrations ?? [],
     isLoading,
@@ -179,5 +201,6 @@ export function useOutboundIntegrations() {
     toggleIntegration,
     syncIntegration,
     setupWebhook,
+    resetSyncStatus,
   };
 }
