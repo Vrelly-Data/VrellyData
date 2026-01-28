@@ -5,7 +5,9 @@ import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Loader2, Search, Users } from 'lucide-react';
+import { Switch } from '@/components/ui/switch';
+import { Label } from '@/components/ui/label';
+import { Loader2, Search, Users, AlertTriangle, Globe } from 'lucide-react';
 import { useAvailableCampaigns, AvailableCampaign } from '@/hooks/useAvailableCampaigns';
 
 interface ManageCampaignsDialogProps {
@@ -32,7 +34,18 @@ function getStatusBadge(status: string) {
 }
 
 export function ManageCampaignsDialog({ open, onOpenChange, integrationId }: ManageCampaignsDialogProps) {
-  const { campaigns, isLoading, error, refetch, bulkUpdateLinks, isUpdating } = useAvailableCampaigns(integrationId);
+  const { 
+    campaigns, 
+    teamFiltered, 
+    teamId, 
+    skipTeamFilter, 
+    toggleTeamFilter, 
+    isLoading, 
+    error, 
+    refetch, 
+    bulkUpdateLinks, 
+    isUpdating 
+  } = useAvailableCampaigns(integrationId);
   const [searchQuery, setSearchQuery] = useState('');
   const [localSelections, setLocalSelections] = useState<Map<string, boolean>>(new Map());
   const [hasChanges, setHasChanges] = useState(false);
@@ -132,6 +145,42 @@ export function ManageCampaignsDialog({ open, onOpenChange, integrationId }: Man
               className="pl-9"
             />
           </div>
+
+          {/* Team Filter Toggle */}
+          {teamFiltered && !skipTeamFilter && (
+            <div className="flex items-center gap-2 p-3 bg-muted/50 rounded-md border border-border">
+              <AlertTriangle className="h-4 w-4 text-warning shrink-0" />
+              <span className="text-sm text-muted-foreground flex-1">
+                Showing {campaigns.length} campaigns for team "{teamId}"
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={toggleTeamFilter}
+                className="shrink-0"
+              >
+                <Globe className="h-4 w-4 mr-1" />
+                Show All Campaigns
+              </Button>
+            </div>
+          )}
+
+          {skipTeamFilter && (
+            <div className="flex items-center gap-2 p-3 bg-primary/10 rounded-md border border-primary/20">
+              <Globe className="h-4 w-4 text-primary shrink-0" />
+              <span className="text-sm text-muted-foreground flex-1">
+                Showing all {campaigns.length} campaigns (no team filter)
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={toggleTeamFilter}
+                className="shrink-0"
+              >
+                Filter by Team
+              </Button>
+            </div>
+          )}
 
           {/* Select All / Deselect All */}
           <div className="flex items-center gap-4 text-sm">

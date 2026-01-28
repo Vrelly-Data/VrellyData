@@ -107,7 +107,7 @@ Deno.serve(async (req) => {
     }
 
     const body = await req.json();
-    const { integrationId } = body;
+    const { integrationId, skipTeamFilter } = body;
 
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL") ?? "",
@@ -138,10 +138,12 @@ Deno.serve(async (req) => {
     const teamId = integration.team_id;
     const replyTeamId = integration.reply_team_id;
 
-    console.log(`Fetching campaigns for integration ${integrationId}${replyTeamId ? ` (team: ${replyTeamId})` : ''}`);
+    // If skipTeamFilter is true, don't apply the team filter
+    const effectiveTeamId = skipTeamFilter ? undefined : (replyTeamId || undefined);
+    console.log(`Fetching campaigns for integration ${integrationId}${effectiveTeamId ? ` (team: ${effectiveTeamId})` : ' (all teams)'}`);
 
     // Fetch ALL campaigns from Reply.io (lightweight - just names/IDs/status)
-    const campaigns = await fetchAllCampaigns(apiKey, replyTeamId || undefined);
+    const campaigns = await fetchAllCampaigns(apiKey, effectiveTeamId);
     
     console.log(`Found ${campaigns.length} campaigns from Reply.io`);
 
@@ -195,6 +197,8 @@ Deno.serve(async (req) => {
         success: true,
         campaigns: result,
         total: result.length,
+        teamFiltered: !!effectiveTeamId,
+        teamId: effectiveTeamId || null,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
