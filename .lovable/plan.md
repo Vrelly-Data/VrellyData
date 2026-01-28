@@ -1,49 +1,75 @@
 
 
-## Test with Single Client First
+## Add Team Dropdown to Edit Integration Dialog
 
-### Current Situation
-Your integration has `reply_team_id = null`, which means it tries to sync all 62 campaigns across all clients. This causes timeouts.
+### The Problem
+When editing an existing Reply.io integration, you can only manually type a Team ID. There's no dropdown to select from available teams like there is when adding a new integration.
 
-### Two-Step Testing Plan
+### The Solution
+Create a new edge function that fetches teams using the stored API key, then update the Edit dialog to show a dropdown.
 
-#### Step 1: Reset Stuck Status and Set Team ID (Manual)
-First, we need to:
-1. **Reset the stuck "syncing" status** in the database
-2. **Set a specific Team ID** for your integration to isolate to one client
+### Implementation
 
-**Database update to run:**
-```sql
-UPDATE outbound_integrations 
-SET sync_status = 'pending',
-    sync_error = NULL,
-    updated_at = NOW()
-WHERE id = 'ac749820-fa6d-4a85-8955-039d328bec97';
+#### 1. New Edge Function: `fetch-integration-teams`
+This function takes an `integrationId`, retrieves the stored API key from the database, and calls `fetch-reply-teams` logic internally.
+
+**Location:** `supabase/functions/fetch-integration-teams/index.ts`
+
+```text
+Request: { integrationId: "uuid" }
+Response: { teams: [{ id: number, name: string }], isAgencyAccount: boolean }
 ```
 
-Then use the **Edit button** (pencil icon) in the UI to set your Team ID.
+**Flow:**
+1. Authenticate user via JWT
+2. Fetch integration from DB (includes encrypted API key)
+3. Call Reply.io API endpoints to discover teams
+4. Return teams list
 
-#### Step 2: Find Your Reply.io Team ID
-To get the Team ID for your test client, you can either:
-- **Option A**: Check Reply.io dashboard → Settings → Agency/Clients → Copy the client's team ID
-- **Option B**: After resetting, I can call the `fetch-reply-teams` edge function to list available teams from your API key
+#### 2. Update `EditIntegrationDialog.tsx`
+- Add "Load Teams" button that calls the new edge function
+- Show dropdown when teams are loaded
+- Keep manual input as fallback if team discovery fails
+- Show loading state while fetching
 
-### What This Fixes
-With a Team ID set, the sync will:
-- Only fetch campaigns for that specific client (maybe 5-10 instead of 62)
-- Complete within the timeout window
-- Allow proper testing before we optimize for all clients
+**New UI flow:**
+1. User opens Edit dialog
+2. User clicks "Load Teams" button
+3. Teams load into dropdown
+4. User selects a team and saves
 
 ### Files to Modify
 
 | File | Change |
 |------|--------|
-| Database | Reset `sync_status` to `pending` for your integration |
-| UI (manual) | Enter Team ID via Edit dialog |
+| `supabase/functions/fetch-integration-teams/index.ts` | NEW - Edge function to fetch teams using stored API key |
+| `supabase/config.toml` | Add config for new function |
+| `src/components/playground/EditIntegrationDialog.tsx` | Add teams dropdown with "Load Teams" button |
 
-### After Testing Works
-Once single-client sync works reliably, we can:
-1. Add the "Reset Stuck Sync" button for self-service recovery
-2. Optimize the edge function for handling many campaigns (campaigns-only mode)
-3. Consider separate integrations per client if needed
+### Technical Details
+
+**Edge Function Auth:**
+```typescript
+// Get integration with API key (requires auth)
+const { data: integration } = await supabaseClient
+  .from('outbound_integrations')
+  .select('id, api_key_encrypted, platform')
+  .eq('id', integrationId)
+  .single();
+
+// Use API key to fetch teams from Reply.io
+const teams = await fetchTeamsFromReplyIO(integration.api_key_encrypted);
+```
+
+**Updated Dialog UI:**
+- "Load Teams" button appears next to the Team ID field
+- When clicked, shows loading spinner
+- On success, shows dropdown with available teams
+- On failure, shows error toast and keeps manual input
+
+### Why This Approach?
+- **Security:** API key stays server-side, never exposed to client
+- **Reuses existing logic:** Same team discovery logic as `fetch-reply-teams`
+- **Fallback:** Manual input still available if API discovery fails
+- **User-friendly:** No need to look up Team IDs in Reply.io dashboard
 
