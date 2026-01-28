@@ -1,45 +1,96 @@
 
 
-## Fix: Campaign List Not Scrolling/Showing All Campaigns
+## Fix Campaign Fetching: Remove Team ID Filter Option
 
-### Problem Identified
-The `ManageCampaignsDialog` is correctly fetching all 62 campaigns from the API, but only a few are visible because the `ScrollArea` component doesn't have a proper height constraint for scrolling to work.
+### Problem
+Your integration is filtering to team ID `383171`, showing only 62 campaigns. If your Reply.io account has campaigns across multiple teams/workspaces, or if the team discovery is incomplete, you're missing campaigns.
 
-### Root Cause
-The Radix UI `ScrollArea` component requires an explicit height to create a scrollable container. Currently, `flex-1` is used, but this doesn't provide a bounded height in this dialog layout context, so the scroll viewport has no limit and content overflows or gets cut off without being scrollable.
+### Solution: Allow "All Campaigns" Option
 
-### Solution
-Add an explicit height to the `ScrollArea` to ensure all 62 campaigns are accessible via scrolling.
+Give users the ability to fetch campaigns **without** the team filter to see all accessible campaigns.
 
-### File to Modify
+### Changes Required
 
-**`src/components/playground/ManageCampaignsDialog.tsx`**
+**1. Update Edge Function: `fetch-available-campaigns`**
 
-Change the ScrollArea from:
-```tsx
-<ScrollArea className="flex-1 border rounded-md">
+Add an optional `skipTeamFilter` parameter that bypasses the `X-Reply-Team-Id` header:
+
+```typescript
+// If user requests all campaigns, don't filter by team
+const campaigns = await fetchAllCampaigns(
+  apiKey, 
+  skipTeamFilter ? undefined : (replyTeamId || undefined)
+);
 ```
 
-To:
-```tsx
-<ScrollArea className="h-[400px] border rounded-md">
+**2. Update UI: `ManageCampaignsDialog.tsx`**
+
+Add a toggle or button to "Show all campaigns" that refetches without the team filter:
+
+```text
++-----------------------------------------------------------+
+| Manage Campaigns                               [X] Close   |
++-----------------------------------------------------------+
+| [Search campaigns...]                                      |
+| [✓] Select All  [  ] Deselect All                          |
+|                                                            |
+| ⚠️ Showing 62 campaigns for team "383171"                  |
+| [Show All Campaigns] ← Fetch without team filter           |
++-----------------------------------------------------------+
 ```
 
-This gives the ScrollArea a fixed 400px height, which:
-- Provides enough space to show approximately 8-10 campaigns at once
-- Enables vertical scrolling to access all 62 campaigns
-- Works reliably within the dialog's max-height constraint
+**3. Update Integration Settings: Allow Clearing Team ID**
 
-### Alternative Approach (if fixed height is undesirable)
-If you prefer a responsive approach that uses available dialog space, we could use:
-```tsx
-<ScrollArea className="flex-1 min-h-[200px] max-h-[400px] border rounded-md">
-```
+In `EditIntegrationDialog.tsx`, allow users to clear the Team ID field to disable filtering entirely.
 
-This provides a minimum height of 200px, maximum of 400px, with flex to fill available space between.
+**4. Alternative: Improve Team Discovery**
+
+Update `fetch-reply-teams` to:
+- Paginate through ALL sequences (not just 100)
+- Also check the V1 `/campaigns` endpoint directly for unique owners
+- Provide better visibility into what the API key has access to
+
+### Files to Modify
+
+| File | Change |
+|------|--------|
+| `supabase/functions/fetch-available-campaigns/index.ts` | Add `skipTeamFilter` option |
+| `src/components/playground/ManageCampaignsDialog.tsx` | Add "Show All" toggle/button |
+| `src/hooks/useAvailableCampaigns.ts` | Add refetch option with no filter |
+| `src/components/playground/EditIntegrationDialog.tsx` | Allow clearing Team ID |
+
+### Alternative Quick Fix
+
+If you want to immediately see all campaigns, you can:
+1. Edit your integration and clear the Team ID field (set to empty)
+2. Refresh the Manage Campaigns dialog
+
+This will fetch campaigns without the team filter.
 
 ### Technical Details
-- The Radix UI ScrollArea viewport needs a bounded container to calculate scroll dimensions
-- Without explicit height, the viewport's `h-full` has nothing to reference
-- The fix ensures the scroll thumb appears and users can scroll through all campaigns
+
+**Current behavior:**
+```
+GET /v1/campaigns?limit=100&page=1
+Headers: X-Reply-Team-Id: 383171  ← Filters to one team
+Response: 62 campaigns
+```
+
+**Proposed "Show All" behavior:**
+```
+GET /v1/campaigns?limit=100&page=1
+Headers: (no team filter)
+Response: All campaigns accessible by API key
+```
+
+### Recommended Approach
+
+**Option A: Quick Fix** - Let users clear Team ID in Edit dialog
+- Fastest to implement
+- User manually controls filtering
+
+**Option B: Toggle in Dialog** - "Show All Campaigns" button
+- Better UX
+- More explicit about what filtering is happening
+- Shows warning about team filter being applied
 
