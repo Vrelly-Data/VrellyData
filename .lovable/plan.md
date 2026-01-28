@@ -1,81 +1,149 @@
 
-## What’s going on (and answer to your endpoint question)
 
-### Are we using the Reply.io V1 API endpoint?
-Yes. Our backend function fetches campaigns via **Reply.io V1**:
-- `GET https://api.reply.io/v1/campaigns?limit=...&page=...`
+## Improve Reply.io Workspace Clarity in UI
 
-We are **not** using the `name={{campaignName}}` query param. That `name` param is a *filter/search* and would only return matching campaigns, not “all campaigns”.
+Now that we understand Reply.io API keys are workspace-specific, we need to update the UI to make this crystal clear and guide users on how to access campaigns from other workspaces.
 
-### Why is it still only showing 62 (even in “Show All Teams” mode)?
-Your “Show All Teams” mode depends on “team discovery” from Reply.io **V3** (`/v3/sequences`) to find all team IDs, then it loops through each team and calls V1 `/campaigns` with `X-Reply-Team-Id`.
+### Changes Overview
 
-Right now, the team discovery in `fetch-available-campaigns` is almost certainly failing because it parses the V3 response incorrectly:
+#### 1. Update ManageCampaignsDialog Warning Message
 
-- Reply.io V3 `/sequences` returns data under `items` (per Reply docs).
-- Our code in `discoverAllTeams()` is looking for `response.sequences` (or treating the entire response as an array).
-- Result: it “discovers” **0 teams** → falls back to a single unscoped V1 fetch → **62 campaigns**.
+**Current behavior (lines 209-216):**
+Shows a vague warning: "Only detected 1 team. If you expect multiple client teams, team discovery may be failing."
 
-This is consistent with what you’re seeing.
+**New behavior:**
+Replace with a clear, actionable message explaining the API key scope:
 
-## Implementation plan (fix team discovery so multi-team fetch actually runs)
+```
+"Your API key only has access to this workspace ({campaigns.length} campaigns).
+Reply.io uses separate API keys per workspace. To see campaigns from other 
+client workspaces, add each workspace as a separate integration."
+```
 
-### 1) Fix V3 `/sequences` response parsing in the backend function
-**File:** `supabase/functions/fetch-available-campaigns/index.ts`
+Add a button to quickly navigate to "Add Integration" from this warning.
 
-Update `discoverAllTeams()` to:
-- Read sequences from `response.items` (not `response.sequences`)
-- Use `response.info?.hasMore` to paginate reliably
-- Log the number of discovered teams and the first few team IDs for debugging
+#### 2. Update AddIntegrationDialog Help Text
 
-Concrete adjustments:
-- Replace:
-  - `const sequences = response.sequences || response || [];`
-  with:
-  - `const sequences = response.items || [];`
-- Replace:
-  - `hasMore = sequences.length === pageSize;`
-  with:
-  - `hasMore = response.info?.hasMore ?? (sequences.length === pageSize);`
+**Current behavior (line 353-354):**
+Shows generic text about agency accounts.
 
-Also keep the safety limit but make it more robust (e.g., stop if `hasMore` is false OR no items returned).
+**New behavior:**
+Update the help text to clearly explain:
+- Each Reply.io workspace has its own API key
+- To track multiple workspaces, add multiple integrations
+- Where to find the API key in Reply.io (Settings → API)
 
-### 2) Add a small “debug payload” back to the UI (temporary but very helpful)
-**File:** `supabase/functions/fetch-available-campaigns/index.ts`
+#### 3. Add Workspace Name Display to IntegrationSetupCard
 
-When `skipTeamFilter === true`, include in the JSON response:
-- `discoveredTeamIds: string[]` (maybe capped to first 50)
-- `discoveredTeamsCount: number`
+Show which workspace each integration belongs to by displaying the workspace name (first campaign's team name or ID) on the integration card. This helps users identify which workspace each integration represents.
 
-This lets us confirm from the UI (or network response) whether team discovery is actually finding more than one team.
+#### 4. Add "Add Another Workspace" Quick Action
 
-### 3) Update the UI to show “team discovery results” when showing all teams
-**File:** `src/components/playground/ManageCampaignsDialog.tsx`
+When viewing a Reply.io integration that only has access to one workspace, add a subtle prompt suggesting they can add another integration for other workspaces.
 
-In the `skipTeamFilter` banner:
-- If `teamsCount <= 1`, show a warning like:
-  - “We only detected 1 team from your API key. If you expect multiple client teams, team discovery may be failing.”
-- If we add `discoveredTeamsCount`, display:
-  - “Discovered X teams, fetched Y campaigns.”
+### Files to Modify
 
-This prevents silent failure where the UI says “Show All Teams” but is effectively still scoped.
+| File | Changes |
+|------|---------|
+| `src/components/playground/ManageCampaignsDialog.tsx` | Update single-team warning to explain workspace-scoped API keys; add "Add Integration" button |
+| `src/components/playground/AddIntegrationDialog.tsx` | Improve help text explaining workspace-specific API keys |
+| `src/components/playground/IntegrationSetupCard.tsx` | Show workspace name; add "Add Another Workspace" hint for Reply.io |
 
-### 4) Validate end-to-end behavior
-After the change, the expected behavior in “Show All Teams” mode:
-- `discoverAllTeams()` finds multiple team IDs (agency clients)
-- `fetchCampaignsForTeam()` runs once per team with `X-Reply-Team-Id`
-- The merged total should jump from **62 → 200+**
+### Detailed Changes
 
-Validation steps:
-1. Open **Manage Campaigns** → click **Show All Teams**
-2. Confirm the UI shows something like “Discovered N teams”
-3. Confirm campaign count increases beyond 62
-4. Sanity-check: in the merged list, confirm at least 2 different `replyTeamId` values appear.
+#### ManageCampaignsDialog.tsx (lines 209-217)
 
-## Potential follow-up hardening (optional but recommended)
-If Reply.io campaign IDs are only unique *within* a team (not globally), our DB upsert key `UNIQUE(integration_id, external_campaign_id)` could cause collisions across teams. If we observe collisions, we’ll adjust storage to avoid overwriting (e.g., store a composite external id like `teamId:campaignId`, or add a dedicated `reply_team_id` column and include it in uniqueness).
+Replace the vague warning with:
 
-## Files that will be changed
-- `supabase/functions/fetch-available-campaigns/index.ts` (core fix: correct V3 parsing + better pagination + debug fields)
-- `src/components/playground/ManageCampaignsDialog.tsx` (display discovery diagnostics / warnings)
-- (Optional) `src/hooks/useAvailableCampaigns.ts` (extend `CampaignFetchResult` to pass through debug fields if we decide to show them cleanly)
+```tsx
+{discoveredTeamsCount !== undefined && discoveredTeamsCount <= 1 && (
+  <div className="flex flex-col gap-2 text-sm bg-amber-500/10 p-3 rounded-md border border-amber-500/20">
+    <div className="flex items-center gap-2">
+      <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />
+      <span className="font-medium text-amber-700 dark:text-amber-400">
+        Single Workspace Detected
+      </span>
+    </div>
+    <p className="text-muted-foreground text-xs">
+      Your API key only has access to this workspace ({campaigns.length} campaigns). 
+      Reply.io uses separate API keys per workspace. To track campaigns from other 
+      client workspaces, add each one as a separate integration.
+    </p>
+    <Button
+      variant="outline"
+      size="sm"
+      className="w-fit mt-1"
+      onClick={() => {
+        onOpenChange(false);
+        // Trigger add integration dialog (via callback prop or event)
+      }}
+    >
+      <Plus className="h-3 w-3 mr-1" />
+      Add Another Workspace
+    </Button>
+  </div>
+)}
+```
+
+#### AddIntegrationDialog.tsx (lines 340-356)
+
+Update the optional Team ID section with clearer messaging:
+
+```tsx
+{platform === 'reply.io' && validationStatus === 'valid' && !isAgencyAccount && (
+  <div className="grid gap-2 p-3 bg-muted/50 rounded-md">
+    <div className="flex items-center gap-2 text-sm font-medium">
+      <Building2 className="h-4 w-4" />
+      Workspace API Key Detected
+    </div>
+    <p className="text-xs text-muted-foreground">
+      This API key has access to one Reply.io workspace. Each workspace in Reply.io 
+      has its own API key. To sync campaigns from multiple workspaces, add each 
+      workspace as a separate integration.
+    </p>
+    {manualTeamId && (
+      <div className="flex items-center gap-2 text-xs">
+        <span className="text-muted-foreground">Workspace ID:</span>
+        <Badge variant="secondary">{manualTeamId}</Badge>
+      </div>
+    )}
+  </div>
+)}
+```
+
+#### IntegrationSetupCard.tsx
+
+Add a note under Reply.io integrations that shows only one workspace is linked, with a quick action to add another:
+
+```tsx
+{integration.platform.toLowerCase() === 'reply.io' && (
+  <div className="text-xs text-muted-foreground mt-1">
+    {integration.reply_team_id 
+      ? `Workspace: ${integration.reply_team_id}` 
+      : 'Single workspace'
+    }
+    {' · '}
+    <button 
+      className="text-primary hover:underline"
+      onClick={() => setDialogOpen(true)}
+    >
+      Add another workspace
+    </button>
+  </div>
+)}
+```
+
+### Expected Result
+
+After these changes:
+1. Users immediately understand that Reply.io API keys are workspace-specific
+2. Clear guidance on how to add other workspaces (add more integrations)
+3. No more confusion about "Show All Teams" not finding all campaigns
+4. Each integration clearly shows which workspace it represents
+
+### Technical Notes
+
+- Remove or hide the "Show All Teams" toggle for Reply.io since it's misleading (workspace API keys can't access other workspaces)
+- Keep the team discovery logic for future use if Reply.io ever provides agency-level keys
+- Consider storing the workspace name (from the first campaign) in the integration record for display
+
