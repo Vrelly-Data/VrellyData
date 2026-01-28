@@ -89,6 +89,15 @@ function IntegrationRow({ integration, onToggle, onDelete, onSync, onEdit, onSet
               <> · Last synced {formatDistanceToNow(new Date(integration.last_synced_at), { addSuffix: true })}</>
             )}
           </p>
+          {/* Workspace info for Reply.io */}
+          {isReplyIo && (
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {replyTeamId 
+                ? `Workspace: ${replyTeamId}` 
+                : 'Single workspace'
+              }
+            </p>
+          )}
           {integration.sync_error && (
             <p className="text-xs text-destructive flex items-center gap-1 mt-1">
               <AlertCircle className="h-3 w-3" />
@@ -305,6 +314,7 @@ export function IntegrationSetupCard() {
         open={manageCampaignsOpen}
         onOpenChange={setManageCampaignsOpen}
         integrationId={managingIntegration?.id ?? null}
+        onAddWorkspace={() => setDialogOpen(true)}
       />
     </>
   );

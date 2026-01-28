@@ -5,13 +5,14 @@ import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Loader2, Search, Users, AlertTriangle, Globe, Building2 } from 'lucide-react';
+import { Loader2, Search, Users, AlertTriangle, Globe, Building2, Plus } from 'lucide-react';
 import { useAvailableCampaigns, AvailableCampaign } from '@/hooks/useAvailableCampaigns';
 
 interface ManageCampaignsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   integrationId: string | null;
+  onAddWorkspace?: () => void;
 }
 
 function getStatusBadge(status: string) {
@@ -31,7 +32,7 @@ function getStatusBadge(status: string) {
   }
 }
 
-export function ManageCampaignsDialog({ open, onOpenChange, integrationId }: ManageCampaignsDialogProps) {
+export function ManageCampaignsDialog({ open, onOpenChange, integrationId, onAddWorkspace }: ManageCampaignsDialogProps) {
   const { 
     campaigns, 
     teamFiltered, 
@@ -206,13 +207,34 @@ export function ManageCampaignsDialog({ open, onOpenChange, integrationId }: Man
                   Filter by Team
                 </Button>
               </div>
-              {/* Warning if only 1 team discovered */}
+              {/* Warning explaining workspace-scoped API keys */}
               {discoveredTeamsCount !== undefined && discoveredTeamsCount <= 1 && (
-                <div className="flex items-center gap-2 text-xs text-warning">
-                  <AlertTriangle className="h-3 w-3 shrink-0" />
-                  <span>
-                    Only detected 1 team. If you expect multiple client teams, team discovery may be failing.
-                  </span>
+                <div className="flex flex-col gap-2 mt-2 p-3 bg-amber-500/10 rounded-md border border-amber-500/20">
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                    <span className="font-medium text-amber-700 dark:text-amber-400 text-sm">
+                      Single Workspace Detected
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Your API key only has access to this workspace ({campaigns.length} campaigns). 
+                    Reply.io uses separate API keys per workspace. To track campaigns from other 
+                    client workspaces, add each one as a separate integration.
+                  </p>
+                  {onAddWorkspace && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-fit mt-1"
+                      onClick={() => {
+                        onOpenChange(false);
+                        onAddWorkspace();
+                      }}
+                    >
+                      <Plus className="h-3 w-3 mr-1" />
+                      Add Another Workspace
+                    </Button>
+                  )}
                 </div>
               )}
               {/* Team breakdown */}

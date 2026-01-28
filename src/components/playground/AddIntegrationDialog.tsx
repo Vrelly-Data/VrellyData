@@ -336,22 +336,24 @@ export function AddIntegrationDialog({ open, onOpenChange }: AddIntegrationDialo
               </div>
             )}
 
-            {/* Manual Team ID input - shown for Reply.io when validated but no teams detected */}
+            {/* Workspace API key info - shown for Reply.io when validated but no agency teams detected */}
             {platform === 'reply.io' && validationStatus === 'valid' && !isAgencyAccount && (
-              <div className="grid gap-2">
-                <Label htmlFor="manualTeamId" className="flex items-center gap-2">
+              <div className="grid gap-2 p-3 bg-muted/50 rounded-md">
+                <div className="flex items-center gap-2 text-sm font-medium">
                   <Building2 className="h-4 w-4" />
-                  Team ID (Optional)
-                </Label>
-                <Input
-                  id="manualTeamId"
-                  placeholder="Enter team ID from Reply.io dashboard"
-                  value={manualTeamId}
-                  onChange={(e) => setManualTeamId(e.target.value)}
-                />
+                  Workspace API Key Detected
+                </div>
                 <p className="text-xs text-muted-foreground">
-                  For agency accounts: find this in Reply.io → Settings → Agency. Leave empty to sync all campaigns.
+                  This API key has access to one Reply.io workspace. Each workspace in Reply.io 
+                  has its own API key. To sync campaigns from multiple workspaces, add each 
+                  workspace as a separate integration.
                 </p>
+                {manualTeamId && (
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="text-muted-foreground">Workspace ID:</span>
+                    <span className="font-mono bg-secondary px-1.5 py-0.5 rounded">{manualTeamId}</span>
+                  </div>
+                )}
               </div>
             )}
           </div>
