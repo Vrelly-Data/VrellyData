@@ -4,6 +4,7 @@ const corsHeaders = {
 };
 
 const REPLY_API_BASE = "https://api.reply.io/v1";
+const REPLY_API_V3 = "https://api.reply.io/v3";
 
 interface ReplyTeam {
   id: number;
@@ -132,10 +133,10 @@ Deno.serve(async (req) => {
       console.log("Agency clients endpoint not available:", agencyErr);
     }
 
-    // Try 4: Extract unique owners from campaigns as fallback (ACTUALLY add them)
-    console.log("Trying /campaigns endpoint to extract unique owners...");
+    // Try 4: Use V3 API /sequences endpoint (has proper teamId/ownerId)
+    console.log("Trying V3 /sequences endpoint for team discovery...");
     try {
-      const campaignsResponse = await fetch(`${REPLY_API_BASE}/campaigns?limit=100`, {
+      const sequencesResponse = await fetch(`${REPLY_API_V3}/sequences?limit=100`, {
         method: "GET",
         headers: {
           "X-Api-Key": apiKey,
@@ -143,32 +144,75 @@ Deno.serve(async (req) => {
         },
       });
 
-      if (campaignsResponse.ok) {
-        const campaignsData = await campaignsResponse.json();
-        console.log("Campaigns count:", Array.isArray(campaignsData) ? campaignsData.length : 0);
+      if (sequencesResponse.ok) {
+        const sequencesData = await sequencesResponse.json();
+        console.log("V3 Sequences count:", sequencesData.items?.length || 0);
         
-        if (Array.isArray(campaignsData) && campaignsData.length > 0) {
-          console.log("Sample campaign fields:", Object.keys(campaignsData[0]));
+        if (sequencesData.items && Array.isArray(sequencesData.items) && sequencesData.items.length > 0) {
+          console.log("Sample V3 sequence fields:", Object.keys(sequencesData.items[0]));
           
-          // Extract unique owners from campaigns
-          for (const campaign of campaignsData) {
-            // Reply.io campaigns have ownerId and ownerName fields
-            const ownerId = campaign.ownerId || campaign.owner_id;
-            const ownerName = campaign.ownerName || campaign.owner_name || campaign.ownerEmail;
+          // Extract unique teamId values from sequences
+          for (const sequence of sequencesData.items) {
+            const teamId = sequence.teamId;
+            const ownerId = sequence.ownerId;
             
-            if (ownerId && !seenTeamIds.has(ownerId)) {
-              seenTeamIds.add(ownerId);
+            // Prefer teamId, fall back to ownerId
+            const idToUse = teamId || ownerId;
+            
+            if (idToUse && !seenTeamIds.has(idToUse)) {
+              seenTeamIds.add(idToUse);
               teams.push({
-                id: ownerId,
-                name: ownerName || `User ${ownerId}`,
+                id: idToUse,
+                name: sequence.ownerName || sequence.name || `Team ${idToUse}`,
               });
-              console.log("Found owner from campaign:", { id: ownerId, name: ownerName });
+              console.log("Found team from V3 sequence:", { id: idToUse, name: sequence.ownerName || sequence.name });
             }
           }
         }
+      } else {
+        console.log("V3 Sequences endpoint status:", sequencesResponse.status);
       }
-    } catch (campaignsErr) {
-      console.log("Campaigns endpoint error:", campaignsErr);
+    } catch (v3Err) {
+      console.log("V3 Sequences endpoint error:", v3Err);
+    }
+
+    // Try 5: Fallback - Extract unique ownerEmails from V1 campaigns
+    if (teams.length === 0) {
+      console.log("Fallback: Extracting unique ownerEmails from V1 campaigns...");
+      try {
+        const campaignsResponse = await fetch(`${REPLY_API_BASE}/campaigns?limit=100`, {
+          method: "GET",
+          headers: {
+            "X-Api-Key": apiKey,
+            "Content-Type": "application/json",
+          },
+        });
+
+        if (campaignsResponse.ok) {
+          const campaignsData = await campaignsResponse.json();
+          console.log("V1 Campaigns count:", Array.isArray(campaignsData) ? campaignsData.length : 0);
+          
+          if (Array.isArray(campaignsData) && campaignsData.length > 0) {
+            const seenEmails = new Set<string>();
+            
+            for (const campaign of campaignsData) {
+              const ownerEmail = campaign.ownerEmail;
+              
+              if (ownerEmail && !seenEmails.has(ownerEmail)) {
+                seenEmails.add(ownerEmail);
+                // Use email as both ID and name for fallback
+                teams.push({
+                  id: ownerEmail,
+                  name: ownerEmail,
+                });
+                console.log("Found owner email from V1 campaign:", ownerEmail);
+              }
+            }
+          }
+        }
+      } catch (campaignsErr) {
+        console.log("V1 Campaigns fallback error:", campaignsErr);
+      }
     }
 
     const isAgencyAccount = teams.length > 1;
