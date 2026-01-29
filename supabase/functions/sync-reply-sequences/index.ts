@@ -150,7 +150,10 @@ Deno.serve(async (req) => {
     let stepsSynced = 0;
     let stepsFailed = 0;
 
-    for (const step of steps) {
+    for (let i = 0; i < steps.length; i++) {
+      const step = steps[i];
+      const stepNumber = i + 1; // Use array index + 1 since Reply.io doesn't return step.number
+      
       try {
         const template = step.templates?.[0];
         const bodyHtml = template?.body || null;
@@ -162,7 +165,7 @@ Deno.serve(async (req) => {
             campaign_id: campaignId,
             team_id: teamId,
             external_sequence_id: String(step.id),
-            step_number: step.number,
+            step_number: stepNumber,
             step_type: step.type?.toLowerCase() || 'email',
             subject: template?.subject || null,
             body_html: bodyHtml,
