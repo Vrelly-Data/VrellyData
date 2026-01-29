@@ -7,6 +7,16 @@ const corsHeaders = {
 
 const REPLY_API_BASE = "https://api.reply.io/v1";
 
+// LinkedIn fields - preserved from CSV uploads, never overwritten by sync
+const LINKEDIN_FIELDS = [
+  'linkedinMessagesSent',
+  'linkedinConnectionsSent',
+  'linkedinReplies',
+  'linkedinConnectionsAccepted',
+  'linkedinDataSource',
+  'linkedinDataUploadedAt',
+];
+
 interface ReplyioCampaign {
   id: number;
   name: string;
@@ -233,7 +243,42 @@ Deno.serve(async (req) => {
         
         console.log(`Processing campaign: ${campaign.name} (ID: ${campaign.id})`);
 
-        // Upsert campaign with stats
+        // Fetch existing campaign to preserve LinkedIn stats
+        const { data: existingCampaign } = await supabase
+          .from("synced_campaigns")
+          .select("stats")
+          .eq("integration_id", integrationId)
+          .eq("external_campaign_id", String(campaign.id))
+          .maybeSingle();
+
+        const existingStats = (existingCampaign?.stats as Record<string, unknown>) || {};
+
+        // Preserve LinkedIn fields from existing stats
+        const linkedinStats: Record<string, unknown> = {};
+        for (const field of LINKEDIN_FIELDS) {
+          if (existingStats[field] !== undefined) {
+            linkedinStats[field] = existingStats[field];
+          }
+        }
+
+        // Build merged stats object: email stats from API + preserved LinkedIn stats
+        const mergedStats = {
+          // Email stats from Reply.io API
+          sent: campaign.deliveriesCount || 0,
+          delivered: campaign.deliveriesCount || 0,
+          replies: campaign.repliesCount || 0,
+          opens: campaign.opensCount || 0,
+          bounces: campaign.bouncesCount || 0,
+          optOuts: campaign.optOutsCount || 0,
+          peopleCount: campaign.peopleCount || 0,
+          peopleActive: campaign.peopleActive || 0,
+          peopleFinished: campaign.peopleFinished || 0,
+          outOfOffice: campaign.outOfOfficeCount || 0,
+          // Preserve LinkedIn stats from CSV upload
+          ...linkedinStats,
+        };
+
+        // Upsert campaign with merged stats
         const { error: campaignError } = await supabase
           .from("synced_campaigns")
           .upsert({
@@ -242,18 +287,7 @@ Deno.serve(async (req) => {
             external_campaign_id: String(campaign.id),
             name: String(campaign.name || 'Unnamed Campaign'),
             status: normalizeStatus(campaign.status),
-            stats: {
-              sent: campaign.deliveriesCount || 0,
-              delivered: campaign.deliveriesCount || 0,
-              replies: campaign.repliesCount || 0,
-              opens: campaign.opensCount || 0,
-              bounces: campaign.bouncesCount || 0,
-              optOuts: campaign.optOutsCount || 0,
-              peopleCount: campaign.peopleCount || 0,
-              peopleActive: campaign.peopleActive || 0,
-              peopleFinished: campaign.peopleFinished || 0,
-              outOfOffice: campaign.outOfOfficeCount || 0,
-            },
+            stats: mergedStats,
             raw_data: campaign,
             updated_at: new Date().toISOString(),
           }, {
