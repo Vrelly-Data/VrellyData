@@ -1,107 +1,96 @@
 
 
-## Fix: Enable LinkedIn Copy Syncing
+## Add Sync Progress Timer / Activity Indicator
 
-### Problem Identified
+### Problem
 
-The Reply.io API returns **different data structures** for different step types:
-
-| Step Type | Copy Location | Current Extraction | Result |
-|-----------|---------------|-------------------|--------|
-| **Email** | `step.templates[0].body` | Extracted correctly | Works |
-| **LinkedIn** | `step.message` | Not extracted | Missing copy |
-| **Condition** | No copy content | N/A | Correctly empty |
-
-Looking at the actual data in your database:
-
-**Email step (working):**
-```json
-{
-  "type": "Email",
-  "templates": [{ "body": "Hi {{FirstName}}...", "subject": "..." }]
-}
-```
-
-**LinkedIn step (currently broken):**
-```json
-{
-  "type": "LinkedIn",
-  "actionType": "Message",
-  "message": "<p>Hi {{FirstName}}, Are you doing any sort of outbound?...</p>"
-}
-```
-
-The `message` field contains the LinkedIn copy but the edge function ignores it.
+When clicking "Sync", the button shows a spinner, but if the sync takes a while, users can't tell if it's still working or stuck. The "Syncing..." badge doesn't provide enough feedback about ongoing activity.
 
 ---
 
 ### Solution
 
-Update the `sync-reply-sequences` edge function to:
-1. Check if it's a LinkedIn step (type contains "LinkedIn" or step has `message` field)
-2. Extract copy from `step.message` for LinkedIn steps
-3. Extract copy from `step.templates[0].body` for Email steps
-4. Store the LinkedIn `actionType` (Connect, Message, InMail) for better categorization
+Add an **elapsed time counter** that shows how long the sync has been running, along with a subtle **progress animation** to indicate activity.
+
+| Current State | Improved State |
+|---------------|----------------|
+| Badge: "Syncing..." | Badge: "Syncing... (0:45)" with elapsed time |
+| No activity indication | Animated progress bar or pulsing indicator |
+| User confused if stuck | Clear visual that work is in progress |
 
 ---
 
-### Technical Changes
+### UI Changes
 
-**File**: `supabase/functions/sync-reply-sequences/index.ts`
-
-**Current Logic (broken for LinkedIn):**
-```typescript
-const template = step.templates?.[0];
-const bodyHtml = template?.body || null;
-const bodyText = bodyHtml ? stripHtml(bodyHtml) : null;
+**During Active Sync:**
+```text
+┌──────────────────────────────────────────────────────────────────┐
+│ 📧 Incrementums  [Syncing... 0:32]  [Team: 383893]  [⚡ Live]    │
+│    reply.io · Last synced 1 hour ago                             │
+│    ┌─────────────────────────────────────────┐                   │
+│    │ ████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ │  ← Progress bar   │
+│    └─────────────────────────────────────────┘                   │
+│    Workspace: 383893                                             │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-**Updated Logic (handles both):**
+**Key Features:**
+1. **Elapsed Timer**: Shows `0:00`, `0:15`, `0:32`, etc. while syncing
+2. **Animated Progress Bar**: Indeterminate animation (striped/pulsing) since we don't know exact progress
+3. **Visual Continuity**: Timer keeps counting so users know it's not frozen
+
+---
+
+### Implementation Details
+
+**Component Changes**: `src/components/playground/IntegrationSetupCard.tsx`
+
+1. **Track sync start time** using local state or `updated_at` timestamp
+2. **Add useEffect with interval** to update elapsed time display every second
+3. **Show animated progress bar** below the integration row when syncing
+4. **Update status badge** to include elapsed time: `Syncing... (0:45)`
+
+**New State:**
 ```typescript
-// LinkedIn steps store message at step level, emails in templates
-const isLinkedIn = step.type?.toLowerCase().includes('linkedin') || !!step.message;
-const template = step.templates?.[0];
+const [syncStartTime, setSyncStartTime] = useState<Record<string, number>>({});
+const [elapsedTime, setElapsedTime] = useState<Record<string, number>>({});
 
-let bodyHtml: string | null = null;
-let subject: string | null = null;
-
-if (isLinkedIn && step.message) {
-  // LinkedIn message content
-  bodyHtml = step.message;
-} else if (template?.body) {
-  // Email template content
-  bodyHtml = template.body;
-  subject = template.subject || null;
-}
-
-const bodyText = bodyHtml ? stripHtml(bodyHtml) : null;
-
-// More specific step type for LinkedIn
-let stepType = step.type?.toLowerCase() || 'email';
-if (isLinkedIn && step.actionType) {
-  stepType = `linkedin_${step.actionType.toLowerCase()}`;
-}
+// Track elapsed time with useEffect
+useEffect(() => {
+  const interval = setInterval(() => {
+    // Update elapsed time for any syncing integrations
+    const now = Date.now();
+    const updates: Record<string, number> = {};
+    for (const [id, startTime] of Object.entries(syncStartTime)) {
+      updates[id] = Math.floor((now - startTime) / 1000);
+    }
+    setElapsedTime(updates);
+  }, 1000);
+  return () => clearInterval(interval);
+}, [syncStartTime]);
 ```
 
-**Interface Update:**
+**Updated Badge:**
 ```typescript
-interface ReplyStep {
-  id: number;
-  sequenceId: number;
-  type: string;
-  number: number;
-  delayInMinutes?: number;
-  executionMode?: string;
-  message?: string;          // ADD: LinkedIn message content
-  actionType?: string;       // ADD: LinkedIn action type (Connect, Message, InMail)
-  templates?: Array<{
-    id: number;
-    templateId?: number;
-    subject?: string;
-    body?: string;
-  }>;
-  stats?: { ... };
-}
+case 'syncing':
+  const elapsed = elapsedSeconds ? formatElapsedTime(elapsedSeconds) : '';
+  return (
+    <Badge variant="secondary" className="text-xs bg-accent text-accent-foreground">
+      Syncing...{elapsed && ` (${elapsed})`}
+    </Badge>
+  );
+```
+
+**Animated Progress Bar:**
+```typescript
+{isCurrentlySyncing && (
+  <div className="mt-2">
+    <Progress 
+      value={undefined} 
+      className="h-1.5 animate-pulse" 
+    />
+  </div>
+)}
 ```
 
 ---
@@ -110,19 +99,16 @@ interface ReplyStep {
 
 | File | Changes |
 |------|---------|
-| `supabase/functions/sync-reply-sequences/index.ts` | Extract LinkedIn `message` field and `actionType` |
+| `src/components/playground/IntegrationSetupCard.tsx` | Add elapsed time tracking, update badge display, add progress bar animation |
 
 ---
 
-### Expected Result After Fix
+### Expected Result
 
-| Step Type | Before | After |
-|-----------|--------|-------|
-| Email | Copy displayed | Copy displayed |
-| LinkedIn Message | Empty (no body) | Copy displayed |
-| LinkedIn Connect | Empty | Shows connection request note (if any) |
-| LinkedIn InMail | Empty | Copy displayed |
-| Condition | Empty (correct) | Empty (correct) |
-
-After re-syncing a campaign, LinkedIn steps will show their message content just like email steps.
+| Before | After |
+|--------|-------|
+| "Syncing..." badge with no time indicator | "Syncing... (0:45)" badge with elapsed time |
+| Static spinner only | Animated progress bar below row |
+| User unsure if working | Clear indication of ongoing activity |
+| 5-minute timeout detection only | Real-time feedback from second 1 |
 
