@@ -327,7 +327,7 @@ export function LinkedInStatsUploadDialog({ open, onOpenChange }: LinkedInStatsU
                 </div>
                 <p className="text-xs text-muted-foreground">
                   {mode === 'replace' 
-                    ? 'Overwrites existing LinkedIn stats with values from this CSV. Email stats are preserved.'
+                    ? 'Clears ALL existing LinkedIn stats, then applies this CSV. Email stats are preserved.'
                     : 'Adds CSV values on top of existing LinkedIn stats (for cumulative updates).'}
                 </p>
               </div>
@@ -380,9 +380,9 @@ export function LinkedInStatsUploadDialog({ open, onOpenChange }: LinkedInStatsU
         <DialogFooter>
           {step === 'preview' && (
             <>
-              {mode === 'replace' && matchedCount > 0 && (
+              {mode === 'replace' && (
                 <p className="text-xs text-muted-foreground mr-auto">
-                  This will overwrite LinkedIn stats for {matchedCount} existing campaign{matchedCount > 1 ? 's' : ''}.
+                  This will clear LinkedIn stats from ALL campaigns{matchedCount > 0 ? `, then apply data to ${matchedCount} matched campaign${matchedCount > 1 ? 's' : ''}` : ''}.
                 </p>
               )}
               <Button variant="outline" onClick={() => setStep('upload')}>

@@ -46,6 +46,34 @@ export function useLinkedInStatsUpload() {
         .eq('platform', 'reply')
         .maybeSingle();
 
+      // For "replace" mode, first clear ALL LinkedIn stats from all team campaigns
+      if (mode === 'replace') {
+        const { data: allCampaigns } = await supabase
+          .from('synced_campaigns')
+          .select('id, stats')
+          .eq('team_id', membership.team_id);
+
+        if (allCampaigns) {
+          for (const campaign of allCampaigns) {
+            const existingStats = (campaign.stats as Record<string, unknown>) || {};
+            const clearedStats = {
+              ...existingStats,
+              linkedinMessagesSent: 0,
+              linkedinConnectionsSent: 0,
+              linkedinReplies: 0,
+              linkedinConnectionsAccepted: 0,
+              linkedinDataSource: null,
+              linkedinDataUploadedAt: null,
+            };
+            
+            await supabase
+              .from('synced_campaigns')
+              .update({ stats: clearedStats, updated_at: new Date().toISOString() })
+              .eq('id', campaign.id);
+          }
+        }
+      }
+
       let updatedCount = 0;
       let createdCount = 0;
 
