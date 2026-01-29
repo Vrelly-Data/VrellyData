@@ -1,116 +1,96 @@
 
+## Fix: LinkedIn Stats Not Appearing in Dashboard
 
-## Fix: Preserve LinkedIn Stats During Reply.io Sync
+### Root Cause Analysis
 
-### Problem Identified
-The `sync-reply-campaigns` Edge Function completely **overwrites** the `stats` column when syncing campaigns from Reply.io:
+Based on the database investigation, I found the core issue:
+
+**The data is fragmented across separate campaign records:**
+
+| Campaign Source | is_linked | Has Email Stats | Has LinkedIn Stats |
+|-----------------|-----------|-----------------|-------------------|
+| Reply.io Sync | true | Yes (17 sent) | No (null) |
+| CSV Upload | false | No (null) | Mostly 0s |
+
+When you upload LinkedIn stats via CSV:
+1. The CSV parser tries to match campaign names with existing campaigns
+2. If names don't match exactly (case-sensitive, spacing, etc.), it creates **NEW** campaign records
+3. These new records are `is_linked: false` and don't have email stats
+4. The existing Reply.io campaigns keep their email stats but have no LinkedIn data
+
+**Current totals in database:**
+- Email Sent: 17 ✓
+- LinkedIn Messages: 1 (should be 214)
+- LinkedIn Connections: 0 (should be 590)
+- LinkedIn Replies: 0 (should be 14)
+
+### Solution: Improve Campaign Matching
+
+The LinkedIn CSV upload needs smarter matching to find existing campaigns:
+
+#### 1. Improve `useSyncedCampaigns` to Return ALL Campaigns
+
+Currently the upload dialog uses `useSyncedCampaigns(true)` which only returns linked campaigns. The matching should search across ALL team campaigns.
+
+#### 2. Implement Fuzzy Campaign Name Matching
+
+Instead of exact match, use fuzzy matching:
+- Case-insensitive comparison
+- Trim whitespace
+- Normalize common variations (e.g., "LI + Email" vs "LinkedIn + Email")
+- Match by partial name if unique
+
+#### 3. Update Matching Logic in `LinkedInStatsUploadDialog.tsx`
 
 ```typescript
-// Current code (line 245-256) - OVERWRITES everything
-stats: {
-  sent: campaign.deliveriesCount || 0,
-  delivered: campaign.deliveriesCount || 0,
-  replies: campaign.repliesCount || 0,
-  // ... NO LinkedIn fields preserved!
-}
-```
+// Current (exact match only)
+const matchedCampaign = campaigns.find(
+  c => c.name.toLowerCase() === campaignName.toLowerCase()
+);
 
-When you sync, the LinkedIn stats uploaded via CSV are completely lost because the sync creates a new `stats` object that only contains email metrics.
-
-### Solution: Merge Stats Instead of Replace
-
-The sync function needs to:
-1. **Fetch existing campaign stats** before updating
-2. **Preserve LinkedIn-specific fields** that were uploaded via CSV
-3. **Only update email-related fields** from the Reply.io API
-
-### Implementation
-
-#### File: `supabase/functions/sync-reply-campaigns/index.ts`
-
-**Step 1: Define which fields come from which source**
-```typescript
-// LinkedIn fields - preserved from CSV uploads, never overwritten by sync
-const LINKEDIN_FIELDS = [
-  'linkedinMessagesSent',
-  'linkedinConnectionsSent', 
-  'linkedinReplies',
-  'linkedinConnectionsAccepted',
-  'linkedinDataSource',
-  'linkedinDataUploadedAt',
-];
-```
-
-**Step 2: Fetch existing stats before upsert**
-```typescript
-// Before upserting, fetch existing campaign to preserve LinkedIn stats
-const { data: existingCampaign } = await supabase
-  .from('synced_campaigns')
-  .select('stats')
-  .eq('integration_id', integrationId)
-  .eq('external_campaign_id', String(campaign.id))
-  .maybeSingle();
-
-const existingStats = (existingCampaign?.stats as Record<string, unknown>) || {};
-```
-
-**Step 3: Merge stats, preserving LinkedIn data**
-```typescript
-// Preserve LinkedIn fields from existing stats
-const linkedinStats: Record<string, unknown> = {};
-for (const field of LINKEDIN_FIELDS) {
-  if (existingStats[field] !== undefined) {
-    linkedinStats[field] = existingStats[field];
-  }
+// Improved (fuzzy matching)
+function normalizeForMatch(name: string): string {
+  return name
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, ' ')           // Normalize spaces
+    .replace(/li\s?\+\s?email/gi, 'linkedin email')  // Normalize common patterns
+    .replace(/[^\w\s]/g, '');       // Remove special chars
 }
 
-// Build merged stats object
-const mergedStats = {
-  // Email stats from Reply.io API
-  sent: campaign.deliveriesCount || 0,
-  delivered: campaign.deliveriesCount || 0,
-  replies: campaign.repliesCount || 0,
-  opens: campaign.opensCount || 0,
-  bounces: campaign.bouncesCount || 0,
-  optOuts: campaign.optOutsCount || 0,
-  peopleCount: campaign.peopleCount || 0,
-  peopleActive: campaign.peopleActive || 0,
-  peopleFinished: campaign.peopleFinished || 0,
-  outOfOffice: campaign.outOfOfficeCount || 0,
-  // Preserve LinkedIn stats from CSV upload
-  ...linkedinStats,
-};
+const matchedCampaign = campaigns.find(c => 
+  normalizeForMatch(c.name) === normalizeForMatch(campaignName)
+);
 ```
 
-### Data Flow After Fix
+#### 4. Show Better Matching Feedback in Preview
 
-```text
-┌─────────────────────────────────────────────────────────────┐
-│                     synced_campaigns.stats                  │
-├─────────────────────────────────────────────────────────────┤
-│ EMAIL STATS (from Reply.io API sync):                       │
-│   sent, delivered, replies, opens, bounces, optOuts,        │
-│   peopleCount, peopleActive, peopleFinished, outOfOffice    │
-├─────────────────────────────────────────────────────────────┤
-│ LINKEDIN STATS (from CSV upload - PRESERVED during sync):   │
-│   linkedinMessagesSent, linkedinConnectionsSent,            │
-│   linkedinReplies, linkedinConnectionsAccepted,             │
-│   linkedinDataSource, linkedinDataUploadedAt                │
-└─────────────────────────────────────────────────────────────┘
-```
+Add visual indicators for which campaigns will be matched vs created:
+- Show the existing campaign name alongside the CSV name
+- Allow manual matching for unmatched campaigns
 
 ### Files to Modify
 
 | File | Changes |
 |------|---------|
-| `supabase/functions/sync-reply-campaigns/index.ts` | Fetch existing campaign stats before upsert, preserve LinkedIn fields during merge |
+| `src/components/playground/LinkedInStatsUploadDialog.tsx` | Improve campaign name matching logic, add fuzzy matching helper |
+| `src/hooks/useSyncedCampaigns.ts` | Ensure hook can return all campaigns (not just linked) for matching purposes |
 
 ### Expected Result
 
-After this fix:
-1. **Sync** → Updates email stats (sent, delivered, replies, etc.) from Reply.io API
-2. **LinkedIn Upload** → Updates LinkedIn stats (connections, messages, etc.) from CSV
-3. **Sync again** → Email stats updated, **LinkedIn stats preserved**
+After implementing these changes:
+1. Upload LinkedIn CSV
+2. CSV campaigns match with existing Reply.io synced campaigns
+3. LinkedIn stats merge INTO existing campaigns (not create new ones)
+4. Dashboard shows combined totals:
+   - Total Messages = 17 emails + 214 LI messages + 590 connections = **821**
+   - Total Replies = 0 email replies + 14 LI replies = **14**
 
-Both data sources can coexist peacefully in the same `stats` column.
+### Alternative Quick Fix
 
+If the campaign names in your CSV don't match any existing campaigns at all, you may need to:
+1. Re-sync from Reply.io first (to get fresh campaign names)
+2. Ensure your CSV uses **exactly** the same campaign names as shown in Reply.io
+3. Re-upload the LinkedIn CSV
+
+Would you like me to implement the improved matching logic, or would you prefer to first verify that your CSV campaign names match the existing campaign names?
