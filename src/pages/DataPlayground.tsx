@@ -5,6 +5,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import vrellyLogo from '@/assets/vrelly-logo.png';
 import { UserMenu } from '@/components/UserMenu';
 import { PlaygroundDashboard } from '@/components/playground/PlaygroundDashboard';
+import { CopyTab } from '@/components/playground/CopyTab';
+import { PeopleTab } from '@/components/playground/PeopleTab';
 
 export default function DataPlayground() {
   const navigate = useNavigate();
@@ -39,21 +41,11 @@ export default function DataPlayground() {
               <TabsContent value="playground" className="flex-1 m-0 p-6 overflow-auto">
                 <PlaygroundDashboard />
               </TabsContent>
-              <TabsContent value="copy" className="flex-1 m-0 p-6">
-                <div className="flex flex-col items-center justify-center h-full text-center">
-                  <h2 className="text-2xl font-semibold mb-2">Email Copy & Sequences</h2>
-                  <p className="text-muted-foreground max-w-md">
-                    View and remix your synced email sequences with AI assistance.
-                  </p>
-                </div>
+              <TabsContent value="copy" className="flex-1 m-0 p-6 overflow-auto">
+                <CopyTab />
               </TabsContent>
-              <TabsContent value="people" className="flex-1 m-0 p-6">
-                <div className="flex flex-col items-center justify-center h-full text-center">
-                  <h2 className="text-2xl font-semibold mb-2">Campaign Contacts</h2>
-                  <p className="text-muted-foreground max-w-md">
-                    View contacts synced from your campaigns with engagement metrics.
-                  </p>
-                </div>
+              <TabsContent value="people" className="flex-1 m-0 p-6 overflow-auto">
+                <PeopleTab />
               </TabsContent>
             </Tabs>
           </main>
