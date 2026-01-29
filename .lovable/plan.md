@@ -1,118 +1,119 @@
 
 
-## Fix LinkedIn Stats "Replace" to Clear All Existing Data First
+## Fix LinkedIn Stats Parsing for Action-Based CSV
 
-### Problem
-The current "Replace" mode only updates campaigns that match names in the CSV. Campaigns not in the CSV still retain their old LinkedIn stats, causing inflated totals.
+### Problem Identified
+The CSV parser has hardcoded action names that don't match your Reply.io export format:
 
-**Your expected totals after upload:**
-- LinkedIn Replies: 14
-- LinkedIn Messages Sent: 213
-- Connection Acceptances: 116
-- Connection Requests Sent: 561
+| Expected Action | Current Mapping | Your CSV Uses |
+|----------------|-----------------|---------------|
+| Connection Request Sent | `'sent auto connection note'` | `'sent auto connection'` |
+| Reply to Connection | `'replied auto connection note'` | Likely `'replied auto connection'` |
+| Reply to Message | `'replied auto message'` | May need verification |
 
-**Current database totals (wrong):**
-- LinkedIn Replies: 70 (includes old data from 4 campaigns not in your CSV)
-- LinkedIn Messages Sent: 242
-- Connection Acceptances: 248
-- Connection Requests Sent: 980
+This explains:
+- **Connection Requests = 0** - The action text doesn't match, so all 561 connection requests are ignored
+- **Replies = 40 instead of 14** - Either the action name is wrong OR old data from Jan 27 campaigns is still being counted
 
-### Root Cause
-4 campaigns from an earlier upload (Jan 27) weren't in your new CSV, so their LinkedIn stats remained:
-- Retail LI + Email
-- Healthcare LI + Email
-- Bournemouth locals LI + Email
-- Rejuvenate IT LI only sequence
+### Root Cause Analysis
+1. **Action mapping is too strict**: Only exact lowercase matches work. `'Sent Auto Connection'` ≠ `'sent auto connection note'`
+2. **The 4 old campaigns from Jan 27** (Retail, Healthcare, Bournemouth, Rejuvenate) weren't cleared because they may have different campaign names that didn't match
 
 ### Solution
-Modify the "Replace" mode to first **clear ALL LinkedIn stats** from ALL campaigns in the team, then apply the new CSV data.
 
-### Implementation
+#### 1. Expand Action Mappings (LinkedInStatsUploadDialog.tsx)
 
-#### File: `src/hooks/useLinkedInStatsUpload.ts`
-
-Add a new step at the beginning of the mutation when `mode === 'replace'`:
-
-```text
-1. Before processing any CSV rows:
-   - Query ALL campaigns for the team
-   - For each campaign, set LinkedIn fields to 0:
-     - linkedinMessagesSent: 0
-     - linkedinConnectionsSent: 0
-     - linkedinReplies: 0
-     - linkedinConnectionsAccepted: 0
-   - Preserve all other stats (email deliveries, replies, etc.)
-
-2. Then proceed with normal CSV processing
-   - Update matched campaigns with new LinkedIn values
-   - Create new campaigns for unmatched rows
-```
-
-**Key code change (after line 47, before the loop):**
+Add more action aliases to cover Reply.io's actual export format:
 
 ```typescript
-// For "replace" mode, first clear ALL LinkedIn stats from all team campaigns
-if (mode === 'replace') {
-  const { data: allCampaigns } = await supabase
-    .from('synced_campaigns')
-    .select('id, stats')
-    .eq('team_id', membership.team_id);
+const ACTION_MAPPINGS: Record<string, LinkedInMetric> = {
+  // Replies
+  'replied auto connection note': 'linkedinReplies',
+  'replied auto connection': 'linkedinReplies',  // NEW
+  'replied auto message': 'linkedinReplies',
+  'replied message': 'linkedinReplies',  // NEW - potential alias
+  
+  // Connection Acceptances
+  'accepted auto connection': 'linkedinConnectionsAccepted',
+  'accepted connection': 'linkedinConnectionsAccepted',  // NEW
+  
+  // Connection Requests Sent
+  'sent auto connection note': 'linkedinConnectionsSent',
+  'sent auto connection': 'linkedinConnectionsSent',  // NEW - THIS IS THE KEY FIX
+  'sent connection request': 'linkedinConnectionsSent',  // NEW
+  
+  // Messages Sent
+  'sent auto message': 'linkedinMessagesSent',
+  'sent message': 'linkedinMessagesSent',  // NEW
+};
+```
 
-  if (allCampaigns) {
-    for (const campaign of allCampaigns) {
-      const existingStats = (campaign.stats as Record<string, unknown>) || {};
-      const clearedStats = {
-        ...existingStats,
-        linkedinMessagesSent: 0,
-        linkedinConnectionsSent: 0,
-        linkedinReplies: 0,
-        linkedinConnectionsAccepted: 0,
-        linkedinDataSource: null,
-        linkedinDataUploadedAt: null,
-      };
-      
-      await supabase
-        .from('synced_campaigns')
-        .update({ stats: clearedStats })
-        .eq('id', campaign.id);
-    }
+#### 2. Add Partial Matching Fallback
+
+Instead of only exact matches, add fuzzy matching logic:
+
+```typescript
+function getMetricForAction(action: string): LinkedInMetric | null {
+  const normalized = action.toLowerCase().trim();
+  
+  // Exact match first
+  if (ACTION_MAPPINGS[normalized]) {
+    return ACTION_MAPPINGS[normalized];
   }
+  
+  // Partial matching fallback
+  if (normalized.includes('replied') && normalized.includes('connection')) {
+    return 'linkedinReplies';
+  }
+  if (normalized.includes('replied') && normalized.includes('message')) {
+    return 'linkedinReplies';
+  }
+  if (normalized.includes('accepted') && normalized.includes('connection')) {
+    return 'linkedinConnectionsAccepted';
+  }
+  if (normalized.includes('sent') && normalized.includes('connection')) {
+    return 'linkedinConnectionsSent';
+  }
+  if (normalized.includes('sent') && normalized.includes('message')) {
+    return 'linkedinMessagesSent';
+  }
+  
+  return null;
 }
 ```
 
-#### File: `src/components/playground/LinkedInStatsUploadDialog.tsx`
+#### 3. Add Debug Info to Preview Table
 
-Update the mode description to be even clearer:
+Show which actions were detected to help troubleshoot:
 
-**Current:**
-> "Overwrites existing LinkedIn stats with values from this CSV. Email stats are preserved."
-
-**Updated:**
-> "Clears ALL existing LinkedIn stats, then applies this CSV. Email stats are preserved."
-
-Update the confirmation message:
-
-**Current:**
-> "This will overwrite LinkedIn stats for {matchedCount} existing campaigns."
-
-**Updated:**
-> "This will clear LinkedIn stats from ALL campaigns, then apply data from this CSV to {matchedCount} matched campaigns."
-
-### Expected Result After Fix
-
-When you upload a CSV in "Replace" mode:
-1. All 12 campaigns have their LinkedIn stats reset to 0
-2. Only the 7 campaigns in your CSV get the new LinkedIn values
-3. Dashboard totals show exactly what's in your CSV:
-   - LinkedIn Replies: 14
-   - LinkedIn Messages Sent: 213
-   - Connection Acceptances: 116  
-   - Connection Requests Sent: 561
+```tsx
+// Add a summary above the table showing detected action types
+<div className="text-xs text-muted-foreground mb-2">
+  Detected actions: {detectedActions.join(', ')}
+  {unrecognizedActions.length > 0 && (
+    <span className="text-amber-600"> | Unrecognized: {unrecognizedActions.join(', ')}</span>
+  )}
+</div>
+```
 
 ### Files to Modify
 
 | File | Changes |
 |------|---------|
-| `src/hooks/useLinkedInStatsUpload.ts` | Add step to clear ALL LinkedIn stats before applying CSV data in "replace" mode |
-| `src/components/playground/LinkedInStatsUploadDialog.tsx` | Update mode description and confirmation text to reflect global clear behavior |
+| `src/components/playground/LinkedInStatsUploadDialog.tsx` | Expand ACTION_MAPPINGS to include `'sent auto connection'` and other variants; add partial matching logic; add debug info showing detected/unrecognized actions |
+
+### Expected Result After Fix
+
+When you re-upload your CSV:
+- **Connection Requests Sent**: 561 (currently 0 → fixed by adding `'sent auto connection'` mapping)
+- **LinkedIn Replies**: 14 (currently inflated → fixed by correct action matching)
+- **LinkedIn Messages**: 213 (already working)
+- **Connection Acceptances**: 116 (already working)
+
+### Verification Steps
+
+After implementing:
+1. Upload your LinkedIn stats CSV using "Replace LinkedIn Stats" mode
+2. Check the preview table shows the correct totals per campaign
+3. Verify dashboard shows exactly: 14 replies, 213 messages, 116 acceptances, 561 connection requests
 
