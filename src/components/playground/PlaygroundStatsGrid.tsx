@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { usePlaygroundStats } from '@/hooks/usePlaygroundStats';
 import { useChannelMetrics } from '@/hooks/useChannelMetrics';
 import { Send, MessageSquare, Users, Zap, Target, Clock, Loader2, Mail, Linkedin } from 'lucide-react';
@@ -15,13 +15,13 @@ interface StatCardProps {
   isPlaceholder?: boolean;
   onClick?: () => void;
   clickable?: boolean;
-  tooltipContent?: React.ReactNode;
+  popoverContent?: React.ReactNode;
 }
 
-function StatCard({ title, value, icon, description, isPlaceholder, onClick, clickable, tooltipContent }: StatCardProps) {
+function StatCard({ title, value, icon, description, isPlaceholder, onClick, clickable, popoverContent }: StatCardProps) {
   const cardContent = (
     <Card 
-      className={`${isPlaceholder ? 'border-dashed' : ''} ${clickable || tooltipContent ? 'cursor-pointer hover:bg-accent/50 transition-colors' : ''}`}
+      className={`${isPlaceholder ? 'border-dashed' : ''} ${clickable || popoverContent ? 'cursor-pointer hover:bg-accent/50 transition-colors' : ''}`}
       onClick={clickable ? onClick : undefined}
     >
       <CardContent className="pt-6">
@@ -47,16 +47,16 @@ function StatCard({ title, value, icon, description, isPlaceholder, onClick, cli
     </Card>
   );
 
-  if (tooltipContent) {
+  if (popoverContent) {
     return (
-      <Tooltip>
-        <TooltipTrigger asChild>
+      <Popover>
+        <PopoverTrigger asChild>
           {cardContent}
-        </TooltipTrigger>
-        <TooltipContent side="bottom" className="w-64">
-          {tooltipContent}
-        </TooltipContent>
-      </Tooltip>
+        </PopoverTrigger>
+        <PopoverContent side="bottom" className="w-72">
+          {popoverContent}
+        </PopoverContent>
+      </Popover>
     );
   }
 
@@ -196,21 +196,21 @@ export function PlaygroundStatsGrid() {
   );
 
   return (
-    <TooltipProvider>
+    <>
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         <StatCard
           title="Total Messages Sent"
           value={stats?.totalMessagesSent.toLocaleString() ?? 0}
           icon={<Send className="h-5 w-5 text-primary" />}
           description="Across all campaigns"
-          tooltipContent={messagesTooltipContent}
+          popoverContent={messagesTooltipContent}
         />
         <StatCard
           title="Total Replies"
           value={stats?.totalReplies.toLocaleString() ?? 0}
           icon={<MessageSquare className="h-5 w-5 text-primary" />}
           description="Positive responses"
-          tooltipContent={repliesTooltipContent}
+          popoverContent={repliesTooltipContent}
         />
         <StatCard
           title="Total Contacts"
@@ -253,6 +253,6 @@ export function PlaygroundStatsGrid() {
         open={contactsDialogOpen}
         onOpenChange={setContactsDialogOpen}
       />
-    </TooltipProvider>
+    </>
   );
 }
