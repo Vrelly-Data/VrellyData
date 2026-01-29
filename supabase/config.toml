@@ -41,3 +41,9 @@ verify_jwt = false
 
 [functions.fetch-available-campaigns]
 verify_jwt = false
+
+[functions.sync-reply-contacts]
+verify_jwt = true
+
+[functions.sync-reply-sequences]
+verify_jwt = true

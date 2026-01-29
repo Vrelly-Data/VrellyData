@@ -140,12 +140,15 @@ Deno.serve(async (req) => {
 
     while (hasMore) {
       const endpoint = `/sequences/${sequenceId}/contacts/extended?page=${page}&limit=100`;
-      const response = await fetchWithRetry(endpoint, apiKey, replyTeamId || undefined) as { contacts?: ReplyContact[]; hasMore?: boolean };
+      const response = await fetchWithRetry(endpoint, apiKey, replyTeamId || undefined) as { 
+        items?: ReplyContact[]; 
+        info?: { hasMore?: boolean } 
+      };
       
-      const contacts = response.contacts || [];
+      const contacts = response.items || [];
       allContacts = [...allContacts, ...contacts];
       
-      hasMore = response.hasMore || contacts.length === 100;
+      hasMore = response.info?.hasMore || false;
       page++;
       
       if (page > 50) {

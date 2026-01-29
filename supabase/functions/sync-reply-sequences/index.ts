@@ -141,11 +141,9 @@ Deno.serve(async (req) => {
 
     console.log(`Fetching sequence steps for sequence ${sequenceId}`);
 
-    // Fetch steps from Reply.io V3 API
+    // Fetch steps from Reply.io V3 API - returns direct array, not { steps: [] }
     const endpoint = `/sequences/${sequenceId}/steps`;
-    const response = await fetchWithRetry(endpoint, apiKey, replyTeamId || undefined) as { steps?: ReplyStep[] };
-    
-    const steps = response.steps || [];
+    const steps = await fetchWithRetry(endpoint, apiKey, replyTeamId || undefined) as ReplyStep[];
     console.log(`Fetched ${steps.length} steps from Reply.io`);
 
     // Upsert steps to database
