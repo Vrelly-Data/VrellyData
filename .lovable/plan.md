@@ -1,113 +1,116 @@
 
 
-## Fix: Count Unique People for LinkedIn Reply Stats
+## Fix: Preserve LinkedIn Stats During Reply.io Sync
 
-### Problem
-The current action-based CSV parsing counts **every row** as +1 to the stat. When the same person replies multiple times to a campaign, each reply row adds to the count, inflating the reply total from 14 (unique people who replied) to 40+ (total reply actions).
+### Problem Identified
+The `sync-reply-campaigns` Edge Function completely **overwrites** the `stats` column when syncing campaigns from Reply.io:
 
-### Current Logic (Wrong)
 ```typescript
-// Line 215 - increments by 1 for EVERY row
-existing[metric] += 1;
+// Current code (line 245-256) - OVERWRITES everything
+stats: {
+  sent: campaign.deliveriesCount || 0,
+  delivered: campaign.deliveriesCount || 0,
+  replies: campaign.repliesCount || 0,
+  // ... NO LinkedIn fields preserved!
+}
 ```
 
-If Alice replies 3 times in Campaign A:
-- Row 1: Campaign A, Replied Auto Connection, alice@email.com → +1
-- Row 2: Campaign A, Replied Auto Message, alice@email.com → +1  
-- Row 3: Campaign A, Replied Auto Connection, alice@email.com → +1
-- **Result: 3 replies counted (wrong)**
+When you sync, the LinkedIn stats uploaded via CSV are completely lost because the sync creates a new `stats` object that only contains email metrics.
 
-### Solution: Deduplicate by Person
-Track unique people per campaign per metric type, so each person is only counted once.
+### Solution: Merge Stats Instead of Replace
+
+The sync function needs to:
+1. **Fetch existing campaign stats** before updating
+2. **Preserve LinkedIn-specific fields** that were uploaded via CSV
+3. **Only update email-related fields** from the Reply.io API
 
 ### Implementation
 
-#### File: `src/components/playground/LinkedInStatsUploadDialog.tsx`
+#### File: `supabase/functions/sync-reply-campaigns/index.ts`
 
-**Step 1: Add aliases to detect person identifier column**
+**Step 1: Define which fields come from which source**
 ```typescript
-const PERSON_IDENTIFIER_ALIASES = [
-  'email', 'contact email', 'person email', 'recipient email',
-  'contact', 'person', 'recipient', 'name', 'contact name'
+// LinkedIn fields - preserved from CSV uploads, never overwritten by sync
+const LINKEDIN_FIELDS = [
+  'linkedinMessagesSent',
+  'linkedinConnectionsSent', 
+  'linkedinReplies',
+  'linkedinConnectionsAccepted',
+  'linkedinDataSource',
+  'linkedinDataUploadedAt',
 ];
 ```
 
-**Step 2: Change tracking data structure**
-
-Instead of:
+**Step 2: Fetch existing stats before upsert**
 ```typescript
-const campaignStats = new Map<string, AggregatedStats>();
+// Before upserting, fetch existing campaign to preserve LinkedIn stats
+const { data: existingCampaign } = await supabase
+  .from('synced_campaigns')
+  .select('stats')
+  .eq('integration_id', integrationId)
+  .eq('external_campaign_id', String(campaign.id))
+  .maybeSingle();
+
+const existingStats = (existingCampaign?.stats as Record<string, unknown>) || {};
 ```
 
-Use:
+**Step 3: Merge stats, preserving LinkedIn data**
 ```typescript
-// Track unique people per campaign per metric
-interface CampaignTracking {
-  // Set of person identifiers who performed each action type
-  linkedinReplies: Set<string>;
-  linkedinConnectionsSent: Set<string>;
-  linkedinMessagesSent: Set<string>;
-  linkedinConnectionsAccepted: Set<string>;
-}
-const campaignTracking = new Map<string, CampaignTracking>();
-```
-
-**Step 3: Update the parsing loop**
-```typescript
-for (const row of results.data as Record<string, unknown>[]) {
-  const campaignName = String(row[campaignCol] || '').trim();
-  if (!campaignName) continue;
-
-  const action = String(row[actionCol] || '').trim();
-  if (!action) continue;
-  
-  // Get person identifier (email or name)
-  const personId = personCol 
-    ? String(row[personCol] || '').toLowerCase().trim() 
-    : `${campaignName}_row_${rowIndex}`; // Fallback: no dedup if no person column
-  
-  const metric = getMetricForAction(action);
-  if (metric) {
-    detectedSet.add(action.toLowerCase());
-    const existing = campaignTracking.get(campaignName) || createEmptyTracking();
-    
-    // Only add if not already tracked for this person
-    existing[metric].add(personId);
-    campaignTracking.set(campaignName, existing);
-  } else {
-    unrecognizedSet.add(action.toLowerCase());
+// Preserve LinkedIn fields from existing stats
+const linkedinStats: Record<string, unknown> = {};
+for (const field of LINKEDIN_FIELDS) {
+  if (existingStats[field] !== undefined) {
+    linkedinStats[field] = existingStats[field];
   }
 }
+
+// Build merged stats object
+const mergedStats = {
+  // Email stats from Reply.io API
+  sent: campaign.deliveriesCount || 0,
+  delivered: campaign.deliveriesCount || 0,
+  replies: campaign.repliesCount || 0,
+  opens: campaign.opensCount || 0,
+  bounces: campaign.bouncesCount || 0,
+  optOuts: campaign.optOutsCount || 0,
+  peopleCount: campaign.peopleCount || 0,
+  peopleActive: campaign.peopleActive || 0,
+  peopleFinished: campaign.peopleFinished || 0,
+  outOfOffice: campaign.outOfOfficeCount || 0,
+  // Preserve LinkedIn stats from CSV upload
+  ...linkedinStats,
+};
 ```
 
-**Step 4: Convert Sets to counts at the end**
-```typescript
-stats = Array.from(campaignTracking.entries()).map(([campaignName, tracking]) => ({
-  campaignName,
-  linkedinMessagesSent: tracking.linkedinMessagesSent.size,
-  linkedinConnectionsSent: tracking.linkedinConnectionsSent.size,
-  linkedinReplies: tracking.linkedinReplies.size,
-  linkedinConnectionsAccepted: tracking.linkedinConnectionsAccepted.size,
-  matched: !!matchedCampaign,
-  campaignId: matchedCampaign?.id,
-}));
+### Data Flow After Fix
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│                     synced_campaigns.stats                  │
+├─────────────────────────────────────────────────────────────┤
+│ EMAIL STATS (from Reply.io API sync):                       │
+│   sent, delivered, replies, opens, bounces, optOuts,        │
+│   peopleCount, peopleActive, peopleFinished, outOfOffice    │
+├─────────────────────────────────────────────────────────────┤
+│ LINKEDIN STATS (from CSV upload - PRESERVED during sync):   │
+│   linkedinMessagesSent, linkedinConnectionsSent,            │
+│   linkedinReplies, linkedinConnectionsAccepted,             │
+│   linkedinDataSource, linkedinDataUploadedAt                │
+└─────────────────────────────────────────────────────────────┘
 ```
-
-### Expected Result
-
-| Metric | Before (Counting Rows) | After (Counting Unique People) |
-|--------|------------------------|-------------------------------|
-| LinkedIn Replies | 40 | **14** |
-| Connection Requests | 561 | 561 (or lower if duplicates) |
-| Connection Acceptances | 116 | 116 (or lower if duplicates) |
-| Messages Sent | 213 | 213 (or lower if duplicates) |
 
 ### Files to Modify
 
 | File | Changes |
 |------|---------|
-| `src/components/playground/LinkedInStatsUploadDialog.tsx` | Add person identifier detection, change tracking to use Sets per metric, convert Set sizes to final counts |
+| `supabase/functions/sync-reply-campaigns/index.ts` | Fetch existing campaign stats before upsert, preserve LinkedIn fields during merge |
 
-### Fallback Behavior
-If the CSV doesn't have a person identifier column (email/contact), the parser will fall back to row-based counting (current behavior) to avoid breaking imports.
+### Expected Result
+
+After this fix:
+1. **Sync** → Updates email stats (sent, delivered, replies, etc.) from Reply.io API
+2. **LinkedIn Upload** → Updates LinkedIn stats (connections, messages, etc.) from CSV
+3. **Sync again** → Email stats updated, **LinkedIn stats preserved**
+
+Both data sources can coexist peacefully in the same `stats` column.
 
