@@ -51,11 +51,24 @@ const ACTION_COLUMN_ALIASES = ['action', 'activity', 'step', 'action type'];
 type LinkedInMetric = 'linkedinMessagesSent' | 'linkedinConnectionsSent' | 'linkedinReplies' | 'linkedinConnectionsAccepted';
 
 const ACTION_MAPPINGS: Record<string, LinkedInMetric> = {
+  // Replies
   'replied auto connection note': 'linkedinReplies',
+  'replied auto connection': 'linkedinReplies',
   'replied auto message': 'linkedinReplies',
+  'replied message': 'linkedinReplies',
+  
+  // Connection Acceptances
   'accepted auto connection': 'linkedinConnectionsAccepted',
+  'accepted connection': 'linkedinConnectionsAccepted',
+  
+  // Connection Requests Sent
   'sent auto connection note': 'linkedinConnectionsSent',
+  'sent auto connection': 'linkedinConnectionsSent',
+  'sent connection request': 'linkedinConnectionsSent',
+  
+  // Messages Sent
   'sent auto message': 'linkedinMessagesSent',
+  'sent message': 'linkedinMessagesSent',
 };
 
 function normalizeHeader(header: string): string {
@@ -89,7 +102,30 @@ function normalizeAction(action: unknown): string {
 
 function getMetricForAction(action: string): LinkedInMetric | null {
   const normalized = normalizeAction(action);
-  return ACTION_MAPPINGS[normalized] || null;
+  
+  // Exact match first
+  if (ACTION_MAPPINGS[normalized]) {
+    return ACTION_MAPPINGS[normalized];
+  }
+  
+  // Partial matching fallback for variations
+  if (normalized.includes('replied') && normalized.includes('connection')) {
+    return 'linkedinReplies';
+  }
+  if (normalized.includes('replied') && normalized.includes('message')) {
+    return 'linkedinReplies';
+  }
+  if (normalized.includes('accepted') && normalized.includes('connection')) {
+    return 'linkedinConnectionsAccepted';
+  }
+  if (normalized.includes('sent') && normalized.includes('connection')) {
+    return 'linkedinConnectionsSent';
+  }
+  if (normalized.includes('sent') && normalized.includes('message')) {
+    return 'linkedinMessagesSent';
+  }
+  
+  return null;
 }
 
 interface AggregatedStats {
@@ -113,6 +149,8 @@ export function LinkedInStatsUploadDialog({ open, onOpenChange }: LinkedInStatsU
   const [parsedStats, setParsedStats] = useState<LinkedInStatsRow[]>([]);
   const [mode, setMode] = useState<'replace' | 'add'>('replace');
   const [error, setError] = useState<string | null>(null);
+  const [detectedActions, setDetectedActions] = useState<string[]>([]);
+  const [unrecognizedActions, setUnrecognizedActions] = useState<string[]>([]);
 
   const { data: campaigns = [] } = useSyncedCampaigns();
   const uploadMutation = useLinkedInStatsUpload();
@@ -122,6 +160,8 @@ export function LinkedInStatsUploadDialog({ open, onOpenChange }: LinkedInStatsU
     setParsedStats([]);
     setError(null);
     setMode('replace');
+    setDetectedActions([]);
+    setUnrecognizedActions([]);
   }, []);
 
   const handleOpenChange = useCallback((newOpen: boolean) => {
@@ -157,20 +197,30 @@ export function LinkedInStatsUploadDialog({ open, onOpenChange }: LinkedInStatsU
         if (actionCol) {
           // ACTION-BASED FORMAT: Aggregate rows by campaign
           const campaignStats = new Map<string, AggregatedStats>();
+          const detectedSet = new Set<string>();
+          const unrecognizedSet = new Set<string>();
 
           for (const row of results.data as Record<string, unknown>[]) {
             const campaignName = String(row[campaignCol] || '').trim();
             if (!campaignName) continue;
 
-            const action = String(row[actionCol] || '');
+            const action = String(row[actionCol] || '').trim();
+            if (!action) continue;
+            
             const metric = getMetricForAction(action);
 
             if (metric) {
+              detectedSet.add(action.toLowerCase());
               const existing = campaignStats.get(campaignName) || createEmptyStats();
               existing[metric] += 1;
               campaignStats.set(campaignName, existing);
+            } else {
+              unrecognizedSet.add(action.toLowerCase());
             }
           }
+          
+          setDetectedActions(Array.from(detectedSet).sort());
+          setUnrecognizedActions(Array.from(unrecognizedSet).sort());
 
           // Convert Map to array
           stats = Array.from(campaignStats.entries()).map(([campaignName, metrics]) => {
@@ -297,6 +347,24 @@ export function LinkedInStatsUploadDialog({ open, onOpenChange }: LinkedInStatsU
 
         {step === 'preview' && (
           <>
+            {/* Debug info for detected actions */}
+            {(detectedActions.length > 0 || unrecognizedActions.length > 0) && (
+              <div className="text-xs text-muted-foreground mb-3 p-2 bg-muted/50 rounded">
+                {detectedActions.length > 0 && (
+                  <div className="mb-1">
+                    <span className="font-medium text-green-600 dark:text-green-400">Detected actions:</span>{' '}
+                    {detectedActions.join(', ')}
+                  </div>
+                )}
+                {unrecognizedActions.length > 0 && (
+                  <div className="text-amber-600 dark:text-amber-400">
+                    <span className="font-medium">Unrecognized actions:</span>{' '}
+                    {unrecognizedActions.join(', ')}
+                  </div>
+                )}
+              </div>
+            )}
+            
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-3">
                 {matchedCount > 0 && (
