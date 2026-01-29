@@ -47,6 +47,12 @@ const LI_REPLIES_ALIASES = ['li replies', 'linkedin replies', 'replies', 'linked
 // Column aliases for action-based format
 const ACTION_COLUMN_ALIASES = ['action', 'activity', 'step', 'action type'];
 
+// Person identifier aliases for deduplication
+const PERSON_IDENTIFIER_ALIASES = [
+  'email', 'contact email', 'person email', 'recipient email',
+  'contact', 'person', 'recipient', 'name', 'contact name'
+];
+
 // Action value to metric mapping
 type LinkedInMetric = 'linkedinMessagesSent' | 'linkedinConnectionsSent' | 'linkedinReplies' | 'linkedinConnectionsAccepted';
 
@@ -135,12 +141,29 @@ interface AggregatedStats {
   linkedinConnectionsAccepted: number;
 }
 
+// Track unique people per campaign per metric for deduplication
+interface CampaignTracking {
+  linkedinReplies: Set<string>;
+  linkedinConnectionsSent: Set<string>;
+  linkedinMessagesSent: Set<string>;
+  linkedinConnectionsAccepted: Set<string>;
+}
+
 function createEmptyStats(): AggregatedStats {
   return {
     linkedinMessagesSent: 0,
     linkedinConnectionsSent: 0,
     linkedinReplies: 0,
     linkedinConnectionsAccepted: 0,
+  };
+}
+
+function createEmptyTracking(): CampaignTracking {
+  return {
+    linkedinReplies: new Set(),
+    linkedinConnectionsSent: new Set(),
+    linkedinMessagesSent: new Set(),
+    linkedinConnectionsAccepted: new Set(),
   };
 }
 
@@ -195,25 +218,39 @@ export function LinkedInStatsUploadDialog({ open, onOpenChange }: LinkedInStatsU
         let stats: LinkedInStatsRow[];
 
         if (actionCol) {
-          // ACTION-BASED FORMAT: Aggregate rows by campaign
-          const campaignStats = new Map<string, AggregatedStats>();
+          // ACTION-BASED FORMAT: Aggregate rows by campaign, deduplicated by person
+          const campaignTracking = new Map<string, CampaignTracking>();
           const detectedSet = new Set<string>();
           const unrecognizedSet = new Set<string>();
+          
+          // Find person identifier column for deduplication
+          const personCol = findMatchingColumn(headers, PERSON_IDENTIFIER_ALIASES);
+          let rowIndex = 0;
 
           for (const row of results.data as Record<string, unknown>[]) {
+            rowIndex++;
             const campaignName = String(row[campaignCol] || '').trim();
             if (!campaignName) continue;
 
             const action = String(row[actionCol] || '').trim();
             if (!action) continue;
             
+            // Get person identifier for deduplication (fallback to row-based if no person column)
+            const personId = personCol 
+              ? String(row[personCol] || '').toLowerCase().trim() 
+              : `${campaignName}_row_${rowIndex}`;
+            
+            // Skip if no valid person identifier
+            if (personCol && !personId) continue;
+            
             const metric = getMetricForAction(action);
 
             if (metric) {
               detectedSet.add(action.toLowerCase());
-              const existing = campaignStats.get(campaignName) || createEmptyStats();
-              existing[metric] += 1;
-              campaignStats.set(campaignName, existing);
+              const existing = campaignTracking.get(campaignName) || createEmptyTracking();
+              // Add to Set - automatically deduplicates by person
+              existing[metric].add(personId);
+              campaignTracking.set(campaignName, existing);
             } else {
               unrecognizedSet.add(action.toLowerCase());
             }
@@ -222,15 +259,18 @@ export function LinkedInStatsUploadDialog({ open, onOpenChange }: LinkedInStatsU
           setDetectedActions(Array.from(detectedSet).sort());
           setUnrecognizedActions(Array.from(unrecognizedSet).sort());
 
-          // Convert Map to array
-          stats = Array.from(campaignStats.entries()).map(([campaignName, metrics]) => {
+          // Convert Map to array, using Set sizes for counts
+          stats = Array.from(campaignTracking.entries()).map(([campaignName, tracking]) => {
             const matchedCampaign = campaigns.find(
               c => c.name.toLowerCase() === campaignName.toLowerCase()
             );
 
             return {
               campaignName,
-              ...metrics,
+              linkedinMessagesSent: tracking.linkedinMessagesSent.size,
+              linkedinConnectionsSent: tracking.linkedinConnectionsSent.size,
+              linkedinReplies: tracking.linkedinReplies.size,
+              linkedinConnectionsAccepted: tracking.linkedinConnectionsAccepted.size,
               matched: !!matchedCampaign,
               campaignId: matchedCampaign?.id,
             };
