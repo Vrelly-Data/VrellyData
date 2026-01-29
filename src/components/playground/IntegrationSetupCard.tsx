@@ -2,14 +2,21 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
+import { Progress } from '@/components/ui/progress';
 import { Plus, Plug, RefreshCw, Trash2, AlertCircle, Loader2, Pencil, Building2, Zap, Upload, Settings2 } from 'lucide-react';
 import { OutboundIntegration, useOutboundIntegrations } from '@/hooks/useOutboundIntegrations';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { AddIntegrationDialog } from './AddIntegrationDialog';
 import { EditIntegrationDialog } from './EditIntegrationDialog';
 import { LinkedInStatsUploadDialog } from './LinkedInStatsUploadDialog';
 import { ManageCampaignsDialog } from './ManageCampaignsDialog';
 import { formatDistanceToNow } from 'date-fns';
+
+function formatElapsedTime(seconds: number): string {
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
 
 const platformIcons: Record<string, string> = {
   'reply.io': '📧',
@@ -18,7 +25,7 @@ const platformIcons: Record<string, string> = {
   'lemlist': '🍋',
 };
 
-function getStatusBadge(status: string | null, error: string | null, isStuck?: boolean) {
+function getStatusBadge(status: string | null, error: string | null, isStuck?: boolean, elapsedSeconds?: number) {
   if (error) {
     return <Badge variant="destructive" className="text-xs">Error</Badge>;
   }
@@ -29,7 +36,8 @@ function getStatusBadge(status: string | null, error: string | null, isStuck?: b
     case 'synced':
       return <Badge variant="secondary" className="text-xs bg-primary/10 text-primary">Synced</Badge>;
     case 'syncing':
-      return <Badge variant="secondary" className="text-xs bg-accent text-accent-foreground">Syncing...</Badge>;
+      const elapsed = elapsedSeconds !== undefined ? ` (${formatElapsedTime(elapsedSeconds)})` : '';
+      return <Badge variant="secondary" className="text-xs bg-accent text-accent-foreground">Syncing...{elapsed}</Badge>;
     case 'pending':
       return <Badge variant="outline" className="text-xs">Pending</Badge>;
     default:
@@ -48,9 +56,10 @@ interface IntegrationRowProps {
   onManageCampaigns: (integration: OutboundIntegration) => void;
   isSyncing: boolean;
   isSettingUpWebhook: boolean;
+  elapsedSeconds?: number;
 }
 
-function IntegrationRow({ integration, onToggle, onDelete, onSync, onEdit, onSetupWebhook, onResetSync, onManageCampaigns, isSyncing, isSettingUpWebhook }: IntegrationRowProps) {
+function IntegrationRow({ integration, onToggle, onDelete, onSync, onEdit, onSetupWebhook, onResetSync, onManageCampaigns, isSyncing, isSettingUpWebhook, elapsedSeconds }: IntegrationRowProps) {
   const icon = platformIcons[integration.platform.toLowerCase()] || '🔌';
   const isCurrentlySyncing = isSyncing || integration.sync_status === 'syncing';
   // Access reply_team_id from extended integration type
@@ -63,13 +72,14 @@ function IntegrationRow({ integration, onToggle, onDelete, onSync, onEdit, onSet
     (new Date().getTime() - new Date(integration.updated_at).getTime()) > 5 * 60 * 1000;
 
   return (
-    <div className="flex items-center justify-between py-3 border-b last:border-0">
-      <div className="flex items-center gap-3">
-        <span className="text-2xl">{icon}</span>
-        <div>
-          <div className="flex items-center gap-2">
-            <span className="font-medium">{integration.name}</span>
-            {getStatusBadge(integration.sync_status, integration.sync_error, isStuck)}
+    <div className="py-3 border-b last:border-0">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <span className="text-2xl">{icon}</span>
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="font-medium">{integration.name}</span>
+              {getStatusBadge(integration.sync_status, integration.sync_error, isStuck, isCurrentlySyncing ? elapsedSeconds : undefined)}
             {replyTeamId && (
               <Badge variant="outline" className="text-xs flex items-center gap-1">
                 <Building2 className="h-3 w-3" />
@@ -188,7 +198,13 @@ function IntegrationRow({ integration, onToggle, onDelete, onSync, onEdit, onSet
         >
           <Trash2 className="h-4 w-4" />
         </Button>
+        </div>
       </div>
+      {isCurrentlySyncing && (
+        <div className="mt-2 ml-11">
+          <Progress value={undefined} className="h-1.5 w-full animate-pulse" />
+        </div>
+      )}
     </div>
   );
 }
@@ -202,7 +218,32 @@ export function IntegrationSetupCard() {
   const [managingIntegration, setManagingIntegration] = useState<OutboundIntegration | null>(null);
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [webhookSetupId, setWebhookSetupId] = useState<string | null>(null);
+  const [syncStartTimes, setSyncStartTimes] = useState<Record<string, number>>({});
+  const [elapsedTimes, setElapsedTimes] = useState<Record<string, number>>({});
   const { integrations, isLoading, toggleIntegration, deleteIntegration, syncIntegration, setupWebhook, resetSyncStatus } = useOutboundIntegrations();
+
+  // Track elapsed time for syncing integrations
+  useEffect(() => {
+    const syncingIntegrations = integrations.filter(i => i.sync_status === 'syncing' || syncingId === i.id);
+    
+    if (syncingIntegrations.length === 0) {
+      return;
+    }
+
+    const interval = setInterval(() => {
+      const now = Date.now();
+      const updates: Record<string, number> = {};
+      
+      syncingIntegrations.forEach(integration => {
+        const startTime = syncStartTimes[integration.id] || now;
+        updates[integration.id] = Math.floor((now - startTime) / 1000);
+      });
+      
+      setElapsedTimes(updates);
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [integrations, syncingId, syncStartTimes]);
 
   const handleToggle = (id: string, isActive: boolean) => {
     toggleIntegration.mutate({ id, isActive });
@@ -216,8 +257,20 @@ export function IntegrationSetupCard() {
 
   const handleSync = (id: string) => {
     setSyncingId(id);
+    setSyncStartTimes(prev => ({ ...prev, [id]: Date.now() }));
+    setElapsedTimes(prev => ({ ...prev, [id]: 0 }));
     syncIntegration.mutate(id, {
-      onSettled: () => setSyncingId(null),
+      onSettled: () => {
+        setSyncingId(null);
+        setSyncStartTimes(prev => {
+          const { [id]: _, ...rest } = prev;
+          return rest;
+        });
+        setElapsedTimes(prev => {
+          const { [id]: _, ...rest } = prev;
+          return rest;
+        });
+      },
     });
   };
 
@@ -293,6 +346,7 @@ export function IntegrationSetupCard() {
                   onManageCampaigns={handleManageCampaigns}
                   isSyncing={syncingId === integration.id}
                   isSettingUpWebhook={webhookSetupId === integration.id}
+                  elapsedSeconds={elapsedTimes[integration.id]}
                 />
               ))}
             </div>
