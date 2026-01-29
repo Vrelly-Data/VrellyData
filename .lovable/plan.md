@@ -1,96 +1,75 @@
 
 
-## Add Sync Progress Timer / Activity Indicator
+## Change Stat Card Breakdowns from Hover to Click
 
-### Problem
+### What You're Asking For
 
-When clicking "Sync", the button shows a spinner, but if the sync takes a while, users can't tell if it's still working or stuck. The "Syncing..." badge doesn't provide enough feedback about ongoing activity.
-
----
-
-### Solution
-
-Add an **elapsed time counter** that shows how long the sync has been running, along with a subtle **progress animation** to indicate activity.
-
-| Current State | Improved State |
-|---------------|----------------|
-| Badge: "Syncing..." | Badge: "Syncing... (0:45)" with elapsed time |
-| No activity indication | Animated progress bar or pulsing indicator |
-| User confused if stuck | Clear visual that work is in progress |
+Currently, the "Total Messages Sent" and "Total Replies" stat cards show their detailed breakdowns (Email vs LinkedIn metrics) when you **hover** over them. You want to change this to show the breakdowns when users **click** on the cards instead.
 
 ---
 
-### UI Changes
+### Current vs Proposed Behavior
 
-**During Active Sync:**
-```text
-┌──────────────────────────────────────────────────────────────────┐
-│ 📧 Incrementums  [Syncing... 0:32]  [Team: 383893]  [⚡ Live]    │
-│    reply.io · Last synced 1 hour ago                             │
-│    ┌─────────────────────────────────────────┐                   │
-│    │ ████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ │  ← Progress bar   │
-│    └─────────────────────────────────────────┘                   │
-│    Workspace: 383893                                             │
-└──────────────────────────────────────────────────────────────────┘
-```
-
-**Key Features:**
-1. **Elapsed Timer**: Shows `0:00`, `0:15`, `0:32`, etc. while syncing
-2. **Animated Progress Bar**: Indeterminate animation (striped/pulsing) since we don't know exact progress
-3. **Visual Continuity**: Timer keeps counting so users know it's not frozen
+| Card | Current Behavior | Proposed Behavior |
+|------|------------------|-------------------|
+| Total Messages Sent | Hover shows tooltip with breakdown | Click opens dialog/popover with breakdown |
+| Total Replies | Hover shows tooltip with breakdown | Click opens dialog/popover with breakdown |
+| Total Contacts | Click opens contacts dialog | No change |
+| Active Campaigns | Click opens campaigns dialog | No change |
 
 ---
 
-### Implementation Details
+### Implementation Approach
 
-**Component Changes**: `src/components/playground/IntegrationSetupCard.tsx`
+Replace the `Tooltip` component with a `Popover` component for these two cards. The popover:
+- Opens on click (not hover)
+- Shows the same breakdown content
+- Can be dismissed by clicking outside or clicking again
 
-1. **Track sync start time** using local state or `updated_at` timestamp
-2. **Add useEffect with interval** to update elapsed time display every second
-3. **Show animated progress bar** below the integration row when syncing
-4. **Update status badge** to include elapsed time: `Syncing... (0:45)`
+---
 
-**New State:**
+### Technical Changes
+
+**File**: `src/components/playground/PlaygroundStatsGrid.tsx`
+
+1. **Add Popover imports** from `@/components/ui/popover`
+2. **Update StatCard component** to accept a `popoverContent` prop instead of `tooltipContent`
+3. **Wrap card in Popover** when `popoverContent` is provided
+4. **Update the two stat cards** to use the new popover-based interaction
+
+**Updated StatCard Logic:**
 ```typescript
-const [syncStartTime, setSyncStartTime] = useState<Record<string, number>>({});
-const [elapsedTime, setElapsedTime] = useState<Record<string, number>>({});
+interface StatCardProps {
+  // ... existing props
+  popoverContent?: React.ReactNode;  // NEW: replaces tooltipContent
+}
 
-// Track elapsed time with useEffect
-useEffect(() => {
-  const interval = setInterval(() => {
-    // Update elapsed time for any syncing integrations
-    const now = Date.now();
-    const updates: Record<string, number> = {};
-    for (const [id, startTime] of Object.entries(syncStartTime)) {
-      updates[id] = Math.floor((now - startTime) / 1000);
-    }
-    setElapsedTime(updates);
-  }, 1000);
-  return () => clearInterval(interval);
-}, [syncStartTime]);
+function StatCard({ ..., popoverContent }: StatCardProps) {
+  if (popoverContent) {
+    return (
+      <Popover>
+        <PopoverTrigger asChild>
+          {cardContent}
+        </PopoverTrigger>
+        <PopoverContent side="bottom" className="w-72">
+          {popoverContent}
+        </PopoverContent>
+      </Popover>
+    );
+  }
+  // ... rest of existing logic
+}
 ```
 
-**Updated Badge:**
+**Updated Card Usage:**
 ```typescript
-case 'syncing':
-  const elapsed = elapsedSeconds ? formatElapsedTime(elapsedSeconds) : '';
-  return (
-    <Badge variant="secondary" className="text-xs bg-accent text-accent-foreground">
-      Syncing...{elapsed && ` (${elapsed})`}
-    </Badge>
-  );
-```
-
-**Animated Progress Bar:**
-```typescript
-{isCurrentlySyncing && (
-  <div className="mt-2">
-    <Progress 
-      value={undefined} 
-      className="h-1.5 animate-pulse" 
-    />
-  </div>
-)}
+<StatCard
+  title="Total Messages Sent"
+  value={stats?.totalMessagesSent.toLocaleString() ?? 0}
+  icon={<Send className="h-5 w-5 text-primary" />}
+  description="Across all campaigns"
+  popoverContent={messagesTooltipContent}  // Changed from tooltipContent
+/>
 ```
 
 ---
@@ -99,7 +78,7 @@ case 'syncing':
 
 | File | Changes |
 |------|---------|
-| `src/components/playground/IntegrationSetupCard.tsx` | Add elapsed time tracking, update badge display, add progress bar animation |
+| `src/components/playground/PlaygroundStatsGrid.tsx` | Replace Tooltip with Popover for breakdown cards |
 
 ---
 
@@ -107,8 +86,7 @@ case 'syncing':
 
 | Before | After |
 |--------|-------|
-| "Syncing..." badge with no time indicator | "Syncing... (0:45)" badge with elapsed time |
-| Static spinner only | Animated progress bar below row |
-| User unsure if working | Clear indication of ongoing activity |
-| 5-minute timeout detection only | Real-time feedback from second 1 |
+| Hover over card → tooltip appears | Click card → popover opens |
+| Tooltip disappears when mouse leaves | Popover stays open until clicked away |
+| Harder to read on mobile/touch devices | Works properly on touch devices |
 
