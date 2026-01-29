@@ -1,96 +1,208 @@
 
-## Fix: LinkedIn Stats Not Appearing in Dashboard
 
-### Root Cause Analysis
+## Data Playground Enhancements - Expanding Reply.io Sync Capabilities
 
-Based on the database investigation, I found the core issue:
+Based on my investigation, I've identified the issues and capabilities. Here's a comprehensive analysis and implementation plan.
 
-**The data is fragmented across separate campaign records:**
+---
 
-| Campaign Source | is_linked | Has Email Stats | Has LinkedIn Stats |
-|-----------------|-----------|-----------------|-------------------|
-| Reply.io Sync | true | Yes (17 sent) | No (null) |
-| CSV Upload | false | No (null) | Mostly 0s |
+## Current State Analysis
 
-When you upload LinkedIn stats via CSV:
-1. The CSV parser tries to match campaign names with existing campaigns
-2. If names don't match exactly (case-sensitive, spacing, etc.), it creates **NEW** campaign records
-3. These new records are `is_linked: false` and don't have email stats
-4. The existing Reply.io campaigns keep their email stats but have no LinkedIn data
+### 1. Campaign Status Issue (0 Active Campaigns)
 
-**Current totals in database:**
-- Email Sent: 17 ✓
-- LinkedIn Messages: 1 (should be 214)
-- LinkedIn Connections: 0 (should be 590)
-- LinkedIn Replies: 0 (should be 14)
+**Root Cause Found**: Reply.io is returning status code `7` for some campaigns, which isn't mapped in the current status normalizer. The current code only handles:
+- 0 = draft
+- 1 = active
+- 2 = paused
+- 3 = completed
+- 4 = archived
 
-### Solution: Improve Campaign Matching
+Status `7` is being stored as "unknown" in the database:
 
-The LinkedIn CSV upload needs smarter matching to find existing campaigns:
+| Campaign | Raw Status | Stored Status |
+|----------|------------|---------------|
+| HVAC campaign | 2 | paused |
+| Business owners no connect message | 7 | unknown |
 
-#### 1. Improve `useSyncedCampaigns` to Return ALL Campaigns
+**Fix**: Update the status mapping to handle all Reply.io status codes including `7` (which likely means "finished" or "stopped").
 
-Currently the upload dialog uses `useSyncedCampaigns(true)` which only returns linked campaigns. The matching should search across ALL team campaigns.
+### 2. Contacts via API - YES, Fully Supported
 
-#### 2. Implement Fuzzy Campaign Name Matching
-
-Instead of exact match, use fuzzy matching:
-- Case-insensitive comparison
-- Trim whitespace
-- Normalize common variations (e.g., "LI + Email" vs "LinkedIn + Email")
-- Match by partial name if unique
-
-#### 3. Update Matching Logic in `LinkedInStatsUploadDialog.tsx`
-
-```typescript
-// Current (exact match only)
-const matchedCampaign = campaigns.find(
-  c => c.name.toLowerCase() === campaignName.toLowerCase()
-);
-
-// Improved (fuzzy matching)
-function normalizeForMatch(name: string): string {
-  return name
-    .toLowerCase()
-    .trim()
-    .replace(/\s+/g, ' ')           // Normalize spaces
-    .replace(/li\s?\+\s?email/gi, 'linkedin email')  // Normalize common patterns
-    .replace(/[^\w\s]/g, '');       // Remove special chars
-}
-
-const matchedCampaign = campaigns.find(c => 
-  normalizeForMatch(c.name) === normalizeForMatch(campaignName)
-);
+Reply.io V3 API provides a dedicated endpoint to fetch contacts per sequence:
+```
+GET /v3/sequences/{id}/contacts/extended
 ```
 
-#### 4. Show Better Matching Feedback in Preview
+Returns detailed contact data including:
+- email, firstName, lastName, title
+- Current step in sequence
+- Status (Active, Finished, Replied, Bounced, Opened, Clicked)
+- addedAt timestamp
+- lastStepCompletedAt
 
-Add visual indicators for which campaigns will be matched vs created:
-- Show the existing campaign name alongside the CSV name
-- Allow manual matching for unmatched campaigns
+**Current State**: The `synced_contacts` table exists but is **empty** - the sync function doesn't fetch contacts yet.
 
-### Files to Modify
+### 3. Copy/Templates via API - YES, Fully Supported
 
-| File | Changes |
-|------|---------|
-| `src/components/playground/LinkedInStatsUploadDialog.tsx` | Improve campaign name matching logic, add fuzzy matching helper |
-| `src/hooks/useSyncedCampaigns.ts` | Ensure hook can return all campaigns (not just linked) for matching purposes |
+Reply.io V3 API provides sequence steps with full template content:
+```
+GET /v3/sequences/{id}/steps
+```
 
-### Expected Result
+Returns for each step:
+- type (Email, LinkedIn Message, LinkedIn Connect, Call, SMS, WhatsApp, etc.)
+- templates array with:
+  - subject
+  - body (HTML content)
+  - id and templateId
+- delayInMinutes
+- executionMode (Automatic/Manual)
 
-After implementing these changes:
-1. Upload LinkedIn CSV
-2. CSV campaigns match with existing Reply.io synced campaigns
-3. LinkedIn stats merge INTO existing campaigns (not create new ones)
-4. Dashboard shows combined totals:
-   - Total Messages = 17 emails + 214 LI messages + 590 connections = **821**
-   - Total Replies = 0 email replies + 14 LI replies = **14**
+**Current State**: The `synced_sequences` table exists but is **empty** - the sync function doesn't fetch steps yet.
 
-### Alternative Quick Fix
+### 4. Completion Rate Calculation
 
-If the campaign names in your CSV don't match any existing campaigns at all, you may need to:
-1. Re-sync from Reply.io first (to get fresh campaign names)
-2. Ensure your CSV uses **exactly** the same campaign names as shown in Reply.io
-3. Re-upload the LinkedIn CSV
+**Current Logic** (in `usePlaygroundStats.ts`):
+```typescript
+completionPercentage = (totalPeopleFinished / totalPeopleCount) * 100
+```
 
-Would you like me to implement the improved matching logic, or would you prefer to first verify that your CSV campaign names match the existing campaign names?
+This is correct - it uses Reply.io's `peopleFinished` and `peopleCount` fields. However, accuracy depends on the API returning accurate values (which you mentioned may have issues with Reply.io's own dashboard).
+
+---
+
+## Implementation Plan
+
+### Phase 1: Fix Campaign Status Mapping
+
+**File**: `supabase/functions/sync-reply-campaigns/index.ts`
+
+Update the `normalizeStatus` function to handle all Reply.io status codes:
+```typescript
+const statusMap: Record<number, string> = {
+  0: 'draft',
+  1: 'active',
+  2: 'paused',
+  3: 'completed',
+  4: 'archived',
+  5: 'stopped',
+  6: 'error',
+  7: 'finished',  // Add this mapping
+};
+```
+
+### Phase 2: Sync Contacts from Reply.io
+
+**New Approach**: Create a separate "deep sync" function for contacts to avoid timeout issues. The main fast sync handles campaign metadata; contacts are synced on-demand per campaign.
+
+**File**: `supabase/functions/sync-reply-contacts/index.ts` (new)
+
+Endpoint: `GET /v3/sequences/{sequenceId}/contacts/extended`
+
+Data mapping to `synced_contacts` table:
+| Reply.io Field | Database Column |
+|----------------|-----------------|
+| email | email |
+| firstName | first_name |
+| lastName | last_name |
+| title | job_title |
+| status.status | status |
+| status.replied, delivered, bounced, opened | engagement_data (JSONB) |
+
+### Phase 3: Sync Sequence Steps (Copy)
+
+**File**: `supabase/functions/sync-reply-sequences/index.ts` (new)
+
+Endpoint: `GET /v3/sequences/{sequenceId}/steps`
+
+Data mapping to `synced_sequences` table:
+| Reply.io Field | Database Column |
+|----------------|-----------------|
+| id | external_sequence_id |
+| type | step_type |
+| templates[0].subject | subject |
+| templates[0].body | body_html |
+| delayInMinutes | delay_days (convert) |
+
+### Phase 4: Build "Copy" Tab UI
+
+**File**: `src/components/playground/CopyTab.tsx` (new)
+
+Display synced email templates with:
+- Campaign name and step number
+- Subject line
+- Email body preview
+- Step type badge (Email, LinkedIn Message, etc.)
+- Option to copy or "remix" with AI
+
+### Phase 5: Build "People" Tab UI
+
+**File**: `src/components/playground/PeopleTab.tsx` (new)
+
+Display synced contacts with:
+- Contact details (name, email, company, title)
+- Campaign association
+- Engagement status (Active, Replied, Finished, Bounced)
+- Filters by campaign and status
+
+---
+
+## Technical Architecture
+
+```text
+┌─────────────────────────────────────────────────────────────────┐
+│                     DATA PLAYGROUND                             │
+├─────────────────────────────────────────────────────────────────┤
+│ PLAYGROUND TAB                                                  │
+│   ├── IntegrationSetupCard (Sync button)                       │
+│   ├── PlaygroundStatsGrid (Overview metrics)                   │
+│   └── CampaignsTable (Campaign list)                           │
+├─────────────────────────────────────────────────────────────────┤
+│ COPY TAB (NEW)                                                  │
+│   ├── Sequence step browser                                     │
+│   ├── Email template viewer                                     │
+│   └── AI remix functionality                                    │
+├─────────────────────────────────────────────────────────────────┤
+│ PEOPLE TAB (NEW)                                                │
+│   ├── Contact list with pagination                              │
+│   ├── Campaign filter                                           │
+│   └── Engagement status badges                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Files to Create/Modify
+
+| File | Action | Purpose |
+|------|--------|---------|
+| `supabase/functions/sync-reply-campaigns/index.ts` | Modify | Fix status mapping (add code 7) |
+| `supabase/functions/sync-reply-contacts/index.ts` | Create | Fetch contacts per campaign |
+| `supabase/functions/sync-reply-sequences/index.ts` | Create | Fetch email copy/steps per campaign |
+| `src/components/playground/CopyTab.tsx` | Create | Display synced email templates |
+| `src/components/playground/PeopleTab.tsx` | Create | Display synced contacts |
+| `src/hooks/useSyncedSequences.ts` | Create | Hook to fetch sequence data |
+| `src/pages/DataPlayground.tsx` | Modify | Wire up new tabs with real content |
+
+---
+
+## Sync Strategy (Avoiding Timeouts)
+
+Given the 3-minute Edge Function timeout and potentially 1000+ contacts:
+
+1. **Fast Sync** (existing): Campaign metadata and stats only - runs quickly
+2. **Deep Sync** (new): Triggered per-campaign to fetch contacts and sequences
+3. **Background Sync**: For large accounts, batch process with continuation tokens
+
+---
+
+## Expected Results After Implementation
+
+| Metric | Current | After Fix |
+|--------|---------|-----------|
+| Active Campaigns | 0 | Accurate count |
+| Total Contacts | Sum of peopleCount | Actual synced contacts |
+| Copy/Templates | Empty | Real email content |
+| People Tab | Placeholder | Full contact list |
+| Completion Rate | Based on peopleFinished | Same (depends on API accuracy) |
+
