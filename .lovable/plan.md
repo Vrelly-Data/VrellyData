@@ -1,85 +1,118 @@
 
 
-## Clarify LinkedIn Stats Upload Behavior in UI
+## Fix LinkedIn Stats "Replace" to Clear All Existing Data First
 
-### Current State
-The dialog has a mode selector ("Replace" / "Add to existing") but provides no explanation of what each mode does.
+### Problem
+The current "Replace" mode only updates campaigns that match names in the CSV. Campaigns not in the CSV still retain their old LinkedIn stats, causing inflated totals.
 
-### Goal
-Make it crystal clear that "Replace" mode will overwrite existing LinkedIn stats, which is the desired behavior for re-uploading corrected data.
+**Your expected totals after upload:**
+- LinkedIn Replies: 14
+- LinkedIn Messages Sent: 213
+- Connection Acceptances: 116
+- Connection Requests Sent: 561
 
-### Changes
+**Current database totals (wrong):**
+- LinkedIn Replies: 70 (includes old data from 4 campaigns not in your CSV)
+- LinkedIn Messages Sent: 242
+- Connection Acceptances: 248
+- Connection Requests Sent: 980
 
-#### 1. Add Descriptive Text Under Mode Selector
-Add helper text that explains both modes clearly:
+### Root Cause
+4 campaigns from an earlier upload (Jan 27) weren't in your new CSV, so their LinkedIn stats remained:
+- Retail LI + Email
+- Healthcare LI + Email
+- Bournemouth locals LI + Email
+- Rejuvenate IT LI only sequence
 
-| Mode | Description |
-|------|-------------|
-| **Replace** | "Overwrites existing LinkedIn stats with the values from this CSV. Email stats are preserved." |
-| **Add to existing** | "Adds CSV values on top of existing LinkedIn stats (for cumulative updates)." |
+### Solution
+Modify the "Replace" mode to first **clear ALL LinkedIn stats** from ALL campaigns in the team, then apply the new CSV data.
 
-#### 2. Update Mode Labels for Clarity
-Rename the options to be more descriptive:
-- "Replace" → "Replace LinkedIn Stats"
-- "Add to existing" → "Add to Existing Stats"
+### Implementation
 
-#### 3. Add Confirmation Message Before Import
-When "Replace" mode is selected and matched campaigns exist, show a subtle confirmation:
+#### File: `src/hooks/useLinkedInStatsUpload.ts`
+
+Add a new step at the beginning of the mutation when `mode === 'replace'`:
+
+```text
+1. Before processing any CSV rows:
+   - Query ALL campaigns for the team
+   - For each campaign, set LinkedIn fields to 0:
+     - linkedinMessagesSent: 0
+     - linkedinConnectionsSent: 0
+     - linkedinReplies: 0
+     - linkedinConnectionsAccepted: 0
+   - Preserve all other stats (email deliveries, replies, etc.)
+
+2. Then proceed with normal CSV processing
+   - Update matched campaigns with new LinkedIn values
+   - Create new campaigns for unmatched rows
 ```
-"This will overwrite LinkedIn stats for {matchedCount} existing campaigns."
+
+**Key code change (after line 47, before the loop):**
+
+```typescript
+// For "replace" mode, first clear ALL LinkedIn stats from all team campaigns
+if (mode === 'replace') {
+  const { data: allCampaigns } = await supabase
+    .from('synced_campaigns')
+    .select('id, stats')
+    .eq('team_id', membership.team_id);
+
+  if (allCampaigns) {
+    for (const campaign of allCampaigns) {
+      const existingStats = (campaign.stats as Record<string, unknown>) || {};
+      const clearedStats = {
+        ...existingStats,
+        linkedinMessagesSent: 0,
+        linkedinConnectionsSent: 0,
+        linkedinReplies: 0,
+        linkedinConnectionsAccepted: 0,
+        linkedinDataSource: null,
+        linkedinDataUploadedAt: null,
+      };
+      
+      await supabase
+        .from('synced_campaigns')
+        .update({ stats: clearedStats })
+        .eq('id', campaign.id);
+    }
+  }
+}
 ```
 
-#### 4. Update Dialog Description
-Change from:
-> "Import historical LinkedIn metrics from a Reply.io report CSV"
+#### File: `src/components/playground/LinkedInStatsUploadDialog.tsx`
 
-To:
-> "Import or update LinkedIn metrics. Use 'Replace' to overwrite existing stats with fresh data."
+Update the mode description to be even clearer:
+
+**Current:**
+> "Overwrites existing LinkedIn stats with values from this CSV. Email stats are preserved."
+
+**Updated:**
+> "Clears ALL existing LinkedIn stats, then applies this CSV. Email stats are preserved."
+
+Update the confirmation message:
+
+**Current:**
+> "This will overwrite LinkedIn stats for {matchedCount} existing campaigns."
+
+**Updated:**
+> "This will clear LinkedIn stats from ALL campaigns, then apply data from this CSV to {matchedCount} matched campaigns."
+
+### Expected Result After Fix
+
+When you upload a CSV in "Replace" mode:
+1. All 12 campaigns have their LinkedIn stats reset to 0
+2. Only the 7 campaigns in your CSV get the new LinkedIn values
+3. Dashboard totals show exactly what's in your CSV:
+   - LinkedIn Replies: 14
+   - LinkedIn Messages Sent: 213
+   - Connection Acceptances: 116  
+   - Connection Requests Sent: 561
 
 ### Files to Modify
 
 | File | Changes |
 |------|---------|
-| `src/components/playground/LinkedInStatsUploadDialog.tsx` | Add mode descriptions, update labels, add confirmation text |
-
-### Implementation Details
-
-**Mode Section Update (around line 315):**
-```tsx
-<div className="flex flex-col gap-2">
-  <div className="flex items-center gap-2">
-    <Label htmlFor="mode" className="text-sm">Mode:</Label>
-    <Select value={mode} onValueChange={(v: 'replace' | 'add') => setMode(v)}>
-      <SelectTrigger id="mode" className="w-[180px]">
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value="replace">Replace LinkedIn Stats</SelectItem>
-        <SelectItem value="add">Add to Existing Stats</SelectItem>
-      </SelectContent>
-    </Select>
-  </div>
-  <p className="text-xs text-muted-foreground">
-    {mode === 'replace' 
-      ? 'Overwrites existing LinkedIn stats with values from this CSV. Email stats are preserved.'
-      : 'Adds CSV values on top of existing LinkedIn stats (for cumulative updates).'}
-  </p>
-</div>
-```
-
-**Confirmation Text Before Import Button (around line 379):**
-```tsx
-{mode === 'replace' && matchedCount > 0 && (
-  <p className="text-xs text-muted-foreground mr-auto">
-    This will overwrite LinkedIn stats for {matchedCount} existing campaign{matchedCount > 1 ? 's' : ''}.
-  </p>
-)}
-```
-
-### Expected Result
-After these changes:
-- Users clearly understand that "Replace" will overwrite their existing LinkedIn stats
-- The behavior is explicitly stated, removing any ambiguity
-- Users feel confident re-uploading CSVs to correct/update their data
-- Email stats preservation is clearly communicated
+| `src/hooks/useLinkedInStatsUpload.ts` | Add step to clear ALL LinkedIn stats before applying CSV data in "replace" mode |
+| `src/components/playground/LinkedInStatsUploadDialog.tsx` | Update mode description and confirmation text to reflect global clear behavior |
 
