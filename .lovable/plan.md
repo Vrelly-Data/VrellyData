@@ -1,105 +1,114 @@
 
 
-## Fix: Campaign Status, Contacts & Copy Sync Issues
+## Fix: Sync Copy and People - Database Constraint and API Field Mapping Issues
 
-### Issues Identified
+### Root Cause Analysis
 
-#### Issue 1: Campaign Status Not Updating
-The edge function `sync-reply-campaigns` was updated with the new status mappings (including code 7 = "finished"), but the fix needs to be verified and possibly the campaigns need to be re-synced. The database shows campaigns with "unknown" status from the last sync.
+I've identified the exact issues preventing the sync from working:
 
-#### Issue 2: Edge Functions Not Registered in config.toml
-The new edge functions `sync-reply-contacts` and `sync-reply-sequences` are **NOT** registered in `supabase/config.toml`. This means they may have JWT verification enabled by default and could fail authentication.
+---
 
-```toml
-# Missing from config.toml:
-[functions.sync-reply-contacts]
-verify_jwt = true
+### Issue 1: Missing Database Unique Constraint for Sequences
 
-[functions.sync-reply-sequences]
-verify_jwt = true
+The `synced_sequences` table needs a unique constraint for the upsert to work:
+
+| Current State | Required |
+|---------------|----------|
+| Only primary key on `id` | Unique constraint on `(campaign_id, step_number)` |
+| Only regular indexes on `campaign_id`, `team_id` | Composite unique for upsert |
+
+The error `there is no unique or exclusion constraint matching the ON CONFLICT specification` occurs because there's no unique index matching `campaign_id,step_number`.
+
+---
+
+### Issue 2: Wrong Field Name for Step Number
+
+The Reply.io API **does NOT return a `number` field**. Looking at the actual API docs:
+
+```json
+[
+  {
+    "type": "Email",
+    "delayInMinutes": 1,
+    "executionMode": "Automatic",
+    "templates": [...],
+    "id": 123      // <-- Only "id", no "number"
+  }
+]
 ```
 
-#### Issue 3: Wrong Response Parsing in Edge Functions
+The code uses `step.number` which is always `undefined`. We need to use the **array index + 1** as the step number.
 
-**sync-reply-sequences** (Line 148):
-```typescript
-// WRONG: expects { steps: [] }
-const response = await fetchWithRetry(...) as { steps?: ReplyStep[] };
-const steps = response.steps || [];
+---
 
-// CORRECT: Reply.io returns a plain array
-const steps = await fetchWithRetry(...) as ReplyStep[];
-```
+### Issue 3: Contacts May Need External ID Constraint
 
-**sync-reply-contacts** (Line 143-145):
-```typescript
-// WRONG: expects { contacts: [], hasMore: boolean }
-const response = await fetchWithRetry(...) as { contacts?: ReplyContact[]; hasMore?: boolean };
-const contacts = response.contacts || [];
+The `synced_contacts` table has a unique constraint on `(campaign_id, email)` which should work. However, the logs show the contacts sync started but no completion message - need to also check if `external_contact_id` is better for uniqueness.
 
-// CORRECT: Reply.io returns { items: [], info: { hasMore: boolean } }
-const response = await fetchWithRetry(...) as { items?: ReplyContact[]; info?: { hasMore?: boolean } };
-const contacts = response.items || [];
-hasMore = response.info?.hasMore || false;
-```
+---
 
 ### Solution
 
-#### Fix 1: Register Edge Functions in config.toml
-Add the missing function entries to `supabase/config.toml`:
+#### Fix 1: Add Unique Constraint to `synced_sequences`
 
-```toml
-[functions.sync-reply-contacts]
-verify_jwt = true
+Create a database migration to add the missing constraint:
 
-[functions.sync-reply-sequences]
-verify_jwt = true
+```sql
+ALTER TABLE synced_sequences
+ADD CONSTRAINT synced_sequences_campaign_step_unique 
+UNIQUE (campaign_id, step_number);
 ```
 
-#### Fix 2: Correct Response Parsing in sync-reply-sequences
+#### Fix 2: Fix Step Number Mapping in Edge Function
 
-Update to parse the response as a direct array:
+Change from using a non-existent `step.number` field to using the array index:
+
 ```typescript
-// Fetch steps from Reply.io V3 API - returns direct array, not { steps: [] }
-const steps = await fetchWithRetry(endpoint, apiKey, replyTeamId || undefined) as ReplyStep[];
-console.log(`Fetched ${steps.length} steps from Reply.io`);
+// BEFORE (broken):
+for (const step of steps) {
+  step_number: step.number,  // undefined!
+}
+
+// AFTER (fixed):
+for (let i = 0; i < steps.length; i++) {
+  const step = steps[i];
+  const stepNumber = i + 1;  // Use array index + 1
+  // ...
+  step_number: stepNumber,
+}
 ```
 
-#### Fix 3: Correct Response Parsing in sync-reply-contacts
+#### Fix 3: Update onConflict for Sequences
 
-Update to use `items` and `info.hasMore`:
+After adding the constraint, use a more specific conflict target that includes `external_sequence_id`:
+
 ```typescript
-const response = await fetchWithRetry(endpoint, apiKey, replyTeamId || undefined) as { 
-  items?: ReplyContact[]; 
-  info?: { hasMore?: boolean } 
-};
-
-const contacts = response.items || [];
-allContacts = [...allContacts, ...contacts];
-
-hasMore = response.info?.hasMore || false;
+.upsert({
+  campaign_id: campaignId,
+  external_sequence_id: String(step.id),
+  step_number: stepNumber,
+  // ...
+}, {
+  onConflict: "campaign_id,step_number",
+})
 ```
+
+---
 
 ### Files to Modify
 
 | File | Changes |
 |------|---------|
-| `supabase/config.toml` | Add `sync-reply-contacts` and `sync-reply-sequences` function entries |
-| `supabase/functions/sync-reply-sequences/index.ts` | Fix response parsing (array not object) |
-| `supabase/functions/sync-reply-contacts/index.ts` | Fix response parsing (`items` not `contacts`, `info.hasMore` not `hasMore`) |
+| Database Migration | Add unique constraint `(campaign_id, step_number)` to `synced_sequences` |
+| `supabase/functions/sync-reply-sequences/index.ts` | Use array index for step_number instead of undefined `step.number` |
 
-### Post-Fix Testing Steps
+---
 
-1. **Re-deploy edge functions** (automatic after file changes)
-2. **Re-sync campaigns** from the Playground tab to update statuses
-3. **Navigate to Copy tab** and select a campaign to sync sequence steps
-4. **Navigate to People tab** and select a campaign to sync contacts
+### Expected Result After Fix
 
-### Expected Results After Fix
-
-| Feature | Before | After |
-|---------|--------|-------|
-| Campaign statuses | "unknown" for some campaigns | Correct: "active", "paused", "finished" |
-| Copy/Sequences sync | "Fetched 0 steps" | Actual email templates synced |
-| Contacts sync | "Fetched 0 contacts" | Actual contacts synced |
+| Metric | Before | After |
+|--------|--------|-------|
+| Steps synced | 0 synced, 6 failed | 6 synced, 0 failed |
+| Copy Tab | Empty | Shows email templates |
+| Error logs | "no unique constraint" | Clean sync logs |
 
