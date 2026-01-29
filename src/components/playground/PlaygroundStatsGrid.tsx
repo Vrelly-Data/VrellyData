@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { usePlaygroundStats } from '@/hooks/usePlaygroundStats';
 import { useChannelMetrics } from '@/hooks/useChannelMetrics';
 import { Send, MessageSquare, Users, Zap, Target, Clock, Loader2, Mail, Linkedin } from 'lucide-react';
@@ -100,99 +101,138 @@ export function PlaygroundStatsGrid() {
   const linkedinReplies = stats?.linkedinReplies ?? 0;
   const hasWebhookData = linkedinMessagesSent > 0 || linkedinConnectionsSent > 0 || linkedinConnectionsAccepted > 0 || linkedinReplies > 0;
 
+  // Calculate percentage rates
+  const connectionAcceptanceRate = linkedinConnectionsSent > 0 
+    ? ((linkedinConnectionsAccepted / linkedinConnectionsSent) * 100).toFixed(1)
+    : null;
+
+  const linkedinReplyRate = linkedinMessagesSent > 0
+    ? ((linkedinReplies / linkedinMessagesSent) * 100).toFixed(1)
+    : null;
+
   // Check if we have LinkedIn steps from the channel metrics hook
   const hasLinkedInSteps = channelMetrics && channelMetrics.totalLinkedInSteps > 0;
 
   const messagesTooltipContent = (
-    <div className="space-y-2 text-sm">
-      <p className="font-medium text-foreground border-b pb-1">Messages Breakdown</p>
-      <div className="space-y-1">
-        <div className="flex items-center justify-between gap-4">
-          <span className="flex items-center gap-1.5 text-muted-foreground">
-            <Mail className="h-3.5 w-3.5" />
-            Emails Sent:
-          </span>
-          <span className="font-medium">{emailsDelivered.toLocaleString()}</span>
-        </div>
-        <div className="flex items-center justify-between gap-4">
-          <span className="flex items-center gap-1.5 text-muted-foreground">
-            <Linkedin className="h-3.5 w-3.5" />
-            LinkedIn Messages:
-          </span>
-          <span className="font-medium">
-            {hasWebhookData ? linkedinMessagesSent.toLocaleString() : 'Not tracked'}
-          </span>
-        </div>
-        <div className="flex items-center justify-between gap-4">
-          <span className="flex items-center gap-1.5 text-muted-foreground">
-            <Linkedin className="h-3.5 w-3.5" />
-            Connection Requests:
-          </span>
-          <span className="font-medium">
-            {hasWebhookData ? linkedinConnectionsSent.toLocaleString() : 'Not tracked'}
-          </span>
-        </div>
-        <div className="flex items-center justify-between gap-4">
-          <span className="flex items-center gap-1.5 text-muted-foreground">
-            <Linkedin className="h-3.5 w-3.5" />
-            Connections Accepted:
-          </span>
-          <span className="font-medium">
-            {hasWebhookData ? linkedinConnectionsAccepted.toLocaleString() : 'Not tracked'}
-          </span>
-        </div>
-        {linkedinCampaignCount > 0 && !hasWebhookData && (
-          <div className="flex items-center justify-between gap-4 pt-1 border-t">
+    <TooltipProvider>
+      <div className="space-y-2 text-sm">
+        <p className="font-medium text-foreground border-b pb-1">Messages Breakdown</p>
+        <div className="space-y-1">
+          <div className="flex items-center justify-between gap-4">
             <span className="flex items-center gap-1.5 text-muted-foreground">
-              LinkedIn-only Campaigns:
+              <Mail className="h-3.5 w-3.5" />
+              Emails Sent:
             </span>
-            <span className="font-medium">{linkedinCampaignCount}</span>
+            <span className="font-medium">{emailsDelivered.toLocaleString()}</span>
           </div>
+          <div className="flex items-center justify-between gap-4">
+            <span className="flex items-center gap-1.5 text-muted-foreground">
+              <Linkedin className="h-3.5 w-3.5" />
+              LinkedIn Messages:
+            </span>
+            <span className="font-medium">
+              {hasWebhookData ? linkedinMessagesSent.toLocaleString() : 'Not tracked'}
+            </span>
+          </div>
+          <div className="flex items-center justify-between gap-4">
+            <span className="flex items-center gap-1.5 text-muted-foreground">
+              <Linkedin className="h-3.5 w-3.5" />
+              Connection Requests:
+            </span>
+            <span className="font-medium">
+              {hasWebhookData ? linkedinConnectionsSent.toLocaleString() : 'Not tracked'}
+            </span>
+          </div>
+          <div className="flex items-center justify-between gap-4">
+            <span className="flex items-center gap-1.5 text-muted-foreground">
+              <Linkedin className="h-3.5 w-3.5" />
+              Connections Accepted:
+            </span>
+            {connectionAcceptanceRate && hasWebhookData ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="font-medium cursor-help underline decoration-dotted underline-offset-2">
+                    {linkedinConnectionsAccepted.toLocaleString()}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {connectionAcceptanceRate}% acceptance rate
+                </TooltipContent>
+              </Tooltip>
+            ) : (
+              <span className="font-medium">
+                {hasWebhookData ? linkedinConnectionsAccepted.toLocaleString() : 'Not tracked'}
+              </span>
+            )}
+          </div>
+          {linkedinCampaignCount > 0 && !hasWebhookData && (
+            <div className="flex items-center justify-between gap-4 pt-1 border-t">
+              <span className="flex items-center gap-1.5 text-muted-foreground">
+                LinkedIn-only Campaigns:
+              </span>
+              <span className="font-medium">{linkedinCampaignCount}</span>
+            </div>
+          )}
+        </div>
+        {hasWebhookData ? (
+          <p className="text-xs text-green-600 pt-1 border-t flex items-center gap-1">
+            <Zap className="h-3 w-3" /> Real-time via webhooks
+          </p>
+        ) : (
+          <p className="text-xs text-muted-foreground pt-1 border-t">
+            Enable webhooks for LinkedIn tracking
+          </p>
         )}
       </div>
-      {hasWebhookData ? (
-        <p className="text-xs text-green-600 pt-1 border-t flex items-center gap-1">
-          <Zap className="h-3 w-3" /> Real-time via webhooks
-        </p>
-      ) : (
-        <p className="text-xs text-muted-foreground pt-1 border-t">
-          Enable webhooks for LinkedIn tracking
-        </p>
-      )}
-    </div>
+    </TooltipProvider>
   );
 
   const repliesTooltipContent = (
-    <div className="space-y-2 text-sm">
-      <p className="font-medium text-foreground border-b pb-1">Replies Breakdown</p>
-      <div className="space-y-1">
-        <div className="flex items-center justify-between gap-4">
-          <span className="flex items-center gap-1.5 text-muted-foreground">
-            <Mail className="h-3.5 w-3.5" />
-            Email Replies:
-          </span>
-          <span className="font-medium">{emailReplies.toLocaleString()}</span>
+    <TooltipProvider>
+      <div className="space-y-2 text-sm">
+        <p className="font-medium text-foreground border-b pb-1">Replies Breakdown</p>
+        <div className="space-y-1">
+          <div className="flex items-center justify-between gap-4">
+            <span className="flex items-center gap-1.5 text-muted-foreground">
+              <Mail className="h-3.5 w-3.5" />
+              Email Replies:
+            </span>
+            <span className="font-medium">{emailReplies.toLocaleString()}</span>
+          </div>
+          <div className="flex items-center justify-between gap-4">
+            <span className="flex items-center gap-1.5 text-muted-foreground">
+              <Linkedin className="h-3.5 w-3.5" />
+              LinkedIn Replies:
+            </span>
+            {linkedinReplyRate && hasWebhookData ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="font-medium cursor-help underline decoration-dotted underline-offset-2">
+                    {linkedinReplies.toLocaleString()}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {linkedinReplyRate}% reply rate
+                </TooltipContent>
+              </Tooltip>
+            ) : (
+              <span className="font-medium">
+                {hasWebhookData ? linkedinReplies.toLocaleString() : 'Not tracked'}
+              </span>
+            )}
+          </div>
         </div>
-        <div className="flex items-center justify-between gap-4">
-          <span className="flex items-center gap-1.5 text-muted-foreground">
-            <Linkedin className="h-3.5 w-3.5" />
-            LinkedIn Replies:
-          </span>
-          <span className="font-medium">
-            {hasWebhookData ? linkedinReplies.toLocaleString() : 'Not tracked'}
-          </span>
-        </div>
+        {hasWebhookData ? (
+          <p className="text-xs text-green-600 pt-1 border-t flex items-center gap-1">
+            <Zap className="h-3 w-3" /> Real-time via webhooks
+          </p>
+        ) : (
+          <p className="text-xs text-muted-foreground pt-1 border-t">
+            Enable webhooks for LinkedIn tracking
+          </p>
+        )}
       </div>
-      {hasWebhookData ? (
-        <p className="text-xs text-green-600 pt-1 border-t flex items-center gap-1">
-          <Zap className="h-3 w-3" /> Real-time via webhooks
-        </p>
-      ) : (
-        <p className="text-xs text-muted-foreground pt-1 border-t">
-          Enable webhooks for LinkedIn tracking
-        </p>
-      )}
-    </div>
+    </TooltipProvider>
   );
 
   return (
