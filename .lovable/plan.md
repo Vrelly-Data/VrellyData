@@ -1,119 +1,77 @@
 
 
-## Add Hover Tooltips with Percentage Rates
+## Fix Active Campaigns Count
 
-### What You're Asking For
+### Problem Analysis
 
-Inside the "Total Messages Sent" and "Total Replies" popovers, add hover tooltips to specific metrics that show conversion percentages:
+**What the data shows:**
+| Campaign Name | Status | is_linked |
+|---------------|--------|-----------|
+| HVAC campaign | paused | ✅ true |
+| Plumbing Campaign | paused | ✅ true |
+| Business owners... Advertising | finished | ✅ true |
+| Business owners... Copy | finished | ✅ true |
+| Already connected agency owners | archived | ✅ true |
+| Business owners no connect message | finished | ✅ true |
+| Various CSV imports... | imported | ❌ false |
 
-| Metric | Hover Shows |
-|--------|-------------|
-| Connections Accepted | `X% acceptance rate` (accepted / requests sent) |
-| LinkedIn Replies | `X% reply rate` (replies / messages sent) |
+**Two issues identified:**
+
+1. **Stats query doesn't filter by `is_linked`** - Currently counting ALL campaigns including CSV import duplicates
+2. **No campaigns have `active` status** - Your campaigns are correctly showing `paused`/`finished` because that's their actual Reply.io status
 
 ---
 
-### Visual Example
+### Solution Options
 
-**Before** (just numbers):
-```
-Connections Accepted:    42
-LinkedIn Replies:        15
-```
+**Option A: Fix the filter only (minimal change)**
+- Add `is_linked = true` filter to the stats query
+- Keep "Active Campaigns" showing only truly active campaigns (status = 'active')
+- Current behavior is technically correct (0 active = 0 running)
 
-**After** (numbers with hover for percentages):
-```
-Connections Accepted:    42  ← hover → "58.3% acceptance rate"
-LinkedIn Replies:        15  ← hover → "12.5% reply rate"
-```
+**Option B: Show "Running Campaigns" instead**
+- Rename to "Running Campaigns" 
+- Count campaigns that are either `active` OR `paused` (still have people in queue)
+- Excludes `finished`, `archived`, `completed`, `stopped`
+
+**Recommended: Option A + B combined**
+- Filter by `is_linked`
+- Count `active` + `paused` as "running" (shows campaigns that are operational)
+- This gives you a non-zero, meaningful number
 
 ---
 
 ### Implementation Details
 
-**File**: `src/components/playground/PlaygroundStatsGrid.tsx`
+**File**: `src/hooks/usePlaygroundStats.ts`
 
-1. **Import Tooltip components** (already available in the project)
-2. **Calculate percentages**:
-   - Acceptance rate: `(linkedinConnectionsAccepted / linkedinConnectionsSent) * 100`
-   - LinkedIn reply rate: `(linkedinReplies / linkedinMessagesSent) * 100`
-3. **Wrap the value spans** in the popover content with `Tooltip` components
-4. **Handle edge cases**: Show "N/A" or skip tooltip when denominator is 0
+**Change 1: Filter by `is_linked`**
+```typescript
+const { data: campaigns, error: campaignsError } = await supabase
+  .from('synced_campaigns')
+  .select('id, status, stats')
+  .eq('is_linked', true);  // ADD THIS FILTER
+```
+
+**Change 2: Count "running" campaigns (active + paused)**
+```typescript
+// Count campaigns that are still running (active or paused)
+const runningStatuses = ['active', 'paused'];
+if (runningStatuses.includes(campaign.status?.toLowerCase() || '')) {
+  activeCampaigns++;
+}
+```
 
 ---
 
-### Technical Changes
+### UI Consideration (Optional)
 
-**Add Tooltip imports**:
-```typescript
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-```
+To make it clearer what "Active" means, we could also update the card label:
 
-**Calculate percentages**:
-```typescript
-const connectionAcceptanceRate = linkedinConnectionsSent > 0 
-  ? ((linkedinConnectionsAccepted / linkedinConnectionsSent) * 100).toFixed(1)
-  : null;
-
-const linkedinReplyRate = linkedinMessagesSent > 0
-  ? ((linkedinReplies / linkedinMessagesSent) * 100).toFixed(1)
-  : null;
-```
-
-**Update Connections Accepted row**:
-```typescript
-<div className="flex items-center justify-between gap-4">
-  <span className="flex items-center gap-1.5 text-muted-foreground">
-    <Linkedin className="h-3.5 w-3.5" />
-    Connections Accepted:
-  </span>
-  {connectionAcceptanceRate ? (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span className="font-medium cursor-help underline decoration-dotted">
-          {linkedinConnectionsAccepted.toLocaleString()}
-        </span>
-      </TooltipTrigger>
-      <TooltipContent>
-        {connectionAcceptanceRate}% acceptance rate
-      </TooltipContent>
-    </Tooltip>
-  ) : (
-    <span className="font-medium">
-      {hasWebhookData ? linkedinConnectionsAccepted.toLocaleString() : 'Not tracked'}
-    </span>
-  )}
-</div>
-```
-
-**Update LinkedIn Replies row** (in the replies popover):
-```typescript
-<div className="flex items-center justify-between gap-4">
-  <span className="flex items-center gap-1.5 text-muted-foreground">
-    <Linkedin className="h-3.5 w-3.5" />
-    LinkedIn Replies:
-  </span>
-  {linkedinReplyRate ? (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span className="font-medium cursor-help underline decoration-dotted">
-          {linkedinReplies.toLocaleString()}
-        </span>
-      </TooltipTrigger>
-      <TooltipContent>
-        {linkedinReplyRate}% reply rate
-      </TooltipContent>
-    </Tooltip>
-  ) : (
-    <span className="font-medium">
-      {hasWebhookData ? linkedinReplies.toLocaleString() : 'Not tracked'}
-    </span>
-  )}
-</div>
-```
-
-**Wrap popover content in TooltipProvider**:
-The tooltip content needs to be wrapped in a `TooltipProvider` for the nested tooltips to work inside the popover.
+| Current | Proposed |
+|---------|----------|
+| "Active Campaigns" | "Running Campaigns" (or keep as-is) |
+| Description: "Currently running" | Description: "Active or paused" |
 
 ---
 
@@ -121,18 +79,15 @@ The tooltip content needs to be wrapped in a `TooltipProvider` for the nested to
 
 | File | Changes |
 |------|---------|
-| `src/components/playground/PlaygroundStatsGrid.tsx` | Add Tooltip imports, calculate rates, wrap metric values with hover tooltips |
+| `src/hooks/usePlaygroundStats.ts` | Add `is_linked` filter, count `active` + `paused` as running |
 
 ---
 
 ### Expected Result
 
-| Interaction | Before | After |
-|-------------|--------|-------|
-| Click "Total Messages Sent" card | Popover opens with breakdown | Same |
-| Hover over "Connections Accepted" number | Nothing | Tooltip shows "58.3% acceptance rate" |
-| Click "Total Replies" card | Popover opens with breakdown | Same |
-| Hover over "LinkedIn Replies" number | Nothing | Tooltip shows "12.5% reply rate" |
-
-The numbers will have a subtle dotted underline to indicate they're hoverable.
+| Before | After |
+|--------|-------|
+| 0 Active Campaigns | 2 Active Campaigns (HVAC + Plumbing) |
+| Counting all campaigns including CSV duplicates | Only counting linked campaigns |
+| Strict "active" status only | Includes "paused" (still operational) |
 
