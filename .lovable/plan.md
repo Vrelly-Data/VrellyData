@@ -1,76 +1,119 @@
 
 
-## Change Stat Card Breakdowns from Hover to Click
+## Add Hover Tooltips with Percentage Rates
 
 ### What You're Asking For
 
-Currently, the "Total Messages Sent" and "Total Replies" stat cards show their detailed breakdowns (Email vs LinkedIn metrics) when you **hover** over them. You want to change this to show the breakdowns when users **click** on the cards instead.
+Inside the "Total Messages Sent" and "Total Replies" popovers, add hover tooltips to specific metrics that show conversion percentages:
+
+| Metric | Hover Shows |
+|--------|-------------|
+| Connections Accepted | `X% acceptance rate` (accepted / requests sent) |
+| LinkedIn Replies | `X% reply rate` (replies / messages sent) |
 
 ---
 
-### Current vs Proposed Behavior
+### Visual Example
 
-| Card | Current Behavior | Proposed Behavior |
-|------|------------------|-------------------|
-| Total Messages Sent | Hover shows tooltip with breakdown | Click opens dialog/popover with breakdown |
-| Total Replies | Hover shows tooltip with breakdown | Click opens dialog/popover with breakdown |
-| Total Contacts | Click opens contacts dialog | No change |
-| Active Campaigns | Click opens campaigns dialog | No change |
+**Before** (just numbers):
+```
+Connections Accepted:    42
+LinkedIn Replies:        15
+```
+
+**After** (numbers with hover for percentages):
+```
+Connections Accepted:    42  ← hover → "58.3% acceptance rate"
+LinkedIn Replies:        15  ← hover → "12.5% reply rate"
+```
 
 ---
 
-### Implementation Approach
+### Implementation Details
 
-Replace the `Tooltip` component with a `Popover` component for these two cards. The popover:
-- Opens on click (not hover)
-- Shows the same breakdown content
-- Can be dismissed by clicking outside or clicking again
+**File**: `src/components/playground/PlaygroundStatsGrid.tsx`
+
+1. **Import Tooltip components** (already available in the project)
+2. **Calculate percentages**:
+   - Acceptance rate: `(linkedinConnectionsAccepted / linkedinConnectionsSent) * 100`
+   - LinkedIn reply rate: `(linkedinReplies / linkedinMessagesSent) * 100`
+3. **Wrap the value spans** in the popover content with `Tooltip` components
+4. **Handle edge cases**: Show "N/A" or skip tooltip when denominator is 0
 
 ---
 
 ### Technical Changes
 
-**File**: `src/components/playground/PlaygroundStatsGrid.tsx`
-
-1. **Add Popover imports** from `@/components/ui/popover`
-2. **Update StatCard component** to accept a `popoverContent` prop instead of `tooltipContent`
-3. **Wrap card in Popover** when `popoverContent` is provided
-4. **Update the two stat cards** to use the new popover-based interaction
-
-**Updated StatCard Logic:**
+**Add Tooltip imports**:
 ```typescript
-interface StatCardProps {
-  // ... existing props
-  popoverContent?: React.ReactNode;  // NEW: replaces tooltipContent
-}
-
-function StatCard({ ..., popoverContent }: StatCardProps) {
-  if (popoverContent) {
-    return (
-      <Popover>
-        <PopoverTrigger asChild>
-          {cardContent}
-        </PopoverTrigger>
-        <PopoverContent side="bottom" className="w-72">
-          {popoverContent}
-        </PopoverContent>
-      </Popover>
-    );
-  }
-  // ... rest of existing logic
-}
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 ```
 
-**Updated Card Usage:**
+**Calculate percentages**:
 ```typescript
-<StatCard
-  title="Total Messages Sent"
-  value={stats?.totalMessagesSent.toLocaleString() ?? 0}
-  icon={<Send className="h-5 w-5 text-primary" />}
-  description="Across all campaigns"
-  popoverContent={messagesTooltipContent}  // Changed from tooltipContent
-/>
+const connectionAcceptanceRate = linkedinConnectionsSent > 0 
+  ? ((linkedinConnectionsAccepted / linkedinConnectionsSent) * 100).toFixed(1)
+  : null;
+
+const linkedinReplyRate = linkedinMessagesSent > 0
+  ? ((linkedinReplies / linkedinMessagesSent) * 100).toFixed(1)
+  : null;
 ```
+
+**Update Connections Accepted row**:
+```typescript
+<div className="flex items-center justify-between gap-4">
+  <span className="flex items-center gap-1.5 text-muted-foreground">
+    <Linkedin className="h-3.5 w-3.5" />
+    Connections Accepted:
+  </span>
+  {connectionAcceptanceRate ? (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="font-medium cursor-help underline decoration-dotted">
+          {linkedinConnectionsAccepted.toLocaleString()}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>
+        {connectionAcceptanceRate}% acceptance rate
+      </TooltipContent>
+    </Tooltip>
+  ) : (
+    <span className="font-medium">
+      {hasWebhookData ? linkedinConnectionsAccepted.toLocaleString() : 'Not tracked'}
+    </span>
+  )}
+</div>
+```
+
+**Update LinkedIn Replies row** (in the replies popover):
+```typescript
+<div className="flex items-center justify-between gap-4">
+  <span className="flex items-center gap-1.5 text-muted-foreground">
+    <Linkedin className="h-3.5 w-3.5" />
+    LinkedIn Replies:
+  </span>
+  {linkedinReplyRate ? (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="font-medium cursor-help underline decoration-dotted">
+          {linkedinReplies.toLocaleString()}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>
+        {linkedinReplyRate}% reply rate
+      </TooltipContent>
+    </Tooltip>
+  ) : (
+    <span className="font-medium">
+      {hasWebhookData ? linkedinReplies.toLocaleString() : 'Not tracked'}
+    </span>
+  )}
+</div>
+```
+
+**Wrap popover content in TooltipProvider**:
+The tooltip content needs to be wrapped in a `TooltipProvider` for the nested tooltips to work inside the popover.
 
 ---
 
@@ -78,15 +121,18 @@ function StatCard({ ..., popoverContent }: StatCardProps) {
 
 | File | Changes |
 |------|---------|
-| `src/components/playground/PlaygroundStatsGrid.tsx` | Replace Tooltip with Popover for breakdown cards |
+| `src/components/playground/PlaygroundStatsGrid.tsx` | Add Tooltip imports, calculate rates, wrap metric values with hover tooltips |
 
 ---
 
 ### Expected Result
 
-| Before | After |
-|--------|-------|
-| Hover over card → tooltip appears | Click card → popover opens |
-| Tooltip disappears when mouse leaves | Popover stays open until clicked away |
-| Harder to read on mobile/touch devices | Works properly on touch devices |
+| Interaction | Before | After |
+|-------------|--------|-------|
+| Click "Total Messages Sent" card | Popover opens with breakdown | Same |
+| Hover over "Connections Accepted" number | Nothing | Tooltip shows "58.3% acceptance rate" |
+| Click "Total Replies" card | Popover opens with breakdown | Same |
+| Hover over "LinkedIn Replies" number | Nothing | Tooltip shows "12.5% reply rate" |
+
+The numbers will have a subtle dotted underline to indicate they're hoverable.
 
