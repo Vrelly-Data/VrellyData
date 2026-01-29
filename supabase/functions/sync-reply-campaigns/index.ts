@@ -42,7 +42,7 @@ interface ReplyioCampaign {
   };
 }
 
-// Reply.io returns status as integers: 0=draft, 1=active, 2=paused, 3=completed, 4=archived
+// Reply.io returns status as integers: 0=draft, 1=active, 2=paused, 3=completed, 4=archived, 5=stopped, 6=error, 7=finished
 function normalizeStatus(status: unknown): string {
   if (typeof status === 'string') {
     return status.toLowerCase();
@@ -54,6 +54,9 @@ function normalizeStatus(status: unknown): string {
       2: 'paused',
       3: 'completed',
       4: 'archived',
+      5: 'stopped',
+      6: 'error',
+      7: 'finished',
     };
     return statusMap[status] || 'unknown';
   }
