@@ -16,6 +16,7 @@ export interface PlaygroundStats {
   // LinkedIn-specific metrics from webhooks
   linkedinMessagesSent: number;
   linkedinConnectionsSent: number;
+  linkedinConnectionsAccepted: number;
   linkedinReplies: number;
 }
 
@@ -54,6 +55,7 @@ export function usePlaygroundStats() {
       // LinkedIn metrics from webhooks
       let linkedinMessagesSent = 0;
       let linkedinConnectionsSent = 0;
+      let linkedinConnectionsAccepted = 0;
       let linkedinReplies = 0;
 
       campaigns?.forEach((campaign) => {
@@ -76,6 +78,7 @@ export function usePlaygroundStats() {
           // LinkedIn metrics from webhooks
           linkedinMessagesSent += stats.linkedinMessagesSent || 0;
           linkedinConnectionsSent += stats.linkedinConnectionsSent || 0;
+          linkedinConnectionsAccepted += stats.linkedinConnectionsAccepted || 0;
           linkedinReplies += stats.linkedinReplies || 0;
           
           // Identify LinkedIn-focused campaigns (have people but no email deliveries)
@@ -110,6 +113,7 @@ export function usePlaygroundStats() {
         linkedinCampaignCount,
         linkedinMessagesSent,
         linkedinConnectionsSent,
+        linkedinConnectionsAccepted,
         linkedinReplies,
       };
     },
