@@ -24,10 +24,11 @@ export function usePlaygroundStats() {
   return useQuery({
     queryKey: ['playground-stats'],
     queryFn: async (): Promise<PlaygroundStats> => {
-      // Fetch campaigns
+      // Fetch campaigns - only linked ones (excludes CSV import duplicates)
       const { data: campaigns, error: campaignsError } = await supabase
         .from('synced_campaigns')
-        .select('id, status, stats');
+        .select('id, status, stats')
+        .eq('is_linked', true);
 
       if (campaignsError) throw campaignsError;
 
@@ -86,7 +87,9 @@ export function usePlaygroundStats() {
             linkedinCampaignCount++;
           }
         }
-        if (campaign.status === 'active') {
+        // Count campaigns that are still running (active or paused)
+        const runningStatuses = ['active', 'paused'];
+        if (runningStatuses.includes(campaign.status?.toLowerCase() || '')) {
           activeCampaigns++;
         }
       });
