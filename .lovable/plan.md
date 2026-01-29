@@ -1,208 +1,105 @@
 
 
-## Data Playground Enhancements - Expanding Reply.io Sync Capabilities
+## Fix: Campaign Status, Contacts & Copy Sync Issues
 
-Based on my investigation, I've identified the issues and capabilities. Here's a comprehensive analysis and implementation plan.
+### Issues Identified
 
----
+#### Issue 1: Campaign Status Not Updating
+The edge function `sync-reply-campaigns` was updated with the new status mappings (including code 7 = "finished"), but the fix needs to be verified and possibly the campaigns need to be re-synced. The database shows campaigns with "unknown" status from the last sync.
 
-## Current State Analysis
+#### Issue 2: Edge Functions Not Registered in config.toml
+The new edge functions `sync-reply-contacts` and `sync-reply-sequences` are **NOT** registered in `supabase/config.toml`. This means they may have JWT verification enabled by default and could fail authentication.
 
-### 1. Campaign Status Issue (0 Active Campaigns)
+```toml
+# Missing from config.toml:
+[functions.sync-reply-contacts]
+verify_jwt = true
 
-**Root Cause Found**: Reply.io is returning status code `7` for some campaigns, which isn't mapped in the current status normalizer. The current code only handles:
-- 0 = draft
-- 1 = active
-- 2 = paused
-- 3 = completed
-- 4 = archived
-
-Status `7` is being stored as "unknown" in the database:
-
-| Campaign | Raw Status | Stored Status |
-|----------|------------|---------------|
-| HVAC campaign | 2 | paused |
-| Business owners no connect message | 7 | unknown |
-
-**Fix**: Update the status mapping to handle all Reply.io status codes including `7` (which likely means "finished" or "stopped").
-
-### 2. Contacts via API - YES, Fully Supported
-
-Reply.io V3 API provides a dedicated endpoint to fetch contacts per sequence:
-```
-GET /v3/sequences/{id}/contacts/extended
+[functions.sync-reply-sequences]
+verify_jwt = true
 ```
 
-Returns detailed contact data including:
-- email, firstName, lastName, title
-- Current step in sequence
-- Status (Active, Finished, Replied, Bounced, Opened, Clicked)
-- addedAt timestamp
-- lastStepCompletedAt
+#### Issue 3: Wrong Response Parsing in Edge Functions
 
-**Current State**: The `synced_contacts` table exists but is **empty** - the sync function doesn't fetch contacts yet.
-
-### 3. Copy/Templates via API - YES, Fully Supported
-
-Reply.io V3 API provides sequence steps with full template content:
-```
-GET /v3/sequences/{id}/steps
-```
-
-Returns for each step:
-- type (Email, LinkedIn Message, LinkedIn Connect, Call, SMS, WhatsApp, etc.)
-- templates array with:
-  - subject
-  - body (HTML content)
-  - id and templateId
-- delayInMinutes
-- executionMode (Automatic/Manual)
-
-**Current State**: The `synced_sequences` table exists but is **empty** - the sync function doesn't fetch steps yet.
-
-### 4. Completion Rate Calculation
-
-**Current Logic** (in `usePlaygroundStats.ts`):
+**sync-reply-sequences** (Line 148):
 ```typescript
-completionPercentage = (totalPeopleFinished / totalPeopleCount) * 100
+// WRONG: expects { steps: [] }
+const response = await fetchWithRetry(...) as { steps?: ReplyStep[] };
+const steps = response.steps || [];
+
+// CORRECT: Reply.io returns a plain array
+const steps = await fetchWithRetry(...) as ReplyStep[];
 ```
 
-This is correct - it uses Reply.io's `peopleFinished` and `peopleCount` fields. However, accuracy depends on the API returning accurate values (which you mentioned may have issues with Reply.io's own dashboard).
-
----
-
-## Implementation Plan
-
-### Phase 1: Fix Campaign Status Mapping
-
-**File**: `supabase/functions/sync-reply-campaigns/index.ts`
-
-Update the `normalizeStatus` function to handle all Reply.io status codes:
+**sync-reply-contacts** (Line 143-145):
 ```typescript
-const statusMap: Record<number, string> = {
-  0: 'draft',
-  1: 'active',
-  2: 'paused',
-  3: 'completed',
-  4: 'archived',
-  5: 'stopped',
-  6: 'error',
-  7: 'finished',  // Add this mapping
+// WRONG: expects { contacts: [], hasMore: boolean }
+const response = await fetchWithRetry(...) as { contacts?: ReplyContact[]; hasMore?: boolean };
+const contacts = response.contacts || [];
+
+// CORRECT: Reply.io returns { items: [], info: { hasMore: boolean } }
+const response = await fetchWithRetry(...) as { items?: ReplyContact[]; info?: { hasMore?: boolean } };
+const contacts = response.items || [];
+hasMore = response.info?.hasMore || false;
+```
+
+### Solution
+
+#### Fix 1: Register Edge Functions in config.toml
+Add the missing function entries to `supabase/config.toml`:
+
+```toml
+[functions.sync-reply-contacts]
+verify_jwt = true
+
+[functions.sync-reply-sequences]
+verify_jwt = true
+```
+
+#### Fix 2: Correct Response Parsing in sync-reply-sequences
+
+Update to parse the response as a direct array:
+```typescript
+// Fetch steps from Reply.io V3 API - returns direct array, not { steps: [] }
+const steps = await fetchWithRetry(endpoint, apiKey, replyTeamId || undefined) as ReplyStep[];
+console.log(`Fetched ${steps.length} steps from Reply.io`);
+```
+
+#### Fix 3: Correct Response Parsing in sync-reply-contacts
+
+Update to use `items` and `info.hasMore`:
+```typescript
+const response = await fetchWithRetry(endpoint, apiKey, replyTeamId || undefined) as { 
+  items?: ReplyContact[]; 
+  info?: { hasMore?: boolean } 
 };
+
+const contacts = response.items || [];
+allContacts = [...allContacts, ...contacts];
+
+hasMore = response.info?.hasMore || false;
 ```
 
-### Phase 2: Sync Contacts from Reply.io
+### Files to Modify
 
-**New Approach**: Create a separate "deep sync" function for contacts to avoid timeout issues. The main fast sync handles campaign metadata; contacts are synced on-demand per campaign.
+| File | Changes |
+|------|---------|
+| `supabase/config.toml` | Add `sync-reply-contacts` and `sync-reply-sequences` function entries |
+| `supabase/functions/sync-reply-sequences/index.ts` | Fix response parsing (array not object) |
+| `supabase/functions/sync-reply-contacts/index.ts` | Fix response parsing (`items` not `contacts`, `info.hasMore` not `hasMore`) |
 
-**File**: `supabase/functions/sync-reply-contacts/index.ts` (new)
+### Post-Fix Testing Steps
 
-Endpoint: `GET /v3/sequences/{sequenceId}/contacts/extended`
+1. **Re-deploy edge functions** (automatic after file changes)
+2. **Re-sync campaigns** from the Playground tab to update statuses
+3. **Navigate to Copy tab** and select a campaign to sync sequence steps
+4. **Navigate to People tab** and select a campaign to sync contacts
 
-Data mapping to `synced_contacts` table:
-| Reply.io Field | Database Column |
-|----------------|-----------------|
-| email | email |
-| firstName | first_name |
-| lastName | last_name |
-| title | job_title |
-| status.status | status |
-| status.replied, delivered, bounced, opened | engagement_data (JSONB) |
+### Expected Results After Fix
 
-### Phase 3: Sync Sequence Steps (Copy)
-
-**File**: `supabase/functions/sync-reply-sequences/index.ts` (new)
-
-Endpoint: `GET /v3/sequences/{sequenceId}/steps`
-
-Data mapping to `synced_sequences` table:
-| Reply.io Field | Database Column |
-|----------------|-----------------|
-| id | external_sequence_id |
-| type | step_type |
-| templates[0].subject | subject |
-| templates[0].body | body_html |
-| delayInMinutes | delay_days (convert) |
-
-### Phase 4: Build "Copy" Tab UI
-
-**File**: `src/components/playground/CopyTab.tsx` (new)
-
-Display synced email templates with:
-- Campaign name and step number
-- Subject line
-- Email body preview
-- Step type badge (Email, LinkedIn Message, etc.)
-- Option to copy or "remix" with AI
-
-### Phase 5: Build "People" Tab UI
-
-**File**: `src/components/playground/PeopleTab.tsx` (new)
-
-Display synced contacts with:
-- Contact details (name, email, company, title)
-- Campaign association
-- Engagement status (Active, Replied, Finished, Bounced)
-- Filters by campaign and status
-
----
-
-## Technical Architecture
-
-```text
-┌─────────────────────────────────────────────────────────────────┐
-│                     DATA PLAYGROUND                             │
-├─────────────────────────────────────────────────────────────────┤
-│ PLAYGROUND TAB                                                  │
-│   ├── IntegrationSetupCard (Sync button)                       │
-│   ├── PlaygroundStatsGrid (Overview metrics)                   │
-│   └── CampaignsTable (Campaign list)                           │
-├─────────────────────────────────────────────────────────────────┤
-│ COPY TAB (NEW)                                                  │
-│   ├── Sequence step browser                                     │
-│   ├── Email template viewer                                     │
-│   └── AI remix functionality                                    │
-├─────────────────────────────────────────────────────────────────┤
-│ PEOPLE TAB (NEW)                                                │
-│   ├── Contact list with pagination                              │
-│   ├── Campaign filter                                           │
-│   └── Engagement status badges                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## Files to Create/Modify
-
-| File | Action | Purpose |
-|------|--------|---------|
-| `supabase/functions/sync-reply-campaigns/index.ts` | Modify | Fix status mapping (add code 7) |
-| `supabase/functions/sync-reply-contacts/index.ts` | Create | Fetch contacts per campaign |
-| `supabase/functions/sync-reply-sequences/index.ts` | Create | Fetch email copy/steps per campaign |
-| `src/components/playground/CopyTab.tsx` | Create | Display synced email templates |
-| `src/components/playground/PeopleTab.tsx` | Create | Display synced contacts |
-| `src/hooks/useSyncedSequences.ts` | Create | Hook to fetch sequence data |
-| `src/pages/DataPlayground.tsx` | Modify | Wire up new tabs with real content |
-
----
-
-## Sync Strategy (Avoiding Timeouts)
-
-Given the 3-minute Edge Function timeout and potentially 1000+ contacts:
-
-1. **Fast Sync** (existing): Campaign metadata and stats only - runs quickly
-2. **Deep Sync** (new): Triggered per-campaign to fetch contacts and sequences
-3. **Background Sync**: For large accounts, batch process with continuation tokens
-
----
-
-## Expected Results After Implementation
-
-| Metric | Current | After Fix |
-|--------|---------|-----------|
-| Active Campaigns | 0 | Accurate count |
-| Total Contacts | Sum of peopleCount | Actual synced contacts |
-| Copy/Templates | Empty | Real email content |
-| People Tab | Placeholder | Full contact list |
-| Completion Rate | Based on peopleFinished | Same (depends on API accuracy) |
+| Feature | Before | After |
+|---------|--------|-------|
+| Campaign statuses | "unknown" for some campaigns | Correct: "active", "paused", "finished" |
+| Copy/Sequences sync | "Fetched 0 steps" | Actual email templates synced |
+| Contacts sync | "Fetched 0 contacts" | Actual contacts synced |
 
