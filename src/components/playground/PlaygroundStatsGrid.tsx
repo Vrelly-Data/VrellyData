@@ -96,8 +96,9 @@ export function PlaygroundStatsGrid() {
   // LinkedIn metrics from webhooks
   const linkedinMessagesSent = stats?.linkedinMessagesSent ?? 0;
   const linkedinConnectionsSent = stats?.linkedinConnectionsSent ?? 0;
+  const linkedinConnectionsAccepted = stats?.linkedinConnectionsAccepted ?? 0;
   const linkedinReplies = stats?.linkedinReplies ?? 0;
-  const hasWebhookData = linkedinMessagesSent > 0 || linkedinConnectionsSent > 0 || linkedinReplies > 0;
+  const hasWebhookData = linkedinMessagesSent > 0 || linkedinConnectionsSent > 0 || linkedinConnectionsAccepted > 0 || linkedinReplies > 0;
 
   // Check if we have LinkedIn steps from the channel metrics hook
   const hasLinkedInSteps = channelMetrics && channelMetrics.totalLinkedInSteps > 0;
@@ -129,6 +130,15 @@ export function PlaygroundStatsGrid() {
           </span>
           <span className="font-medium">
             {hasWebhookData ? linkedinConnectionsSent.toLocaleString() : 'Not tracked'}
+          </span>
+        </div>
+        <div className="flex items-center justify-between gap-4">
+          <span className="flex items-center gap-1.5 text-muted-foreground">
+            <Linkedin className="h-3.5 w-3.5" />
+            Connections Accepted:
+          </span>
+          <span className="font-medium">
+            {hasWebhookData ? linkedinConnectionsAccepted.toLocaleString() : 'Not tracked'}
           </span>
         </div>
         {linkedinCampaignCount > 0 && !hasWebhookData && (
