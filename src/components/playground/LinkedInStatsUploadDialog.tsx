@@ -28,7 +28,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Upload, FileSpreadsheet, Check, Plus, Loader2, Linkedin } from 'lucide-react';
-import { useSyncedCampaigns } from '@/hooks/useSyncedCampaigns';
+import { useSyncedCampaigns, findMatchingCampaign } from '@/hooks/useSyncedCampaigns';
 import { useLinkedInStatsUpload, LinkedInStatsRow } from '@/hooks/useLinkedInStatsUpload';
 
 interface LinkedInStatsUploadDialogProps {
@@ -175,7 +175,8 @@ export function LinkedInStatsUploadDialog({ open, onOpenChange }: LinkedInStatsU
   const [detectedActions, setDetectedActions] = useState<string[]>([]);
   const [unrecognizedActions, setUnrecognizedActions] = useState<string[]>([]);
 
-  const { data: campaigns = [] } = useSyncedCampaigns();
+  // Fetch ALL campaigns (not just linked) for better matching during CSV upload
+  const { data: campaigns = [] } = useSyncedCampaigns(false);
   const uploadMutation = useLinkedInStatsUpload();
 
   const resetDialog = useCallback(() => {
@@ -261,9 +262,8 @@ export function LinkedInStatsUploadDialog({ open, onOpenChange }: LinkedInStatsU
 
           // Convert Map to array, using Set sizes for counts
           stats = Array.from(campaignTracking.entries()).map(([campaignName, tracking]) => {
-            const matchedCampaign = campaigns.find(
-              c => c.name.toLowerCase() === campaignName.toLowerCase()
-            );
+            // Use fuzzy matching to find existing campaign
+            const matchedCampaign = findMatchingCampaign(campaigns, campaignName);
 
             return {
               campaignName,
@@ -297,9 +297,8 @@ export function LinkedInStatsUploadDialog({ open, onOpenChange }: LinkedInStatsU
             const linkedinConnectionsSent = connectionsCol ? parseNumber(row[connectionsCol]) : 0;
             const linkedinReplies = repliesCol ? parseNumber(row[repliesCol]) : 0;
 
-            const matchedCampaign = campaigns.find(
-              c => c.name.toLowerCase() === campaignName.toLowerCase()
-            );
+            // Use fuzzy matching to find existing campaign
+            const matchedCampaign = findMatchingCampaign(campaigns, campaignName);
 
             return {
               campaignName,

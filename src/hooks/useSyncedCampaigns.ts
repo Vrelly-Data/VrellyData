@@ -41,3 +41,33 @@ export function useSyncedCampaigns(onlyLinked: boolean = true) {
     },
   });
 }
+
+// Helper function to normalize campaign names for fuzzy matching
+export function normalizeForMatch(name: string): string {
+  return name
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, ' ')           // Normalize multiple spaces to single
+    .replace(/li\s?\+\s?email/gi, 'linkedin email')  // Normalize "LI + Email" variations
+    .replace(/[^\w\s]/g, '');       // Remove special characters
+}
+
+// Find best matching campaign using fuzzy matching
+export function findMatchingCampaign<T extends { name: string }>(
+  campaigns: T[],
+  csvCampaignName: string
+): T | undefined {
+  const normalizedCsv = normalizeForMatch(csvCampaignName);
+  
+  // First try exact normalized match
+  const exactMatch = campaigns.find(c => normalizeForMatch(c.name) === normalizedCsv);
+  if (exactMatch) return exactMatch;
+  
+  // Then try partial match (CSV name contains campaign name or vice versa)
+  const partialMatch = campaigns.find(c => {
+    const normalizedCampaign = normalizeForMatch(c.name);
+    return normalizedCsv.includes(normalizedCampaign) || normalizedCampaign.includes(normalizedCsv);
+  });
+  
+  return partialMatch;
+}
