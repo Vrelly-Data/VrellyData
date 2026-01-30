@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/hooks/use-toast';
+import { normalizeForMatch, findMatchingCampaign } from '@/hooks/useSyncedCampaigns';
 
 export interface LinkedInStatsRow {
   campaignName: string;
@@ -26,7 +27,7 @@ export function useLinkedInStatsUpload() {
         throw new Error('No campaigns to import');
       }
 
-      // Get user's team_id for creating new campaigns
+      // Get user's team_id
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('User not authenticated');
 
@@ -38,13 +39,12 @@ export function useLinkedInStatsUpload() {
 
       if (!membership?.team_id) throw new Error('No team found for user');
 
-      // Try to find an existing integration (optional)
-      const { data: integration } = await supabase
-        .from('outbound_integrations')
-        .select('id')
+      // Fetch ALL linked campaigns for matching (not just the ones in preview)
+      const { data: linkedCampaigns } = await supabase
+        .from('synced_campaigns')
+        .select('id, name, stats, is_linked')
         .eq('team_id', membership.team_id)
-        .eq('platform', 'reply')
-        .maybeSingle();
+        .eq('is_linked', true);
 
       // For "replace" mode, first clear ALL LinkedIn stats from all team campaigns
       if (mode === 'replace') {
@@ -87,18 +87,55 @@ export function useLinkedInStatsUpload() {
           linkedinDataUploadedAt: new Date().toISOString(),
         };
 
-        if (stat.matched && stat.campaignId) {
-          // UPDATE existing campaign
-          const { data: campaign, error: fetchError } = await supabase
+        // Try to find a matching LINKED campaign by name (fuzzy match)
+        const matchedLinkedCampaign = findMatchingCampaign(linkedCampaigns || [], stat.campaignName);
+
+        if (matchedLinkedCampaign) {
+          // UPDATE the linked campaign directly (not create a new row)
+          const existingStats = (matchedLinkedCampaign.stats as Record<string, unknown>) || {};
+          
+          let newLinkedinMessagesSent = stat.linkedinMessagesSent;
+          let newLinkedinConnectionsSent = stat.linkedinConnectionsSent;
+          let newLinkedinReplies = stat.linkedinReplies;
+          let newLinkedinConnectionsAccepted = stat.linkedinConnectionsAccepted;
+
+          if (mode === 'add') {
+            newLinkedinMessagesSent += (existingStats.linkedinMessagesSent as number) || 0;
+            newLinkedinConnectionsSent += (existingStats.linkedinConnectionsSent as number) || 0;
+            newLinkedinReplies += (existingStats.linkedinReplies as number) || 0;
+            newLinkedinConnectionsAccepted += (existingStats.linkedinConnectionsAccepted as number) || 0;
+          }
+
+          const mergedStats = {
+            ...existingStats,
+            linkedinMessagesSent: newLinkedinMessagesSent,
+            linkedinConnectionsSent: newLinkedinConnectionsSent,
+            linkedinReplies: newLinkedinReplies,
+            linkedinConnectionsAccepted: newLinkedinConnectionsAccepted,
+            linkedinDataSource: 'csv_upload',
+            linkedinDataUploadedAt: new Date().toISOString(),
+          };
+
+          const { error: updateError } = await supabase
+            .from('synced_campaigns')
+            .update({ 
+              stats: mergedStats,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', matchedLinkedCampaign.id);
+
+          if (updateError) {
+            console.error(`Error updating campaign ${matchedLinkedCampaign.name}:`, updateError);
+          } else {
+            updatedCount++;
+          }
+        } else if (stat.matched && stat.campaignId) {
+          // Fallback: use the campaignId from the dialog if it was pre-matched
+          const { data: campaign } = await supabase
             .from('synced_campaigns')
             .select('stats')
             .eq('id', stat.campaignId)
             .maybeSingle();
-
-          if (fetchError) {
-            console.error(`Error fetching campaign ${stat.campaignId}:`, fetchError);
-            continue;
-          }
 
           const existingStats = (campaign?.stats as Record<string, unknown>) || {};
           
@@ -138,23 +175,9 @@ export function useLinkedInStatsUpload() {
             updatedCount++;
           }
         } else {
-          // CREATE new campaign from CSV data
-          const { error: insertError } = await supabase
-            .from('synced_campaigns')
-            .insert({
-              team_id: membership.team_id,
-              integration_id: integration?.id || null,
-              external_campaign_id: `csv_import_${Date.now()}_${stat.campaignName.replace(/\s+/g, '_')}`,
-              name: stat.campaignName,
-              status: 'imported',
-              stats: linkedinStats,
-            });
-
-          if (insertError) {
-            console.error(`Error creating campaign ${stat.campaignName}:`, insertError);
-          } else {
-            createdCount++;
-          }
+          // No matching linked campaign found - skip creating orphan rows
+          // Log for debugging but don't create csv_import rows anymore
+          console.log(`No matching linked campaign found for: ${stat.campaignName} - skipping`);
         }
       }
 
@@ -168,9 +191,12 @@ export function useLinkedInStatsUpload() {
       if (updatedCount > 0) parts.push(`Updated ${updatedCount}`);
       if (createdCount > 0) parts.push(`Created ${createdCount}`);
       
+      const skipped = total - updatedCount - createdCount;
+      if (skipped > 0) parts.push(`${skipped} skipped (no matching campaign)`);
+      
       toast({
         title: 'LinkedIn Stats Imported',
-        description: parts.join(', ') + ` of ${total} campaigns`,
+        description: parts.join(', ') || 'No changes made',
       });
     },
     onError: (error) => {
