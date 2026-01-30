@@ -42,21 +42,19 @@ interface ReplyioCampaign {
   };
 }
 
-// Reply.io returns status as integers: 0=draft, 1=active, 2=paused, 3=completed, 4=archived, 5=stopped, 6=error, 7=finished
+// Reply.io v1 Campaign Status Codes (verified from API docs):
+// 0 = New/Draft, 2 = Active, 4 = Paused, 7 = Finished
+// NOTE: This differs from sequence status codes - campaigns use 2=active, 4=paused
 function normalizeStatus(status: unknown): string {
   if (typeof status === 'string') {
     return status.toLowerCase();
   }
   if (typeof status === 'number') {
     const statusMap: Record<number, string> = {
-      0: 'draft',
-      1: 'active',
-      2: 'paused',
-      3: 'completed',
-      4: 'archived',
-      5: 'stopped',
-      6: 'error',
-      7: 'finished',
+      0: 'draft',      // New campaign
+      2: 'active',     // Currently running
+      4: 'paused',     // Paused by user
+      7: 'finished',   // Completed
     };
     return statusMap[status] || 'unknown';
   }
