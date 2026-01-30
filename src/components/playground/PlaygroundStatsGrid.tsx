@@ -110,6 +110,10 @@ export function PlaygroundStatsGrid() {
     ? ((linkedinReplies / linkedinMessagesSent) * 100).toFixed(1)
     : null;
 
+  const emailReplyRate = emailsDelivered > 0
+    ? ((emailReplies / emailsDelivered) * 100).toFixed(1)
+    : null;
+
   // Check if we have LinkedIn steps from the channel metrics hook
   const hasLinkedInSteps = channelMetrics && channelMetrics.totalLinkedInSteps > 0;
 
@@ -197,7 +201,20 @@ export function PlaygroundStatsGrid() {
               <Mail className="h-3.5 w-3.5" />
               Email Replies:
             </span>
-            <span className="font-medium">{emailReplies.toLocaleString()}</span>
+            {emailReplyRate ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="font-medium cursor-help underline decoration-dotted underline-offset-2">
+                    {emailReplies.toLocaleString()}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {emailReplyRate}% reply rate
+                </TooltipContent>
+              </Tooltip>
+            ) : (
+              <span className="font-medium">{emailReplies.toLocaleString()}</span>
+            )}
           </div>
           <div className="flex items-center justify-between gap-4">
             <span className="flex items-center gap-1.5 text-muted-foreground">
