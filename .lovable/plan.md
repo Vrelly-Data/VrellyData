@@ -1,49 +1,73 @@
 
 
-## Add Email Reply Rate Percentage on Hover
+## Fix Webhook Handler to Process LinkedIn Events
 
-### What you're asking for
+### Problems Found
 
-Show an email reply rate percentage when hovering over the "Email Replies" count in the Total Replies breakdown popover, similar to how LinkedIn Replies already displays a rate.
+| Issue | Expected | Actual |
+|-------|----------|--------|
+| Event type format | `linkedin_connection_request_sent` | `LinkedInConnectionRequestSent` |
+| Campaign ID location | `event.campaignId` | `event.sequence_fields.id` |
+| Event type storage | Just the type string | Entire event object JSON |
 
----
-
-## Implementation
-
-### Change to make
-
-In `src/components/playground/PlaygroundStatsGrid.tsx`:
-
-1. **Calculate email reply rate** - Add a new calculation:
-   - Formula: `(emailReplies / emailsDelivered) * 100`
-   - Only show when `emailsDelivered > 0` to avoid division by zero
-
-2. **Add hover tooltip to Email Replies count** - Wrap the email replies number with a `Tooltip` component (same pattern used for LinkedIn replies and connection acceptance rate)
+This is why webhooks are logged but stats aren't updating in real-time.
 
 ---
 
-### Code location
+### Solution
 
-Lines 195-201 currently show:
-```tsx
-<div className="flex items-center justify-between gap-4">
-  <span className="flex items-center gap-1.5 text-muted-foreground">
-    <Mail className="h-3.5 w-3.5" />
-    Email Replies:
-  </span>
-  <span className="font-medium">{emailReplies.toLocaleString()}</span>
-</div>
+Update the `reply-webhook` edge function to:
+
+1. **Extract event type correctly** - Use `event.event?.type` which contains the PascalCase type
+2. **Handle PascalCase event types** - Map Reply.io's format to our switch cases
+3. **Extract campaign ID correctly** - Look in `event.sequence_fields?.id`
+4. **Store clean event type** - Just the type string, not the whole object
+
+---
+
+### Files to Modify
+
+| File | Changes |
+|------|---------|
+| `supabase/functions/reply-webhook/index.ts` | Fix event parsing, add PascalCase support, extract campaign ID from sequence_fields |
+
+---
+
+### Code Changes
+
+```typescript
+// BEFORE (broken)
+const eventType = event.event || event.type || 'unknown';
+const campaignId = event.campaignId || event.campaign_id || event.data?.campaignId;
+
+// AFTER (fixed)
+const eventType = event.event?.type || event.type || 'unknown';
+const campaignId = event.sequence_fields?.id || event.campaignId || event.campaign_id;
 ```
 
-This will be updated to include a tooltip showing the email reply rate percentage, following the same pattern as the LinkedIn reply rate tooltip at lines 207-222.
+And update the switch statement to handle PascalCase:
+
+```typescript
+switch (eventType) {
+  case 'EmailSent':
+  case 'email_sent':
+    stats.sent = (stats.sent || 0) + 1;
+    break;
+  case 'LinkedInConnectionRequestSent':
+  case 'linkedin_connection_request_sent':
+    stats.linkedinConnectionsSent = (stats.linkedinConnectionsSent || 0) + 1;
+    break;
+  // ... etc
+}
+```
 
 ---
 
-### Result
+### Expected Result
 
-When you click on the "Total Replies" stat card and hover over the Email Replies number, you'll see a tooltip showing something like:
-
-> **2.5% reply rate**
-
-This matches the existing behavior for LinkedIn Replies and Connection Acceptance Rate.
+After this fix:
+- Real-time LinkedIn events will update campaign stats
+- New connection requests/acceptances will increment counters
+- Email replies will be tracked via webhooks
+- Dashboard will show live data without needing CSV uploads
 
