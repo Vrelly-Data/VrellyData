@@ -59,9 +59,11 @@ Deno.serve(async (req) => {
       });
     }
     
-    const eventType = event.event || event.type || 'unknown';
+    // Reply.io v2 sends event type in event.event.type as PascalCase (e.g., "LinkedInConnectionRequestSent")
+    const eventType = event.event?.type || event.type || 'unknown';
     const contactEmail = event.email || event.contact?.email || event.data?.email;
-    const campaignId = event.campaignId || event.campaign_id || event.data?.campaignId;
+    // Campaign ID is in sequence_fields.id for Reply.io v2 webhooks
+    const campaignId = event.sequence_fields?.id || event.campaignId || event.campaign_id || event.data?.campaignId;
     
     console.log(`Received webhook event: ${eventType} for integration ${integrationId}`);
     
@@ -87,35 +89,47 @@ Deno.serve(async (req) => {
       if (campaign) {
         const stats = (campaign.stats || {}) as Record<string, number>;
         
+        // Handle both PascalCase (Reply.io v2) and snake_case event types
         switch (eventType) {
+          case 'EmailSent':
+          case 'EmailDelivered':
           case 'email_sent':
           case 'email_delivered':
             stats.sent = (stats.sent || 0) + 1;
             break;
+          case 'EmailOpened':
           case 'email_opened':
             stats.opens = (stats.opens || 0) + 1;
             break;
+          case 'EmailReplied':
           case 'email_replied':
             stats.replies = (stats.replies || 0) + 1;
             break;
+          case 'EmailBounced':
           case 'email_bounced':
             stats.bounces = (stats.bounces || 0) + 1;
             break;
+          case 'LinkedInMessageSent':
           case 'linkedin_message_sent':
             stats.linkedinMessagesSent = (stats.linkedinMessagesSent || 0) + 1;
             break;
+          case 'LinkedInMessageReplied':
           case 'linkedin_message_replied':
             stats.linkedinReplies = (stats.linkedinReplies || 0) + 1;
             break;
+          case 'LinkedInConnectionRequestSent':
           case 'linkedin_connection_request_sent':
             stats.linkedinConnectionsSent = (stats.linkedinConnectionsSent || 0) + 1;
             break;
+          case 'LinkedInConnectionRequestAccepted':
           case 'linkedin_connection_request_accepted':
             stats.linkedinConnectionsAccepted = (stats.linkedinConnectionsAccepted || 0) + 1;
             break;
+          case 'ContactFinished':
           case 'contact_finished':
             stats.finished = (stats.finished || 0) + 1;
             break;
+          case 'ContactOptedOut':
           case 'contact_opted_out':
             stats.optedOut = (stats.optedOut || 0) + 1;
             break;
@@ -141,18 +155,23 @@ Deno.serve(async (req) => {
       if (contact) {
         const engagement = (contact.engagement_data || {}) as Record<string, unknown>;
         
+        // Handle both PascalCase and snake_case for contact engagement updates
         switch (eventType) {
+          case 'EmailSent':
           case 'email_sent':
             engagement.lastEmailSent = new Date().toISOString();
             break;
+          case 'EmailOpened':
           case 'email_opened':
             engagement.opened = true;
             engagement.lastOpened = new Date().toISOString();
             break;
+          case 'EmailReplied':
           case 'email_replied':
             engagement.replied = true;
             engagement.repliedAt = new Date().toISOString();
             break;
+          case 'ContactOptedOut':
           case 'contact_opted_out':
             engagement.optedOut = true;
             engagement.optedOutAt = new Date().toISOString();
