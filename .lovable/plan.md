@@ -1,99 +1,49 @@
 
-## Fix LinkedIn Stats Not Showing After Refresh
 
-### Problem Identified
+## Add Email Reply Rate Percentage on Hover
 
-Your LinkedIn metrics (connection requests, connections accepted) are stored in a **different database row** than the one being displayed:
+### What you're asking for
 
-| Campaign | is_linked | LinkedIn Data | Source |
-|----------|-----------|---------------|--------|
-| HVAC campaign (`e2ffeb62...`) | true | None | Reply.io sync |
-| HVAC campaign (`a9caf789...`) | false | 13 sent, 1 accepted | CSV upload |
-
-The dashboard only queries campaigns where `is_linked = true`, so the LinkedIn data from the CSV upload (stored in a separate row) is never retrieved.
-
-### Root Cause
-
-The CSV upload feature creates its own campaign rows with `external_campaign_id` like `csv_import_...` instead of matching and updating existing Reply.io campaigns. This means:
-1. LinkedIn stats go into the CSV row (not linked)
-2. Reply.io sync refreshes the linked row (no LinkedIn stats)
-3. Dashboard queries linked rows only (misses the LinkedIn stats)
+Show an email reply rate percentage when hovering over the "Email Replies" count in the Total Replies breakdown popover, similar to how LinkedIn Replies already displays a rate.
 
 ---
 
-### Solution
+## Implementation
 
-**Merge the LinkedIn stats from CSV import rows into their matching Reply.io campaign rows**, then delete the duplicate CSV rows.
+### Change to make
 
-This is a one-time data fix followed by an update to the CSV upload logic to prevent this from happening again.
+In `src/components/playground/PlaygroundStatsGrid.tsx`:
 
----
+1. **Calculate email reply rate** - Add a new calculation:
+   - Formula: `(emailReplies / emailsDelivered) * 100`
+   - Only show when `emailsDelivered > 0` to avoid division by zero
 
-### Implementation
-
-#### Step 1: One-time database migration
-
-Run a SQL migration that:
-1. For each CSV-imported campaign with LinkedIn stats, find a matching Reply.io campaign by name
-2. Copy the LinkedIn fields from the CSV row to the linked Reply.io row
-3. Delete the orphaned CSV import rows
-
-#### Step 2: Update CSV upload logic
-
-Modify the LinkedIn stats CSV upload component to:
-1. Match campaigns by name (case-insensitive) first
-2. Update existing linked campaigns instead of creating new rows
-3. Only create new rows if no match is found
+2. **Add hover tooltip to Email Replies count** - Wrap the email replies number with a `Tooltip` component (same pattern used for LinkedIn replies and connection acceptance rate)
 
 ---
 
-### Files to Modify
+### Code location
 
-| File | Purpose |
-|------|---------|
-| New migration SQL | Merge LinkedIn stats from CSV rows into linked campaigns, then clean up duplicates |
-| `src/components/playground/LinkedInStatsUploadDialog.tsx` | Update to match existing linked campaigns by name instead of creating new rows |
-
----
-
-### Expected Result
-
-After fix:
-- HVAC campaign (`is_linked: true`) will have `linkedinConnectionsSent: 13`, `linkedinConnectionsAccepted: 1`
-- No more duplicate CSV import rows
-- Dashboard will display correct LinkedIn metrics
-- Future CSV uploads will update existing campaigns, not create duplicates
-
----
-
-### Technical Details
-
-**Migration SQL logic:**
-```sql
--- Merge LinkedIn stats from CSV rows into matching linked campaigns
-UPDATE synced_campaigns target
-SET stats = target.stats || jsonb_build_object(
-  'linkedinMessagesSent', (source.stats->>'linkedinMessagesSent')::int,
-  'linkedinConnectionsSent', (source.stats->>'linkedinConnectionsSent')::int,
-  'linkedinConnectionsAccepted', (source.stats->>'linkedinConnectionsAccepted')::int,
-  'linkedinReplies', (source.stats->>'linkedinReplies')::int,
-  'linkedinDataSource', source.stats->>'linkedinDataSource',
-  'linkedinDataUploadedAt', source.stats->>'linkedinDataUploadedAt'
-)
-FROM synced_campaigns source
-WHERE target.is_linked = true
-  AND source.is_linked = false
-  AND source.external_campaign_id LIKE 'csv_import_%'
-  AND lower(trim(target.name)) = lower(trim(source.name))
-  AND source.stats->>'linkedinConnectionsSent' IS NOT NULL;
-
--- Remove duplicate CSV import rows after merge
-DELETE FROM synced_campaigns
-WHERE is_linked = false
-  AND external_campaign_id LIKE 'csv_import_%'
-  AND EXISTS (
-    SELECT 1 FROM synced_campaigns linked
-    WHERE linked.is_linked = true
-      AND lower(trim(linked.name)) = lower(trim(synced_campaigns.name))
-  );
+Lines 195-201 currently show:
+```tsx
+<div className="flex items-center justify-between gap-4">
+  <span className="flex items-center gap-1.5 text-muted-foreground">
+    <Mail className="h-3.5 w-3.5" />
+    Email Replies:
+  </span>
+  <span className="font-medium">{emailReplies.toLocaleString()}</span>
+</div>
 ```
+
+This will be updated to include a tooltip showing the email reply rate percentage, following the same pattern as the LinkedIn reply rate tooltip at lines 207-222.
+
+---
+
+### Result
+
+When you click on the "Total Replies" stat card and hover over the Email Replies number, you'll see a tooltip showing something like:
+
+> **2.5% reply rate**
+
+This matches the existing behavior for LinkedIn Replies and Connection Acceptance Rate.
+
