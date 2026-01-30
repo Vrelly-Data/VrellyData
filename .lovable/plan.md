@@ -1,108 +1,99 @@
 
-## What’s happening (root cause)
+## Fix LinkedIn Stats Not Showing After Refresh
 
-Your campaigns are showing as “paused” in the app even though they’re “active” in Reply because we’re **misinterpreting Reply’s campaign status codes**.
+### Problem Identified
 
-From Reply’s own API docs for **v1 campaigns**, the `status` integer is:
+Your LinkedIn metrics (connection requests, connections accepted) are stored in a **different database row** than the one being displayed:
 
-- `0 = New`
-- `2 = Active`
-- `4 = Paused`
+| Campaign | is_linked | LinkedIn Data | Source |
+|----------|-----------|---------------|--------|
+| HVAC campaign (`e2ffeb62...`) | true | None | Reply.io sync |
+| HVAC campaign (`a9caf789...`) | false | 13 sent, 1 accepted | CSV upload |
 
-But our current `normalizeStatus()` logic assumes a different mapping (it treats `2` as “paused”), so **any truly-active campaign (status 2) gets saved as “paused”** in `synced_campaigns`, and then the UI correctly displays that incorrect value.
+The dashboard only queries campaigns where `is_linked = true`, so the LinkedIn data from the CSV upload (stored in a separate row) is never retrieved.
 
-This impacts:
-- Campaign table status badges
-- “Active Campaigns” count (and any other logic relying on `status`)
+### Root Cause
 
----
-
-## Goal
-
-Make campaign statuses in our database and UI match what Reply actually returns:
-- `2 -> active`
-- `4 -> paused`
-- keep safe handling for other/unknown status values
+The CSV upload feature creates its own campaign rows with `external_campaign_id` like `csv_import_...` instead of matching and updating existing Reply.io campaigns. This means:
+1. LinkedIn stats go into the CSV row (not linked)
+2. Reply.io sync refreshes the linked row (no LinkedIn stats)
+3. Dashboard queries linked rows only (misses the LinkedIn stats)
 
 ---
 
-## Changes to make (code)
+### Solution
 
-### 1) Fix status normalization in backend functions that ingest campaigns
+**Merge the LinkedIn stats from CSV import rows into their matching Reply.io campaign rows**, then delete the duplicate CSV rows.
 
-We need to update **both** functions that read Reply campaigns and write to `synced_campaigns`, otherwise one can overwrite the other with the wrong mapping:
-
-- `supabase/functions/sync-reply-campaigns/index.ts`
-- `supabase/functions/fetch-available-campaigns/index.ts`
-
-Implementation details:
-- Replace the existing numeric `statusMap` with a campaign-specific mapping consistent with Reply v1 campaign docs.
-- Keep string status handling (`"Active"`, `"Paused"`) as lowercase (already supported).
-- Add a safe fallback to `unknown` if a new/unexpected numeric code appears.
-
-Suggested mapping (campaign-focused):
-- `0 => 'draft'` (or `'new'`; we’ll keep `'draft'` to match existing UI badge naming)
-- `2 => 'active'`
-- `4 => 'paused'`
-- optionally handle `7 => 'finished'` if we’ve seen it in real payloads (we have), so we don’t regress those rows
-- everything else => `'unknown'`
-
-Also update comments in both files so future work doesn’t reintroduce the mismatch.
-
-### 2) Prevent “Manage Campaigns” from reintroducing wrong statuses
-This is automatically handled by step (1) because `fetch-available-campaigns` is what powers the Manage Campaigns dialog and also upserts into `synced_campaigns`.
+This is a one-time data fix followed by an update to the CSV upload logic to prevent this from happening again.
 
 ---
 
-## Data correction (existing records)
+### Implementation
 
-Even after code is fixed, previously-saved rows will still have wrong `status` until a refresh happens.
+#### Step 1: One-time database migration
 
-Two options:
+Run a SQL migration that:
+1. For each CSV-imported campaign with LinkedIn stats, find a matching Reply.io campaign by name
+2. Copy the LinkedIn fields from the CSV row to the linked Reply.io row
+3. Delete the orphaned CSV import rows
 
-### Option A (simplest): re-sync after deploy
-- After the function mapping is corrected, clicking **Sync** will rewrite `synced_campaigns.status` correctly from Reply.
-- Opening **Manage Campaigns** will also refresh/upsert campaigns and correct statuses.
+#### Step 2: Update CSV upload logic
 
-### Option B (recommended for immediate correctness): one-time database correction
-Run a safe, one-time backend migration that updates existing `synced_campaigns.status` values based on `raw_data->>'status'` for Reply-sourced campaigns:
-
-- If `raw_data.status = 2` set `status='active'`
-- If `raw_data.status = 4` set `status='paused'`
-- Leave others unchanged
-
-Scope it safely by joining `outbound_integrations` where `platform='reply.io'`, so we don’t touch CSV/imported rows.
-
-This makes the UI correct immediately without waiting for the next sync.
+Modify the LinkedIn stats CSV upload component to:
+1. Match campaigns by name (case-insensitive) first
+2. Update existing linked campaigns instead of creating new rows
+3. Only create new rows if no match is found
 
 ---
 
-## Validation / Testing steps (end-to-end)
+### Files to Modify
 
-1. Go to **Data Playground → Connected Platforms**.
-2. Click **Sync** on the Reply integration.
-3. Verify in **Campaigns table**:
-   - “HVAC campaign” shows **Active** (not Paused)
-4. Verify the **Active Campaigns** stat card:
-   - should count campaigns with status `active` (and `paused` if we still consider “running” = active+paused in the stats hook)
-5. Open **Manage Campaigns** and confirm statuses do not flip back to paused.
+| File | Purpose |
+|------|---------|
+| New migration SQL | Merge LinkedIn stats from CSV rows into linked campaigns, then clean up duplicates |
+| `src/components/playground/LinkedInStatsUploadDialog.tsx` | Update to match existing linked campaigns by name instead of creating new rows |
 
 ---
 
-## Files involved
+### Expected Result
 
-Backend functions:
-- `supabase/functions/sync-reply-campaigns/index.ts`
-- `supabase/functions/fetch-available-campaigns/index.ts`
-
-(Optional) one-time data fix:
-- new DB migration that updates `synced_campaigns.status` based on `raw_data.status` for Reply integrations.
+After fix:
+- HVAC campaign (`is_linked: true`) will have `linkedinConnectionsSent: 13`, `linkedinConnectionsAccepted: 1`
+- No more duplicate CSV import rows
+- Dashboard will display correct LinkedIn metrics
+- Future CSV uploads will update existing campaigns, not create duplicates
 
 ---
 
-## Risks / edge cases considered
+### Technical Details
 
-- Reply might return status as a string in some endpoints; we already normalize strings to lowercase and will keep that behavior.
-- If Reply introduces new numeric codes, we’ll surface them as `unknown` rather than mislabeling them.
-- If any other part of the system writes `synced_campaigns.status`, it will now use the corrected mapping in both campaign ingestion functions, preventing “status flapping”.
+**Migration SQL logic:**
+```sql
+-- Merge LinkedIn stats from CSV rows into matching linked campaigns
+UPDATE synced_campaigns target
+SET stats = target.stats || jsonb_build_object(
+  'linkedinMessagesSent', (source.stats->>'linkedinMessagesSent')::int,
+  'linkedinConnectionsSent', (source.stats->>'linkedinConnectionsSent')::int,
+  'linkedinConnectionsAccepted', (source.stats->>'linkedinConnectionsAccepted')::int,
+  'linkedinReplies', (source.stats->>'linkedinReplies')::int,
+  'linkedinDataSource', source.stats->>'linkedinDataSource',
+  'linkedinDataUploadedAt', source.stats->>'linkedinDataUploadedAt'
+)
+FROM synced_campaigns source
+WHERE target.is_linked = true
+  AND source.is_linked = false
+  AND source.external_campaign_id LIKE 'csv_import_%'
+  AND lower(trim(target.name)) = lower(trim(source.name))
+  AND source.stats->>'linkedinConnectionsSent' IS NOT NULL;
 
+-- Remove duplicate CSV import rows after merge
+DELETE FROM synced_campaigns
+WHERE is_linked = false
+  AND external_campaign_id LIKE 'csv_import_%'
+  AND EXISTS (
+    SELECT 1 FROM synced_campaigns linked
+    WHERE linked.is_linked = true
+      AND lower(trim(linked.name)) = lower(trim(synced_campaigns.name))
+  );
+```
