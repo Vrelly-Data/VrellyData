@@ -1,89 +1,109 @@
 
 
-## Fix LinkedIn Copy Not Saving to Database
+## Improve Timeline Display in Copy Tab
 
-### What's happening
+### What you're asking for
 
-The LinkedIn message content **is being fetched** from Reply.io (visible in `raw_data->>'message'`), but it's **not being saved** to the `body_html` / `body_text` columns that the Copy tab uses to display content.
-
-### Evidence from database
-
-| step_type | body_html | raw_data->>'message' |
-|-----------|-----------|---------------------|
-| linkedin | **null** | `"<p>Hi {{FirstName}}, Are you doing any sort of outbound?..."` |
-| linkedin | **null** | `"<p>Great to connect {{FirstName}}, Curious how you're approaching growth..."` |
-
-The content exists in `raw_data` but wasn't extracted to the display columns.
+Change from confusing "+0d delay" / "+1d delay" badges to clear cumulative day labels like "Day 1", "Day 2", etc. This helps users understand the actual sequence timeline at a glance.
 
 ---
 
-### Root Cause
+## Current vs Proposed Display
 
-The sync function (lines 161-174) has flawed logic:
-
-```typescript
-const isLinkedIn = step.type?.toLowerCase().includes('linkedin') || !!step.message;
-
-if (isLinkedIn && step.message) {
-  bodyHtml = step.message;  // Only runs if message is truthy
-}
-```
-
-**Problems:**
-1. For LinkedIn **Connect** steps, `step.message` is empty string `""` (falsy) - so `isLinkedIn` becomes false
-2. Even when `type` contains "linkedin", the second condition `step.message` can be falsy
-3. The step type from Reply.io is `"LinkedIn"` (capital L), but we check `.toLowerCase().includes('linkedin')` which works... but then the body assignment still fails
+| Current | Proposed |
+|---------|----------|
+| LinkedIn Connect "0" | LinkedIn Connect **Day 1** |
+| Email "0" | Email **Day 1** |
+| Condition "0" | Condition **Day 1** |
+| Email "0" | Email **Day 1** |
+| LinkedIn Message "+1d delay" | LinkedIn Message **Day 2** |
+| LinkedIn Message "+2d delay" | LinkedIn Message **Day 4** |
 
 ---
 
-### Solution
+## How it works
 
-Fix the sync function to properly handle LinkedIn steps:
+The `delay_days` field represents delay **from the previous step**, not cumulative time. We need to calculate running totals:
 
-**File:** `supabase/functions/sync-reply-sequences/index.ts`
-
-```typescript
-// BEFORE (buggy)
-const isLinkedIn = step.type?.toLowerCase().includes('linkedin') || !!step.message;
-
-if (isLinkedIn && step.message) {
-  bodyHtml = step.message;
-}
-
-// AFTER (fixed)  
-const isLinkedIn = step.type?.toLowerCase().includes('linkedin');
-
-if (isLinkedIn) {
-  // LinkedIn steps: message is at step level (can be empty for Connect steps)
-  if (step.message && step.message.trim()) {
-    bodyHtml = step.message;
-  }
-  // More specific step type based on actionType
-  if (step.actionType) {
-    stepType = `linkedin_${step.actionType.toLowerCase()}`;
-  }
-}
+```text
+Step 1: delay=0 → cumulative = 1 (Day 1)
+Step 2: delay=0 → cumulative = 1 (Day 1)  
+Step 3: delay=0 → cumulative = 1 (Day 1)
+Step 4: delay=0 → cumulative = 1 (Day 1)
+Step 5: delay=1 → cumulative = 2 (Day 2)
+Step 6: delay=2 → cumulative = 4 (Day 4)
 ```
 
 ---
 
-### After Fix: Re-sync Required
+## Implementation
 
-Yes, you'll need to **re-sync the copy** after we deploy the fix. The data is already in `raw_data`, but we need to:
+### File: `src/components/playground/CopyTab.tsx`
 
-1. Deploy the fixed edge function
-2. Click "Sync Copy" on the campaigns
-3. LinkedIn messages will then populate `body_html` / `body_text`
+**1. Add helper function to calculate cumulative days:**
+
+```typescript
+// Calculate cumulative day for each step
+const getSequenceWithDays = (steps: typeof sequences) => {
+  if (!steps) return [];
+  
+  let cumulativeDay = 1;
+  return steps.map((step, index) => {
+    if (index > 0 && step.delay_days) {
+      cumulativeDay += step.delay_days;
+    }
+    return { ...step, cumulativeDay };
+  });
+};
+```
+
+**2. Update the badge display:**
+
+Replace:
+```tsx
+{step.delay_days && step.delay_days > 0 && (
+  <Badge variant="secondary" className="text-xs">
+    +{step.delay_days}d delay
+  </Badge>
+)}
+```
+
+With:
+```tsx
+<Badge variant="secondary" className="text-xs">
+  Day {step.cumulativeDay}
+</Badge>
+```
 
 ---
 
-### Summary
+## Visual Result
 
-| Action | Details |
+Each step card will clearly show:
+
+```text
+┌─────────────────────────────────────────┐
+│ ▸ 🔗 Step 1  LinkedIn Connect  [Day 1]  │
+├─────────────────────────────────────────┤
+│ ▸ ✉️ Step 2  Email            [Day 1]  │
+├─────────────────────────────────────────┤
+│ ▸ ⚙️ Step 3  Condition        [Day 1]  │
+├─────────────────────────────────────────┤
+│ ▸ ✉️ Step 4  Email            [Day 1]  │
+├─────────────────────────────────────────┤
+│ ▸ 💬 Step 5  LinkedIn Message [Day 2]  │
+├─────────────────────────────────────────┤
+│ ▸ 💬 Step 6  LinkedIn Message [Day 4]  │
+└─────────────────────────────────────────┘
+```
+
+---
+
+## Summary
+
+| Change | Details |
 |--------|---------|
-| Fix edge function | Correct LinkedIn detection and message extraction |
-| Re-deploy | Automatic after code change |
-| Re-sync campaigns | Click "Sync Copy" button for each campaign |
-
-The LinkedIn copy will then appear in the Copy tab alongside email content.
+| Calculate cumulative days | Sum delays to get actual timeline position |
+| Show "Day X" badge | Always visible, not just for non-zero delays |
+| Clearer UX | Users immediately understand sequence timing |
 
