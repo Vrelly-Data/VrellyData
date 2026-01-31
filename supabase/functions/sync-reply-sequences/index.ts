@@ -157,16 +157,23 @@ Deno.serve(async (req) => {
       const stepNumber = i + 1; // Use array index + 1 since Reply.io doesn't return step.number
       
       try {
-        // LinkedIn steps store message at step level, emails in templates
-        const isLinkedIn = step.type?.toLowerCase().includes('linkedin') || !!step.message;
+        // Detect LinkedIn based on step type only (not message presence)
+        const isLinkedIn = step.type?.toLowerCase().includes('linkedin');
         const template = step.templates?.[0];
 
         let bodyHtml: string | null = null;
         let subject: string | null = null;
+        let stepType = step.type?.toLowerCase() || 'email';
 
-        if (isLinkedIn && step.message) {
-          // LinkedIn message content
-          bodyHtml = step.message;
+        if (isLinkedIn) {
+          // LinkedIn steps: message is at step level (can be empty for Connect steps)
+          if (step.message && step.message.trim()) {
+            bodyHtml = step.message;
+          }
+          // More specific step type based on actionType
+          if (step.actionType) {
+            stepType = `linkedin_${step.actionType.toLowerCase()}`;
+          }
         } else if (template?.body) {
           // Email template content
           bodyHtml = template.body;
@@ -174,12 +181,6 @@ Deno.serve(async (req) => {
         }
 
         const bodyText = bodyHtml ? stripHtml(bodyHtml) : null;
-
-        // More specific step type for LinkedIn
-        let stepType = step.type?.toLowerCase() || 'email';
-        if (isLinkedIn && step.actionType) {
-          stepType = `linkedin_${step.actionType.toLowerCase()}`;
-        }
 
         const { error: upsertError } = await supabase
           .from("synced_sequences")
