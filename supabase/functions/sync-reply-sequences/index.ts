@@ -13,6 +13,7 @@ interface ReplyStep {
   type: string;
   number: number;
   delayInMinutes?: number;
+  waitInMinutes?: number;    // Used by Condition steps to define wait time
   executionMode?: string;
   message?: string;          // LinkedIn message content
   actionType?: string;       // LinkedIn action type (Connect, Message, InMail)
@@ -193,7 +194,7 @@ Deno.serve(async (req) => {
             subject: subject,
             body_html: bodyHtml,
             body_text: bodyText,
-            delay_days: minutesToDays(step.delayInMinutes || 0),
+            delay_days: minutesToDays(step.delayInMinutes || step.waitInMinutes || 0),
             stats: step.stats || {},
             raw_data: step,
             updated_at: new Date().toISOString(),

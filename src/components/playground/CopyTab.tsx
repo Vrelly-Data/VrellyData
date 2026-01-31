@@ -44,11 +44,13 @@ export function CopyTab() {
   const selectedCampaign = campaigns?.find(c => c.id === selectedCampaignId);
 
   // Calculate cumulative day for each step
+  // delay_days represents wait time BEFORE this step executes
   const sequencesWithDays = (() => {
     if (!sequences) return [];
     let cumulativeDay = 1;
-    return sequences.map((step, index) => {
-      if (index > 0 && step.delay_days) {
+    return sequences.map((step) => {
+      // Add delay from THIS step (wait before this step runs)
+      if (step.delay_days) {
         cumulativeDay += step.delay_days;
       }
       return { ...step, cumulativeDay };
