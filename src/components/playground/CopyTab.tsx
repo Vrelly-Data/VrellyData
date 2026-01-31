@@ -43,6 +43,18 @@ export function CopyTab() {
   const activeIntegration = integrations?.find(i => i.platform === 'reply.io' && i.is_active);
   const selectedCampaign = campaigns?.find(c => c.id === selectedCampaignId);
 
+  // Calculate cumulative day for each step
+  const sequencesWithDays = (() => {
+    if (!sequences) return [];
+    let cumulativeDay = 1;
+    return sequences.map((step, index) => {
+      if (index > 0 && step.delay_days) {
+        cumulativeDay += step.delay_days;
+      }
+      return { ...step, cumulativeDay };
+    });
+  })();
+
   const handleSyncCampaign = () => {
     if (!activeIntegration) {
       toast.error('No active Reply.io integration found');
@@ -191,9 +203,9 @@ export function CopyTab() {
           )}
 
           {/* Sequence Steps */}
-          {!sequencesLoading && sequences && sequences.length > 0 && (
+          {!sequencesLoading && sequencesWithDays.length > 0 && (
             <div className="space-y-3">
-              {sequences.map((step) => {
+              {sequencesWithDays.map((step) => {
                 const isExpanded = expandedSteps.has(step.id);
                 
                 return (
@@ -217,11 +229,9 @@ export function CopyTab() {
                               <span className="text-sm text-muted-foreground">
                                 {stepTypeLabels[step.step_type || 'email'] || step.step_type}
                               </span>
-                              {step.delay_days && step.delay_days > 0 && (
-                                <Badge variant="secondary" className="text-xs">
-                                  +{step.delay_days}d delay
-                                </Badge>
-                              )}
+                              <Badge variant="secondary" className="text-xs">
+                                Day {step.cumulativeDay}
+                              </Badge>
                             </div>
                           </div>
                           {step.subject && (
