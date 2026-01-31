@@ -1,73 +1,185 @@
 
 
-## Fix Webhook Handler to Process LinkedIn Events
+## Replace "Out of Office" with "Leaderboard" Feature
 
-### Problems Found
+### What you're asking for
 
-| Issue | Expected | Actual |
-|-------|----------|--------|
-| Event type format | `linkedin_connection_request_sent` | `LinkedInConnectionRequestSent` |
-| Campaign ID location | `event.campaignId` | `event.sequence_fields.id` |
-| Event type storage | Just the type string | Entire event object JSON |
-
-This is why webhooks are logged but stats aren't updating in real-time.
+Replace the "Out of Office" stat card with a "Leaderboard" card that shows the top 50 campaigns across ALL users on the platform, completely anonymized. When clicked, it opens a dialog showing campaign performance stats.
 
 ---
 
-### Solution
+## Implementation Overview
 
-Update the `reply-webhook` edge function to:
-
-1. **Extract event type correctly** - Use `event.event?.type` which contains the PascalCase type
-2. **Handle PascalCase event types** - Map Reply.io's format to our switch cases
-3. **Extract campaign ID correctly** - Look in `event.sequence_fields?.id`
-4. **Store clean event type** - Just the type string, not the whole object
+### Key Points
+- **Anonymous**: No team names, user info, or campaign names will be shown
+- **Global**: Queries across all teams using a secure database function
+- **Privacy-first**: Uses a server-side function to ensure no data leaks
 
 ---
 
-### Files to Modify
+## Database Changes
 
-| File | Changes |
-|------|---------|
-| `supabase/functions/reply-webhook/index.ts` | Fix event parsing, add PascalCase support, extract campaign ID from sequence_fields |
+### New Database Function
+Create a secure RPC function that returns anonymized leaderboard data:
 
----
-
-### Code Changes
-
-```typescript
-// BEFORE (broken)
-const eventType = event.event || event.type || 'unknown';
-const campaignId = event.campaignId || event.campaign_id || event.data?.campaignId;
-
-// AFTER (fixed)
-const eventType = event.event?.type || event.type || 'unknown';
-const campaignId = event.sequence_fields?.id || event.campaignId || event.campaign_id;
+```sql
+CREATE OR REPLACE FUNCTION get_campaign_leaderboard(p_limit integer DEFAULT 50)
+RETURNS TABLE (
+  rank integer,
+  messages_sent bigint,
+  replies bigint,
+  reply_rate numeric,
+  contacts bigint,
+  completion_rate numeric
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public'
+AS $$
+BEGIN
+  RETURN QUERY
+  SELECT 
+    ROW_NUMBER() OVER (ORDER BY 
+      CASE WHEN (stats->>'sent')::int > 0 
+           THEN ((stats->>'replies')::numeric / (stats->>'sent')::numeric) * 100 
+           ELSE 0 END DESC
+    )::integer as rank,
+    COALESCE((stats->>'sent')::bigint, 0) as messages_sent,
+    COALESCE((stats->>'replies')::bigint, 0) as replies,
+    CASE WHEN (stats->>'sent')::int > 0 
+         THEN ROUND(((stats->>'replies')::numeric / (stats->>'sent')::numeric) * 100, 1) 
+         ELSE 0 END as reply_rate,
+    COALESCE((stats->>'peopleCount')::bigint, 0) as contacts,
+    CASE WHEN (stats->>'peopleCount')::int > 0 
+         THEN ROUND(((stats->>'peopleFinished')::numeric / (stats->>'peopleCount')::numeric) * 100, 1) 
+         ELSE 0 END as completion_rate
+  FROM synced_campaigns
+  WHERE is_linked = true
+    AND (stats->>'sent')::int > 0  -- Only campaigns with activity
+  ORDER BY reply_rate DESC
+  LIMIT p_limit;
+END;
+$$;
 ```
 
-And update the switch statement to handle PascalCase:
+This function:
+- Uses `SECURITY DEFINER` to bypass RLS and query all teams
+- Returns ONLY stats - no identifying information
+- Excludes campaign names, team IDs, or any PII
+
+---
+
+## Frontend Changes
+
+### Files to Create/Modify
+
+| File | Action | Purpose |
+|------|--------|---------|
+| `src/hooks/useLeaderboard.ts` | Create | Hook to fetch leaderboard data via RPC |
+| `src/components/playground/LeaderboardDialog.tsx` | Create | Dialog showing top 50 campaigns table |
+| `src/components/playground/PlaygroundStatsGrid.tsx` | Modify | Replace "Out of Office" card with "Leaderboard" card |
+
+---
+
+### New Hook: `useLeaderboard.ts`
 
 ```typescript
-switch (eventType) {
-  case 'EmailSent':
-  case 'email_sent':
-    stats.sent = (stats.sent || 0) + 1;
-    break;
-  case 'LinkedInConnectionRequestSent':
-  case 'linkedin_connection_request_sent':
-    stats.linkedinConnectionsSent = (stats.linkedinConnectionsSent || 0) + 1;
-    break;
-  // ... etc
+import { useQuery } from '@tanstack/react-query';
+import { supabase } from '@/integrations/supabase/client';
+
+export interface LeaderboardEntry {
+  rank: number;
+  messages_sent: number;
+  replies: number;
+  reply_rate: number;
+  contacts: number;
+  completion_rate: number;
+}
+
+export function useLeaderboard() {
+  return useQuery({
+    queryKey: ['campaign-leaderboard'],
+    queryFn: async (): Promise<LeaderboardEntry[]> => {
+      const { data, error } = await supabase
+        .rpc('get_campaign_leaderboard', { p_limit: 50 });
+      
+      if (error) throw error;
+      return data || [];
+    },
+  });
 }
 ```
 
 ---
 
-### Expected Result
+### New Component: `LeaderboardDialog.tsx`
 
-After this fix:
-- Real-time LinkedIn events will update campaign stats
-- New connection requests/acceptances will increment counters
-- Email replies will be tracked via webhooks
-- Dashboard will show live data without needing CSV uploads
+A dialog that displays:
+- Table with columns: Rank, Messages Sent, Replies, Reply Rate %, Contacts, Completion %
+- Clear "Anonymous" badge/notice at the top
+- "Data is aggregated across all platform users" disclaimer
+
+---
+
+### UI Changes to Stats Grid
+
+Replace the "Out of Office" card:
+
+```tsx
+// BEFORE
+<StatCard
+  title="Out of Office"
+  value={stats?.outOfOfficeCount ?? 0}
+  icon={<Clock className="h-5 w-5 text-primary" />}
+  description="Auto-replies detected"
+/>
+
+// AFTER
+<StatCard
+  title="Leaderboard"
+  value="Top 50"
+  icon={<Trophy className="h-5 w-5 text-primary" />}
+  description="Anonymous global stats"
+  onClick={() => setLeaderboardOpen(true)}
+  clickable
+/>
+```
+
+---
+
+## Privacy & Security
+
+| Aspect | Approach |
+|--------|----------|
+| Team isolation | RPC function returns no team_id |
+| Campaign names | Not returned from function |
+| User identity | Not returned from function |
+| Data shown | Only: rank, counts, percentages |
+
+---
+
+## Visual Preview
+
+When clicking "Leaderboard", users see:
+
+```text
++--------------------------------------------------+
+|  Leaderboard                              [X]    |
+|--------------------------------------------------|
+|  All data is completely anonymous.               |
+|  Rankings based on reply rate.                   |
+|--------------------------------------------------|
+|  #   Sent    Replies   Rate    Contacts   Done   |
+|  1   1,200   96        8.0%    500        85%    |
+|  2   800     56        7.0%    300        92%    |
+|  3   2,500   150       6.0%    1,000      78%    |
+|  ...                                             |
++--------------------------------------------------+
+```
+
+---
+
+## Summary
+
+This sets up the basic infrastructure for a global anonymous leaderboard. The scoring system can be refined later - currently it's sorted by reply rate, but we can adjust this to use a weighted scoring formula when you're ready to define it.
 
