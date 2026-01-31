@@ -76,14 +76,16 @@ export function PeopleTab() {
       return;
     }
 
-    const headers = ['Email', 'First Name', 'Last Name', 'Company', 'Job Title', 'Status'];
+    const headers = ['Email', 'First Name', 'Last Name', 'Job Title', 'Status', 'Replied', 'Opened', 'Bounced'];
     const rows = filteredContacts.map(c => [
       c.email,
       c.first_name || '',
       c.last_name || '',
-      c.company || '',
       c.job_title || '',
       c.status || '',
+      c.engagement_data?.replied ? 'Yes' : 'No',
+      c.engagement_data?.opened ? 'Yes' : 'No',
+      c.engagement_data?.bounced ? 'Yes' : 'No',
     ]);
 
     const csvContent = [headers, ...rows].map(row => row.map(cell => `"${cell}"`).join(',')).join('\n');
@@ -244,8 +246,8 @@ export function PeopleTab() {
               <TableRow>
                 <TableHead>Name</TableHead>
                 <TableHead>Email</TableHead>
-                <TableHead>Company</TableHead>
                 <TableHead>Title</TableHead>
+                <TableHead>Opened</TableHead>
                 <TableHead>Status</TableHead>
               </TableRow>
             </TableHeader>
@@ -256,8 +258,16 @@ export function PeopleTab() {
                     {[contact.first_name, contact.last_name].filter(Boolean).join(' ') || '—'}
                   </TableCell>
                   <TableCell>{contact.email}</TableCell>
-                  <TableCell>{contact.company || '—'}</TableCell>
                   <TableCell>{contact.job_title || '—'}</TableCell>
+                  <TableCell>
+                    {contact.engagement_data?.opened ? (
+                      <Badge variant="secondary" className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
+                        Yes
+                      </Badge>
+                    ) : (
+                      <span className="text-muted-foreground">No</span>
+                    )}
+                  </TableCell>
                   <TableCell>
                     <Badge 
                       variant="secondary" 
