@@ -163,12 +163,19 @@ Deno.serve(async (req) => {
 
     console.log(`Fetched ${allContacts.length} contacts from Reply.io`);
 
-    // Upsert contacts to database
+    // Batch upsert contacts to database to avoid timeout
+    const BATCH_SIZE = 100;
     let contactsSynced = 0;
     let contactsFailed = 0;
 
-    for (const contact of allContacts) {
-      try {
+    for (let i = 0; i < allContacts.length; i += BATCH_SIZE) {
+      const batch = allContacts.slice(i, i + BATCH_SIZE);
+      const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
+      const totalBatches = Math.ceil(allContacts.length / BATCH_SIZE);
+      
+      console.log(`Processing batch ${batchNumber}/${totalBatches} (${batch.length} contacts)`);
+
+      const records = batch.map(contact => {
         const engagementData = {
           replied: contact.status?.replied || false,
           delivered: contact.status?.delivered || false,
@@ -180,35 +187,39 @@ Deno.serve(async (req) => {
           lastStepCompletedAt: contact.lastStepCompletedAt,
         };
 
+        return {
+          campaign_id: campaignId,
+          team_id: teamId,
+          external_contact_id: String(contact.id),
+          email: contact.email,
+          first_name: contact.firstName || null,
+          last_name: contact.lastName || null,
+          company: contact.company || null,
+          job_title: contact.title || null,
+          status: mapContactStatus(contact.status),
+          engagement_data: engagementData,
+          custom_fields: contact.customFields || {},
+          raw_data: contact,
+          updated_at: new Date().toISOString(),
+        };
+      });
+
+      try {
         const { error: upsertError } = await supabase
           .from("synced_contacts")
-          .upsert({
-            campaign_id: campaignId,
-            team_id: teamId,
-            external_contact_id: String(contact.id),
-            email: contact.email,
-            first_name: contact.firstName || null,
-            last_name: contact.lastName || null,
-            company: contact.company || null,
-            job_title: contact.title || null,
-            status: mapContactStatus(contact.status),
-            engagement_data: engagementData,
-            custom_fields: contact.customFields || {},
-            raw_data: contact,
-            updated_at: new Date().toISOString(),
-          }, {
+          .upsert(records, {
             onConflict: "campaign_id,email",
           });
 
         if (upsertError) {
-          console.error(`Failed to upsert contact ${contact.email}:`, upsertError);
-          contactsFailed++;
+          console.error(`Batch ${batchNumber} failed:`, upsertError);
+          contactsFailed += batch.length;
         } else {
-          contactsSynced++;
+          contactsSynced += batch.length;
         }
       } catch (err) {
-        console.error(`Error processing contact ${contact.email}:`, err);
-        contactsFailed++;
+        console.error(`Error in batch ${batchNumber}:`, err);
+        contactsFailed += batch.length;
       }
     }
 
