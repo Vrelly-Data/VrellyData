@@ -1284,6 +1284,17 @@ export type Database = {
           subscription_tier: string
         }[]
       }
+      get_campaign_leaderboard: {
+        Args: { p_limit?: number }
+        Returns: {
+          completion_rate: number
+          contacts: number
+          messages_sent: number
+          rank: number
+          replies: number
+          reply_rate: number
+        }[]
+      }
       get_filter_suggestions: { Args: never; Returns: Json }
       get_user_team_id: { Args: { _user_id: string }; Returns: string }
       has_role: {

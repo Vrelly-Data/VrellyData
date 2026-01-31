@@ -4,9 +4,10 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { usePlaygroundStats } from '@/hooks/usePlaygroundStats';
 import { useChannelMetrics } from '@/hooks/useChannelMetrics';
-import { Send, MessageSquare, Users, Zap, Target, Clock, Loader2, Mail, Linkedin } from 'lucide-react';
+import { Send, MessageSquare, Users, Zap, Target, Trophy, Loader2, Mail, Linkedin } from 'lucide-react';
 import { CampaignListDialog } from './CampaignListDialog';
 import { ContactsListDialog } from './ContactsListDialog';
+import { LeaderboardDialog } from './LeaderboardDialog';
 
 interface StatCardProps {
   title: string;
@@ -72,6 +73,7 @@ export function PlaygroundStatsGrid() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogFilter, setDialogFilter] = useState<DialogFilter>(null);
   const [contactsDialogOpen, setContactsDialogOpen] = useState(false);
+  const [leaderboardOpen, setLeaderboardOpen] = useState(false);
 
   const openDialog = (filter: DialogFilter) => {
     setDialogFilter(filter);
@@ -292,10 +294,12 @@ export function PlaygroundStatsGrid() {
           description="Average across campaigns"
         />
         <StatCard
-          title="Out of Office"
-          value={stats?.outOfOfficeCount ?? 0}
-          icon={<Clock className="h-5 w-5 text-primary" />}
-          description="Auto-replies detected"
+          title="Leaderboard"
+          value="Top 50"
+          icon={<Trophy className="h-5 w-5 text-primary" />}
+          description="Anonymous global stats"
+          onClick={() => setLeaderboardOpen(true)}
+          clickable
         />
       </div>
 
@@ -309,6 +313,11 @@ export function PlaygroundStatsGrid() {
       <ContactsListDialog
         open={contactsDialogOpen}
         onOpenChange={setContactsDialogOpen}
+      />
+
+      <LeaderboardDialog
+        open={leaderboardOpen}
+        onOpenChange={setLeaderboardOpen}
       />
     </>
   );
