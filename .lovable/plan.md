@@ -1,86 +1,110 @@
 
 
-## Fix Timeline to Include Condition Wait Times
+## Fix Contacts Sync: 100 Limit and Missing Fields
 
-### The Problem
+### Issues Found
 
-Reply.io uses **two different delay fields**:
-- `delayInMinutes` - delay before a step executes (most steps)
-- `waitInMinutes` - used by **Condition** steps to define how long to wait before checking
+#### 1. Database Shows Only 100 Contacts (Not an API limit)
+The edge function logs show it **actually fetched 5,000 contacts** from Reply.io, but only 100 are in the database. This is a database upsert issue - the sync likely timed out before completing all inserts.
 
-Currently we only capture `delayInMinutes`, but your condition step has `waitInMinutes: 4320` (3 days) that we're ignoring.
+**Evidence:**
+- Edge function log: `Fetched 5000 contacts from Reply.io`
+- Database count: `100 contacts`
+- The "Plumbing Campaign" has 98 people in Reply.io but only 100 contacts in DB total across all campaigns
 
-### Current vs Correct Timeline
+#### 2. Company Field Missing from Reply.io Extended Endpoint
+The `/sequences/{id}/contacts/extended` endpoint **does not return company data**. Looking at the API response structure and your actual `raw_data`:
 
-| Step | Type | Current | Correct |
-|------|------|---------|---------|
-| 1 | LinkedIn Connect | Day 1 | Day 1 |
-| 2 | Email | Day 1 | Day 1 |
-| 3 | Condition | Day 1 | Day 1 |
-| 4 | Email | Day 1 | **Day 4** |
-| 5 | LinkedIn Message | Day 2 | **Day 5** |
-| 6 | LinkedIn Message | Day 4 | **Day 7** |
+```json
+{
+  "email": "...",
+  "firstName": "Adam",
+  "lastName": "Resnick",
+  "title": "",           // job title
+  "addedAt": "...",
+  "status": {...}
+}
+```
+
+No `company` field exists in this endpoint. The `company` field requires using the **People API** (`/v1/people/{email}`) to get full contact details.
 
 ---
 
-### Solution: Two Changes Required
+### Solution: Two-Part Fix
 
-#### 1. Update Edge Function to Capture Wait Time
+#### Part 1: Fix the 100 Contact Limit (Timeout Issue)
 
-**File:** `supabase/functions/sync-reply-sequences/index.ts`
+The edge function times out (3 min limit) trying to insert 5000+ contacts one-by-one. Use **batch upserts** instead:
 
-Add `waitInMinutes` to the interface and use whichever delay field is populated:
+**File:** `supabase/functions/sync-reply-contacts/index.ts`
 
 ```typescript
-interface ReplyStep {
-  // ... existing fields
-  waitInMinutes?: number;  // Add this - used by Condition steps
+// BEFORE: Individual upserts (slow, causes timeout)
+for (const contact of allContacts) {
+  await supabase.from("synced_contacts").upsert({...});
 }
 
-// When calculating delay_days:
-const delayMinutes = step.delayInMinutes || step.waitInMinutes || 0;
-delay_days: minutesToDays(delayMinutes),
-```
-
-#### 2. Update Frontend Logic for Timeline Calculation
-
-**File:** `src/components/playground/CopyTab.tsx`
-
-The delay on a Condition step applies to **the next step**, not the condition itself. Update the cumulative calculation:
-
-```typescript
-const sequencesWithDays = (() => {
-  if (!sequences) return [];
-  let cumulativeDay = 1;
-  return sequences.map((step, index) => {
-    // Add delay from THIS step (represents wait before this step runs)
-    if (step.delay_days) {
-      cumulativeDay += step.delay_days;
-    }
-    return { ...step, cumulativeDay };
+// AFTER: Batch upserts (fast, completes in time)
+const BATCH_SIZE = 100;
+for (let i = 0; i < allContacts.length; i += BATCH_SIZE) {
+  const batch = allContacts.slice(i, i + BATCH_SIZE);
+  const records = batch.map(contact => ({...}));
+  await supabase.from("synced_contacts").upsert(records, {
+    onConflict: "campaign_id,email"
   });
-})();
+}
 ```
 
----
+#### Part 2: Fetch Full Contact Details (Including Company)
 
-### After Implementation
+The extended sequence contacts endpoint doesn't include company. To get company data, we need to either:
 
-1. Deploy the updated edge function
-2. Re-sync your campaigns (click "Sync Copy")
-3. Timeline will correctly show:
-   - Steps 1-3: Day 1
-   - Step 4 (after 3-day condition): Day 4
-   - Step 5 (+1 day): Day 5
-   - Step 6 (+2 days): Day 7
+**Option A - Enrich from People API (slower but more data):**
+Call `/v1/people/{email}` for each contact to get full details including company, phone, LinkedIn URL, etc.
+
+**Option B - Accept limitation (faster sync):**
+Keep current approach but clearly document that company comes from custom fields if the user has them.
 
 ---
 
-### Technical Summary
+### Dynamic Fields Currently Tracked
 
-| Change | File | Details |
-|--------|------|---------|
-| Capture `waitInMinutes` | Edge function | Use `delayInMinutes \|\| waitInMinutes` for conditions |
-| Fix cumulative logic | CopyTab.tsx | Apply delay to the step itself, not the next one |
-| Re-sync required | User action | Click "Sync Copy" after deployment |
+| Field | Database Column | Source |
+|-------|----------------|--------|
+| Email | `email` | Direct from API |
+| First Name | `first_name` | `firstName` |
+| Last Name | `last_name` | `lastName` |
+| Job Title | `job_title` | `title` |
+| Company | `company` | **NOT in extended endpoint** |
+| Status | `status` | Mapped from `status` object |
+| Replied | `engagement_data.replied` | `status.replied` |
+| Delivered | `engagement_data.delivered` | `status.delivered` |
+| Bounced | `engagement_data.bounced` | `status.bounced` |
+| Opened | `engagement_data.opened` | `status.opened` |
+| Clicked | `engagement_data.clicked` | `status.clicked` |
+| Opted Out | `engagement_data.optedOut` | `status.optedOut` |
+| Added At | `engagement_data.addedAt` | `addedAt` |
+| Last Step | `engagement_data.lastStepCompletedAt` | `lastStepCompletedAt` |
+| Custom Fields | `custom_fields` | `customFields` (if present) |
+
+---
+
+### Implementation Plan
+
+| Step | Change | File |
+|------|--------|------|
+| 1 | Switch to batch upserts (100 at a time) | Edge function |
+| 2 | Add progress logging | Edge function |
+| 3 | Optionally enrich with People API for company | Edge function |
+| 4 | Update UI to show more fields from engagement_data | PeopleTab.tsx |
+
+---
+
+### Question for You
+
+For the company data, which approach do you prefer?
+
+**A) Enrich contacts** - Make additional API calls to get full contact details (company, phone, LinkedIn). This is slower but gives complete data.
+
+**B) Keep it fast** - Accept that company data isn't available from the sequence contacts endpoint. Users would need to ensure company is in custom fields when adding contacts.
 
