@@ -1,125 +1,82 @@
 
-## What’s happening (confirmed)
-There are two separate “100” limits in the current system:
 
-1) **Backend sync is only persisting ~100 unique contacts per campaign**
-- The database currently has **100 contacts for the campaign** (not just the UI).
-- Your sync function logs can still show “5000 fetched/processed” because the contact endpoint pagination is being called incorrectly:
-  - Reply’s “List contacts in sequence (extended)” endpoint uses **`offset`**, not `page`.
-  - Because we pass `page=...`, the API effectively keeps returning the **same first 100 contacts** (duplicates), and `hasMore` stays true, so we loop until the safety cap and “process” a big number—yet only **100 unique emails** exist to upsert.
+## Fix: Reply.io API Returning Same Contacts on Multiple Pages
 
-2) **Frontend People table is explicitly capped at 100 rows**
-- `PeopleTab.tsx` still does: `filteredContacts.slice(0, 100)`
+### Root Cause Identified
 
-So even after we fix the backend, the UI would still only show 100 unless we change the table rendering/pagination.
+The logs reveal the issue:
+```
+Page 1: fetched 100, new unique: 100, total unique: 100
+Page 2: fetched 100, new unique: 0, total unique: 100
+No new unique contacts in this page, stopping pagination
+```
 
----
+The Reply.io API is returning the **same 100 contacts** when fetching with `offset=100`. This triggers our "duplicate detection" logic that was meant to prevent infinite loops, but it's stopping pagination prematurely.
 
-## Goals
-1) Sync should store the full set of contacts (e.g., 5,000+) for a campaign.
-2) People tab should display beyond 100 (ideally with pagination so it stays fast).
-3) CSV export should export the full filtered dataset (not just the first page).
+**Possible causes:**
+1. The API may not have stable ordering for offset pagination
+2. The sequence may have contacts that overlap across "pages" due to API behavior
+3. There may be a caching issue on the Reply.io side
 
 ---
 
-## Implementation Plan
+### Solution
 
-### A) Fix the backend contact sync pagination (critical)
+The "stop if no new unique contacts" logic is too aggressive. We need to:
+
+1. **Continue pagination based on `hasMore` flag**, not duplicate detection
+2. **Still deduplicate** contacts (using the Map), but don't stop early just because one page has duplicates
+3. **Only stop when**:
+   - `hasMore` is explicitly `false`
+   - We receive fewer items than `limit` (last page)
+   - We hit the safety cap (10,000 contacts)
+   - We receive 0 items (empty page)
+
+---
+
+### Code Changes
+
 **File:** `supabase/functions/sync-reply-contacts/index.ts`
 
-1) **Switch pagination from `page` to `offset`**
-- Use:
-  - `limit=100`
-  - `offset=0, 100, 200, ...`
-- Pseudocode:
-  - `offset = 0`
-  - while `hasMore`:
-    - GET `/sequences/${sequenceId}/contacts/extended?limit=100&offset=${offset}`
-    - append returned `items`
-    - `offset += items.length`
-    - `hasMore = response.info?.hasMore ?? (items.length === 100)`
-    - break if `items.length === 0` (safety)
+**Before (problematic logic at lines 176-180):**
+```typescript
+// Stop if no new contacts were found (we're seeing duplicates)
+if (newUniqueCount === 0 && contacts.length > 0) {
+  console.log("No new unique contacts in this page, stopping pagination");
+  break;
+}
+```
 
-2) **Add a “no progress” safety guard**
-- Track unique IDs/emails seen; if a page returns no new unique contacts, stop early.
-- Also keep a max-iterations cap (prevents infinite loops if the API misbehaves).
+**After (remove premature exit, rely on hasMore):**
+```typescript
+// Log duplicate detection but DON'T stop - continue checking hasMore
+if (newUniqueCount === 0 && contacts.length > 0) {
+  console.log(`Page ${iterations} returned only duplicates, but continuing based on hasMore flag`);
+}
+```
 
-3) **Deduplicate before upsert**
-- Build a `Map` keyed by `(campaign_id + email)` or by `external_contact_id` to avoid repeatedly upserting duplicates.
-- This also makes logging/reporting honest (“unique contacts prepared”).
-
-4) **Improve reporting**
-- Return both:
-  - `totalFetched` (raw items across pages)
-  - `uniquePrepared` (deduped)
-  - `verifiedCount` (actual DB count after sync)
-- Update the UI toast to prefer `verifiedCount`/`uniquePrepared` so the user isn’t told “5000” when only 100 exist.
+The rest of the pagination logic already handles proper termination:
+- `hasMore = response.info?.hasMore ?? (contacts.length === limit)` - respects API signal
+- `if (contacts.length < limit) hasMore = false` - detects last page
+- `iterations < maxIterations` - safety cap
 
 ---
 
-### B) Fix the People tab “100 rows” UI cap
-**File:** `src/components/playground/PeopleTab.tsx`
+### Expected Outcome
 
-We’ll replace the hard slice with real pagination.
-
-1) **Remove `slice(0, 100)`**
-- Either show all (not recommended for 5k+ rows) or paginate.
-
-2) **Add pagination UI**
-- Reuse existing `PaginationControls` (`src/components/search/PaginationControls.tsx`) to keep patterns consistent.
-- Add state:
-  - `currentPage`
-  - `perPage` (50/100/200)
-
-3) **Paginate the rendered rows**
-- Render only the current page of contacts.
+| Before | After |
+|--------|-------|
+| Stops after 2 pages (200 fetched, 100 unique) | Continues until `hasMore=false` |
+| 100 contacts synced | All 1,176 contacts synced |
+| Premature exit on duplicate page | Respects Reply.io pagination signal |
 
 ---
 
-### C) Fix data fetching so we can actually view >1000 rows reliably
-Once the backend stores 5,000+, the current `useSyncedContacts()` query will likely hit the backend’s default row limit (often ~1000 per request). To make PeopleTab reliable:
+### Verification Steps
 
-**Option (recommended):** add a paginated contacts hook used only by PeopleTab
-- Create `useSyncedContactsPaged({ campaignId, status, page, perPage })`
-- Use:
-  - `.select(..., { count: 'exact' })`
-  - `.range(from, to)`
-  - `.eq('campaign_id', ...)` when a specific campaign is selected
-  - `.eq('status', ...)` when status filter is set
+After deployment:
+1. Click "Refresh Contacts" for the campaign
+2. Check logs show continued pagination beyond page 2
+3. Verify final count matches ~1,176 contacts
+4. Confirm People tab shows all contacts with pagination
 
-This avoids loading thousands into memory and keeps the tab fast.
-
-(We will keep the existing `useSyncedContacts()` hook unchanged so other dialogs/screens don’t break.)
-
----
-
-### D) Update CSV export so it exports “everything”, not just the current page
-**Files:** `PeopleTab.tsx` (and/or a small helper)
-
-When the table is paginated server-side, we’ll update export to:
-- Fetch **all** matching rows in a loop (range 0–999, 1000–1999, etc.) for the selected campaign/status
-- Then build the CSV from the full dataset
-
-This ensures the CSV matches what you expect (all contacts), regardless of UI pagination.
-
----
-
-## How we’ll verify it’s fixed
-1) Trigger “Refresh Contacts” for a campaign you know has thousands.
-2) Confirm logs show something like:
-   - `Fetched X total items`
-   - `Unique prepared Y`
-   - `Verified in database Y`
-3) Run a database count check (internally) to confirm the campaign has >100 rows.
-4) In People tab:
-   - You can page past 100
-   - Total count matches reality
-5) Export CSV:
-   - CSV row count matches the total filtered count (not just one page)
-
----
-
-## Expected outcome
-- The sync will persist all contacts (no longer stuck at 100 unique).
-- The People tab will display and navigate thousands of contacts smoothly (paged).
-- CSV export will include the full filtered dataset.
