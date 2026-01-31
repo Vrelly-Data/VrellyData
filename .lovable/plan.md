@@ -1,110 +1,105 @@
 
 
-## Fix Contacts Sync: 100 Limit and Missing Fields
+## Fix: 5000 Contacts Synced But Only 100 Visible
 
-### Issues Found
+### Root Cause Identified
 
-#### 1. Database Shows Only 100 Contacts (Not an API limit)
-The edge function logs show it **actually fetched 5,000 contacts** from Reply.io, but only 100 are in the database. This is a database upsert issue - the sync likely timed out before completing all inserts.
+The database confirms only **100 contacts exist**, all created on Jan 29 (initial sync). The latest sync on Jan 31 **updated those 100** but failed to insert the remaining 4900 new contacts.
 
 **Evidence:**
-- Edge function log: `Fetched 5000 contacts from Reply.io`
-- Database count: `100 contacts`
-- The "Plumbing Campaign" has 98 people in Reply.io but only 100 contacts in DB total across all campaigns
+- `created_at`: Jan 29 for all 100 contacts
+- `updated_at`: Jan 31 (latest sync) for all 100 contacts
+- Edge function logs: "5000 synced, 0 failed" (false positive)
 
-#### 2. Company Field Missing from Reply.io Extended Endpoint
-The `/sequences/{id}/contacts/extended` endpoint **does not return company data**. Looking at the API response structure and your actual `raw_data`:
+### The Problem
 
-```json
-{
-  "email": "...",
-  "firstName": "Adam",
-  "lastName": "Resnick",
-  "title": "",           // job title
-  "addedAt": "...",
-  "status": {...}
-}
-```
+The edge function uses `SUPABASE_ANON_KEY` with the user's JWT, which works for RLS. However, the **upsert operation doesn't throw errors when RLS blocks inserts** - it silently skips them while still allowing updates to existing records.
 
-No `company` field exists in this endpoint. The `company` field requires using the **People API** (`/v1/people/{email}`) to get full contact details.
+The function counts rows processed, not rows actually inserted, leading to the misleading "5000 synced" message.
 
 ---
 
-### Solution: Two-Part Fix
+### Solution: Use Service Role Key for Edge Function
 
-#### Part 1: Fix the 100 Contact Limit (Timeout Issue)
+Edge functions that perform bulk data operations should use the `SUPABASE_SERVICE_ROLE_KEY` to bypass RLS, since we've already validated the user's access to the integration and campaign.
 
-The edge function times out (3 min limit) trying to insert 5000+ contacts one-by-one. Use **batch upserts** instead:
+#### Changes Required
 
-**File:** `supabase/functions/sync-reply-contacts/index.ts`
+**1. Update Edge Function to Use Service Role Key**
+
+File: `supabase/functions/sync-reply-contacts/index.ts`
 
 ```typescript
-// BEFORE: Individual upserts (slow, causes timeout)
-for (const contact of allContacts) {
-  await supabase.from("synced_contacts").upsert({...});
-}
+// BEFORE: Uses anon key with user auth (RLS blocks bulk inserts)
+const supabase = createClient(
+  Deno.env.get("SUPABASE_URL") ?? "",
+  Deno.env.get("SUPABASE_ANON_KEY") ?? "",
+  { global: { headers: { Authorization: authHeader } } }
+);
 
-// AFTER: Batch upserts (fast, completes in time)
-const BATCH_SIZE = 100;
-for (let i = 0; i < allContacts.length; i += BATCH_SIZE) {
-  const batch = allContacts.slice(i, i + BATCH_SIZE);
-  const records = batch.map(contact => ({...}));
-  await supabase.from("synced_contacts").upsert(records, {
-    onConflict: "campaign_id,email"
-  });
-}
+// AFTER: Use service role for data operations (after validating access)
+// First, validate user has access using their auth
+const userClient = createClient(
+  Deno.env.get("SUPABASE_URL") ?? "",
+  Deno.env.get("SUPABASE_ANON_KEY") ?? "",
+  { global: { headers: { Authorization: authHeader } } }
+);
+
+// Validate integration/campaign access with user's auth
+const { data: integration } = await userClient
+  .from("outbound_integrations")
+  .select("...")
+  .single();
+
+// Then use service role for bulk upserts
+const serviceClient = createClient(
+  Deno.env.get("SUPABASE_URL") ?? "",
+  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
+);
+
+// Use serviceClient for upserts
+await serviceClient.from("synced_contacts").upsert(records, {...});
 ```
 
-#### Part 2: Fetch Full Contact Details (Including Company)
+**2. Add Actual Insert Count Verification**
 
-The extended sequence contacts endpoint doesn't include company. To get company data, we need to either:
+After each batch upsert, query the count to verify rows were actually inserted:
 
-**Option A - Enrich from People API (slower but more data):**
-Call `/v1/people/{email}` for each contact to get full details including company, phone, LinkedIn URL, etc.
+```typescript
+const { count } = await serviceClient
+  .from("synced_contacts")
+  .select("*", { count: "exact", head: true })
+  .eq("campaign_id", campaignId);
 
-**Option B - Accept limitation (faster sync):**
-Keep current approach but clearly document that company comes from custom fields if the user has them.
-
----
-
-### Dynamic Fields Currently Tracked
-
-| Field | Database Column | Source |
-|-------|----------------|--------|
-| Email | `email` | Direct from API |
-| First Name | `first_name` | `firstName` |
-| Last Name | `last_name` | `lastName` |
-| Job Title | `job_title` | `title` |
-| Company | `company` | **NOT in extended endpoint** |
-| Status | `status` | Mapped from `status` object |
-| Replied | `engagement_data.replied` | `status.replied` |
-| Delivered | `engagement_data.delivered` | `status.delivered` |
-| Bounced | `engagement_data.bounced` | `status.bounced` |
-| Opened | `engagement_data.opened` | `status.opened` |
-| Clicked | `engagement_data.clicked` | `status.clicked` |
-| Opted Out | `engagement_data.optedOut` | `status.optedOut` |
-| Added At | `engagement_data.addedAt` | `addedAt` |
-| Last Step | `engagement_data.lastStepCompletedAt` | `lastStepCompletedAt` |
-| Custom Fields | `custom_fields` | `customFields` (if present) |
+console.log(`Verified ${count} contacts in database after batch`);
+```
 
 ---
 
-### Implementation Plan
+### Why This Fixes the Issue
 
-| Step | Change | File |
-|------|--------|------|
-| 1 | Switch to batch upserts (100 at a time) | Edge function |
-| 2 | Add progress logging | Edge function |
-| 3 | Optionally enrich with People API for company | Edge function |
-| 4 | Update UI to show more fields from engagement_data | PeopleTab.tsx |
+| Before | After |
+|--------|-------|
+| User auth + anon key | User auth for validation + service role for writes |
+| RLS silently blocks new inserts | Service role bypasses RLS (safe since we validate first) |
+| 100 contacts (original batch) | All 5000+ contacts |
+| Misleading success count | Verified actual database count |
 
 ---
 
-### Question for You
+### Security Consideration
 
-For the company data, which approach do you prefer?
+This is secure because:
+1. User authentication is still required (validated via `userClient`)
+2. Access to the integration is verified before any data operations
+3. The `team_id` is taken from the validated integration, not user input
+4. Service role is only used for the trusted bulk operation after access is confirmed
 
-**A) Enrich contacts** - Make additional API calls to get full contact details (company, phone, LinkedIn). This is slower but gives complete data.
+---
 
-**B) Keep it fast** - Accept that company data isn't available from the sequence contacts endpoint. Users would need to ensure company is in custom fields when adding contacts.
+### After Implementation
+
+1. Deploy the updated edge function
+2. Re-sync contacts for a campaign
+3. Verify all 5000+ contacts now appear in the People tab
 
