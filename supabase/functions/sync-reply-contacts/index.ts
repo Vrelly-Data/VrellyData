@@ -173,10 +173,9 @@ Deno.serve(async (req) => {
       
       console.log(`Page ${iterations}: fetched ${contacts.length}, new unique: ${newUniqueCount}, total unique: ${uniqueContactsMap.size}`);
       
-      // Stop if no new contacts were found (we're seeing duplicates)
+      // Log duplicate detection but DON'T stop - continue checking hasMore
       if (newUniqueCount === 0 && contacts.length > 0) {
-        console.log("No new unique contacts in this page, stopping pagination");
-        break;
+        console.log(`Page ${iterations} returned only duplicates, continuing based on hasMore flag`);
       }
       
       // Check if there's more data
