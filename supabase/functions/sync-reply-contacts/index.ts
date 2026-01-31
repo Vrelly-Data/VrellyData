@@ -98,14 +98,15 @@ Deno.serve(async (req) => {
       throw new Error("Missing campaignId or integrationId");
     }
 
-    const supabase = createClient(
+    // Use user's auth to validate access to integration/campaign
+    const userClient = createClient(
       Deno.env.get("SUPABASE_URL") ?? "",
       Deno.env.get("SUPABASE_ANON_KEY") ?? "",
       { global: { headers: { Authorization: authHeader } } }
     );
 
-    // Fetch the integration
-    const { data: integration, error: integrationError } = await supabase
+    // Fetch the integration (validates user has access via RLS)
+    const { data: integration, error: integrationError } = await userClient
       .from("outbound_integrations")
       .select("id, team_id, api_key_encrypted, reply_team_id")
       .eq("id", integrationId)
@@ -115,12 +116,18 @@ Deno.serve(async (req) => {
       throw new Error("Integration not found or access denied");
     }
 
-    // Fetch the campaign to get external_campaign_id
-    const { data: campaign, error: campaignError } = await supabase
+    // Fetch the campaign to get external_campaign_id (validates access via RLS)
+    const { data: campaign, error: campaignError } = await userClient
       .from("synced_campaigns")
       .select("id, external_campaign_id, team_id")
       .eq("id", campaignId)
       .single();
+
+    // Use service role for bulk data operations (after access is validated)
+    const serviceClient = createClient(
+      Deno.env.get("SUPABASE_URL") ?? "",
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
+    );
 
     if (campaignError || !campaign) {
       throw new Error("Campaign not found");
@@ -205,7 +212,7 @@ Deno.serve(async (req) => {
       });
 
       try {
-        const { error: upsertError } = await supabase
+        const { error: upsertError } = await serviceClient
           .from("synced_contacts")
           .upsert(records, {
             onConflict: "campaign_id,email",
@@ -223,7 +230,13 @@ Deno.serve(async (req) => {
       }
     }
 
-    console.log(`Contacts sync complete: ${contactsSynced} synced, ${contactsFailed} failed`);
+    // Verify actual count in database
+    const { count: verifiedCount } = await serviceClient
+      .from("synced_contacts")
+      .select("*", { count: "exact", head: true })
+      .eq("campaign_id", campaignId);
+
+    console.log(`Contacts sync complete: ${contactsSynced} processed, ${contactsFailed} failed, ${verifiedCount} verified in database`);
 
     return new Response(
       JSON.stringify({
