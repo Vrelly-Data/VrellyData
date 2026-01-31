@@ -1,105 +1,125 @@
 
+## What’s happening (confirmed)
+There are two separate “100” limits in the current system:
 
-## Fix: 5000 Contacts Synced But Only 100 Visible
+1) **Backend sync is only persisting ~100 unique contacts per campaign**
+- The database currently has **100 contacts for the campaign** (not just the UI).
+- Your sync function logs can still show “5000 fetched/processed” because the contact endpoint pagination is being called incorrectly:
+  - Reply’s “List contacts in sequence (extended)” endpoint uses **`offset`**, not `page`.
+  - Because we pass `page=...`, the API effectively keeps returning the **same first 100 contacts** (duplicates), and `hasMore` stays true, so we loop until the safety cap and “process” a big number—yet only **100 unique emails** exist to upsert.
 
-### Root Cause Identified
+2) **Frontend People table is explicitly capped at 100 rows**
+- `PeopleTab.tsx` still does: `filteredContacts.slice(0, 100)`
 
-The database confirms only **100 contacts exist**, all created on Jan 29 (initial sync). The latest sync on Jan 31 **updated those 100** but failed to insert the remaining 4900 new contacts.
-
-**Evidence:**
-- `created_at`: Jan 29 for all 100 contacts
-- `updated_at`: Jan 31 (latest sync) for all 100 contacts
-- Edge function logs: "5000 synced, 0 failed" (false positive)
-
-### The Problem
-
-The edge function uses `SUPABASE_ANON_KEY` with the user's JWT, which works for RLS. However, the **upsert operation doesn't throw errors when RLS blocks inserts** - it silently skips them while still allowing updates to existing records.
-
-The function counts rows processed, not rows actually inserted, leading to the misleading "5000 synced" message.
+So even after we fix the backend, the UI would still only show 100 unless we change the table rendering/pagination.
 
 ---
 
-### Solution: Use Service Role Key for Edge Function
-
-Edge functions that perform bulk data operations should use the `SUPABASE_SERVICE_ROLE_KEY` to bypass RLS, since we've already validated the user's access to the integration and campaign.
-
-#### Changes Required
-
-**1. Update Edge Function to Use Service Role Key**
-
-File: `supabase/functions/sync-reply-contacts/index.ts`
-
-```typescript
-// BEFORE: Uses anon key with user auth (RLS blocks bulk inserts)
-const supabase = createClient(
-  Deno.env.get("SUPABASE_URL") ?? "",
-  Deno.env.get("SUPABASE_ANON_KEY") ?? "",
-  { global: { headers: { Authorization: authHeader } } }
-);
-
-// AFTER: Use service role for data operations (after validating access)
-// First, validate user has access using their auth
-const userClient = createClient(
-  Deno.env.get("SUPABASE_URL") ?? "",
-  Deno.env.get("SUPABASE_ANON_KEY") ?? "",
-  { global: { headers: { Authorization: authHeader } } }
-);
-
-// Validate integration/campaign access with user's auth
-const { data: integration } = await userClient
-  .from("outbound_integrations")
-  .select("...")
-  .single();
-
-// Then use service role for bulk upserts
-const serviceClient = createClient(
-  Deno.env.get("SUPABASE_URL") ?? "",
-  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
-);
-
-// Use serviceClient for upserts
-await serviceClient.from("synced_contacts").upsert(records, {...});
-```
-
-**2. Add Actual Insert Count Verification**
-
-After each batch upsert, query the count to verify rows were actually inserted:
-
-```typescript
-const { count } = await serviceClient
-  .from("synced_contacts")
-  .select("*", { count: "exact", head: true })
-  .eq("campaign_id", campaignId);
-
-console.log(`Verified ${count} contacts in database after batch`);
-```
+## Goals
+1) Sync should store the full set of contacts (e.g., 5,000+) for a campaign.
+2) People tab should display beyond 100 (ideally with pagination so it stays fast).
+3) CSV export should export the full filtered dataset (not just the first page).
 
 ---
 
-### Why This Fixes the Issue
+## Implementation Plan
 
-| Before | After |
-|--------|-------|
-| User auth + anon key | User auth for validation + service role for writes |
-| RLS silently blocks new inserts | Service role bypasses RLS (safe since we validate first) |
-| 100 contacts (original batch) | All 5000+ contacts |
-| Misleading success count | Verified actual database count |
+### A) Fix the backend contact sync pagination (critical)
+**File:** `supabase/functions/sync-reply-contacts/index.ts`
+
+1) **Switch pagination from `page` to `offset`**
+- Use:
+  - `limit=100`
+  - `offset=0, 100, 200, ...`
+- Pseudocode:
+  - `offset = 0`
+  - while `hasMore`:
+    - GET `/sequences/${sequenceId}/contacts/extended?limit=100&offset=${offset}`
+    - append returned `items`
+    - `offset += items.length`
+    - `hasMore = response.info?.hasMore ?? (items.length === 100)`
+    - break if `items.length === 0` (safety)
+
+2) **Add a “no progress” safety guard**
+- Track unique IDs/emails seen; if a page returns no new unique contacts, stop early.
+- Also keep a max-iterations cap (prevents infinite loops if the API misbehaves).
+
+3) **Deduplicate before upsert**
+- Build a `Map` keyed by `(campaign_id + email)` or by `external_contact_id` to avoid repeatedly upserting duplicates.
+- This also makes logging/reporting honest (“unique contacts prepared”).
+
+4) **Improve reporting**
+- Return both:
+  - `totalFetched` (raw items across pages)
+  - `uniquePrepared` (deduped)
+  - `verifiedCount` (actual DB count after sync)
+- Update the UI toast to prefer `verifiedCount`/`uniquePrepared` so the user isn’t told “5000” when only 100 exist.
 
 ---
 
-### Security Consideration
+### B) Fix the People tab “100 rows” UI cap
+**File:** `src/components/playground/PeopleTab.tsx`
 
-This is secure because:
-1. User authentication is still required (validated via `userClient`)
-2. Access to the integration is verified before any data operations
-3. The `team_id` is taken from the validated integration, not user input
-4. Service role is only used for the trusted bulk operation after access is confirmed
+We’ll replace the hard slice with real pagination.
+
+1) **Remove `slice(0, 100)`**
+- Either show all (not recommended for 5k+ rows) or paginate.
+
+2) **Add pagination UI**
+- Reuse existing `PaginationControls` (`src/components/search/PaginationControls.tsx`) to keep patterns consistent.
+- Add state:
+  - `currentPage`
+  - `perPage` (50/100/200)
+
+3) **Paginate the rendered rows**
+- Render only the current page of contacts.
 
 ---
 
-### After Implementation
+### C) Fix data fetching so we can actually view >1000 rows reliably
+Once the backend stores 5,000+, the current `useSyncedContacts()` query will likely hit the backend’s default row limit (often ~1000 per request). To make PeopleTab reliable:
 
-1. Deploy the updated edge function
-2. Re-sync contacts for a campaign
-3. Verify all 5000+ contacts now appear in the People tab
+**Option (recommended):** add a paginated contacts hook used only by PeopleTab
+- Create `useSyncedContactsPaged({ campaignId, status, page, perPage })`
+- Use:
+  - `.select(..., { count: 'exact' })`
+  - `.range(from, to)`
+  - `.eq('campaign_id', ...)` when a specific campaign is selected
+  - `.eq('status', ...)` when status filter is set
 
+This avoids loading thousands into memory and keeps the tab fast.
+
+(We will keep the existing `useSyncedContacts()` hook unchanged so other dialogs/screens don’t break.)
+
+---
+
+### D) Update CSV export so it exports “everything”, not just the current page
+**Files:** `PeopleTab.tsx` (and/or a small helper)
+
+When the table is paginated server-side, we’ll update export to:
+- Fetch **all** matching rows in a loop (range 0–999, 1000–1999, etc.) for the selected campaign/status
+- Then build the CSV from the full dataset
+
+This ensures the CSV matches what you expect (all contacts), regardless of UI pagination.
+
+---
+
+## How we’ll verify it’s fixed
+1) Trigger “Refresh Contacts” for a campaign you know has thousands.
+2) Confirm logs show something like:
+   - `Fetched X total items`
+   - `Unique prepared Y`
+   - `Verified in database Y`
+3) Run a database count check (internally) to confirm the campaign has >100 rows.
+4) In People tab:
+   - You can page past 100
+   - Total count matches reality
+5) Export CSV:
+   - CSV row count matches the total filtered count (not just one page)
+
+---
+
+## Expected outcome
+- The sync will persist all contacts (no longer stuck at 100 unique).
+- The People tab will display and navigate thousands of contacts smoothly (paged).
+- CSV export will include the full filtered dataset.
