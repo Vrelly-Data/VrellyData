@@ -1,109 +1,86 @@
 
 
-## Improve Timeline Display in Copy Tab
+## Fix Timeline to Include Condition Wait Times
 
-### What you're asking for
+### The Problem
 
-Change from confusing "+0d delay" / "+1d delay" badges to clear cumulative day labels like "Day 1", "Day 2", etc. This helps users understand the actual sequence timeline at a glance.
+Reply.io uses **two different delay fields**:
+- `delayInMinutes` - delay before a step executes (most steps)
+- `waitInMinutes` - used by **Condition** steps to define how long to wait before checking
 
----
+Currently we only capture `delayInMinutes`, but your condition step has `waitInMinutes: 4320` (3 days) that we're ignoring.
 
-## Current vs Proposed Display
+### Current vs Correct Timeline
 
-| Current | Proposed |
-|---------|----------|
-| LinkedIn Connect "0" | LinkedIn Connect **Day 1** |
-| Email "0" | Email **Day 1** |
-| Condition "0" | Condition **Day 1** |
-| Email "0" | Email **Day 1** |
-| LinkedIn Message "+1d delay" | LinkedIn Message **Day 2** |
-| LinkedIn Message "+2d delay" | LinkedIn Message **Day 4** |
-
----
-
-## How it works
-
-The `delay_days` field represents delay **from the previous step**, not cumulative time. We need to calculate running totals:
-
-```text
-Step 1: delay=0 → cumulative = 1 (Day 1)
-Step 2: delay=0 → cumulative = 1 (Day 1)  
-Step 3: delay=0 → cumulative = 1 (Day 1)
-Step 4: delay=0 → cumulative = 1 (Day 1)
-Step 5: delay=1 → cumulative = 2 (Day 2)
-Step 6: delay=2 → cumulative = 4 (Day 4)
-```
+| Step | Type | Current | Correct |
+|------|------|---------|---------|
+| 1 | LinkedIn Connect | Day 1 | Day 1 |
+| 2 | Email | Day 1 | Day 1 |
+| 3 | Condition | Day 1 | Day 1 |
+| 4 | Email | Day 1 | **Day 4** |
+| 5 | LinkedIn Message | Day 2 | **Day 5** |
+| 6 | LinkedIn Message | Day 4 | **Day 7** |
 
 ---
 
-## Implementation
+### Solution: Two Changes Required
 
-### File: `src/components/playground/CopyTab.tsx`
+#### 1. Update Edge Function to Capture Wait Time
 
-**1. Add helper function to calculate cumulative days:**
+**File:** `supabase/functions/sync-reply-sequences/index.ts`
+
+Add `waitInMinutes` to the interface and use whichever delay field is populated:
 
 ```typescript
-// Calculate cumulative day for each step
-const getSequenceWithDays = (steps: typeof sequences) => {
-  if (!steps) return [];
-  
+interface ReplyStep {
+  // ... existing fields
+  waitInMinutes?: number;  // Add this - used by Condition steps
+}
+
+// When calculating delay_days:
+const delayMinutes = step.delayInMinutes || step.waitInMinutes || 0;
+delay_days: minutesToDays(delayMinutes),
+```
+
+#### 2. Update Frontend Logic for Timeline Calculation
+
+**File:** `src/components/playground/CopyTab.tsx`
+
+The delay on a Condition step applies to **the next step**, not the condition itself. Update the cumulative calculation:
+
+```typescript
+const sequencesWithDays = (() => {
+  if (!sequences) return [];
   let cumulativeDay = 1;
-  return steps.map((step, index) => {
-    if (index > 0 && step.delay_days) {
+  return sequences.map((step, index) => {
+    // Add delay from THIS step (represents wait before this step runs)
+    if (step.delay_days) {
       cumulativeDay += step.delay_days;
     }
     return { ...step, cumulativeDay };
   });
-};
-```
-
-**2. Update the badge display:**
-
-Replace:
-```tsx
-{step.delay_days && step.delay_days > 0 && (
-  <Badge variant="secondary" className="text-xs">
-    +{step.delay_days}d delay
-  </Badge>
-)}
-```
-
-With:
-```tsx
-<Badge variant="secondary" className="text-xs">
-  Day {step.cumulativeDay}
-</Badge>
+})();
 ```
 
 ---
 
-## Visual Result
+### After Implementation
 
-Each step card will clearly show:
-
-```text
-┌─────────────────────────────────────────┐
-│ ▸ 🔗 Step 1  LinkedIn Connect  [Day 1]  │
-├─────────────────────────────────────────┤
-│ ▸ ✉️ Step 2  Email            [Day 1]  │
-├─────────────────────────────────────────┤
-│ ▸ ⚙️ Step 3  Condition        [Day 1]  │
-├─────────────────────────────────────────┤
-│ ▸ ✉️ Step 4  Email            [Day 1]  │
-├─────────────────────────────────────────┤
-│ ▸ 💬 Step 5  LinkedIn Message [Day 2]  │
-├─────────────────────────────────────────┤
-│ ▸ 💬 Step 6  LinkedIn Message [Day 4]  │
-└─────────────────────────────────────────┘
-```
+1. Deploy the updated edge function
+2. Re-sync your campaigns (click "Sync Copy")
+3. Timeline will correctly show:
+   - Steps 1-3: Day 1
+   - Step 4 (after 3-day condition): Day 4
+   - Step 5 (+1 day): Day 5
+   - Step 6 (+2 days): Day 7
 
 ---
 
-## Summary
+### Technical Summary
 
-| Change | Details |
-|--------|---------|
-| Calculate cumulative days | Sum delays to get actual timeline position |
-| Show "Day X" badge | Always visible, not just for non-zero delays |
-| Clearer UX | Users immediately understand sequence timing |
+| Change | File | Details |
+|--------|------|---------|
+| Capture `waitInMinutes` | Edge function | Use `delayInMinutes \|\| waitInMinutes` for conditions |
+| Fix cumulative logic | CopyTab.tsx | Apply delay to the step itself, not the next one |
+| Re-sync required | User action | Click "Sync Copy" after deployment |
 
