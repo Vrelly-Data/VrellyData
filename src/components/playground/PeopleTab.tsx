@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useSyncedContacts } from '@/hooks/useSyncedContacts';
+import { useSyncedContactsPaged, fetchAllContactsForExport } from '@/hooks/useSyncedContactsPaged';
 import { useSyncedCampaigns } from '@/hooks/useSyncedCampaigns';
 import { useOutboundIntegrations } from '@/hooks/useOutboundIntegrations';
 import { supabase } from '@/integrations/supabase/client';
@@ -11,6 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Loader2, Users, RefreshCw, Download } from 'lucide-react';
 import { toast } from 'sonner';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { PaginationControls } from '@/components/search/PaginationControls';
 
 const statusColors: Record<string, string> = {
   active: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200',
@@ -20,18 +21,48 @@ const statusColors: Record<string, string> = {
   bounced: 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200',
   opted_out: 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200',
   finished: 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200',
+  unknown: 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200',
 };
 
 export function PeopleTab() {
   const [selectedCampaignId, setSelectedCampaignId] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [perPage, setPerPage] = useState(100);
+  const [isExporting, setIsExporting] = useState(false);
   
-  const { data: allContacts, isLoading: contactsLoading } = useSyncedContacts();
+  const { data: pagedData, isLoading: contactsLoading } = useSyncedContactsPaged({
+    campaignId: selectedCampaignId,
+    status: statusFilter,
+    page: currentPage,
+    perPage,
+  });
+  
   const { data: campaigns } = useSyncedCampaigns(true);
   const { integrations } = useOutboundIntegrations();
   const queryClient = useQueryClient();
 
   const activeIntegration = integrations?.find(i => i.platform === 'reply.io' && i.is_active);
+
+  const contacts = pagedData?.contacts || [];
+  const totalCount = pagedData?.totalCount || 0;
+  const totalPages = Math.ceil(totalCount / perPage);
+
+  // Reset to page 1 when filters change
+  const handleCampaignChange = (value: string) => {
+    setSelectedCampaignId(value);
+    setCurrentPage(1);
+  };
+
+  const handleStatusChange = (value: string) => {
+    setStatusFilter(value);
+    setCurrentPage(1);
+  };
+
+  const handlePerPageChange = (value: number) => {
+    setPerPage(value);
+    setCurrentPage(1);
+  };
 
   const syncContactsMutation = useMutation({
     mutationFn: async (campaignId: string) => {
@@ -48,55 +79,59 @@ export function PeopleTab() {
       return response.data;
     },
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ['synced-contacts'] });
-      toast.success(`Synced ${data.contactsSynced} contacts`);
+      queryClient.invalidateQueries({ queryKey: ['synced-contacts-paged'] });
+      const count = data.verifiedCount || data.uniquePrepared || data.contactsSynced;
+      toast.success(`Synced ${count} contacts`);
     },
     onError: (error) => {
       toast.error(`Failed to sync contacts: ${error.message}`);
     },
   });
 
-  // Filter contacts
-  const filteredContacts = allContacts?.filter(contact => {
-    if (selectedCampaignId !== 'all' && contact.campaign_id !== selectedCampaignId) {
-      return false;
+  // Get unique statuses for filter dropdown
+  const statusOptions = ['active', 'replied', 'bounced', 'opened', 'delivered', 'opted_out', 'finished', 'unknown'];
+
+  const handleExportCSV = async () => {
+    setIsExporting(true);
+    try {
+      // Fetch all contacts matching current filters
+      const allContacts = await fetchAllContactsForExport(
+        selectedCampaignId !== 'all' ? selectedCampaignId : undefined,
+        statusFilter !== 'all' ? statusFilter : undefined
+      );
+
+      if (!allContacts.length) {
+        toast.error('No contacts to export');
+        return;
+      }
+
+      const headers = ['Email', 'First Name', 'Last Name', 'Job Title', 'Status', 'Replied', 'Opened', 'Bounced'];
+      const rows = allContacts.map(c => [
+        c.email,
+        c.first_name || '',
+        c.last_name || '',
+        c.job_title || '',
+        c.status || '',
+        c.engagement_data?.replied ? 'Yes' : 'No',
+        c.engagement_data?.opened ? 'Yes' : 'No',
+        c.engagement_data?.bounced ? 'Yes' : 'No',
+      ]);
+
+      const csvContent = [headers, ...rows].map(row => row.map(cell => `"${cell}"`).join(',')).join('\n');
+      const blob = new Blob([csvContent], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `contacts-export-${new Date().toISOString().split('T')[0]}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success(`Exported ${allContacts.length} contacts`);
+    } catch (error) {
+      toast.error('Failed to export contacts');
+      console.error('Export error:', error);
+    } finally {
+      setIsExporting(false);
     }
-    if (statusFilter !== 'all' && contact.status !== statusFilter) {
-      return false;
-    }
-    return true;
-  }) || [];
-
-  // Get unique statuses for filter
-  const uniqueStatuses = [...new Set(allContacts?.map(c => c.status).filter(Boolean) || [])];
-
-  const handleExportCSV = () => {
-    if (!filteredContacts.length) {
-      toast.error('No contacts to export');
-      return;
-    }
-
-    const headers = ['Email', 'First Name', 'Last Name', 'Job Title', 'Status', 'Replied', 'Opened', 'Bounced'];
-    const rows = filteredContacts.map(c => [
-      c.email,
-      c.first_name || '',
-      c.last_name || '',
-      c.job_title || '',
-      c.status || '',
-      c.engagement_data?.replied ? 'Yes' : 'No',
-      c.engagement_data?.opened ? 'Yes' : 'No',
-      c.engagement_data?.bounced ? 'Yes' : 'No',
-    ]);
-
-    const csvContent = [headers, ...rows].map(row => row.map(cell => `"${cell}"`).join(',')).join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `contacts-export-${new Date().toISOString().split('T')[0]}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-    toast.success('Contacts exported');
   };
 
   if (contactsLoading) {
@@ -107,7 +142,7 @@ export function PeopleTab() {
     );
   }
 
-  if (!allContacts?.length) {
+  if (totalCount === 0 && selectedCampaignId === 'all' && statusFilter === 'all') {
     return (
       <div className="flex flex-col items-center justify-center h-64 text-center">
         <Users className="h-12 w-12 text-muted-foreground mb-4" />
@@ -146,7 +181,7 @@ export function PeopleTab() {
       {/* Filters and Actions */}
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div className="flex items-center gap-4">
-          <Select value={selectedCampaignId} onValueChange={setSelectedCampaignId}>
+          <Select value={selectedCampaignId} onValueChange={handleCampaignChange}>
             <SelectTrigger className="w-64">
               <SelectValue placeholder="Filter by campaign..." />
             </SelectTrigger>
@@ -158,15 +193,15 @@ export function PeopleTab() {
             </SelectContent>
           </Select>
 
-          <Select value={statusFilter} onValueChange={setStatusFilter}>
+          <Select value={statusFilter} onValueChange={handleStatusChange}>
             <SelectTrigger className="w-40">
               <SelectValue placeholder="Status..." />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Statuses</SelectItem>
-              {uniqueStatuses.map(status => (
-                <SelectItem key={status} value={status || 'unknown'}>
-                  {status || 'Unknown'}
+              {statusOptions.map(status => (
+                <SelectItem key={status} value={status}>
+                  {status.charAt(0).toUpperCase() + status.slice(1).replace('_', ' ')}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -189,8 +224,12 @@ export function PeopleTab() {
               Refresh Contacts
             </Button>
           )}
-          <Button variant="outline" size="sm" onClick={handleExportCSV}>
-            <Download className="h-4 w-4 mr-2" />
+          <Button variant="outline" size="sm" onClick={handleExportCSV} disabled={isExporting}>
+            {isExporting ? (
+              <Loader2 className="h-4 w-4 animate-spin mr-2" />
+            ) : (
+              <Download className="h-4 w-4 mr-2" />
+            )}
             Export CSV
           </Button>
         </div>
@@ -203,37 +242,31 @@ export function PeopleTab() {
             <CardTitle className="text-sm font-medium text-muted-foreground">Total Contacts</CardTitle>
           </CardHeader>
           <CardContent className="py-0 pb-3">
-            <p className="text-2xl font-bold">{filteredContacts.length}</p>
+            <p className="text-2xl font-bold">{totalCount.toLocaleString()}</p>
           </CardContent>
         </Card>
         <Card>
           <CardHeader className="py-3">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Replied</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">On This Page</CardTitle>
           </CardHeader>
           <CardContent className="py-0 pb-3">
-            <p className="text-2xl font-bold text-blue-600">
-              {filteredContacts.filter(c => c.status === 'replied').length}
-            </p>
+            <p className="text-2xl font-bold">{contacts.length}</p>
           </CardContent>
         </Card>
         <Card>
           <CardHeader className="py-3">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Bounced</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">Page</CardTitle>
           </CardHeader>
           <CardContent className="py-0 pb-3">
-            <p className="text-2xl font-bold text-red-600">
-              {filteredContacts.filter(c => c.status === 'bounced').length}
-            </p>
+            <p className="text-2xl font-bold">{currentPage} / {totalPages || 1}</p>
           </CardContent>
         </Card>
         <Card>
           <CardHeader className="py-3">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Active</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">Per Page</CardTitle>
           </CardHeader>
           <CardContent className="py-0 pb-3">
-            <p className="text-2xl font-bold text-green-600">
-              {filteredContacts.filter(c => c.status === 'active').length}
-            </p>
+            <p className="text-2xl font-bold">{perPage}</p>
           </CardContent>
         </Card>
       </div>
@@ -252,7 +285,7 @@ export function PeopleTab() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredContacts.slice(0, 100).map((contact) => (
+              {contacts.map((contact) => (
                 <TableRow key={contact.id}>
                   <TableCell className="font-medium">
                     {[contact.first_name, contact.last_name].filter(Boolean).join(' ') || '—'}
@@ -271,7 +304,7 @@ export function PeopleTab() {
                   <TableCell>
                     <Badge 
                       variant="secondary" 
-                      className={statusColors[contact.status || 'unknown'] || statusColors.active}
+                      className={statusColors[contact.status || 'unknown'] || statusColors.unknown}
                     >
                       {contact.status || 'Unknown'}
                     </Badge>
@@ -280,9 +313,18 @@ export function PeopleTab() {
               ))}
             </TableBody>
           </Table>
-          {filteredContacts.length > 100 && (
-            <div className="p-4 text-center text-sm text-muted-foreground border-t">
-              Showing 100 of {filteredContacts.length} contacts. Export to see all.
+          
+          {/* Pagination Controls */}
+          {totalPages > 1 && (
+            <div className="p-4 border-t">
+              <PaginationControls
+                currentPage={currentPage}
+                totalPages={totalPages}
+                perPage={perPage}
+                totalResults={totalCount}
+                onPageChange={setCurrentPage}
+                onPerPageChange={handlePerPageChange}
+              />
             </div>
           )}
         </CardContent>

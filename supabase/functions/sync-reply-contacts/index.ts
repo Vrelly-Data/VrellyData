@@ -140,37 +140,66 @@ Deno.serve(async (req) => {
 
     console.log(`Fetching contacts for sequence ${sequenceId}`);
 
-    // Fetch contacts from Reply.io V3 API
-    let allContacts: ReplyContact[] = [];
-    let page = 1;
+    // Fetch contacts from Reply.io V3 API using OFFSET pagination (not page)
+    const uniqueContactsMap = new Map<string, ReplyContact>();
+    let offset = 0;
+    const limit = 100;
     let hasMore = true;
+    let totalFetched = 0;
+    let iterations = 0;
+    const maxIterations = 100; // Safety cap: 100 iterations * 100 contacts = 10,000 max
 
-    while (hasMore) {
-      const endpoint = `/sequences/${sequenceId}/contacts/extended?page=${page}&limit=100`;
+    while (hasMore && iterations < maxIterations) {
+      iterations++;
+      const endpoint = `/sequences/${sequenceId}/contacts/extended?limit=${limit}&offset=${offset}`;
+      console.log(`Fetching page ${iterations}: offset=${offset}, limit=${limit}`);
+      
       const response = await fetchWithRetry(endpoint, apiKey, replyTeamId || undefined) as { 
         items?: ReplyContact[]; 
         info?: { hasMore?: boolean } 
       };
       
       const contacts = response.items || [];
-      allContacts = [...allContacts, ...contacts];
+      totalFetched += contacts.length;
       
-      hasMore = response.info?.hasMore || false;
-      page++;
+      // Track unique contacts by email to avoid duplicates
+      let newUniqueCount = 0;
+      for (const contact of contacts) {
+        if (contact.email && !uniqueContactsMap.has(contact.email.toLowerCase())) {
+          uniqueContactsMap.set(contact.email.toLowerCase(), contact);
+          newUniqueCount++;
+        }
+      }
       
-      if (page > 50) {
-        console.warn("Reached page limit (50) for contacts");
+      console.log(`Page ${iterations}: fetched ${contacts.length}, new unique: ${newUniqueCount}, total unique: ${uniqueContactsMap.size}`);
+      
+      // Stop if no new contacts were found (we're seeing duplicates)
+      if (newUniqueCount === 0 && contacts.length > 0) {
+        console.log("No new unique contacts in this page, stopping pagination");
         break;
       }
       
+      // Check if there's more data
+      hasMore = response.info?.hasMore ?? (contacts.length === limit);
+      
+      // Move offset forward
+      offset += contacts.length;
+      
+      // Break if we got fewer than limit (last page)
+      if (contacts.length < limit) {
+        hasMore = false;
+      }
+      
+      // Rate limit protection between pages
       if (hasMore) {
-        await new Promise(resolve => setTimeout(resolve, 500));
+        await new Promise(resolve => setTimeout(resolve, 300));
       }
     }
 
-    console.log(`Fetched ${allContacts.length} contacts from Reply.io`);
+    const allContacts = Array.from(uniqueContactsMap.values());
+    console.log(`Fetched ${totalFetched} total items, ${allContacts.length} unique contacts from Reply.io`);
 
-    // Batch upsert contacts to database to avoid timeout
+    // Batch upsert contacts to database
     const BATCH_SIZE = 100;
     let contactsSynced = 0;
     let contactsFailed = 0;
@@ -243,7 +272,9 @@ Deno.serve(async (req) => {
         success: true,
         contactsSynced,
         contactsFailed,
-        totalFetched: allContacts.length,
+        totalFetched,
+        uniquePrepared: allContacts.length,
+        verifiedCount: verifiedCount || 0,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
