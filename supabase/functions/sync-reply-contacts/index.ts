@@ -5,27 +5,30 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const REPLY_API_BASE = "https://api.reply.io/v3";
+// Use V1 API which has working page-based pagination
+const REPLY_API_V1 = "https://api.reply.io/v1";
 
-interface ReplyContact {
+interface ReplyPeopleResponse {
+  people?: ReplyPerson[];
+  totalCount?: number;
+}
+
+interface ReplyPerson {
   id: number;
   email: string;
   firstName?: string;
   lastName?: string;
   title?: string;
   company?: string;
-  status?: {
-    status?: string;
-    replied?: boolean;
-    delivered?: boolean;
-    bounced?: boolean;
-    opened?: boolean;
-    clicked?: boolean;
-    optedOut?: boolean;
-  };
+  status?: string;
+  replied?: boolean;
+  bounced?: boolean;
+  finished?: boolean;
+  optedOut?: boolean;
+  opened?: boolean;
+  clicked?: boolean;
   customFields?: Record<string, unknown>;
-  addedAt?: string;
-  lastStepCompletedAt?: string;
+  addedTime?: string;
 }
 
 // Retry wrapper with exponential backoff for rate limiting
@@ -46,7 +49,7 @@ async function fetchWithRetry(
         headers["X-Reply-Team-Id"] = teamId;
       }
       
-      const response = await fetch(`${REPLY_API_BASE}${endpoint}`, { headers });
+      const response = await fetch(`${REPLY_API_V1}${endpoint}`, { headers });
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -69,15 +72,22 @@ async function fetchWithRetry(
   throw new Error(`Max retries exceeded for ${endpoint}`);
 }
 
-// Map Reply.io contact status to simplified status string
-function mapContactStatus(status: ReplyContact['status']): string {
-  if (!status) return 'unknown';
-  if (status.replied) return 'replied';
-  if (status.bounced) return 'bounced';
-  if (status.optedOut) return 'opted_out';
-  if (status.opened) return 'opened';
-  if (status.delivered) return 'delivered';
-  return status.status || 'active';
+// Map Reply.io person status to simplified status string
+function mapPersonStatus(person: ReplyPerson): string {
+  if (person.replied) return 'replied';
+  if (person.bounced) return 'bounced';
+  if (person.optedOut) return 'opted_out';
+  if (person.finished) return 'finished';
+  if (person.opened) return 'opened';
+  // V1 API uses string status like "InProgress", "Finished", etc.
+  if (person.status) {
+    const statusLower = person.status.toLowerCase();
+    if (statusLower === 'inprogress' || statusLower === 'in_progress') return 'active';
+    if (statusLower === 'finished') return 'finished';
+    if (statusLower === 'paused') return 'paused';
+    return statusLower;
+  }
+  return 'active';
 }
 
 Deno.serve(async (req) => {
@@ -136,58 +146,61 @@ Deno.serve(async (req) => {
     const apiKey = integration.api_key_encrypted;
     const teamId = integration.team_id;
     const replyTeamId = integration.reply_team_id;
-    const sequenceId = campaign.external_campaign_id;
+    // V1 API uses campaign ID directly
+    const replyCampaignId = campaign.external_campaign_id;
 
-    console.log(`Fetching contacts for sequence ${sequenceId}`);
+    console.log(`Fetching contacts for campaign ${replyCampaignId} using V1 API`);
 
-    // Fetch contacts from Reply.io V3 API using OFFSET pagination (not page)
-    const uniqueContactsMap = new Map<string, ReplyContact>();
-    let offset = 0;
+    // Fetch contacts from Reply.io V1 API using PAGE pagination (1-indexed)
+    const uniqueContactsMap = new Map<string, ReplyPerson>();
+    let page = 1;
     const limit = 100;
     let hasMore = true;
     let totalFetched = 0;
-    let iterations = 0;
-    const maxIterations = 100; // Safety cap: 100 iterations * 100 contacts = 10,000 max
+    const maxPages = 100; // Safety cap: 100 pages * 100 contacts = 10,000 max
+    let consecutiveDuplicatePages = 0;
 
-    while (hasMore && iterations < maxIterations) {
-      iterations++;
-      const endpoint = `/sequences/${sequenceId}/contacts/extended?limit=${limit}&offset=${offset}`;
-      console.log(`Fetching page ${iterations}: offset=${offset}, limit=${limit}`);
+    while (hasMore && page <= maxPages) {
+      const endpoint = `/campaigns/${replyCampaignId}/people?limit=${limit}&page=${page}`;
+      console.log(`Fetching page ${page}: limit=${limit}`);
       
-      const response = await fetchWithRetry(endpoint, apiKey, replyTeamId || undefined) as { 
-        items?: ReplyContact[]; 
-        info?: { hasMore?: boolean } 
-      };
+      const response = await fetchWithRetry(endpoint, apiKey, replyTeamId || undefined) as ReplyPeopleResponse;
       
-      const contacts = response.items || [];
-      totalFetched += contacts.length;
+      const people = response.people || [];
+      totalFetched += people.length;
       
       // Track unique contacts by email to avoid duplicates
       let newUniqueCount = 0;
-      for (const contact of contacts) {
-        if (contact.email && !uniqueContactsMap.has(contact.email.toLowerCase())) {
-          uniqueContactsMap.set(contact.email.toLowerCase(), contact);
+      for (const person of people) {
+        if (person.email && !uniqueContactsMap.has(person.email.toLowerCase())) {
+          uniqueContactsMap.set(person.email.toLowerCase(), person);
           newUniqueCount++;
         }
       }
       
-      console.log(`Page ${iterations}: fetched ${contacts.length}, new unique: ${newUniqueCount}, total unique: ${uniqueContactsMap.size}`);
+      console.log(`Page ${page}: fetched ${people.length}, new unique: ${newUniqueCount}, total unique: ${uniqueContactsMap.size}`);
       
-      // Log duplicate detection but DON'T stop - continue checking hasMore
-      if (newUniqueCount === 0 && contacts.length > 0) {
-        console.log(`Page ${iterations} returned only duplicates, continuing based on hasMore flag`);
+      // Track consecutive pages with no new contacts (API returning same data)
+      if (newUniqueCount === 0 && people.length > 0) {
+        consecutiveDuplicatePages++;
+        console.log(`Page ${page} returned duplicates (${consecutiveDuplicatePages} consecutive)`);
+        // Stop if we get 3 consecutive pages of duplicates - API is stuck
+        if (consecutiveDuplicatePages >= 3) {
+          console.log("Stopping: 3 consecutive duplicate pages detected");
+          break;
+        }
+      } else {
+        consecutiveDuplicatePages = 0; // Reset counter on new unique contacts
       }
       
-      // Check if there's more data
-      hasMore = response.info?.hasMore ?? (contacts.length === limit);
-      
-      // Move offset forward
-      offset += contacts.length;
-      
-      // Break if we got fewer than limit (last page)
-      if (contacts.length < limit) {
+      // Stop conditions:
+      // 1. Empty page (no more contacts)
+      // 2. Fewer items than limit (last page)
+      if (people.length === 0 || people.length < limit) {
         hasMore = false;
       }
+      
+      page++;
       
       // Rate limit protection between pages
       if (hasMore) {
@@ -196,7 +209,7 @@ Deno.serve(async (req) => {
     }
 
     const allContacts = Array.from(uniqueContactsMap.values());
-    console.log(`Fetched ${totalFetched} total items, ${allContacts.length} unique contacts from Reply.io`);
+    console.log(`Fetched ${totalFetched} total items, ${allContacts.length} unique contacts from Reply.io V1 API`);
 
     // Batch upsert contacts to database
     const BATCH_SIZE = 100;
@@ -210,31 +223,30 @@ Deno.serve(async (req) => {
       
       console.log(`Processing batch ${batchNumber}/${totalBatches} (${batch.length} contacts)`);
 
-      const records = batch.map(contact => {
+      const records = batch.map(person => {
         const engagementData = {
-          replied: contact.status?.replied || false,
-          delivered: contact.status?.delivered || false,
-          bounced: contact.status?.bounced || false,
-          opened: contact.status?.opened || false,
-          clicked: contact.status?.clicked || false,
-          optedOut: contact.status?.optedOut || false,
-          addedAt: contact.addedAt,
-          lastStepCompletedAt: contact.lastStepCompletedAt,
+          replied: person.replied || false,
+          bounced: person.bounced || false,
+          opened: person.opened || false,
+          clicked: person.clicked || false,
+          optedOut: person.optedOut || false,
+          finished: person.finished || false,
+          addedTime: person.addedTime,
         };
 
         return {
           campaign_id: campaignId,
           team_id: teamId,
-          external_contact_id: String(contact.id),
-          email: contact.email,
-          first_name: contact.firstName || null,
-          last_name: contact.lastName || null,
-          company: contact.company || null,
-          job_title: contact.title || null,
-          status: mapContactStatus(contact.status),
+          external_contact_id: String(person.id),
+          email: person.email,
+          first_name: person.firstName || null,
+          last_name: person.lastName || null,
+          company: person.company || null,
+          job_title: person.title || null,
+          status: mapPersonStatus(person),
           engagement_data: engagementData,
-          custom_fields: contact.customFields || {},
-          raw_data: contact,
+          custom_fields: person.customFields || {},
+          raw_data: person,
           updated_at: new Date().toISOString(),
         };
       });
