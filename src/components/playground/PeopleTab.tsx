@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Progress } from '@/components/ui/progress';
 import { Loader2, Users, RefreshCw, Download } from 'lucide-react';
 import { toast } from 'sonner';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -24,12 +25,19 @@ const statusColors: Record<string, string> = {
   unknown: 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200',
 };
 
+interface SyncProgress {
+  current: number;
+  total: number;
+  campaignName: string;
+}
+
 export function PeopleTab() {
   const [selectedCampaignId, setSelectedCampaignId] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [currentPage, setCurrentPage] = useState(1);
   const [perPage, setPerPage] = useState(100);
   const [isExporting, setIsExporting] = useState(false);
+  const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
   
   const { data: pagedData, isLoading: contactsLoading } = useSyncedContactsPaged({
     campaignId: selectedCampaignId,
@@ -43,6 +51,7 @@ export function PeopleTab() {
   const queryClient = useQueryClient();
 
   const activeIntegration = integrations?.find(i => i.platform === 'reply.io' && i.is_active);
+  const linkedCampaigns = campaigns?.filter(c => c.is_linked) || [];
 
   const contacts = pagedData?.contacts || [];
   const totalCount = pagedData?.totalCount || 0;
@@ -64,20 +73,22 @@ export function PeopleTab() {
     setCurrentPage(1);
   };
 
+  const syncSingleCampaign = async (campaignId: string) => {
+    if (!activeIntegration) throw new Error('No active integration');
+    
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) throw new Error('Not authenticated');
+
+    const response = await supabase.functions.invoke('sync-reply-contacts', {
+      body: { campaignId, integrationId: activeIntegration.id },
+    });
+
+    if (response.error) throw response.error;
+    return response.data;
+  };
+
   const syncContactsMutation = useMutation({
-    mutationFn: async (campaignId: string) => {
-      if (!activeIntegration) throw new Error('No active integration');
-      
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Not authenticated');
-
-      const response = await supabase.functions.invoke('sync-reply-contacts', {
-        body: { campaignId, integrationId: activeIntegration.id },
-      });
-
-      if (response.error) throw response.error;
-      return response.data;
-    },
+    mutationFn: syncSingleCampaign,
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['synced-contacts-paged'] });
       const count = data.verifiedCount || data.uniquePrepared || data.contactsSynced;
@@ -85,6 +96,59 @@ export function PeopleTab() {
     },
     onError: (error) => {
       toast.error(`Failed to sync contacts: ${error.message}`);
+    },
+  });
+
+  const syncAllCampaignsMutation = useMutation({
+    mutationFn: async () => {
+      if (!activeIntegration) throw new Error('No active integration');
+      if (!linkedCampaigns.length) throw new Error('No linked campaigns to sync');
+
+      let totalSynced = 0;
+      const errors: string[] = [];
+
+      for (let i = 0; i < linkedCampaigns.length; i++) {
+        const campaign = linkedCampaigns[i];
+        setSyncProgress({
+          current: i + 1,
+          total: linkedCampaigns.length,
+          campaignName: campaign.name,
+        });
+
+        try {
+          const result = await syncSingleCampaign(campaign.id);
+          totalSynced += result.verifiedCount || result.uniquePrepared || 0;
+        } catch (err) {
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          errors.push(`${campaign.name}: ${errorMsg}`);
+          console.error(`Failed to sync campaign ${campaign.name}:`, err);
+        }
+
+        // Small delay between campaigns to avoid rate limiting
+        if (i < linkedCampaigns.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      }
+
+      setSyncProgress(null);
+
+      if (errors.length > 0) {
+        console.warn('Some campaigns failed to sync:', errors);
+      }
+
+      return { totalSynced, errors };
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['synced-contacts-paged'] });
+      if (data.errors.length > 0) {
+        toast.warning(`Synced ${data.totalSynced} contacts (${data.errors.length} campaigns had errors)`);
+      } else {
+        toast.success(`Synced ${data.totalSynced} contacts from ${linkedCampaigns.length} campaigns`);
+      }
+    },
+    onError: (error) => {
+      setSyncProgress(null);
+      toast.error(`Failed to sync campaigns: ${error.message}`);
     },
   });
 
@@ -150,7 +214,19 @@ export function PeopleTab() {
         <p className="text-muted-foreground max-w-md mb-4">
           Sync your campaigns to fetch contact details and engagement data.
         </p>
-        {campaigns?.length ? (
+        {linkedCampaigns.length > 0 ? (
+          <Button 
+            onClick={() => syncAllCampaignsMutation.mutate()}
+            disabled={syncAllCampaignsMutation.isPending}
+          >
+            {syncAllCampaignsMutation.isPending ? (
+              <Loader2 className="h-4 w-4 animate-spin mr-2" />
+            ) : (
+              <RefreshCw className="h-4 w-4 mr-2" />
+            )}
+            Sync All {linkedCampaigns.length} Linked Campaigns
+          </Button>
+        ) : campaigns?.length ? (
           <div className="flex flex-col gap-2">
             <p className="text-sm text-muted-foreground">Select a campaign to sync its contacts:</p>
             <Select 
@@ -178,6 +254,26 @@ export function PeopleTab() {
 
   return (
     <div className="space-y-6">
+      {/* Sync Progress */}
+      {syncProgress && (
+        <Card className="border-primary/20 bg-primary/5">
+          <CardContent className="py-4">
+            <div className="flex items-center gap-4">
+              <Loader2 className="h-5 w-5 animate-spin text-primary" />
+              <div className="flex-1">
+                <p className="text-sm font-medium">
+                  Syncing campaign {syncProgress.current} of {syncProgress.total}: {syncProgress.campaignName}
+                </p>
+                <Progress 
+                  value={(syncProgress.current / syncProgress.total) * 100} 
+                  className="mt-2 h-2"
+                />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Filters and Actions */}
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div className="flex items-center gap-4">
@@ -209,19 +305,34 @@ export function PeopleTab() {
         </div>
 
         <div className="flex items-center gap-2">
+          {linkedCampaigns.length > 0 && (
+            <Button 
+              variant="outline" 
+              size="sm"
+              onClick={() => syncAllCampaignsMutation.mutate()}
+              disabled={syncAllCampaignsMutation.isPending || syncContactsMutation.isPending}
+            >
+              {syncAllCampaignsMutation.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+              ) : (
+                <RefreshCw className="h-4 w-4 mr-2" />
+              )}
+              Sync All ({linkedCampaigns.length})
+            </Button>
+          )}
           {selectedCampaignId !== 'all' && (
             <Button 
               variant="outline" 
               size="sm"
               onClick={() => syncContactsMutation.mutate(selectedCampaignId)}
-              disabled={syncContactsMutation.isPending}
+              disabled={syncContactsMutation.isPending || syncAllCampaignsMutation.isPending}
             >
               {syncContactsMutation.isPending ? (
                 <Loader2 className="h-4 w-4 animate-spin mr-2" />
               ) : (
                 <RefreshCw className="h-4 w-4 mr-2" />
               )}
-              Refresh Contacts
+              Refresh This
             </Button>
           )}
           <Button variant="outline" size="sm" onClick={handleExportCSV} disabled={isExporting}>

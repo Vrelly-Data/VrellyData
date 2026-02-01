@@ -15,6 +15,7 @@ export interface SyncedCampaign {
   } | null;
   updated_at: string;
   external_campaign_id: string;
+  is_linked: boolean;
 }
 
 export function useSyncedCampaigns(onlyLinked: boolean = true) {
@@ -23,7 +24,7 @@ export function useSyncedCampaigns(onlyLinked: boolean = true) {
     queryFn: async (): Promise<SyncedCampaign[]> => {
       let query = supabase
         .from('synced_campaigns')
-        .select('id, name, status, stats, updated_at, external_campaign_id');
+        .select('id, name, status, stats, updated_at, external_campaign_id, is_linked');
 
       // Filter to only linked campaigns if requested
       if (onlyLinked) {
