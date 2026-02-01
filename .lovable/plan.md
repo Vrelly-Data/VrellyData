@@ -1,82 +1,111 @@
 
+## Fix: Reply.io API Not Respecting Offset Parameter
 
-## Fix: Reply.io API Returning Same Contacts on Multiple Pages
+### Problem Identified
 
-### Root Cause Identified
+The edge function logs prove that the Reply.io V3 API endpoint `/sequences/{id}/contacts/extended` is **not respecting the `offset` parameter**:
 
-The logs reveal the issue:
 ```
 Page 1: fetched 100, new unique: 100, total unique: 100
 Page 2: fetched 100, new unique: 0, total unique: 100
-No new unique contacts in this page, stopping pagination
+...
+Page 100: fetched 100, new unique: 0, total unique: 100
+Fetched 10000 total items, 100 unique contacts from Reply.io
 ```
 
-The Reply.io API is returning the **same 100 contacts** when fetching with `offset=100`. This triggers our "duplicate detection" logic that was meant to prevent infinite loops, but it's stopping pagination prematurely.
+Every page returns the **exact same 100 contacts**, regardless of the `offset` value. This is either:
+1. A Reply.io API bug with this endpoint
+2. The V3 contacts endpoint requires different pagination syntax
 
-**Possible causes:**
-1. The API may not have stable ordering for offset pagination
-2. The sequence may have contacts that overlap across "pages" due to API behavior
-3. There may be a caching issue on the Reply.io side
+The campaign metadata shows Reply.io reports `peopleCount: 98` for Plumbing Campaign, but we should have 1,176 across all campaigns in the account.
 
 ---
 
-### Solution
+### Solution Strategy
 
-The "stop if no new unique contacts" logic is too aggressive. We need to:
+Based on Reply.io API documentation, we have two options:
 
-1. **Continue pagination based on `hasMore` flag**, not duplicate detection
-2. **Still deduplicate** contacts (using the Map), but don't stop early just because one page has duplicates
-3. **Only stop when**:
-   - `hasMore` is explicitly `false`
-   - We receive fewer items than `limit` (last page)
-   - We hit the safety cap (10,000 contacts)
-   - We receive 0 items (empty page)
+**Option A: Try the V1 Campaign/Contacts Endpoint**
+The sync-campaigns function uses the V1 API (`https://api.reply.io/v1/campaigns`). There may be a V1 endpoint for campaign contacts that works differently.
+
+**Option B: Use Global Contacts Endpoint + Filter by Sequence**
+Reply.io may have a `/v3/contacts` global endpoint that we can filter by sequence ID.
+
+**Option C: Use Webhooks for Real-Time Updates**
+Instead of polling, rely on the webhook system (already partially implemented) to capture contact additions and engagement events in real-time.
 
 ---
 
-### Code Changes
+### Implementation Plan
 
-**File:** `supabase/functions/sync-reply-contacts/index.ts`
+#### Phase 1: Fix Contact Sync with Alternative API Approach
 
-**Before (problematic logic at lines 176-180):**
+**1. Add V1 Contacts API endpoint support**
+- File: `supabase/functions/sync-reply-contacts/index.ts`
+- Try the V1 API: `GET /v1/campaigns/{id}/people` with pagination
+- The V1 API may use `page` parameter instead of `offset`
+
+**2. Modify pagination logic**
+- Use `page=1, page=2, ...` instead of `offset=0, offset=100, ...`
+- Check if V1 returns different results for different pages
+
+#### Phase 2: Add "Sync All Linked Campaigns" Button
+
+**3. Create frontend trigger for bulk sync**
+- File: `src/components/playground/PeopleTab.tsx`
+- Add "Sync All Campaigns" button that loops through linked campaigns
+- Show progress indicator during bulk sync
+
+**4. Update mutation to support bulk operations**
+- Invalidate queries after all campaigns are synced
+- Show aggregate success message
+
+---
+
+### Technical Details
+
+**API Endpoint Change:**
 ```typescript
-// Stop if no new contacts were found (we're seeing duplicates)
-if (newUniqueCount === 0 && contacts.length > 0) {
-  console.log("No new unique contacts in this page, stopping pagination");
-  break;
-}
+// BEFORE (V3 - broken pagination)
+const REPLY_API_BASE = "https://api.reply.io/v3";
+const endpoint = `/sequences/${sequenceId}/contacts/extended?limit=${limit}&offset=${offset}`;
+
+// AFTER (V1 - try page-based pagination)
+const REPLY_API_BASE = "https://api.reply.io/v1";
+const endpoint = `/campaigns/${campaignId}/people?limit=${limit}&page=${page}`;
 ```
 
-**After (remove premature exit, rely on hasMore):**
-```typescript
-// Log duplicate detection but DON'T stop - continue checking hasMore
-if (newUniqueCount === 0 && contacts.length > 0) {
-  console.log(`Page ${iterations} returned only duplicates, but continuing based on hasMore flag`);
-}
-```
+**V1 API uses:**
+- `page` parameter (1-indexed)
+- `limit` parameter (max 100)
+- Different response structure (may need mapping)
 
-The rest of the pagination logic already handles proper termination:
-- `hasMore = response.info?.hasMore ?? (contacts.length === limit)` - respects API signal
-- `if (contacts.length < limit) hasMore = false` - detects last page
-- `iterations < maxIterations` - safety cap
+**Bulk Sync UI:**
+```typescript
+// Add to PeopleTab.tsx
+<Button onClick={syncAllCampaigns}>
+  <RefreshCw className="h-4 w-4 mr-2" />
+  Sync All Linked Campaigns
+</Button>
+```
 
 ---
 
 ### Expected Outcome
 
-| Before | After |
-|--------|-------|
-| Stops after 2 pages (200 fetched, 100 unique) | Continues until `hasMore=false` |
-| 100 contacts synced | All 1,176 contacts synced |
-| Premature exit on duplicate page | Respects Reply.io pagination signal |
+| Current State | After Fix |
+|--------------|-----------|
+| 200 contacts (100 per campaign x 2) | All 1,176+ contacts across account |
+| V3 offset pagination broken | V1 page pagination working |
+| Manual sync per campaign | Bulk sync all linked campaigns |
+| Misleading "10000 fetched" logs | Accurate unique contact count |
 
 ---
 
 ### Verification Steps
 
-After deployment:
-1. Click "Refresh Contacts" for the campaign
-2. Check logs show continued pagination beyond page 2
-3. Verify final count matches ~1,176 contacts
-4. Confirm People tab shows all contacts with pagination
-
+1. Deploy updated edge function with V1 API
+2. Click "Sync All Linked Campaigns" 
+3. Check logs show actual unique contacts per page
+4. Verify database count matches Reply.io account total
+5. Confirm People tab shows all 1,176 contacts with pagination
