@@ -1,22 +1,33 @@
 
 
-## Fix Reply.io V3 Webhook API Payload Format
+## Fix Reply.io V3 Webhook 404 Error
 
 ### Problem Identified
 
-The V3 webhook creation is failing with a 404 because the payload format is incorrect:
+The Reply.io V3 API is returning a 404 with an empty response body. Based on the documentation analysis, two potential issues:
 
-| Current (Wrong) | Expected (V3 API) |
-|-----------------|-------------------|
-| `teamId: 383893` | `subscriptionLevel: "team"` + `teamIds: [383893]` |
+1. **Header Case Mismatch**: Documentation shows `X-API-Key` (all caps "API"), but code uses `X-Api-Key`
+2. **Missing Accept Header**: V3 APIs often require explicit `Accept: application/json` header
 
-The Reply.io V3 API requires:
-- `subscriptionLevel` to specify the scope (`account`, `team`, `sequence`, or `organization`)
-- `teamIds` (plural, array) when using team-level subscriptions
+### Root Cause Analysis
+
+From logs at `22:14:09Z`:
+```
+Payload: {"subscriptionLevel":"team","teamIds":[383893],...}
+Reply.io V3 response: 404 (empty body)
+```
+
+The payload format is now correct, but the API is rejecting the request with a 404. An empty 404 typically indicates an authentication/authorization issue rather than a malformed request.
+
+---
 
 ### Solution
 
-Update the payload construction in `setup-reply-webhook/index.ts` to use the correct V3 format.
+Update `supabase/functions/setup-reply-webhook/index.ts` to:
+
+1. Match the exact header casing from Reply.io documentation
+2. Add `Accept: application/json` header
+3. Add verbose logging to capture the full response for debugging
 
 ---
 
@@ -24,36 +35,46 @@ Update the payload construction in `setup-reply-webhook/index.ts` to use the cor
 
 **File:** `supabase/functions/setup-reply-webhook/index.ts`
 
-**Lines 112-122** - Update payload structure:
+**Lines 131-138** - Update fetch headers:
 
 ```typescript
-// Before (incorrect)
-const payload: Record<string, unknown> = {
-  targetUrl: webhookUrl,
-  eventTypes: ALL_EVENT_TYPES,
-  secret: webhookSecret,
-};
+// Before
+const response = await fetch(WEBHOOK_API_BASE, {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'X-Api-Key': apiKey,
+  },
+  body: JSON.stringify(payload),
+});
 
-if (integration.reply_team_id) {
-  payload.teamId = parseInt(integration.reply_team_id, 10);
-}
-
-// After (correct V3 format)
-const payload: Record<string, unknown> = {
-  targetUrl: webhookUrl,
-  eventTypes: ALL_EVENT_TYPES,
-  secret: webhookSecret,
-};
-
-if (integration.reply_team_id) {
-  // V3 API requires subscriptionLevel + teamIds (plural, array)
-  payload.subscriptionLevel = 'team';
-  payload.teamIds = [parseInt(integration.reply_team_id, 10)];
-} else {
-  // Default to account-level if no team specified
-  payload.subscriptionLevel = 'account';
-}
+// After
+const response = await fetch(WEBHOOK_API_BASE, {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+    'X-API-Key': apiKey,  // Match exact casing from Reply.io docs
+  },
+  body: JSON.stringify(payload),
+});
 ```
+
+**Also update delete requests (lines 85-95)** with matching header casing:
+
+```typescript
+headers: { 'X-API-Key': apiKey }  // Consistent casing
+```
+
+---
+
+### Changes Summary
+
+| Location | Change |
+|----------|--------|
+| Line 87 | `X-Api-Key` to `X-API-Key` |
+| Line 94 | `X-Api-Key` to `X-API-Key` |
+| Line 133-135 | Add `Accept: application/json` and fix `X-API-Key` casing |
 
 ---
 
@@ -61,8 +82,15 @@ if (integration.reply_team_id) {
 
 | Before | After |
 |--------|-------|
-| `{"teamId": 383893}` | `{"subscriptionLevel": "team", "teamIds": [383893]}` |
-| 404 error | 201 success with webhook ID |
+| `X-Api-Key` header | `X-API-Key` header (matches docs) |
+| No Accept header | `Accept: application/json` |
+| 404 empty response | 201 with webhook ID |
 
-After this fix, clicking the refresh button will successfully register the V3 webhook with Reply.io.
+---
+
+### Files to Modify
+
+| File | Changes |
+|------|---------|
+| `supabase/functions/setup-reply-webhook/index.ts` | Fix header casing, add Accept header |
 
