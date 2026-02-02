@@ -1,116 +1,109 @@
 
-## Enhance Contact Data Collection and Display
+## Fix Reply.io Webhooks - Upgrade to V3 API
 
-### Current State Analysis
+### Problem Identified
 
-From the database, Reply.io provides these fields in `raw_data` that we're **not currently storing as columns**:
+The webhook system stopped working because:
 
-| Field | Sample Data | Currently Stored |
-|-------|-------------|-----------------|
-| `company` | "Dye Lumber" | Yes (column exists) |
-| `industry` | "Building Construction" (16% populated) | No (only in raw_data) |
-| `companySize` | "Empty" (most empty in Reply) | No (only in raw_data) |
-| `city` | "Monticello" | No (only in raw_data) |
-| `state` | "IN" | No (only in raw_data) |
-| `country` | "US" | No (only in raw_data) |
-| `phone` | "+12198690061" | No (only in raw_data) |
-| `linkedInProfile` | "linkedin.com/in/..." | No (only in raw_data) |
-| `addingDate` | "2026-01-27T19:53:57" | No (only in engagement_data.addedTime) |
+1. **Using deprecated V2 API**: The setup function uses `https://api.reply.io/api/v2/webhooks` but Reply.io now uses V3
+2. **Reply.io disables webhooks after 5 consecutive failures** or no successful delivery in 48 hours
+3. **V2 webhooks may no longer be supported** by Reply.io, causing delivery failures
 
-**Engagement data already tracked:**
-- `replied`, `opened`, `clicked`, `bounced`, `optedOut`, `finished` (booleans)
-- `addedTime` (timestamp)
+Evidence:
+- Webhooks were working until ~8 hours ago (last event at 13:03:49 UTC)
+- Database shows 10 webhook subscription IDs (one per event type - V2 style)
+- V3 API supports multiple event types per subscription and HMAC signing
 
 ---
 
-### Implementation Plan
+### Solution Overview
 
-#### Phase 1: Database Schema Update
-
-**Add new columns to `synced_contacts` table:**
-```sql
-ALTER TABLE synced_contacts 
-ADD COLUMN IF NOT EXISTS industry TEXT,
-ADD COLUMN IF NOT EXISTS company_size TEXT,
-ADD COLUMN IF NOT EXISTS city TEXT,
-ADD COLUMN IF NOT EXISTS state TEXT,
-ADD COLUMN IF NOT EXISTS country TEXT,
-ADD COLUMN IF NOT EXISTS phone TEXT,
-ADD COLUMN IF NOT EXISTS linkedin_url TEXT,
-ADD COLUMN IF NOT EXISTS added_at TIMESTAMPTZ;
-```
+Upgrade the webhook setup to use Reply.io V3 API with:
+1. Single subscription for all event types (instead of 10 separate ones)
+2. HMAC signature verification for security
+3. Better error handling and logging
+4. Re-registration flow in the UI
 
 ---
 
-#### Phase 2: Update Edge Function (sync-reply-contacts)
+### Technical Implementation
 
-**File:** `supabase/functions/sync-reply-contacts/index.ts`
+**File 1: Update Setup Webhook Function**
+`supabase/functions/setup-reply-webhook/index.ts`
 
-Extract additional fields from the Reply.io API response:
+Changes:
+- Switch from V2 to V3 API: `https://api.reply.io/v3/webhooks`
+- Use `eventTypes` array instead of single `event` per subscription
+- Generate and store HMAC `secret` for payload verification
+- Use `subscriptionLevel: 'account'` or `'team'` based on configuration
 
 ```typescript
-const records = batch.map(person => ({
-  // Existing fields...
+// Before (V2 - one subscription per event)
+const WEBHOOK_API_BASE = 'https://api.reply.io/api/v2/webhooks';
+const payload = { event: 'email_replied', url: webhookUrl };
+
+// After (V3 - all events in one subscription)
+const WEBHOOK_API_BASE = 'https://api.reply.io/v3/webhooks';
+const payload = {
+  targetUrl: webhookUrl,
+  eventTypes: ['email_replied', 'email_sent', 'email_opened', ...],
+  secret: generatedHmacSecret,  // For signature verification
+  subscriptionLevel: 'account'
+};
+```
+
+**File 2: Add HMAC Signature Verification**
+`supabase/functions/reply-webhook/index.ts`
+
+Changes:
+- Verify `X-Reply-Signature` header using HMAC-SHA256
+- Reject requests without valid signature
+- Add timing-safe comparison to prevent timing attacks
+
+```typescript
+import { createHmac, timingSafeEqual } from 'node:crypto';
+
+// Verify webhook signature
+const signature = req.headers.get('x-reply-signature');
+const webhookSecret = integration.webhook_secret;
+
+if (webhookSecret && signature) {
+  const expectedSig = createHmac('sha256', webhookSecret)
+    .update(payload)
+    .digest('hex');
   
-  // NEW: Additional contact data
-  industry: person.industry || null,
-  company_size: person.companySize !== 'Empty' ? person.companySize : null,
-  city: person.city || null,
-  state: person.state || null,
-  country: person.country || null,
-  phone: person.phone || null,
-  linkedin_url: person.linkedInProfile || null,
-  added_at: person.addingDate || person.addedAt || null,
-}));
+  if (!timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSig))) {
+    return new Response('Invalid signature', { status: 401 });
+  }
+}
 ```
 
-Also update the `ReplyPerson` interface to include all available fields.
+**File 3: Update Integration Hook**
+`src/hooks/useOutboundIntegrations.ts`
+
+Changes:
+- Add better error messages for webhook setup failures
+- Add "Re-enable Webhooks" button when status is error/inactive
+
+**File 4: Update UI**
+`src/components/playground/IntegrationSetupCard.tsx`
+
+Changes:
+- Show webhook status badge (Active/Error/Inactive)
+- Add "Re-enable Live Updates" button when webhooks are disabled
+- Show last successful webhook timestamp if available
 
 ---
 
-#### Phase 3: Update Frontend (PeopleTab.tsx)
+### Migration Steps
 
-**Add new columns to the table:**
-- Company (already in DB, just not displayed)
-- Industry
-- Location (City, State, Country combined)
-- Phone
-- LinkedIn (link)
-- Added Date
-- Opened (boolean badge)
-- Clicked (boolean badge)
-- Opted Out (boolean badge)
-
-**Updated table headers:**
-```
-Name | Email | Company | Title | Industry | Location | Status | Opened | Replied | Added
-```
-
----
-
-#### Phase 4: Update Hooks and CSV Export
-
-**File:** `src/hooks/useSyncedContactsPaged.ts`
-
-Add new fields to the select query:
-```typescript
-.select('id, email, first_name, last_name, company, job_title, status, 
-         campaign_id, engagement_data, industry, city, state, country, 
-         phone, linkedin_url, added_at', { count: 'exact' })
-```
-
-**File:** `src/hooks/useSyncedContacts.ts`
-
-Update the interface to include new fields.
-
-**CSV Export update:**
-```typescript
-const headers = [
-  'Email', 'First Name', 'Last Name', 'Company', 'Job Title', 
-  'Industry', 'City', 'State', 'Country', 'Phone', 'LinkedIn',
-  'Status', 'Opened', 'Replied', 'Clicked', 'Opted Out', 'Added Date'
-];
-```
+1. Deploy updated edge functions
+2. Click "Re-enable Live Updates" in the UI
+3. System will:
+   - Delete old V2 webhook subscriptions
+   - Create new V3 subscription with all event types
+   - Store HMAC secret for verification
+4. Verify new webhook is active in Reply.io
 
 ---
 
@@ -118,31 +111,19 @@ const headers = [
 
 | File | Changes |
 |------|---------|
-| `supabase/functions/sync-reply-contacts/index.ts` | Add new fields to ReplyPerson interface and record mapping |
-| `src/hooks/useSyncedContacts.ts` | Update SyncedContact interface with new fields |
-| `src/hooks/useSyncedContactsPaged.ts` | Add new fields to select query and export function |
-| `src/components/playground/PeopleTab.tsx` | Add Company, Industry, Location, Phone, engagement columns |
-| `src/components/playground/ContactsListDialog.tsx` | Update to show new fields |
-| **Migration** | Add new columns to synced_contacts table |
+| `supabase/functions/setup-reply-webhook/index.ts` | Upgrade to V3 API, single subscription, HMAC secret |
+| `supabase/functions/reply-webhook/index.ts` | Add HMAC signature verification |
+| `src/hooks/useOutboundIntegrations.ts` | Better error handling for webhook status |
+| `src/components/playground/IntegrationSetupCard.tsx` | Webhook status UI and re-enable button |
 
 ---
 
 ### Expected Outcome
 
-| Before | After |
-|--------|-------|
-| 5 columns displayed | 10+ columns with full contact data |
-| No industry/location data | Industry, City, State, Country visible |
-| No phone/LinkedIn | Phone and LinkedIn columns available |
-| Basic engagement (Opened only) | Opened, Replied, Clicked, Opted Out columns |
-| Limited CSV export | Full data export with all fields |
-
----
-
-### Data Availability Note
-
-Some fields like `industry` and `companySize` are only populated if:
-1. Reply.io has enriched the contact
-2. The user included this data when uploading contacts to Reply
-
-The UI will show "—" for empty values, but the columns will be ready for when this data is available.
+| Current State | After Fix |
+|--------------|-----------|
+| V2 API (deprecated) | V3 API (current) |
+| 10 separate subscriptions | 1 subscription for all events |
+| No signature verification | HMAC-SHA256 verification |
+| Webhooks disabled by Reply.io | Active webhooks with retry support |
+| No way to re-enable | "Re-enable Live Updates" button |
