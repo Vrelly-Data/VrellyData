@@ -1,111 +1,148 @@
 
-## Fix: Reply.io API Not Respecting Offset Parameter
+## Enhance Contact Data Collection and Display
 
-### Problem Identified
+### Current State Analysis
 
-The edge function logs prove that the Reply.io V3 API endpoint `/sequences/{id}/contacts/extended` is **not respecting the `offset` parameter**:
+From the database, Reply.io provides these fields in `raw_data` that we're **not currently storing as columns**:
 
-```
-Page 1: fetched 100, new unique: 100, total unique: 100
-Page 2: fetched 100, new unique: 0, total unique: 100
-...
-Page 100: fetched 100, new unique: 0, total unique: 100
-Fetched 10000 total items, 100 unique contacts from Reply.io
-```
+| Field | Sample Data | Currently Stored |
+|-------|-------------|-----------------|
+| `company` | "Dye Lumber" | Yes (column exists) |
+| `industry` | "Building Construction" (16% populated) | No (only in raw_data) |
+| `companySize` | "Empty" (most empty in Reply) | No (only in raw_data) |
+| `city` | "Monticello" | No (only in raw_data) |
+| `state` | "IN" | No (only in raw_data) |
+| `country` | "US" | No (only in raw_data) |
+| `phone` | "+12198690061" | No (only in raw_data) |
+| `linkedInProfile` | "linkedin.com/in/..." | No (only in raw_data) |
+| `addingDate` | "2026-01-27T19:53:57" | No (only in engagement_data.addedTime) |
 
-Every page returns the **exact same 100 contacts**, regardless of the `offset` value. This is either:
-1. A Reply.io API bug with this endpoint
-2. The V3 contacts endpoint requires different pagination syntax
-
-The campaign metadata shows Reply.io reports `peopleCount: 98` for Plumbing Campaign, but we should have 1,176 across all campaigns in the account.
-
----
-
-### Solution Strategy
-
-Based on Reply.io API documentation, we have two options:
-
-**Option A: Try the V1 Campaign/Contacts Endpoint**
-The sync-campaigns function uses the V1 API (`https://api.reply.io/v1/campaigns`). There may be a V1 endpoint for campaign contacts that works differently.
-
-**Option B: Use Global Contacts Endpoint + Filter by Sequence**
-Reply.io may have a `/v3/contacts` global endpoint that we can filter by sequence ID.
-
-**Option C: Use Webhooks for Real-Time Updates**
-Instead of polling, rely on the webhook system (already partially implemented) to capture contact additions and engagement events in real-time.
+**Engagement data already tracked:**
+- `replied`, `opened`, `clicked`, `bounced`, `optedOut`, `finished` (booleans)
+- `addedTime` (timestamp)
 
 ---
 
 ### Implementation Plan
 
-#### Phase 1: Fix Contact Sync with Alternative API Approach
+#### Phase 1: Database Schema Update
 
-**1. Add V1 Contacts API endpoint support**
-- File: `supabase/functions/sync-reply-contacts/index.ts`
-- Try the V1 API: `GET /v1/campaigns/{id}/people` with pagination
-- The V1 API may use `page` parameter instead of `offset`
-
-**2. Modify pagination logic**
-- Use `page=1, page=2, ...` instead of `offset=0, offset=100, ...`
-- Check if V1 returns different results for different pages
-
-#### Phase 2: Add "Sync All Linked Campaigns" Button
-
-**3. Create frontend trigger for bulk sync**
-- File: `src/components/playground/PeopleTab.tsx`
-- Add "Sync All Campaigns" button that loops through linked campaigns
-- Show progress indicator during bulk sync
-
-**4. Update mutation to support bulk operations**
-- Invalidate queries after all campaigns are synced
-- Show aggregate success message
+**Add new columns to `synced_contacts` table:**
+```sql
+ALTER TABLE synced_contacts 
+ADD COLUMN IF NOT EXISTS industry TEXT,
+ADD COLUMN IF NOT EXISTS company_size TEXT,
+ADD COLUMN IF NOT EXISTS city TEXT,
+ADD COLUMN IF NOT EXISTS state TEXT,
+ADD COLUMN IF NOT EXISTS country TEXT,
+ADD COLUMN IF NOT EXISTS phone TEXT,
+ADD COLUMN IF NOT EXISTS linkedin_url TEXT,
+ADD COLUMN IF NOT EXISTS added_at TIMESTAMPTZ;
+```
 
 ---
 
-### Technical Details
+#### Phase 2: Update Edge Function (sync-reply-contacts)
 
-**API Endpoint Change:**
+**File:** `supabase/functions/sync-reply-contacts/index.ts`
+
+Extract additional fields from the Reply.io API response:
+
 ```typescript
-// BEFORE (V3 - broken pagination)
-const REPLY_API_BASE = "https://api.reply.io/v3";
-const endpoint = `/sequences/${sequenceId}/contacts/extended?limit=${limit}&offset=${offset}`;
-
-// AFTER (V1 - try page-based pagination)
-const REPLY_API_BASE = "https://api.reply.io/v1";
-const endpoint = `/campaigns/${campaignId}/people?limit=${limit}&page=${page}`;
+const records = batch.map(person => ({
+  // Existing fields...
+  
+  // NEW: Additional contact data
+  industry: person.industry || null,
+  company_size: person.companySize !== 'Empty' ? person.companySize : null,
+  city: person.city || null,
+  state: person.state || null,
+  country: person.country || null,
+  phone: person.phone || null,
+  linkedin_url: person.linkedInProfile || null,
+  added_at: person.addingDate || person.addedAt || null,
+}));
 ```
 
-**V1 API uses:**
-- `page` parameter (1-indexed)
-- `limit` parameter (max 100)
-- Different response structure (may need mapping)
+Also update the `ReplyPerson` interface to include all available fields.
 
-**Bulk Sync UI:**
-```typescript
-// Add to PeopleTab.tsx
-<Button onClick={syncAllCampaigns}>
-  <RefreshCw className="h-4 w-4 mr-2" />
-  Sync All Linked Campaigns
-</Button>
+---
+
+#### Phase 3: Update Frontend (PeopleTab.tsx)
+
+**Add new columns to the table:**
+- Company (already in DB, just not displayed)
+- Industry
+- Location (City, State, Country combined)
+- Phone
+- LinkedIn (link)
+- Added Date
+- Opened (boolean badge)
+- Clicked (boolean badge)
+- Opted Out (boolean badge)
+
+**Updated table headers:**
 ```
+Name | Email | Company | Title | Industry | Location | Status | Opened | Replied | Added
+```
+
+---
+
+#### Phase 4: Update Hooks and CSV Export
+
+**File:** `src/hooks/useSyncedContactsPaged.ts`
+
+Add new fields to the select query:
+```typescript
+.select('id, email, first_name, last_name, company, job_title, status, 
+         campaign_id, engagement_data, industry, city, state, country, 
+         phone, linkedin_url, added_at', { count: 'exact' })
+```
+
+**File:** `src/hooks/useSyncedContacts.ts`
+
+Update the interface to include new fields.
+
+**CSV Export update:**
+```typescript
+const headers = [
+  'Email', 'First Name', 'Last Name', 'Company', 'Job Title', 
+  'Industry', 'City', 'State', 'Country', 'Phone', 'LinkedIn',
+  'Status', 'Opened', 'Replied', 'Clicked', 'Opted Out', 'Added Date'
+];
+```
+
+---
+
+### Files to Modify
+
+| File | Changes |
+|------|---------|
+| `supabase/functions/sync-reply-contacts/index.ts` | Add new fields to ReplyPerson interface and record mapping |
+| `src/hooks/useSyncedContacts.ts` | Update SyncedContact interface with new fields |
+| `src/hooks/useSyncedContactsPaged.ts` | Add new fields to select query and export function |
+| `src/components/playground/PeopleTab.tsx` | Add Company, Industry, Location, Phone, engagement columns |
+| `src/components/playground/ContactsListDialog.tsx` | Update to show new fields |
+| **Migration** | Add new columns to synced_contacts table |
 
 ---
 
 ### Expected Outcome
 
-| Current State | After Fix |
-|--------------|-----------|
-| 200 contacts (100 per campaign x 2) | All 1,176+ contacts across account |
-| V3 offset pagination broken | V1 page pagination working |
-| Manual sync per campaign | Bulk sync all linked campaigns |
-| Misleading "10000 fetched" logs | Accurate unique contact count |
+| Before | After |
+|--------|-------|
+| 5 columns displayed | 10+ columns with full contact data |
+| No industry/location data | Industry, City, State, Country visible |
+| No phone/LinkedIn | Phone and LinkedIn columns available |
+| Basic engagement (Opened only) | Opened, Replied, Clicked, Opted Out columns |
+| Limited CSV export | Full data export with all fields |
 
 ---
 
-### Verification Steps
+### Data Availability Note
 
-1. Deploy updated edge function with V1 API
-2. Click "Sync All Linked Campaigns" 
-3. Check logs show actual unique contacts per page
-4. Verify database count matches Reply.io account total
-5. Confirm People tab shows all 1,176 contacts with pagination
+Some fields like `industry` and `companySize` are only populated if:
+1. Reply.io has enriched the contact
+2. The user included this data when uploading contacts to Reply
+
+The UI will show "—" for empty values, but the columns will be ready for when this data is available.
