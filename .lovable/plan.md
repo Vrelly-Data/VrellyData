@@ -1,109 +1,77 @@
 
-## Fix Reply.io Webhooks - Upgrade to V3 API
 
-### Problem Identified
+## Add Manual Webhook Refresh Button
 
-The webhook system stopped working because:
+### Overview
 
-1. **Using deprecated V2 API**: The setup function uses `https://api.reply.io/api/v2/webhooks` but Reply.io now uses V3
-2. **Reply.io disables webhooks after 5 consecutive failures** or no successful delivery in 48 hours
-3. **V2 webhooks may no longer be supported** by Reply.io, causing delivery failures
-
-Evidence:
-- Webhooks were working until ~8 hours ago (last event at 13:03:49 UTC)
-- Database shows 10 webhook subscription IDs (one per event type - V2 style)
-- V3 API supports multiple event types per subscription and HMAC signing
+Add a small refresh button next to the "Live" badge so you can manually re-register the Reply.io webhook at any time, even when the status shows as active.
 
 ---
 
-### Solution Overview
+### Implementation
 
-Upgrade the webhook setup to use Reply.io V3 API with:
-1. Single subscription for all event types (instead of 10 separate ones)
-2. HMAC signature verification for security
-3. Better error handling and logging
-4. Re-registration flow in the UI
+**File:** `src/components/playground/IntegrationSetupCard.tsx`
 
----
+**Change:** Replace the current Live badge (lines 89-94) with a badge + refresh button combo:
 
-### Technical Implementation
+```text
+Current:
+┌──────────────┐
+│ ⚡ Live      │
+└──────────────┘
 
-**File 1: Update Setup Webhook Function**
-`supabase/functions/setup-reply-webhook/index.ts`
-
-Changes:
-- Switch from V2 to V3 API: `https://api.reply.io/v3/webhooks`
-- Use `eventTypes` array instead of single `event` per subscription
-- Generate and store HMAC `secret` for payload verification
-- Use `subscriptionLevel: 'account'` or `'team'` based on configuration
-
-```typescript
-// Before (V2 - one subscription per event)
-const WEBHOOK_API_BASE = 'https://api.reply.io/api/v2/webhooks';
-const payload = { event: 'email_replied', url: webhookUrl };
-
-// After (V3 - all events in one subscription)
-const WEBHOOK_API_BASE = 'https://api.reply.io/v3/webhooks';
-const payload = {
-  targetUrl: webhookUrl,
-  eventTypes: ['email_replied', 'email_sent', 'email_opened', ...],
-  secret: generatedHmacSecret,  // For signature verification
-  subscriptionLevel: 'account'
-};
+After:
+┌──────────────┐ ┌───┐
+│ ⚡ Live      │ │ ↻ │  ← Click to refresh webhook
+└──────────────┘ └───┘
 ```
 
-**File 2: Add HMAC Signature Verification**
-`supabase/functions/reply-webhook/index.ts`
+**Code change:**
 
-Changes:
-- Verify `X-Reply-Signature` header using HMAC-SHA256
-- Reject requests without valid signature
-- Add timing-safe comparison to prevent timing attacks
+```tsx
+// Before (line 89-94)
+{isReplyIo && webhookStatus === 'active' && (
+  <Badge variant="secondary" className="...">
+    <Zap className="h-3 w-3" />
+    Live
+  </Badge>
+)}
 
-```typescript
-import { createHmac, timingSafeEqual } from 'node:crypto';
-
-// Verify webhook signature
-const signature = req.headers.get('x-reply-signature');
-const webhookSecret = integration.webhook_secret;
-
-if (webhookSecret && signature) {
-  const expectedSig = createHmac('sha256', webhookSecret)
-    .update(payload)
-    .digest('hex');
-  
-  if (!timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSig))) {
-    return new Response('Invalid signature', { status: 401 });
-  }
-}
+// After
+{isReplyIo && webhookStatus === 'active' && (
+  <div className="flex items-center gap-1">
+    <Badge variant="secondary" className="...">
+      <Zap className="h-3 w-3" />
+      Live
+    </Badge>
+    <Button
+      variant="ghost"
+      size="icon"
+      className="h-6 w-6"
+      onClick={() => onSetupWebhook(integration.id)}
+      disabled={isSettingUpWebhook || !integration.is_active}
+      title="Refresh webhook connection"
+    >
+      {isSettingUpWebhook ? (
+        <Loader2 className="h-3 w-3 animate-spin" />
+      ) : (
+        <RefreshCw className="h-3 w-3" />
+      )}
+    </Button>
+  </div>
+)}
 ```
-
-**File 3: Update Integration Hook**
-`src/hooks/useOutboundIntegrations.ts`
-
-Changes:
-- Add better error messages for webhook setup failures
-- Add "Re-enable Webhooks" button when status is error/inactive
-
-**File 4: Update UI**
-`src/components/playground/IntegrationSetupCard.tsx`
-
-Changes:
-- Show webhook status badge (Active/Error/Inactive)
-- Add "Re-enable Live Updates" button when webhooks are disabled
-- Show last successful webhook timestamp if available
 
 ---
 
-### Migration Steps
+### Behavior
 
-1. Deploy updated edge functions
-2. Click "Re-enable Live Updates" in the UI
-3. System will:
-   - Delete old V2 webhook subscriptions
-   - Create new V3 subscription with all event types
-   - Store HMAC secret for verification
-4. Verify new webhook is active in Reply.io
+| Action | Result |
+|--------|--------|
+| Click refresh button | Triggers `onSetupWebhook(integration.id)` |
+| During setup | Shows spinning loader, button disabled |
+| On success | Shows toast "Webhook configured successfully" |
+| On failure | Shows toast with error message |
 
 ---
 
@@ -111,19 +79,11 @@ Changes:
 
 | File | Changes |
 |------|---------|
-| `supabase/functions/setup-reply-webhook/index.ts` | Upgrade to V3 API, single subscription, HMAC secret |
-| `supabase/functions/reply-webhook/index.ts` | Add HMAC signature verification |
-| `src/hooks/useOutboundIntegrations.ts` | Better error handling for webhook status |
-| `src/components/playground/IntegrationSetupCard.tsx` | Webhook status UI and re-enable button |
+| `src/components/playground/IntegrationSetupCard.tsx` | Add refresh button next to Live badge (lines 89-94) |
 
 ---
 
-### Expected Outcome
+### Outcome
 
-| Current State | After Fix |
-|--------------|-----------|
-| V2 API (deprecated) | V3 API (current) |
-| 10 separate subscriptions | 1 subscription for all events |
-| No signature verification | HMAC-SHA256 verification |
-| Webhooks disabled by Reply.io | Active webhooks with retry support |
-| No way to re-enable | "Re-enable Live Updates" button |
+You'll be able to click the refresh icon next to the "Live" badge to re-register the webhook with Reply.io using the new V3 API, without needing to wait for the system to detect an error state.
+
