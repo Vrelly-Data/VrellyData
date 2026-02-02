@@ -29,6 +29,15 @@ interface ReplyPerson {
   clicked?: boolean;
   customFields?: Record<string, unknown>;
   addedTime?: string;
+  // Additional contact data fields
+  industry?: string;
+  companySize?: string;
+  city?: string;
+  state?: string;
+  country?: string;
+  phone?: string;
+  linkedInProfile?: string;
+  addingDate?: string;
 }
 
 // Retry wrapper with exponential backoff for rate limiting
@@ -231,7 +240,7 @@ Deno.serve(async (req) => {
           clicked: person.clicked || false,
           optedOut: person.optedOut || false,
           finished: person.finished || false,
-          addedTime: person.addedTime,
+          addedTime: person.addedTime || person.addingDate,
         };
 
         return {
@@ -248,6 +257,15 @@ Deno.serve(async (req) => {
           custom_fields: person.customFields || {},
           raw_data: person,
           updated_at: new Date().toISOString(),
+          // New fields from Reply.io
+          industry: person.industry || null,
+          company_size: person.companySize && person.companySize !== 'Empty' ? person.companySize : null,
+          city: person.city || null,
+          state: person.state || null,
+          country: person.country || null,
+          phone: person.phone || null,
+          linkedin_url: person.linkedInProfile || null,
+          added_at: person.addingDate || person.addedTime || null,
         };
       });
 
