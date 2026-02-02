@@ -116,9 +116,13 @@ Deno.serve(async (req) => {
       secret: webhookSecret,
     };
     
-    // If team_id is specified, use team-level subscription
+    // V3 API requires subscriptionLevel + teamIds (plural, array)
     if (integration.reply_team_id) {
-      payload.teamId = parseInt(integration.reply_team_id, 10);
+      payload.subscriptionLevel = 'team';
+      payload.teamIds = [parseInt(integration.reply_team_id, 10)];
+    } else {
+      // Default to account-level if no team specified
+      payload.subscriptionLevel = 'account';
     }
     
     console.log('Creating V3 webhook subscription');
