@@ -87,10 +87,26 @@ function IntegrationRow({ integration, onToggle, onDelete, onSync, onEdit, onSet
               </Badge>
             )}
             {isReplyIo && webhookStatus === 'active' && (
-              <Badge variant="secondary" className="text-xs flex items-center gap-1 bg-primary/10 text-primary border-primary/30">
-                <Zap className="h-3 w-3" />
-                Live
-              </Badge>
+              <div className="flex items-center gap-1">
+                <Badge variant="secondary" className="text-xs flex items-center gap-1 bg-primary/10 text-primary border-primary/30">
+                  <Zap className="h-3 w-3" />
+                  Live
+                </Badge>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6"
+                  onClick={() => onSetupWebhook(integration.id)}
+                  disabled={isSettingUpWebhook || !integration.is_active}
+                  title="Refresh webhook connection"
+                >
+                  {isSettingUpWebhook ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3 w-3" />
+                  )}
+                </Button>
+              </div>
             )}
             {isReplyIo && webhookStatus === 'error' && (
               <Badge variant="destructive" className="text-xs flex items-center gap-1">
