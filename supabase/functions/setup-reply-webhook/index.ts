@@ -5,11 +5,11 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-// Reply.io v2 API base - note the /api/ segment!
-const WEBHOOK_API_BASE = 'https://api.reply.io/api/v2/webhooks';
+// Reply.io V3 API
+const WEBHOOK_API_BASE = 'https://api.reply.io/v3/webhooks';
 
-// Full set of events including LinkedIn
-const EVENTS_TO_SUBSCRIBE = [
+// All events to subscribe to
+const ALL_EVENT_TYPES = [
   // Email events
   'email_replied',
   'email_sent',
@@ -24,6 +24,13 @@ const EVENTS_TO_SUBSCRIBE = [
   'contact_finished',
   'contact_opted_out',
 ];
+
+// Generate a random HMAC secret
+function generateSecret(): string {
+  const array = new Uint8Array(32);
+  crypto.getRandomValues(array);
+  return Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
+}
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -47,7 +54,7 @@ Deno.serve(async (req) => {
     // Fetch integration details
     const { data: integration, error: integrationError } = await supabase
       .from('outbound_integrations')
-      .select('id, platform, api_key_encrypted, webhook_subscription_id')
+      .select('id, platform, api_key_encrypted, webhook_subscription_id, reply_team_id')
       .eq('id', integrationId)
       .single();
     
@@ -67,17 +74,26 @@ Deno.serve(async (req) => {
 
     const apiKey = integration.api_key_encrypted;
     
-    // Delete existing webhooks if any (comma-separated IDs)
+    // Delete existing webhooks if any (could be V2 style comma-separated or V3 single ID)
     if (integration.webhook_subscription_id) {
       const existingIds = integration.webhook_subscription_id.split(',');
       for (const webhookId of existingIds) {
         if (webhookId.trim()) {
           try {
-            console.log('Deleting existing webhook:', webhookId);
-            const deleteResponse = await fetch(`${WEBHOOK_API_BASE}/${webhookId.trim()}`, {
+            console.log('Deleting existing webhook:', webhookId.trim());
+            // Try V3 deletion first
+            let deleteResponse = await fetch(`${WEBHOOK_API_BASE}/${webhookId.trim()}`, {
               method: 'DELETE',
               headers: { 'X-Api-Key': apiKey },
             });
+            
+            // If V3 fails, try V2 endpoint for old subscriptions
+            if (!deleteResponse.ok) {
+              deleteResponse = await fetch(`https://api.reply.io/api/v2/webhooks/${webhookId.trim()}`, {
+                method: 'DELETE',
+                headers: { 'X-Api-Key': apiKey },
+              });
+            }
             console.log('Delete response status:', deleteResponse.status);
           } catch (e) {
             console.log('Failed to delete webhook, continuing:', e);
@@ -90,54 +106,84 @@ Deno.serve(async (req) => {
     const webhookUrl = `${supabaseUrl}/functions/v1/reply-webhook/${integrationId}`;
     console.log('Webhook URL:', webhookUrl);
     
-    // Create one subscription per event (v2 API requirement)
-    const webhookIds: string[] = [];
-    const errors: string[] = [];
+    // Generate HMAC secret for signature verification
+    const webhookSecret = generateSecret();
     
-    for (const event of EVENTS_TO_SUBSCRIBE) {
-      const payload = {
-        event,
-        url: webhookUrl,
-      };
-      
-      console.log(`Creating webhook for event: ${event}`);
-      console.log('Payload:', JSON.stringify(payload));
-      
-      const response = await fetch(WEBHOOK_API_BASE, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Api-Key': apiKey,
-        },
-        body: JSON.stringify(payload),
-      });
-      
-      const responseText = await response.text();
-      console.log(`Reply.io response for ${event}:`, response.status, responseText);
-      
-      if (response.ok) {
-        try {
-          const data = JSON.parse(responseText);
-          if (data.id) {
-            webhookIds.push(data.id.toString());
-            console.log(`Successfully created webhook ${data.id} for ${event}`);
-          }
-        } catch {
-          console.log('Could not parse response as JSON');
-        }
-      } else {
-        errors.push(`${event}: ${response.status} - ${responseText}`);
-      }
+    // V3 payload - single subscription for all events
+    const payload: Record<string, unknown> = {
+      targetUrl: webhookUrl,
+      eventTypes: ALL_EVENT_TYPES,
+      secret: webhookSecret,
+    };
+    
+    // If team_id is specified, use team-level subscription
+    if (integration.reply_team_id) {
+      payload.teamId = parseInt(integration.reply_team_id, 10);
     }
     
-    // Update integration with results
-    const webhookStatus = webhookIds.length > 0 ? 'active' : 'error';
+    console.log('Creating V3 webhook subscription');
+    console.log('Payload:', JSON.stringify(payload));
+    
+    const response = await fetch(WEBHOOK_API_BASE, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Api-Key': apiKey,
+      },
+      body: JSON.stringify(payload),
+    });
+    
+    const responseText = await response.text();
+    console.log('Reply.io V3 response:', response.status, responseText);
+    
+    if (!response.ok) {
+      // Parse error details
+      let errorDetails = responseText;
+      try {
+        const errorJson = JSON.parse(responseText);
+        errorDetails = errorJson.message || errorJson.error || responseText;
+      } catch {
+        // Keep raw text
+      }
+      
+      // Update integration with error status
+      await supabase
+        .from('outbound_integrations')
+        .update({
+          webhook_status: 'error',
+          webhook_subscription_id: null,
+          webhook_secret: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', integrationId);
+      
+      return new Response(JSON.stringify({ 
+        error: 'Failed to create webhook subscription',
+        details: errorDetails,
+        status: response.status,
+      }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+    
+    // Parse successful response
+    let webhookId: string | null = null;
+    try {
+      const data = JSON.parse(responseText);
+      webhookId = data.id?.toString() || null;
+      console.log('Successfully created V3 webhook with ID:', webhookId);
+    } catch {
+      console.log('Could not parse response as JSON, but request succeeded');
+    }
+    
+    // Update integration with success status
     const { error: updateError } = await supabase
       .from('outbound_integrations')
       .update({
-        webhook_subscription_id: webhookIds.join(',') || null,
-        webhook_status: webhookStatus,
-        webhook_secret: null, // v2 doesn't support HMAC
+        webhook_subscription_id: webhookId,
+        webhook_status: 'active',
+        webhook_secret: webhookSecret,
         updated_at: new Date().toISOString(),
       })
       .eq('id', integrationId);
@@ -150,22 +196,12 @@ Deno.serve(async (req) => {
       });
     }
     
-    if (webhookIds.length === 0) {
-      return new Response(JSON.stringify({ 
-        error: 'Failed to create any webhooks',
-        details: errors.join('; '),
-      }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-    
     return new Response(JSON.stringify({ 
       success: true,
       webhookUrl,
       status: 'active',
-      subscriptionsCreated: webhookIds.length,
-      webhookIds,
+      webhookId,
+      eventTypes: ALL_EVENT_TYPES.length,
     }), {
       status: 200,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
