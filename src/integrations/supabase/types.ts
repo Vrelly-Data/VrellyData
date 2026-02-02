@@ -880,8 +880,12 @@ export type Database = {
       }
       synced_contacts: {
         Row: {
+          added_at: string | null
           campaign_id: string
+          city: string | null
           company: string | null
+          company_size: string | null
+          country: string | null
           created_at: string
           custom_fields: Json | null
           email: string
@@ -889,16 +893,24 @@ export type Database = {
           external_contact_id: string | null
           first_name: string | null
           id: string
+          industry: string | null
           job_title: string | null
           last_name: string | null
+          linkedin_url: string | null
+          phone: string | null
           raw_data: Json | null
+          state: string | null
           status: string | null
           team_id: string
           updated_at: string
         }
         Insert: {
+          added_at?: string | null
           campaign_id: string
+          city?: string | null
           company?: string | null
+          company_size?: string | null
+          country?: string | null
           created_at?: string
           custom_fields?: Json | null
           email: string
@@ -906,16 +918,24 @@ export type Database = {
           external_contact_id?: string | null
           first_name?: string | null
           id?: string
+          industry?: string | null
           job_title?: string | null
           last_name?: string | null
+          linkedin_url?: string | null
+          phone?: string | null
           raw_data?: Json | null
+          state?: string | null
           status?: string | null
           team_id: string
           updated_at?: string
         }
         Update: {
+          added_at?: string | null
           campaign_id?: string
+          city?: string | null
           company?: string | null
+          company_size?: string | null
+          country?: string | null
           created_at?: string
           custom_fields?: Json | null
           email?: string
@@ -923,9 +943,13 @@ export type Database = {
           external_contact_id?: string | null
           first_name?: string | null
           id?: string
+          industry?: string | null
           job_title?: string | null
           last_name?: string | null
+          linkedin_url?: string | null
+          phone?: string | null
           raw_data?: Json | null
+          state?: string | null
           status?: string | null
           team_id?: string
           updated_at?: string

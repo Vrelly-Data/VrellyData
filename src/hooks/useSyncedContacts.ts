@@ -9,7 +9,9 @@ export interface EngagementData {
   opened?: boolean;
   clicked?: boolean;
   optedOut?: boolean;
+  finished?: boolean;
   addedAt?: string;
+  addedTime?: string;
   lastStepCompletedAt?: string;
 }
 
@@ -23,6 +25,15 @@ export interface SyncedContact {
   status: string | null;
   campaign_id: string;
   engagement_data: EngagementData | null;
+  // New fields
+  industry: string | null;
+  company_size: string | null;
+  city: string | null;
+  state: string | null;
+  country: string | null;
+  phone: string | null;
+  linkedin_url: string | null;
+  added_at: string | null;
 }
 
 export function useSyncedContacts() {
@@ -31,7 +42,7 @@ export function useSyncedContacts() {
     queryFn: async (): Promise<SyncedContact[]> => {
       const { data, error } = await supabase
         .from('synced_contacts')
-        .select('id, email, first_name, last_name, company, job_title, status, campaign_id, engagement_data')
+        .select('id, email, first_name, last_name, company, job_title, status, campaign_id, engagement_data, industry, company_size, city, state, country, phone, linkedin_url, added_at')
         .order('created_at', { ascending: false });
 
       if (error) throw error;

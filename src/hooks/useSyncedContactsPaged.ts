@@ -28,7 +28,7 @@ export function useSyncedContactsPaged({
 
       let query = supabase
         .from('synced_contacts')
-        .select('id, email, first_name, last_name, company, job_title, status, campaign_id, engagement_data', { count: 'exact' })
+        .select('id, email, first_name, last_name, company, job_title, status, campaign_id, engagement_data, industry, company_size, city, state, country, phone, linkedin_url, added_at', { count: 'exact' })
         .order('created_at', { ascending: false })
         .range(from, to);
 
@@ -71,7 +71,7 @@ export async function fetchAllContactsForExport(
   while (hasMore) {
     let query = supabase
       .from('synced_contacts')
-      .select('id, email, first_name, last_name, company, job_title, status, campaign_id, engagement_data')
+      .select('id, email, first_name, last_name, company, job_title, status, campaign_id, engagement_data, industry, company_size, city, state, country, phone, linkedin_url, added_at')
       .order('created_at', { ascending: false })
       .range(offset, offset + batchSize - 1);
 

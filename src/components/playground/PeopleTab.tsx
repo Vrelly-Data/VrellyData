@@ -9,7 +9,8 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Progress } from '@/components/ui/progress';
-import { Loader2, Users, RefreshCw, Download } from 'lucide-react';
+import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
+import { Loader2, Users, RefreshCw, Download, ExternalLink, Check, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { PaginationControls } from '@/components/search/PaginationControls';
@@ -169,19 +170,32 @@ export function PeopleTab() {
         return;
       }
 
-      const headers = ['Email', 'First Name', 'Last Name', 'Job Title', 'Status', 'Replied', 'Opened', 'Bounced'];
+      const headers = [
+        'Email', 'First Name', 'Last Name', 'Company', 'Job Title', 
+        'Industry', 'City', 'State', 'Country', 'Phone', 'LinkedIn',
+        'Status', 'Opened', 'Replied', 'Clicked', 'Opted Out', 'Added Date'
+      ];
       const rows = allContacts.map(c => [
         c.email,
         c.first_name || '',
         c.last_name || '',
+        c.company || '',
         c.job_title || '',
+        c.industry || '',
+        c.city || '',
+        c.state || '',
+        c.country || '',
+        c.phone || '',
+        c.linkedin_url || '',
         c.status || '',
-        c.engagement_data?.replied ? 'Yes' : 'No',
         c.engagement_data?.opened ? 'Yes' : 'No',
-        c.engagement_data?.bounced ? 'Yes' : 'No',
+        c.engagement_data?.replied ? 'Yes' : 'No',
+        c.engagement_data?.clicked ? 'Yes' : 'No',
+        c.engagement_data?.optedOut ? 'Yes' : 'No',
+        c.added_at ? new Date(c.added_at).toLocaleDateString() : '',
       ]);
 
-      const csvContent = [headers, ...rows].map(row => row.map(cell => `"${cell}"`).join(',')).join('\n');
+      const csvContent = [headers, ...rows].map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n');
       const blob = new Blob([csvContent], { type: 'text/csv' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -385,45 +399,103 @@ export function PeopleTab() {
       {/* Contacts Table */}
       <Card>
         <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Email</TableHead>
-                <TableHead>Title</TableHead>
-                <TableHead>Opened</TableHead>
-                <TableHead>Status</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {contacts.map((contact) => (
-                <TableRow key={contact.id}>
-                  <TableCell className="font-medium">
-                    {[contact.first_name, contact.last_name].filter(Boolean).join(' ') || '—'}
-                  </TableCell>
-                  <TableCell>{contact.email}</TableCell>
-                  <TableCell>{contact.job_title || '—'}</TableCell>
-                  <TableCell>
-                    {contact.engagement_data?.opened ? (
-                      <Badge variant="secondary" className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
-                        Yes
-                      </Badge>
-                    ) : (
-                      <span className="text-muted-foreground">No</span>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    <Badge 
-                      variant="secondary" 
-                      className={statusColors[contact.status || 'unknown'] || statusColors.unknown}
-                    >
-                      {contact.status || 'Unknown'}
-                    </Badge>
-                  </TableCell>
+          <ScrollArea className="w-full whitespace-nowrap">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="min-w-[150px]">Name</TableHead>
+                  <TableHead className="min-w-[200px]">Email</TableHead>
+                  <TableHead className="min-w-[150px]">Company</TableHead>
+                  <TableHead className="min-w-[150px]">Title</TableHead>
+                  <TableHead className="min-w-[120px]">Industry</TableHead>
+                  <TableHead className="min-w-[150px]">Location</TableHead>
+                  <TableHead className="min-w-[80px]">Status</TableHead>
+                  <TableHead className="min-w-[70px] text-center">Opened</TableHead>
+                  <TableHead className="min-w-[70px] text-center">Replied</TableHead>
+                  <TableHead className="min-w-[70px] text-center">Clicked</TableHead>
+                  <TableHead className="min-w-[80px] text-center">Opted Out</TableHead>
+                  <TableHead className="min-w-[100px]">Added</TableHead>
+                  <TableHead className="min-w-[60px]">LinkedIn</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {contacts.map((contact) => {
+                  const location = [contact.city, contact.state, contact.country]
+                    .filter(Boolean)
+                    .join(', ');
+                  
+                  return (
+                    <TableRow key={contact.id}>
+                      <TableCell className="font-medium">
+                        {[contact.first_name, contact.last_name].filter(Boolean).join(' ') || '—'}
+                      </TableCell>
+                      <TableCell className="max-w-[200px] truncate">{contact.email}</TableCell>
+                      <TableCell className="max-w-[150px] truncate">{contact.company || '—'}</TableCell>
+                      <TableCell className="max-w-[150px] truncate">{contact.job_title || '—'}</TableCell>
+                      <TableCell className="max-w-[120px] truncate">{contact.industry || '—'}</TableCell>
+                      <TableCell className="max-w-[150px] truncate">{location || '—'}</TableCell>
+                      <TableCell>
+                        <Badge 
+                          variant="secondary" 
+                          className={statusColors[contact.status || 'unknown'] || statusColors.unknown}
+                        >
+                          {contact.status || 'Unknown'}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-center">
+                        {contact.engagement_data?.opened ? (
+                          <Check className="h-4 w-4 text-green-600 mx-auto" />
+                        ) : (
+                          <X className="h-4 w-4 text-muted-foreground/40 mx-auto" />
+                        )}
+                      </TableCell>
+                      <TableCell className="text-center">
+                        {contact.engagement_data?.replied ? (
+                          <Check className="h-4 w-4 text-blue-600 mx-auto" />
+                        ) : (
+                          <X className="h-4 w-4 text-muted-foreground/40 mx-auto" />
+                        )}
+                      </TableCell>
+                      <TableCell className="text-center">
+                        {contact.engagement_data?.clicked ? (
+                          <Check className="h-4 w-4 text-purple-600 mx-auto" />
+                        ) : (
+                          <X className="h-4 w-4 text-muted-foreground/40 mx-auto" />
+                        )}
+                      </TableCell>
+                      <TableCell className="text-center">
+                        {contact.engagement_data?.optedOut ? (
+                          <Check className="h-4 w-4 text-orange-600 mx-auto" />
+                        ) : (
+                          <X className="h-4 w-4 text-muted-foreground/40 mx-auto" />
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        {contact.added_at 
+                          ? new Date(contact.added_at).toLocaleDateString() 
+                          : '—'}
+                      </TableCell>
+                      <TableCell>
+                        {contact.linkedin_url ? (
+                          <a 
+                            href={contact.linkedin_url.startsWith('http') ? contact.linkedin_url : `https://${contact.linkedin_url}`}
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className="text-blue-600 hover:text-blue-800"
+                          >
+                            <ExternalLink className="h-4 w-4" />
+                          </a>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+            <ScrollBar orientation="horizontal" />
+          </ScrollArea>
           
           {/* Pagination Controls */}
           {totalPages > 1 && (
