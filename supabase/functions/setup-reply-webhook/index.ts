@@ -84,14 +84,14 @@ Deno.serve(async (req) => {
             // Try V3 deletion first
             let deleteResponse = await fetch(`${WEBHOOK_API_BASE}/${webhookId.trim()}`, {
               method: 'DELETE',
-              headers: { 'X-Api-Key': apiKey },
+              headers: { 'X-API-Key': apiKey },
             });
             
             // If V3 fails, try V2 endpoint for old subscriptions
             if (!deleteResponse.ok) {
               deleteResponse = await fetch(`https://api.reply.io/api/v2/webhooks/${webhookId.trim()}`, {
                 method: 'DELETE',
-                headers: { 'X-Api-Key': apiKey },
+                headers: { 'X-API-Key': apiKey },
               });
             }
             console.log('Delete response status:', deleteResponse.status);
@@ -132,7 +132,8 @@ Deno.serve(async (req) => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Api-Key': apiKey,
+        'Accept': 'application/json',
+        'X-API-Key': apiKey,
       },
       body: JSON.stringify(payload),
     });
