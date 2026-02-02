@@ -87,9 +87,15 @@ function IntegrationRow({ integration, onToggle, onDelete, onSync, onEdit, onSet
               </Badge>
             )}
             {isReplyIo && webhookStatus === 'active' && (
-              <Badge variant="outline" className="text-xs flex items-center gap-1 text-green-600 border-green-600">
+              <Badge variant="secondary" className="text-xs flex items-center gap-1 bg-primary/10 text-primary border-primary/30">
                 <Zap className="h-3 w-3" />
                 Live
+              </Badge>
+            )}
+            {isReplyIo && webhookStatus === 'error' && (
+              <Badge variant="destructive" className="text-xs flex items-center gap-1">
+                <AlertCircle className="h-3 w-3" />
+                Webhook Error
               </Badge>
             )}
           </div>
@@ -131,11 +137,11 @@ function IntegrationRow({ integration, onToggle, onDelete, onSync, onEdit, onSet
         )}
         {isReplyIo && webhookStatus !== 'active' && (
           <div className="flex items-center gap-2">
-            {webhookStatus === 'error' && !replyTeamId && (
-              <span className="text-xs text-amber-600 dark:text-amber-400">Set Team ID first →</span>
+            {webhookStatus === 'error' && (
+              <span className="text-xs text-destructive">Webhook disabled - click to re-enable →</span>
             )}
             <Button
-              variant="outline"
+              variant={webhookStatus === 'error' ? 'default' : 'outline'}
               size="sm"
               onClick={() => onSetupWebhook(integration.id)}
               disabled={isSettingUpWebhook || !integration.is_active}
@@ -146,7 +152,13 @@ function IntegrationRow({ integration, onToggle, onDelete, onSync, onEdit, onSet
               ) : (
                 <Zap className="h-4 w-4" />
               )}
-              <span className="ml-1.5">{isSettingUpWebhook ? 'Setting up...' : 'Enable Live'}</span>
+              <span className="ml-1.5">
+                {isSettingUpWebhook 
+                  ? 'Setting up...' 
+                  : webhookStatus === 'error' 
+                    ? 'Re-enable Live Updates' 
+                    : 'Enable Live'}
+              </span>
             </Button>
           </div>
         )}

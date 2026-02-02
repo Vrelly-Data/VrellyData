@@ -1,9 +1,38 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
+
+// Verify HMAC signature from Reply.io V3 webhooks
+function verifySignature(payload: string, signature: string | null, secret: string | null): boolean {
+  if (!secret || !signature) {
+    // If no secret configured, skip verification (backwards compatibility)
+    return true;
+  }
+  
+  try {
+    const expectedSig = createHmac('sha256', secret)
+      .update(payload)
+      .digest('hex');
+    
+    // Use timing-safe comparison to prevent timing attacks
+    const encoder = new TextEncoder();
+    const sigBuffer = encoder.encode(signature);
+    const expectedBuffer = encoder.encode(expectedSig);
+    
+    if (sigBuffer.length !== expectedBuffer.length) {
+      return false;
+    }
+    
+    return timingSafeEqual(sigBuffer, expectedBuffer);
+  } catch (e) {
+    console.error('Signature verification error:', e);
+    return false;
+  }
+}
 
 Deno.serve(async (req) => {
   // Handle CORS preflight
@@ -25,17 +54,17 @@ Deno.serve(async (req) => {
     }
 
     const payload = await req.text();
-    console.log('Received webhook payload:', payload);
+    console.log('Received webhook payload:', payload.substring(0, 500));
     
     // Initialize Supabase with service role for database updates
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
     
-    // Fetch integration to verify it exists
+    // Fetch integration to verify it exists and get webhook secret
     const { data: integration, error: integrationError } = await supabase
       .from('outbound_integrations')
-      .select('id, team_id, is_active')
+      .select('id, team_id, is_active, webhook_secret')
       .eq('id', integrationId)
       .single();
     
@@ -47,7 +76,20 @@ Deno.serve(async (req) => {
       });
     }
     
-    // Parse the event (v2 API sends simpler payloads)
+    // Verify HMAC signature if secret is configured
+    const signature = req.headers.get('x-reply-signature');
+    if (integration.webhook_secret) {
+      if (!verifySignature(payload, signature, integration.webhook_secret)) {
+        console.error('Invalid webhook signature');
+        return new Response(JSON.stringify({ error: 'Invalid signature' }), {
+          status: 401,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      console.log('Webhook signature verified successfully');
+    }
+    
+    // Parse the event
     let event;
     try {
       event = JSON.parse(payload);
@@ -59,13 +101,20 @@ Deno.serve(async (req) => {
       });
     }
     
-    // Reply.io v2 sends event type in event.event.type as PascalCase (e.g., "LinkedInConnectionRequestSent")
-    const eventType = event.event?.type || event.type || 'unknown';
+    // V3 API sends event type in different formats - handle both
+    // V3: event.eventType (snake_case like "email_replied")
+    // V2: event.event.type (PascalCase like "EmailReplied")
+    const eventType = event.eventType || event.event?.type || event.type || 'unknown';
     const contactEmail = event.email || event.contact?.email || event.data?.email;
-    // Campaign ID is in sequence_fields.id for Reply.io v2 webhooks
-    const campaignId = event.sequence_fields?.id || event.campaignId || event.campaign_id || event.data?.campaignId;
     
-    console.log(`Received webhook event: ${eventType} for integration ${integrationId}`);
+    // Campaign ID extraction - V3 uses different field names
+    // V3: event.campaignId or event.sequenceId
+    // V2: event.sequence_fields.id
+    const campaignId = event.campaignId || event.sequenceId || 
+                       event.sequence_fields?.id || event.campaign_id || 
+                       event.data?.campaignId;
+    
+    console.log(`Received webhook event: ${eventType} for integration ${integrationId}, campaign: ${campaignId}`);
     
     // Log the event
     await supabase.from('webhook_events').insert({
@@ -89,47 +138,38 @@ Deno.serve(async (req) => {
       if (campaign) {
         const stats = (campaign.stats || {}) as Record<string, number>;
         
-        // Handle both PascalCase (Reply.io v2) and snake_case event types
-        switch (eventType) {
-          case 'EmailSent':
-          case 'EmailDelivered':
+        // Normalize event type to snake_case for consistent handling
+        const normalizedType = eventType.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase();
+        
+        switch (normalizedType) {
           case 'email_sent':
           case 'email_delivered':
             stats.sent = (stats.sent || 0) + 1;
             break;
-          case 'EmailOpened':
           case 'email_opened':
             stats.opens = (stats.opens || 0) + 1;
             break;
-          case 'EmailReplied':
           case 'email_replied':
             stats.replies = (stats.replies || 0) + 1;
             break;
-          case 'EmailBounced':
           case 'email_bounced':
             stats.bounces = (stats.bounces || 0) + 1;
             break;
-          case 'LinkedInMessageSent':
           case 'linkedin_message_sent':
             stats.linkedinMessagesSent = (stats.linkedinMessagesSent || 0) + 1;
             break;
-          case 'LinkedInMessageReplied':
           case 'linkedin_message_replied':
             stats.linkedinReplies = (stats.linkedinReplies || 0) + 1;
             break;
-          case 'LinkedInConnectionRequestSent':
           case 'linkedin_connection_request_sent':
             stats.linkedinConnectionsSent = (stats.linkedinConnectionsSent || 0) + 1;
             break;
-          case 'LinkedInConnectionRequestAccepted':
           case 'linkedin_connection_request_accepted':
             stats.linkedinConnectionsAccepted = (stats.linkedinConnectionsAccepted || 0) + 1;
             break;
-          case 'ContactFinished':
           case 'contact_finished':
             stats.finished = (stats.finished || 0) + 1;
             break;
-          case 'ContactOptedOut':
           case 'contact_opted_out':
             stats.optedOut = (stats.optedOut || 0) + 1;
             break;
@@ -154,24 +194,24 @@ Deno.serve(async (req) => {
       
       if (contact) {
         const engagement = (contact.engagement_data || {}) as Record<string, unknown>;
+        const normalizedType = eventType.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase();
         
-        // Handle both PascalCase and snake_case for contact engagement updates
-        switch (eventType) {
-          case 'EmailSent':
+        switch (normalizedType) {
           case 'email_sent':
             engagement.lastEmailSent = new Date().toISOString();
             break;
-          case 'EmailOpened':
           case 'email_opened':
             engagement.opened = true;
             engagement.lastOpened = new Date().toISOString();
             break;
-          case 'EmailReplied':
           case 'email_replied':
             engagement.replied = true;
             engagement.repliedAt = new Date().toISOString();
             break;
-          case 'ContactOptedOut':
+          case 'link_clicked':
+            engagement.clicked = true;
+            engagement.lastClicked = new Date().toISOString();
+            break;
           case 'contact_opted_out':
             engagement.optedOut = true;
             engagement.optedOutAt = new Date().toISOString();
@@ -183,7 +223,7 @@ Deno.serve(async (req) => {
           .update({ 
             engagement_data: engagement, 
             updated_at: new Date().toISOString(),
-            status: eventType === 'email_replied' ? 'replied' : undefined,
+            status: normalizedType === 'email_replied' ? 'replied' : undefined,
           })
           .eq('id', contact.id);
       }
