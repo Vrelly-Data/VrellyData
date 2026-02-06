@@ -1,118 +1,194 @@
 
-Goal
-- Fix the “re-enable live updates” webhook setup so it doesn’t keep failing with a Reply API 404, and make failures actionable (right now Reply returns 404 with an empty body, so the UI can’t show a meaningful reason).
 
-What we know from logs (confirmed)
-- The backend webhook setup call returns:
-  - status: 400 (from our backend function)
-  - payload: {"error":"Failed to create webhook subscription","details":"","status":404}
-- The upstream Reply API call to:
-  - POST https://api.reply.io/v3/webhooks
-  returns 404 with an empty response body.
-- The request payload looks valid per Reply docs:
-  - targetUrl, eventTypes, secret, subscriptionLevel: "team", teamIds: [383893]
-- Because the body is empty, we can’t tell if this is:
-  - a “team not found / not accessible” situation,
-  - an “API key not authorized for v3/webhooks” situation (some APIs intentionally return 404),
-  - a subtle request formatting issue (less likely),
-  - or an API-key formatting issue (whitespace).
+## Fix Reply.io Integration: Sync Stats Not Visible + Webhook 404 Error
 
-Why it’s failing again (most likely causes)
-1) Team scope issue:
-   - subscriptionLevel="team" + teamIds=[383893] may be invalid for that API key (wrong team, team not accessible, or teamId discovered from v1 endpoints not matching v3 expectations).
-2) API key works for older endpoints but not for v3 webhooks:
-   - Your integration uses Reply v1 calls elsewhere (fetch teams, etc.). The webhook endpoint is v3. Some accounts/keys may not have access or may require different auth behavior.
-3) API key value has hidden whitespace:
-   - If the stored key includes a trailing newline/space, auth can fail in non-obvious ways. This is easy to harden against.
+### Problems Identified
 
-Implementation plan (code changes)
-A) Make webhook setup function “self-diagnosing” (backend function: supabase/functions/setup-reply-webhook/index.ts)
-1) Normalize and validate the API key
-   - Change:
-     - const apiKey = integration.api_key_encrypted;
-   - To:
-     - const apiKey = (integration.api_key_encrypted ?? '').trim();
-   - If apiKey is empty after trimming, return a clear error (and set webhook_status='error').
+| Issue | Symptom | Root Cause |
+|-------|---------|------------|
+| **Stats not updating** | Sync completes but dashboard doesn't show new stats | All 62 campaigns have `is_linked: false` - they aren't being included in dashboard aggregations |
+| **Webhook 404** | "Enable Live" fails with 404 even after fallback to account-level | Reply.io V3 API requires `accountId` for account-level subscriptions, but we're not providing it |
 
-2) Add a lightweight “probe” request to confirm v3 access before creating a webhook
-   - Before POST /v3/webhooks, call something simple in v3 that should exist, e.g.:
-     - GET https://api.reply.io/v3/sequences?limit=1 (or GET /v3/webhooks if it supports listing)
-   - Log and return (in a safe way) the probe results:
-     - probeStatus
-     - probeBodySnippet (first ~500 chars)
-     - keyFingerprint (e.g., last 4 chars only) so we never log secrets
-   - If probe fails (401/403/404), return a targeted message like:
-     - “Reply API v3 probe failed (status 401). Your API key likely isn’t valid for v3.”
-     - “Probe returned 404. This often indicates the key doesn’t have access to v3 endpoints, or the endpoint is blocked for this account.”
+---
 
-3) Add retry/fallback strategy for team vs account scope
-   - If webhook creation fails with 404 and reply_team_id is set:
-     - Retry once with an account-level subscription:
-       - Either set subscriptionLevel='account' (with no teamIds), or omit subscriptionLevel entirely (defaults to account per Reply docs).
-     - Reason: if the teamId is the issue, account-level may still succeed and at least enable live updates.
-   - If the retry succeeds:
-     - Save webhook_subscription_id/webhook_secret and mark webhook_status='active'
-     - Optionally also record that we fell back to account-level (if you have an existing column; if not, just log it).
+### Investigation Findings
 
-4) Improve response logging without leaking secrets
-   - For failures, log:
-     - response.status
-     - response.statusText
-     - response headers that are safe (some APIs include request IDs)
-     - response body snippet (it’s currently empty, but if it ever contains a problem+json, we’ll capture it)
-   - Ensure logs redact:
-     - API key (never print)
-     - webhook secret (don’t print the full secret; if needed, show first 6 chars only)
+**Sync is working correctly** - the logs show all 62 campaigns synced with stats:
+```
+Fast sync complete: 62/62 campaigns processed
+```
 
-5) CORS hardening (small but worthwhile)
-   - Update CORS allow-headers to include the full set recommended for web apps so preflights can’t cause confusing failures later:
-     - authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version
-   - Keep returning CORS headers on all responses (success + error).
+The database confirms campaigns have stats (e.g., `sent:22, replies:0, opens:0`), but **none are linked**:
+```sql
+SELECT is_linked FROM synced_campaigns → all false
+```
 
-B) Ensure the UI shows the real diagnostic message (frontend: src/hooks/useOutboundIntegrations.ts)
-Problem
-- supabase.functions.invoke often returns `error` with a generic message; `data` may not reliably include the JSON body on non-2xx responses, so your current “extract details from data” logic may not fire.
+**Webhook probe passes, creation fails**:
+```
+V3 probe result: 200 OK
+Reply.io V3 response (account): 404 (empty body)
+```
 
-Fix
-Option 1 (recommended): Return 200 even on upstream Reply failures
-- Change setup-reply-webhook so that even when Reply returns a failure, our backend function responds with:
-  - HTTP 200
-  - JSON: { success: false, status: 404, details: "...", probe: {...} }
-- Then update the client mutation to:
-  - if (!data?.success) throw new Error(buildMessageFrom(data))
-- This makes the UI reliably show the exact diagnostics we generate.
+Per Reply.io V3 documentation, the `accountId` field is required for account-level subscriptions:
+> `accountId` (integer): Specific account ID (when subscriptionLevel = 'account')
 
-Option 2: Keep non-2xx but enhance extraction
-- Investigate if supabase-js exposes the response body in error context (varies by version/runtime).
-- This is less reliable than Option 1.
+---
 
-Acceptance criteria (what “fixed” looks like)
-- Clicking “Re-enable Live Updates” results in one of:
-  1) Success: webhook_status becomes “active” and a success toast appears.
-  2) Failure with actionable toast, for example:
-     - “Reply API v3 probe failed (401): invalid API key for v3 endpoints”
-     - “Team-level subscription failed (404). Retried as account-level and succeeded.”
-     - “TeamId 383893 not found/accessible for this key. Please re-select workspace.”
+### Solution Overview
 
-User-facing next steps after implementation
-- If the diagnostic indicates “teamId not accessible”:
-  - We’ll prompt you to re-check the selected workspace/team in the integration settings and try again.
-- If the diagnostic indicates “v3 access denied”:
-  - You’ll likely need to generate a new Reply API key that has v3 access (we’ll surface this clearly in the toast).
+```text
+┌─────────────────────────────────────────────────────────────────┐
+│  FIX 1: Webhook Creation                                        │
+│  ─────────────────────────                                      │
+│  • Fetch accountId from V3 user/profile endpoint before         │
+│    creating webhook                                             │
+│  • Include accountId in payload for account-level subscriptions │
+│  • Add detailed error logging for 404 responses                 │
+└─────────────────────────────────────────────────────────────────┘
 
-Files involved
-- Backend function:
-  - supabase/functions/setup-reply-webhook/index.ts
-- Frontend error handling:
-  - src/hooks/useOutboundIntegrations.ts
+┌─────────────────────────────────────────────────────────────────┐
+│  FIX 2: Campaign Visibility                                     │
+│  ─────────────────────────                                      │
+│  • Either auto-link all campaigns during sync, OR               │
+│  • Surface "Manage Campaigns" more prominently after sync       │
+│  • Show count of unlinked campaigns needing action              │
+└─────────────────────────────────────────────────────────────────┘
+```
 
-Risks / tradeoffs
-- Adding probe calls adds a small extra external request during webhook setup, but this only happens when you click “Enable Live” / refresh, not during normal app usage.
-- Fallback to account-level scope may be broader than team-level. If you want strict workspace isolation, we can make fallback optional (only when you opt-in).
+---
 
-Testing plan
-1) Click “Re-enable Live Updates” for the failing integration.
-2) Confirm either:
-   - it succeeds, or
-   - the toast now includes probe + scope information (not the generic non-2xx message).
-3) If it succeeds, verify Reply is sending events by triggering a known event (e.g., email sent) and confirming your webhook event ingestion path receives it (via your existing webhook handler logs/table).
+### Technical Changes
+
+#### File 1: `supabase/functions/setup-reply-webhook/index.ts`
+
+**Change 1**: Fetch the account ID from Reply.io API before creating webhook
+
+Add after the V3 probe succeeds (around line 167):
+
+```typescript
+// Fetch accountId for account-level subscriptions
+let accountId: number | null = null;
+try {
+  const accountResponse = await fetch('https://api.reply.io/v1/actions/me', {
+    headers: { 'X-Api-Key': apiKey },
+  });
+  if (accountResponse.ok) {
+    const accountData = await accountResponse.json();
+    accountId = accountData.id || accountData.accountId || null;
+    console.log('Retrieved accountId:', accountId);
+  }
+} catch (e) {
+  console.log('Could not fetch accountId, will try without it');
+}
+```
+
+**Change 2**: Include accountId in account-level webhook payload
+
+Modify `attemptWebhookCreation` function (lines 207-239):
+
+```typescript
+async function attemptWebhookCreation(
+  subscriptionLevel: 'team' | 'account',
+  teamIds?: number[],
+  accountIdParam?: number | null
+): Promise<{ response: Response; responseText: string }> {
+  const payload: Record<string, unknown> = {
+    targetUrl: webhookUrl,
+    eventTypes: ALL_EVENT_TYPES,
+    secret: webhookSecret,
+    subscriptionLevel,
+  };
+  
+  if (subscriptionLevel === 'team' && teamIds && teamIds.length > 0) {
+    payload.teamIds = teamIds;
+  }
+  
+  // Include accountId for account-level subscriptions
+  if (subscriptionLevel === 'account' && accountIdParam) {
+    payload.accountId = accountIdParam;
+  }
+  
+  // ... rest of function
+}
+```
+
+**Change 3**: Pass accountId to fallback calls
+
+```typescript
+// First attempt: team-level if reply_team_id is set
+if (integration.reply_team_id) {
+  const teamId = parseInt(integration.reply_team_id, 10);
+  const result = await attemptWebhookCreation('team', [teamId]);
+  // ...
+  if (result.response.status === 404) {
+    const fallbackResult = await attemptWebhookCreation('account', undefined, accountId);
+    // ...
+  }
+} else {
+  const result = await attemptWebhookCreation('account', undefined, accountId);
+  // ...
+}
+```
+
+---
+
+#### File 2: `src/components/playground/IntegrationSetupCard.tsx`
+
+**Change**: Show count of unlinked campaigns after sync
+
+Add after sync completes - show a notification or badge indicating campaigns need to be linked:
+
+```typescript
+// In IntegrationRow, add unlinked campaign count display
+{isReplyIo && integration.sync_status === 'synced' && (
+  <span className="text-xs text-amber-600">
+    Sync complete - use "Manage Campaigns" to link campaigns for dashboard
+  </span>
+)}
+```
+
+---
+
+#### File 3: `supabase/functions/sync-reply-campaigns/index.ts` (Optional Enhancement)
+
+**Alternative Approach**: Auto-link all campaigns during sync
+
+If the user wants all campaigns to appear in stats automatically, modify the upsert to set `is_linked: true`:
+
+```typescript
+// Around line 195, change:
+is_linked: existingCampaign?.is_linked ?? false  // preserve existing
+
+// To (if auto-link is desired):
+is_linked: true  // Auto-link all campaigns
+```
+
+---
+
+### Files to Modify
+
+| File | Priority | Changes |
+|------|----------|---------|
+| `supabase/functions/setup-reply-webhook/index.ts` | **Critical** | Fetch accountId, include in payload |
+| `src/components/playground/IntegrationSetupCard.tsx` | Medium | Show campaign linking guidance |
+| `supabase/functions/sync-reply-campaigns/index.ts` | Optional | Auto-link campaigns if desired |
+
+---
+
+### Expected Outcome
+
+| Before | After |
+|--------|-------|
+| Webhook creation: 404 error | Webhook creation: 201 success with accountId |
+| Stats appear empty after sync | Either auto-linked OR clear guidance to link campaigns |
+| Generic error messages | Specific diagnostic errors with accountId info |
+
+---
+
+### Question for You
+
+For the campaign linking behavior, which would you prefer?
+
+1. **Auto-link all campaigns** - Every synced campaign automatically appears in dashboard stats
+2. **Keep manual linking** - User selects which campaigns to include via "Manage Campaigns" (current behavior, but with better guidance)
+
