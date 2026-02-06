@@ -8,6 +8,7 @@ const corsHeaders = {
 // Reply.io V3 API
 const WEBHOOK_API_BASE = 'https://api.reply.io/v3/webhooks';
 const PROBE_API_URL = 'https://api.reply.io/v3/sequences?limit=1';
+const ACCOUNT_INFO_URL = 'https://api.reply.io/v1/actions/me';
 
 // All events to subscribe to
 const ALL_EVENT_TYPES = [
@@ -170,6 +171,30 @@ Deno.serve(async (req) => {
       // Continue anyway - probe failure shouldn't block webhook creation attempt
     }
     
+    // Step 2: Fetch accountId for account-level subscriptions
+    let accountId: number | null = null;
+    try {
+      console.log('Fetching accountId from Reply.io...');
+      const accountResponse = await fetch(ACCOUNT_INFO_URL, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+          'X-Api-Key': apiKey,
+        },
+      });
+      
+      if (accountResponse.ok) {
+        const accountData = await accountResponse.json();
+        // Try different possible field names
+        accountId = accountData.id ?? accountData.accountId ?? accountData.account_id ?? null;
+        console.log('Retrieved accountId:', accountId);
+      } else {
+        console.log('Could not fetch accountId, status:', accountResponse.status);
+      }
+    } catch (e) {
+      console.log('Could not fetch accountId, will try without it:', e);
+    }
+    
     // Delete existing webhooks if any
     if (integration.webhook_subscription_id) {
       const existingIds = integration.webhook_subscription_id.split(',');
@@ -206,7 +231,8 @@ Deno.serve(async (req) => {
     // Helper function to attempt webhook creation
     async function attemptWebhookCreation(
       subscriptionLevel: 'team' | 'account',
-      teamIds?: number[]
+      teamIds?: number[],
+      accountIdParam?: number | null
     ): Promise<{ response: Response; responseText: string }> {
       const payload: Record<string, unknown> = {
         targetUrl: webhookUrl,
@@ -217,6 +243,11 @@ Deno.serve(async (req) => {
       
       if (subscriptionLevel === 'team' && teamIds && teamIds.length > 0) {
         payload.teamIds = teamIds;
+      }
+      
+      // Include accountId for account-level subscriptions (required by Reply.io V3)
+      if (subscriptionLevel === 'account' && accountIdParam) {
+        payload.accountId = accountIdParam;
       }
       
       console.log(`Attempting ${subscriptionLevel}-level webhook creation`);
@@ -238,7 +269,7 @@ Deno.serve(async (req) => {
       return { response, responseText };
     }
     
-    // Step 2: Attempt webhook creation with fallback strategy
+    // Step 3: Attempt webhook creation with fallback strategy
     let finalResponse: Response;
     let finalResponseText: string;
     let usedFallback = false;
@@ -253,14 +284,14 @@ Deno.serve(async (req) => {
       // If team-level fails with 404, retry with account-level
       if (result.response.status === 404) {
         console.log('Team-level webhook failed with 404, falling back to account-level...');
-        const fallbackResult = await attemptWebhookCreation('account');
+        const fallbackResult = await attemptWebhookCreation('account', undefined, accountId);
         finalResponse = fallbackResult.response;
         finalResponseText = fallbackResult.responseText;
         usedFallback = true;
       }
     } else {
-      // No team ID, use account-level directly
-      const result = await attemptWebhookCreation('account');
+      // No team ID, use account-level directly with accountId
+      const result = await attemptWebhookCreation('account', undefined, accountId);
       finalResponse = result.response;
       finalResponseText = result.responseText;
     }
@@ -288,7 +319,10 @@ Deno.serve(async (req) => {
       let errorMessage = `Failed to create webhook subscription (status ${finalResponse.status}). `;
       if (finalResponse.status === 404) {
         if (usedFallback) {
-          errorMessage += 'Both team-level and account-level subscriptions failed. Your API key may not have webhook access. ';
+          errorMessage += 'Both team-level and account-level subscriptions failed. ';
+          if (!accountId) {
+            errorMessage += 'Could not retrieve accountId - your API key may not have proper permissions. ';
+          }
         } else if (integration.reply_team_id) {
           errorMessage += `Team ID ${integration.reply_team_id} may not be accessible. Try re-selecting the workspace. `;
         }
@@ -308,6 +342,7 @@ Deno.serve(async (req) => {
         details: errorDetails,
         probe: probeResult,
         usedFallback,
+        accountId: accountId ?? 'not_retrieved',
         keyFingerprint: keyFingerprint(apiKey)
       }), {
         status: 200,
@@ -354,6 +389,7 @@ Deno.serve(async (req) => {
       webhookId,
       eventTypes: ALL_EVENT_TYPES.length,
       usedFallback,
+      accountId: accountId ?? 'not_needed',
       message: usedFallback 
         ? 'Webhook configured successfully (using account-level scope as fallback)'
         : 'Webhook configured successfully'

@@ -279,7 +279,7 @@ Deno.serve(async (req) => {
           ...linkedinStats,
         };
 
-        // Upsert campaign with merged stats
+        // Upsert campaign with merged stats - auto-link all campaigns
         const { error: campaignError } = await supabase
           .from("synced_campaigns")
           .upsert({
@@ -290,6 +290,7 @@ Deno.serve(async (req) => {
             status: normalizeStatus(campaign.status),
             stats: mergedStats,
             raw_data: campaign,
+            is_linked: true, // Auto-link all campaigns so they appear in stats
             updated_at: new Date().toISOString(),
           }, {
             onConflict: "integration_id,external_campaign_id",
