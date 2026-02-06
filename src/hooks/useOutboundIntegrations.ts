@@ -143,30 +143,37 @@ export function useOutboundIntegrations() {
         body: { integrationId },
       });
 
+      // Edge function returns 200 with success: false for failures
       if (error) {
-        // Try to extract detailed error from response
-        const errorData = data as { error?: string; details?: string; hint?: string; status?: number } | null;
-        const details = errorData?.details || errorData?.error || error.message;
-        const hint = errorData?.hint;
-        const status = errorData?.status;
-        
-        const fullMessage = hint 
-          ? `${details} (${hint})`
-          : status 
-            ? `Reply.io error ${status}: ${details}`
-            : details;
-        
-        throw new Error(fullMessage);
+        throw new Error(error.message || 'Failed to call webhook setup function');
       }
-      return data;
+      
+      // Check the success field in the response
+      const result = data as { 
+        success: boolean; 
+        error?: string; 
+        message?: string;
+        usedFallback?: boolean;
+        probe?: { status: number; ok: boolean };
+        keyFingerprint?: string;
+      } | null;
+      
+      if (!result?.success) {
+        throw new Error(result?.error || 'Webhook setup failed with unknown error');
+      }
+      
+      return result;
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['outbound-integrations'] });
-      toast.success('Webhook configured successfully - live updates enabled!');
+      const message = data?.usedFallback 
+        ? 'Webhook configured (using account-level scope) - live updates enabled!'
+        : 'Webhook configured successfully - live updates enabled!';
+      toast.success(message);
     },
     onError: (error) => {
       queryClient.invalidateQueries({ queryKey: ['outbound-integrations'] });
-      toast.error(`Failed to setup webhook: ${error.message}`);
+      toast.error(error.message, { duration: 8000 });
     },
   });
 
