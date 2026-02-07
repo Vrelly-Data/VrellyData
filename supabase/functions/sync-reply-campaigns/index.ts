@@ -21,6 +21,8 @@ interface ReplyioCampaign {
   id: number;
   name: string;
   status: string | number;
+  // Team/workspace ID - used for filtering
+  teamId?: number;
   // Stats fields from Reply.io API
   deliveriesCount?: number;
   repliesCount?: number;
