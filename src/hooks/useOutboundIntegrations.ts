@@ -48,19 +48,18 @@ export function useOutboundIntegrations() {
 
       if (!membership) throw new Error('No team found');
 
-      // Note: In production, API key should be encrypted server-side
-      // For now, we'll store a placeholder - actual encryption will be in edge function
+      // Create integration with 'syncing' status since we'll auto-sync
       const { data, error } = await supabase
         .from('outbound_integrations')
         .insert({
           team_id: membership.team_id,
           platform,
           name,
-          api_key_encrypted: apiKey, // Will be encrypted by edge function
+          api_key_encrypted: apiKey,
           created_by: user.id,
           is_active: true,
-          sync_status: 'pending',
-          reply_team_id: replyTeamId || null, // For agency accounts
+          sync_status: 'syncing', // Start as syncing since we auto-sync
+          reply_team_id: replyTeamId || null,
         })
         .select()
         .single();
@@ -68,9 +67,30 @@ export function useOutboundIntegrations() {
       if (error) throw error;
       return data;
     },
-    onSuccess: () => {
+    onSuccess: async (data) => {
       queryClient.invalidateQueries({ queryKey: ['outbound-integrations'] });
-      toast.success('Integration added successfully');
+      toast.success('Integration added - syncing campaigns...');
+      
+      // Trigger automatic sync immediately
+      if (data?.id) {
+        try {
+          const { error } = await supabase.functions.invoke('sync-reply-campaigns', {
+            body: { integrationId: data.id },
+          });
+          
+          if (error) {
+            console.error('Auto-sync failed:', error);
+            toast.error('Sync failed - you can try again manually');
+          } else {
+            queryClient.invalidateQueries({ queryKey: ['outbound-integrations'] });
+            queryClient.invalidateQueries({ queryKey: ['playground-stats'] });
+            queryClient.invalidateQueries({ queryKey: ['synced-campaigns'] });
+            toast.success('Sync complete!');
+          }
+        } catch (err) {
+          console.error('Auto-sync error:', err);
+        }
+      }
     },
     onError: (error) => {
       toast.error(`Failed to add integration: ${error.message}`);
