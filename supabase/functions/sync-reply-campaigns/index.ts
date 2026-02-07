@@ -7,6 +7,8 @@ const corsHeaders = {
 
 // V3 API for sequences (includes teamId for workspace filtering)
 const REPLY_API_V3 = "https://api.reply.io/v3";
+// V1 API for fetching campaign stats (V3 doesn't include stats)
+const REPLY_API_V1 = "https://api.reply.io/v1";
 
 // LinkedIn fields - preserved from CSV uploads, never overwritten by sync
 const LINKEDIN_FIELDS = [
@@ -27,7 +29,22 @@ interface ReplyioSequence {
   ownerId?: number;
   created?: string;
   isArchived?: boolean;
-  // V3 may not include stats inline - we'll preserve existing stats
+}
+
+// V1 Campaign stats response
+interface ReplyCampaignStats {
+  id: number;
+  name: string;
+  deliveriesCount?: number;
+  repliesCount?: number;
+  opensCount?: number;
+  bouncesCount?: number;
+  optOutsCount?: number;
+  outOfOfficeCount?: number;
+  peopleCount?: number;
+  peopleActive?: number;
+  peopleFinished?: number;
+  peoplePaused?: number;
 }
 
 // V3 status is already a string, just lowercase it
@@ -38,13 +55,12 @@ function normalizeStatus(status: unknown): string {
   return 'unknown';
 }
 
-async function fetchFromReplyio(endpoint: string, apiKey: string, teamId?: string) {
+async function fetchFromReplyioV3(endpoint: string, apiKey: string, teamId?: string) {
   const headers: Record<string, string> = {
     "X-Api-Key": apiKey,
     "Content-Type": "application/json",
   };
   
-  // Add team context for agency accounts
   if (teamId) {
     headers["X-Reply-Team-Id"] = teamId;
   }
@@ -53,14 +69,34 @@ async function fetchFromReplyio(endpoint: string, apiKey: string, teamId?: strin
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`Reply.io API error (${response.status}): ${errorText}`);
+    throw new Error(`Reply.io V3 API error (${response.status}): ${errorText}`);
+  }
+
+  return response.json();
+}
+
+async function fetchFromReplyioV1(endpoint: string, apiKey: string, teamId?: string) {
+  const headers: Record<string, string> = {
+    "X-Api-Key": apiKey,
+    "Content-Type": "application/json",
+  };
+  
+  if (teamId) {
+    headers["X-Reply-Team-Id"] = teamId;
+  }
+  
+  const response = await fetch(`${REPLY_API_V1}${endpoint}`, { headers });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Reply.io V1 API error (${response.status}): ${errorText}`);
   }
 
   return response.json();
 }
 
 // Retry wrapper with exponential backoff for rate limiting
-async function fetchWithRetry(
+async function fetchWithRetryV3(
   endpoint: string, 
   apiKey: string, 
   teamId?: string, 
@@ -68,13 +104,12 @@ async function fetchWithRetry(
 ): Promise<unknown> {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      return await fetchFromReplyio(endpoint, apiKey, teamId);
+      return await fetchFromReplyioV3(endpoint, apiKey, teamId);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       
-      // Check if it's a rate limit error
       if (errorMessage.includes("Too much requests") && attempt < maxRetries) {
-        const waitTime = 5000 * attempt; // 5s, 10s, 15s
+        const waitTime = 5000 * attempt;
         console.log(`Rate limited on ${endpoint}, waiting ${waitTime/1000}s before retry ${attempt}/${maxRetries}`);
         await new Promise(resolve => setTimeout(resolve, waitTime));
         continue;
@@ -83,6 +118,57 @@ async function fetchWithRetry(
     }
   }
   throw new Error(`Max retries exceeded for ${endpoint}`);
+}
+
+async function fetchWithRetryV1(
+  endpoint: string, 
+  apiKey: string, 
+  teamId?: string, 
+  maxRetries: number = 3
+): Promise<unknown> {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await fetchFromReplyioV1(endpoint, apiKey, teamId);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      
+      if (errorMessage.includes("Too much requests") && attempt < maxRetries) {
+        const waitTime = 5000 * attempt;
+        console.log(`Rate limited on ${endpoint}, waiting ${waitTime/1000}s before retry ${attempt}/${maxRetries}`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error(`Max retries exceeded for ${endpoint}`);
+}
+
+// Fetch campaign stats from V1 API (V3 doesn't include stats in list)
+async function fetchCampaignStats(
+  campaignId: number, 
+  apiKey: string, 
+  teamId?: string
+): Promise<Record<string, number>> {
+  try {
+    const data = await fetchWithRetryV1(`/campaigns/${campaignId}`, apiKey, teamId) as ReplyCampaignStats;
+    
+    return {
+      sent: data.deliveriesCount || 0,
+      delivered: data.deliveriesCount || 0,
+      replies: data.repliesCount || 0,
+      opens: data.opensCount || 0,
+      bounces: data.bouncesCount || 0,
+      optOuts: data.optOutsCount || 0,
+      outOfOffice: data.outOfOfficeCount || 0,
+      peopleCount: data.peopleCount || 0,
+      peopleActive: data.peopleActive || 0,
+      peopleFinished: data.peopleFinished || 0,
+    };
+  } catch (err) {
+    console.warn(`Could not fetch stats for campaign ${campaignId}:`, err);
+    return {};
+  }
 }
 
 // Paginated fetch helper for V3 API
@@ -101,7 +187,7 @@ async function fetchAllPaginated<T>(
     const separator = endpoint.includes('?') ? '&' : '?';
     const url = `${endpoint}${separator}limit=${pageSize}&page=${page}`;
     
-    const response = await fetchWithRetry(url, apiKey, teamId) as Record<string, unknown>;
+    const response = await fetchWithRetryV3(url, apiKey, teamId) as Record<string, unknown>;
     const results = (response[resultKey] || response || []) as T[];
     
     if (!Array.isArray(results)) {
@@ -111,7 +197,6 @@ async function fetchAllPaginated<T>(
     
     allResults = [...allResults, ...results];
     
-    // Check for more pages - V3 uses info.hasMore
     const info = response.info as { hasMore?: boolean } | undefined;
     hasMore = info?.hasMore || 
               (response.hasMore as boolean) || 
@@ -121,13 +206,11 @@ async function fetchAllPaginated<T>(
     
     page++;
     
-    // Safety limit
     if (page > 100) {
       console.warn(`Reached page limit (100) for ${endpoint}`);
       break;
     }
     
-    // Minimal delay between pages for rate limit protection
     if (hasMore) {
       await new Promise(resolve => setTimeout(resolve, 500));
     }
@@ -136,8 +219,172 @@ async function fetchAllPaginated<T>(
   return allResults;
 }
 
+// Contact sync for a single campaign (inline, not separate function call)
+async function syncContactsForCampaign(
+  internalCampaignId: string,
+  externalCampaignId: string,
+  apiKey: string,
+  teamId: string,
+  replyTeamId: string | null,
+  serviceClient: ReturnType<typeof createClient>
+): Promise<{ count: number }> {
+  console.log(`Syncing contacts for campaign ${externalCampaignId}`);
+  
+  interface ReplyPerson {
+    id: number;
+    email: string;
+    firstName?: string;
+    lastName?: string;
+    title?: string;
+    company?: string;
+    status?: string;
+    replied?: boolean;
+    bounced?: boolean;
+    finished?: boolean;
+    optedOut?: boolean;
+    opened?: boolean;
+    clicked?: boolean;
+    customFields?: Record<string, unknown>;
+    addedTime?: string;
+    industry?: string;
+    companySize?: string;
+    city?: string;
+    state?: string;
+    country?: string;
+    phone?: string;
+    linkedInProfile?: string;
+    addingDate?: string;
+  }
+
+  function mapPersonStatus(person: ReplyPerson): string {
+    if (person.replied) return 'replied';
+    if (person.bounced) return 'bounced';
+    if (person.optedOut) return 'opted_out';
+    if (person.finished) return 'finished';
+    if (person.opened) return 'opened';
+    if (person.status) {
+      const statusLower = person.status.toLowerCase();
+      if (statusLower === 'inprogress' || statusLower === 'in_progress') return 'active';
+      if (statusLower === 'finished') return 'finished';
+      if (statusLower === 'paused') return 'paused';
+      return statusLower;
+    }
+    return 'active';
+  }
+
+  const uniqueContactsMap = new Map<string, ReplyPerson>();
+  let page = 1;
+  const limit = 100;
+  let hasMore = true;
+  let consecutiveDuplicatePages = 0;
+
+  while (hasMore && page <= 50) { // Limit to 50 pages (5000 contacts) per campaign to avoid timeout
+    const endpoint = `/campaigns/${externalCampaignId}/people?limit=${limit}&page=${page}`;
+    
+    try {
+      const response = await fetchWithRetryV1(endpoint, apiKey, replyTeamId || undefined) as { people?: ReplyPerson[] };
+      const people = response.people || [];
+      
+      let newUniqueCount = 0;
+      for (const person of people) {
+        if (person.email && !uniqueContactsMap.has(person.email.toLowerCase())) {
+          uniqueContactsMap.set(person.email.toLowerCase(), person);
+          newUniqueCount++;
+        }
+      }
+      
+      console.log(`  Contact page ${page}: fetched ${people.length}, new: ${newUniqueCount}, total: ${uniqueContactsMap.size}`);
+      
+      if (newUniqueCount === 0 && people.length > 0) {
+        consecutiveDuplicatePages++;
+        if (consecutiveDuplicatePages >= 3) {
+          console.log("  Stopping: duplicate pages detected");
+          break;
+        }
+      } else {
+        consecutiveDuplicatePages = 0;
+      }
+      
+      if (people.length === 0 || people.length < limit) {
+        hasMore = false;
+      }
+      
+      page++;
+      
+      if (hasMore) {
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+    } catch (err) {
+      console.warn(`Failed to fetch contacts page ${page}:`, err);
+      break;
+    }
+  }
+
+  const allContacts = Array.from(uniqueContactsMap.values());
+  
+  if (allContacts.length === 0) {
+    return { count: 0 };
+  }
+
+  // Batch upsert
+  const BATCH_SIZE = 100;
+  let contactsSynced = 0;
+
+  for (let i = 0; i < allContacts.length; i += BATCH_SIZE) {
+    const batch = allContacts.slice(i, i + BATCH_SIZE);
+
+    const records = batch.map(person => ({
+      campaign_id: internalCampaignId,
+      team_id: teamId,
+      external_contact_id: String(person.id),
+      email: person.email,
+      first_name: person.firstName || null,
+      last_name: person.lastName || null,
+      company: person.company || null,
+      job_title: person.title || null,
+      status: mapPersonStatus(person),
+      engagement_data: {
+        replied: person.replied || false,
+        bounced: person.bounced || false,
+        opened: person.opened || false,
+        clicked: person.clicked || false,
+        optedOut: person.optedOut || false,
+        finished: person.finished || false,
+        addedTime: person.addedTime || person.addingDate,
+      },
+      custom_fields: person.customFields || {},
+      raw_data: person,
+      updated_at: new Date().toISOString(),
+      industry: person.industry || null,
+      company_size: person.companySize && person.companySize !== 'Empty' ? person.companySize : null,
+      city: person.city || null,
+      state: person.state || null,
+      country: person.country || null,
+      phone: person.phone || null,
+      linkedin_url: person.linkedInProfile || null,
+      added_at: person.addingDate || person.addedTime || null,
+    }));
+
+    try {
+      const { error: upsertError } = await serviceClient
+        .from("synced_contacts")
+        .upsert(records, {
+          onConflict: "campaign_id,email",
+        });
+
+      if (!upsertError) {
+        contactsSynced += batch.length;
+      }
+    } catch (err) {
+      console.warn(`Contact batch failed:`, err);
+    }
+  }
+
+  console.log(`  Synced ${contactsSynced} contacts for campaign ${externalCampaignId}`);
+  return { count: contactsSynced };
+}
+
 Deno.serve(async (req) => {
-  // Handle CORS preflight
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
@@ -146,6 +393,7 @@ Deno.serve(async (req) => {
   let authHeader: string | null = null;
   let campaignsProcessed = 0;
   let campaignsFailed = 0;
+  let totalContactsSynced = 0;
   
   try {
     authHeader = req.headers.get("Authorization");
@@ -161,12 +409,17 @@ Deno.serve(async (req) => {
       Deno.env.get("SUPABASE_ANON_KEY") ?? "",
       { global: { headers: { Authorization: authHeader } } }
     );
+
+    // Service client for bulk contact writes
+    const serviceClient = createClient(
+      Deno.env.get("SUPABASE_URL") ?? "",
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
+    );
     
     if (!integrationId) {
       throw new Error("Missing integrationId");
     }
 
-    // Fetch the integration
     const { data: integration, error: integrationError } = await supabase
       .from("outbound_integrations")
       .select("id, team_id, api_key_encrypted, platform, reply_team_id")
@@ -185,13 +438,12 @@ Deno.serve(async (req) => {
     const teamId = integration.team_id;
     const replyTeamId = integration.reply_team_id;
 
-    // Update status to syncing
     await supabase
       .from("outbound_integrations")
       .update({ sync_status: "syncing", sync_error: null })
       .eq("id", integrationId);
 
-    console.log(`Starting V3 sync for integration ${integrationId}${replyTeamId ? ` (workspace: ${replyTeamId})` : ''}`);
+    console.log(`Starting sync for integration ${integrationId}${replyTeamId ? ` (workspace: ${replyTeamId})` : ''}`);
 
     // Fetch sequences from V3 API (includes teamId for filtering)
     let sequences: ReplyioSequence[] = [];
@@ -199,12 +451,12 @@ Deno.serve(async (req) => {
       sequences = await fetchAllPaginated<ReplyioSequence>(
         "/sequences",
         apiKey,
-        "items",  // V3 returns { items: [...], info: { hasMore } }
+        "items",
         replyTeamId || undefined
       );
       console.log(`Fetched ${sequences.length} total sequences from Reply.io V3`);
       
-      // Filter by workspace teamId (V3 sequences include teamId)
+      // Filter by workspace teamId
       if (replyTeamId) {
         const teamIdNum = parseInt(replyTeamId, 10);
         const originalCount = sequences.length;
@@ -230,7 +482,9 @@ Deno.serve(async (req) => {
       throw new Error(`Failed to fetch sequences: ${errorMessage}`);
     }
 
-    // Process each sequence
+    // Process each sequence - fetch stats and sync contacts
+    const syncedCampaignIds: { internal: string; external: string }[] = [];
+
     for (const sequence of sequences) {
       try {
         if (!sequence.id || !sequence.name) {
@@ -239,12 +493,12 @@ Deno.serve(async (req) => {
           continue;
         }
         
-        console.log(`Processing sequence: ${sequence.name} (ID: ${sequence.id}, teamId: ${sequence.teamId})`);
+        console.log(`Processing sequence: ${sequence.name} (ID: ${sequence.id})`);
 
         // Fetch existing campaign to preserve LinkedIn stats
         const { data: existingCampaign } = await supabase
           .from("synced_campaigns")
-          .select("stats")
+          .select("id, stats")
           .eq("integration_id", integrationId)
           .eq("external_campaign_id", String(sequence.id))
           .maybeSingle();
@@ -259,26 +513,19 @@ Deno.serve(async (req) => {
           }
         }
 
-        // V3 sequences don't include inline stats like V1 campaigns
-        // Preserve existing email stats or start with zeros
+        // Fetch stats from V1 API
+        console.log(`  Fetching stats from V1 API...`);
+        const apiStats = await fetchCampaignStats(sequence.id, apiKey, replyTeamId || undefined);
+        console.log(`  Stats: sent=${apiStats.sent || 0}, replies=${apiStats.replies || 0}, contacts=${apiStats.peopleCount || 0}`);
+
+        // Merge: API stats + preserve LinkedIn stats from CSV
         const mergedStats = {
-          // Preserve existing email stats (from previous syncs or CSV)
-          sent: existingStats.sent || 0,
-          delivered: existingStats.delivered || 0,
-          replies: existingStats.replies || 0,
-          opens: existingStats.opens || 0,
-          bounces: existingStats.bounces || 0,
-          optOuts: existingStats.optOuts || 0,
-          peopleCount: existingStats.peopleCount || 0,
-          peopleActive: existingStats.peopleActive || 0,
-          peopleFinished: existingStats.peopleFinished || 0,
-          outOfOffice: existingStats.outOfOffice || 0,
-          // Preserve LinkedIn stats from CSV upload
+          ...apiStats,
           ...linkedinStats,
         };
 
         // Upsert sequence as campaign
-        const { error: campaignError } = await supabase
+        const { data: upsertedCampaign, error: campaignError } = await supabase
           .from("synced_campaigns")
           .upsert({
             integration_id: integrationId,
@@ -292,7 +539,9 @@ Deno.serve(async (req) => {
             updated_at: new Date().toISOString(),
           }, {
             onConflict: "integration_id,external_campaign_id",
-          });
+          })
+          .select("id")
+          .single();
 
         if (campaignError) {
           console.error(`Failed to upsert sequence ${sequence.id}:`, campaignError);
@@ -302,11 +551,45 @@ Deno.serve(async (req) => {
 
         campaignsProcessed++;
         
+        // Track for contact sync
+        if (upsertedCampaign?.id) {
+          syncedCampaignIds.push({
+            internal: upsertedCampaign.id,
+            external: String(sequence.id),
+          });
+        }
+        
+        // Small delay between campaigns for rate limiting
+        await new Promise(resolve => setTimeout(resolve, 200));
+        
       } catch (sequenceError) {
         console.error(`Error processing sequence ${sequence.id}:`, sequenceError);
         campaignsFailed++;
       }
     }
+
+    console.log(`Campaign sync complete: ${campaignsProcessed}/${sequences.length} sequences`);
+
+    // Now sync contacts for each campaign
+    console.log(`Starting contacts sync for ${syncedCampaignIds.length} campaigns...`);
+    
+    for (const campaign of syncedCampaignIds) {
+      try {
+        const result = await syncContactsForCampaign(
+          campaign.internal,
+          campaign.external,
+          apiKey,
+          teamId,
+          replyTeamId,
+          serviceClient
+        );
+        totalContactsSynced += result.count;
+      } catch (err) {
+        console.warn(`Contact sync failed for campaign ${campaign.external}:`, err);
+      }
+    }
+
+    console.log(`Contacts sync complete: ${totalContactsSynced} total contacts`);
 
     // Update integration status
     const finalStatus = campaignsFailed > 0 && campaignsProcessed === 0 ? "error" : "synced";
@@ -324,14 +607,15 @@ Deno.serve(async (req) => {
       })
       .eq("id", integrationId);
 
-    console.log(`V3 sync complete: ${campaignsProcessed}/${sequences.length} sequences processed`);
+    console.log(`Full sync complete: ${campaignsProcessed} campaigns, ${totalContactsSynced} contacts`);
 
     return new Response(
       JSON.stringify({
         success: true,
         campaigns: campaignsProcessed,
         campaignsFailed,
-        mode: "v3-sequences",
+        contacts: totalContactsSynced,
+        mode: "v3-sequences-with-v1-stats",
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
@@ -339,7 +623,6 @@ Deno.serve(async (req) => {
     const errorMessage = err instanceof Error ? err.message : String(err);
     console.error("Sync error:", err);
 
-    // Update integration status to error
     if (integrationId && authHeader) {
       try {
         const supabase = createClient(

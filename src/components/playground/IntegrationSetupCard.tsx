@@ -37,9 +37,10 @@ function getStatusBadge(status: string | null, error: string | null, isStuck?: b
       return <Badge variant="secondary" className="text-xs bg-primary/10 text-primary">Synced</Badge>;
     case 'syncing':
       const elapsed = elapsedSeconds !== undefined ? ` (${formatElapsedTime(elapsedSeconds)})` : '';
-      return <Badge variant="secondary" className="text-xs bg-accent text-accent-foreground">Syncing...{elapsed}</Badge>;
+      return <Badge variant="secondary" className="text-xs bg-accent text-accent-foreground animate-pulse">Syncing...{elapsed}</Badge>;
     case 'pending':
-      return <Badge variant="outline" className="text-xs">Pending</Badge>;
+      // Show "Syncing..." with animation if just added (pending means about to sync)
+      return <Badge variant="secondary" className="text-xs bg-accent text-accent-foreground animate-pulse">Syncing...</Badge>;
     default:
       return <Badge variant="secondary" className="text-xs">Unknown</Badge>;
   }
