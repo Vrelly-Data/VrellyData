@@ -1,149 +1,118 @@
 
 
-## Fix: Reply.io Sync is Not Respecting Workspace Isolation
-
-### Problem Identified
-
-Looking at the database and logs, you have **two integrations** using the same API key:
-
-| Integration ID | reply_team_id | Last Synced | Campaigns |
-|----------------|---------------|-------------|-----------|
-| `ff397702...` (new) | `383171` | Yesterday 20:16 | 62 |
-| `88a35dc3...` (old) | `null` | Today 13:02 | 62 |
-
-Both synced 62 campaigns because:
-
-1. **The API key has access to all campaigns** - Reply.io API keys are account-level, not workspace-specific
-2. **The `X-Reply-Team-Id` header** is used by Reply.io for **write operations and some read operations**, but the `/campaigns` endpoint may return **all campaigns the API key has access to** regardless of this header
-3. **The old integration without a team ID** was synced today (likely when you clicked sync), pulling all 62 campaigns without any workspace filtering
-
----
+## Fix: Sync 0 Campaigns - V1 API Doesn't Return teamId
 
 ### Root Cause
 
-The Reply.io V1 `/campaigns` endpoint doesn't filter by `X-Reply-Team-Id` header in all cases. According to Reply.io's behavior:
-- Some endpoints respect the team header for filtering
-- Others return all data the API key can access
-- The campaigns endpoint appears to return all accessible campaigns
+The Reply.io V1 `/campaigns` endpoint does **NOT return `teamId`** in campaign objects:
 
-The sync logic correctly **sends** the header but Reply.io **ignores** it for campaign listing.
+```
+Campaign 1606195 (HVAC campaign) has no teamId, excluding from sync
+Campaign 1606099 (Plumbing Campaign) has no teamId, excluding from sync
+...
+After workspace filter: 0/6 campaigns belong to workspace 383893
+```
 
----
+The strict filtering we added is working correctly - it's just that V1 campaigns **never** have `teamId`.
+
+However, the **V3 `/sequences` endpoint DOES include `teamId`** - this is how `fetch-reply-teams` successfully discovers workspaces.
 
 ### Solution
 
-Implement **client-side workspace filtering** after fetching campaigns:
+Switch `sync-reply-campaigns` from V1 API to V3 API:
 
-1. **Fetch workspace info first** - Get the teamId associated with each campaign from Reply.io
-2. **Filter campaigns by teamId** - Only sync campaigns that belong to the specified workspace
-3. **Delete orphaned campaigns** - Remove campaigns from the old integration that should be isolated
-
----
+| Current (Broken) | Fixed |
+|------------------|-------|
+| V1 `/campaigns` - no teamId | V3 `/sequences` - has teamId |
+| All campaigns returned regardless of workspace | Can filter by teamId client-side |
+| Strict filter excludes everything | Strict filter works correctly |
 
 ### Technical Changes
 
 #### File: `supabase/functions/sync-reply-campaigns/index.ts`
 
-**Change 1**: After fetching campaigns, filter them by the workspace teamId
+**Change 1**: Update API endpoint from V1 to V3
 
 ```typescript
-// Around line 219-233, after fetching campaigns:
+// Before:
+const REPLY_API_BASE = "https://api.reply.io/v1";
 
-// Fetch ALL campaigns from Reply.io
-let campaigns: ReplyioCampaign[] = [];
-try {
-  campaigns = await fetchAllPaginated<ReplyioCampaign>(
-    "/campaigns",
-    apiKey,
-    "campaigns",
-    replyTeamId || undefined
-  );
-  console.log(`Fetched ${campaigns.length} total campaigns from Reply.io`);
-  
-  // If a workspace filter is set, filter campaigns to only include those from that workspace
-  if (replyTeamId) {
-    const teamIdNum = parseInt(replyTeamId, 10);
-    const originalCount = campaigns.length;
-    
-    // Filter campaigns by teamId if the campaign has team info
-    campaigns = campaigns.filter(campaign => {
-      // Check if campaign has teamId field (some campaigns include this)
-      const campaignTeamId = (campaign as Record<string, unknown>).teamId as number | undefined;
-      
-      // If campaign has no teamId, try to fetch it individually or exclude it
-      if (campaignTeamId === undefined) {
-        // Conservative: include campaign if we can't determine its team
-        // OR aggressive: exclude if we can't verify
-        return true; // Conservative approach for now
-      }
-      
-      return campaignTeamId === teamIdNum;
-    });
-    
-    console.log(`After workspace filter: ${campaigns.length}/${originalCount} campaigns belong to workspace ${replyTeamId}`);
-  }
-} catch (err) {
-  // ... existing error handling
+// After:
+const REPLY_API_V3 = "https://api.reply.io/v3";
+```
+
+**Change 2**: Update interface to match V3 sequence structure
+
+```typescript
+// V3 sequence fields (different from V1 campaign)
+interface ReplyioSequence {
+  id: number;
+  name: string;
+  status: string;       // "Active", "Paused", "Finished"
+  teamId: number;       // This is what we need!
+  ownerId: number;
+  created: string;
+  isArchived: boolean;
+  // Stats may need separate fetch
 }
 ```
 
-**Change 2**: If Reply.io campaigns don't include `teamId`, fetch each campaign's details to get team info
+**Change 3**: Update fetch to use V3 `/sequences` endpoint
 
 ```typescript
-// Alternative approach: Use the /campaigns/{id} endpoint to get team info
-// This is slower but more accurate
-async function getCampaignTeamId(campaignId: number, apiKey: string): Promise<number | null> {
-  try {
-    const response = await fetchFromReplyio(`/campaigns/${campaignId}`, apiKey);
-    return (response as Record<string, unknown>).teamId as number || null;
-  } catch {
-    return null;
-  }
+// Fetch from V3 sequences endpoint
+const sequences = await fetchAllPaginated<ReplyioSequence>(
+  "/sequences",
+  apiKey,
+  "items",  // V3 returns { items: [], info: { hasMore } }
+  replyTeamId || undefined
+);
+```
+
+**Change 4**: Filter by teamId (now works because V3 includes it)
+
+```typescript
+if (replyTeamId) {
+  const teamIdNum = parseInt(replyTeamId, 10);
+  sequences = sequences.filter(seq => seq.teamId === teamIdNum);
+  console.log(`Filtered to ${sequences.length} sequences for workspace ${replyTeamId}`);
 }
 ```
 
----
+**Change 5**: Update status normalization for V3 format
 
-### Immediate Fix (Database Cleanup)
-
-Before fixing the code, we should clean up the duplicate data:
-
-**Delete campaigns from the old integration (no workspace filter):**
-```sql
--- This will be run as a migration to clean up duplicates
-DELETE FROM synced_campaigns 
-WHERE integration_id = '88a35dc3-241c-4140-9109-670e1ec7ccb0';
+```typescript
+// V3 uses string status: "Active", "Paused", "Finished"
+function normalizeStatus(status: string): string {
+  return status.toLowerCase(); // "active", "paused", "finished"
+}
 ```
 
-**Consider deleting the old integration entirely:**
-```sql
-DELETE FROM outbound_integrations 
-WHERE id = '88a35dc3-241c-4140-9109-670e1ec7ccb0';
-```
+**Change 6**: Handle stats differently
 
----
+V3 sequences may not include inline stats like V1 campaigns. We may need to:
+- Use the existing stats from upsert (preserve from CSV uploads)
+- Or make additional API calls to get stats (slower but more accurate)
 
 ### Files to Modify
 
 | File | Changes |
 |------|---------|
-| `supabase/functions/sync-reply-campaigns/index.ts` | Add workspace filtering after fetching campaigns |
-| Database migration | Clean up duplicate campaigns from old integration |
-
----
+| `supabase/functions/sync-reply-campaigns/index.ts` | Switch from V1 campaigns to V3 sequences |
 
 ### Expected Outcome
 
 | Before | After |
 |--------|-------|
-| 62 campaigns synced (all workspaces) | Only campaigns from workspace 383171 synced |
-| Two integrations with same API key | Single integration with workspace isolation |
-| Duplicate campaign data | Clean, isolated campaign data |
+| 0/6 campaigns synced (no teamId) | 6 sequences synced (filtered by teamId) |
+| Strict filter excludes everything | Strict filter correctly isolates workspace |
+| Uses V1 API (deprecated patterns) | Uses V3 API (modern, includes teamId) |
 
----
+### Note on Terminology
 
-### Questions
+Reply.io uses:
+- **Campaigns** in V1 API - older concept
+- **Sequences** in V3 API - newer concept with same purpose
 
-1. Should I **delete the old integration** (`88a35dc3...`) and its campaigns to clean up duplicates?
-2. For the filtering approach, should we be **conservative** (include campaigns if we can't verify their workspace) or **strict** (exclude if not verified)?
+Our database table is called `synced_campaigns` but will store V3 "sequences". The external_campaign_id will contain the V3 sequence ID.
 
