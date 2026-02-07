@@ -31,20 +31,18 @@ interface ReplyioSequence {
   isArchived?: boolean;
 }
 
-// V1 Campaign stats response
-interface ReplyCampaignStats {
-  id: number;
-  name: string;
-  deliveriesCount?: number;
-  repliesCount?: number;
-  opensCount?: number;
-  bouncesCount?: number;
-  optOutsCount?: number;
-  outOfOfficeCount?: number;
-  peopleCount?: number;
-  peopleActive?: number;
-  peopleFinished?: number;
-  peoplePaused?: number;
+// V3 Statistics response
+interface ReplySequenceStats {
+  sequenceId: number;
+  sequenceName?: string;
+  deliveredContacts?: number;
+  repliedContacts?: number;
+  interestedContacts?: number;
+  notInterestedContacts?: number;
+  replyRate?: number;
+  deliveryRate?: number;
+  interestedRate?: number;
+  openRate?: number;
 }
 
 // V3 status is already a string, just lowercase it
@@ -144,29 +142,27 @@ async function fetchWithRetryV1(
   throw new Error(`Max retries exceeded for ${endpoint}`);
 }
 
-// Fetch campaign stats from V1 API (V3 doesn't include stats in list)
-async function fetchCampaignStats(
-  campaignId: number, 
+// Fetch sequence stats from V3 Statistics API
+async function fetchSequenceStats(
+  sequenceId: number, 
   apiKey: string, 
   teamId?: string
 ): Promise<Record<string, number>> {
   try {
-    const data = await fetchWithRetryV1(`/campaigns/${campaignId}`, apiKey, teamId) as ReplyCampaignStats;
+    const data = await fetchWithRetryV3(`/statistics/sequences/${sequenceId}`, apiKey, teamId) as ReplySequenceStats;
     
     return {
-      sent: data.deliveriesCount || 0,
-      delivered: data.deliveriesCount || 0,
-      replies: data.repliesCount || 0,
-      opens: data.opensCount || 0,
-      bounces: data.bouncesCount || 0,
-      optOuts: data.optOutsCount || 0,
-      outOfOffice: data.outOfOfficeCount || 0,
-      peopleCount: data.peopleCount || 0,
-      peopleActive: data.peopleActive || 0,
-      peopleFinished: data.peopleFinished || 0,
+      sent: data.deliveredContacts || 0,
+      delivered: data.deliveredContacts || 0,
+      replies: data.repliedContacts || 0,
+      replyRate: data.replyRate || 0,
+      deliveryRate: data.deliveryRate || 0,
+      interestedContacts: data.interestedContacts || 0,
+      notInterestedContacts: data.notInterestedContacts || 0,
+      openRate: data.openRate || 0,
     };
   } catch (err) {
-    console.warn(`Could not fetch stats for campaign ${campaignId}:`, err);
+    console.warn(`Could not fetch stats for sequence ${sequenceId}:`, err);
     return {};
   }
 }
@@ -513,10 +509,10 @@ Deno.serve(async (req) => {
           }
         }
 
-        // Fetch stats from V1 API
-        console.log(`  Fetching stats from V1 API...`);
-        const apiStats = await fetchCampaignStats(sequence.id, apiKey, replyTeamId || undefined);
-        console.log(`  Stats: sent=${apiStats.sent || 0}, replies=${apiStats.replies || 0}, contacts=${apiStats.peopleCount || 0}`);
+        // Fetch stats from V3 Statistics API
+        console.log(`  Fetching stats from V3 Statistics API...`);
+        const apiStats = await fetchSequenceStats(sequence.id, apiKey, replyTeamId || undefined);
+        console.log(`  Stats: sent=${apiStats.sent || 0}, replies=${apiStats.replies || 0}`);
 
         // Merge: API stats + preserve LinkedIn stats from CSV
         const mergedStats = {
@@ -570,7 +566,7 @@ Deno.serve(async (req) => {
 
     console.log(`Campaign sync complete: ${campaignsProcessed}/${sequences.length} sequences`);
 
-    // Now sync contacts for each campaign
+    // Now sync contacts for each campaign and update peopleCount
     console.log(`Starting contacts sync for ${syncedCampaignIds.length} campaigns...`);
     
     for (const campaign of syncedCampaignIds) {
@@ -584,6 +580,27 @@ Deno.serve(async (req) => {
           serviceClient
         );
         totalContactsSynced += result.count;
+        
+        // Update the campaign stats with peopleCount from contacts
+        if (result.count > 0) {
+          const { data: existingCampaign } = await supabase
+            .from("synced_campaigns")
+            .select("stats")
+            .eq("id", campaign.internal)
+            .single();
+          
+          const existingStats = (existingCampaign?.stats as Record<string, unknown>) || {};
+          
+          await supabase
+            .from("synced_campaigns")
+            .update({
+              stats: {
+                ...existingStats,
+                peopleCount: result.count,
+              },
+            })
+            .eq("id", campaign.internal);
+        }
       } catch (err) {
         console.warn(`Contact sync failed for campaign ${campaign.external}:`, err);
       }
