@@ -1,177 +1,134 @@
 
 
-## Fix Reply.io Integration: Sync Stats Not Visible + Webhook 404 Error
+## Fix: Reply.io Sync is Not Respecting Workspace Isolation
 
-### Problems Identified
+### Problem Identified
 
-| Issue | Symptom | Root Cause |
-|-------|---------|------------|
-| **Stats not updating** | Sync completes but dashboard doesn't show new stats | All 62 campaigns have `is_linked: false` - they aren't being included in dashboard aggregations |
-| **Webhook 404** | "Enable Live" fails with 404 even after fallback to account-level | Reply.io V3 API requires `accountId` for account-level subscriptions, but we're not providing it |
+Looking at the database and logs, you have **two integrations** using the same API key:
 
----
+| Integration ID | reply_team_id | Last Synced | Campaigns |
+|----------------|---------------|-------------|-----------|
+| `ff397702...` (new) | `383171` | Yesterday 20:16 | 62 |
+| `88a35dc3...` (old) | `null` | Today 13:02 | 62 |
 
-### Investigation Findings
+Both synced 62 campaigns because:
 
-**Sync is working correctly** - the logs show all 62 campaigns synced with stats:
-```
-Fast sync complete: 62/62 campaigns processed
-```
-
-The database confirms campaigns have stats (e.g., `sent:22, replies:0, opens:0`), but **none are linked**:
-```sql
-SELECT is_linked FROM synced_campaigns → all false
-```
-
-**Webhook probe passes, creation fails**:
-```
-V3 probe result: 200 OK
-Reply.io V3 response (account): 404 (empty body)
-```
-
-Per Reply.io V3 documentation, the `accountId` field is required for account-level subscriptions:
-> `accountId` (integer): Specific account ID (when subscriptionLevel = 'account')
+1. **The API key has access to all campaigns** - Reply.io API keys are account-level, not workspace-specific
+2. **The `X-Reply-Team-Id` header** is used by Reply.io for **write operations and some read operations**, but the `/campaigns` endpoint may return **all campaigns the API key has access to** regardless of this header
+3. **The old integration without a team ID** was synced today (likely when you clicked sync), pulling all 62 campaigns without any workspace filtering
 
 ---
 
-### Solution Overview
+### Root Cause
 
-```text
-┌─────────────────────────────────────────────────────────────────┐
-│  FIX 1: Webhook Creation                                        │
-│  ─────────────────────────                                      │
-│  • Fetch accountId from V3 user/profile endpoint before         │
-│    creating webhook                                             │
-│  • Include accountId in payload for account-level subscriptions │
-│  • Add detailed error logging for 404 responses                 │
-└─────────────────────────────────────────────────────────────────┘
+The Reply.io V1 `/campaigns` endpoint doesn't filter by `X-Reply-Team-Id` header in all cases. According to Reply.io's behavior:
+- Some endpoints respect the team header for filtering
+- Others return all data the API key can access
+- The campaigns endpoint appears to return all accessible campaigns
 
-┌─────────────────────────────────────────────────────────────────┐
-│  FIX 2: Campaign Visibility                                     │
-│  ─────────────────────────                                      │
-│  • Either auto-link all campaigns during sync, OR               │
-│  • Surface "Manage Campaigns" more prominently after sync       │
-│  • Show count of unlinked campaigns needing action              │
-└─────────────────────────────────────────────────────────────────┘
-```
+The sync logic correctly **sends** the header but Reply.io **ignores** it for campaign listing.
+
+---
+
+### Solution
+
+Implement **client-side workspace filtering** after fetching campaigns:
+
+1. **Fetch workspace info first** - Get the teamId associated with each campaign from Reply.io
+2. **Filter campaigns by teamId** - Only sync campaigns that belong to the specified workspace
+3. **Delete orphaned campaigns** - Remove campaigns from the old integration that should be isolated
 
 ---
 
 ### Technical Changes
 
-#### File 1: `supabase/functions/setup-reply-webhook/index.ts`
+#### File: `supabase/functions/sync-reply-campaigns/index.ts`
 
-**Change 1**: Fetch the account ID from Reply.io API before creating webhook
-
-Add after the V3 probe succeeds (around line 167):
+**Change 1**: After fetching campaigns, filter them by the workspace teamId
 
 ```typescript
-// Fetch accountId for account-level subscriptions
-let accountId: number | null = null;
+// Around line 219-233, after fetching campaigns:
+
+// Fetch ALL campaigns from Reply.io
+let campaigns: ReplyioCampaign[] = [];
 try {
-  const accountResponse = await fetch('https://api.reply.io/v1/actions/me', {
-    headers: { 'X-Api-Key': apiKey },
-  });
-  if (accountResponse.ok) {
-    const accountData = await accountResponse.json();
-    accountId = accountData.id || accountData.accountId || null;
-    console.log('Retrieved accountId:', accountId);
+  campaigns = await fetchAllPaginated<ReplyioCampaign>(
+    "/campaigns",
+    apiKey,
+    "campaigns",
+    replyTeamId || undefined
+  );
+  console.log(`Fetched ${campaigns.length} total campaigns from Reply.io`);
+  
+  // If a workspace filter is set, filter campaigns to only include those from that workspace
+  if (replyTeamId) {
+    const teamIdNum = parseInt(replyTeamId, 10);
+    const originalCount = campaigns.length;
+    
+    // Filter campaigns by teamId if the campaign has team info
+    campaigns = campaigns.filter(campaign => {
+      // Check if campaign has teamId field (some campaigns include this)
+      const campaignTeamId = (campaign as Record<string, unknown>).teamId as number | undefined;
+      
+      // If campaign has no teamId, try to fetch it individually or exclude it
+      if (campaignTeamId === undefined) {
+        // Conservative: include campaign if we can't determine its team
+        // OR aggressive: exclude if we can't verify
+        return true; // Conservative approach for now
+      }
+      
+      return campaignTeamId === teamIdNum;
+    });
+    
+    console.log(`After workspace filter: ${campaigns.length}/${originalCount} campaigns belong to workspace ${replyTeamId}`);
   }
-} catch (e) {
-  console.log('Could not fetch accountId, will try without it');
+} catch (err) {
+  // ... existing error handling
 }
 ```
 
-**Change 2**: Include accountId in account-level webhook payload
-
-Modify `attemptWebhookCreation` function (lines 207-239):
+**Change 2**: If Reply.io campaigns don't include `teamId`, fetch each campaign's details to get team info
 
 ```typescript
-async function attemptWebhookCreation(
-  subscriptionLevel: 'team' | 'account',
-  teamIds?: number[],
-  accountIdParam?: number | null
-): Promise<{ response: Response; responseText: string }> {
-  const payload: Record<string, unknown> = {
-    targetUrl: webhookUrl,
-    eventTypes: ALL_EVENT_TYPES,
-    secret: webhookSecret,
-    subscriptionLevel,
-  };
-  
-  if (subscriptionLevel === 'team' && teamIds && teamIds.length > 0) {
-    payload.teamIds = teamIds;
+// Alternative approach: Use the /campaigns/{id} endpoint to get team info
+// This is slower but more accurate
+async function getCampaignTeamId(campaignId: number, apiKey: string): Promise<number | null> {
+  try {
+    const response = await fetchFromReplyio(`/campaigns/${campaignId}`, apiKey);
+    return (response as Record<string, unknown>).teamId as number || null;
+  } catch {
+    return null;
   }
-  
-  // Include accountId for account-level subscriptions
-  if (subscriptionLevel === 'account' && accountIdParam) {
-    payload.accountId = accountIdParam;
-  }
-  
-  // ... rest of function
-}
-```
-
-**Change 3**: Pass accountId to fallback calls
-
-```typescript
-// First attempt: team-level if reply_team_id is set
-if (integration.reply_team_id) {
-  const teamId = parseInt(integration.reply_team_id, 10);
-  const result = await attemptWebhookCreation('team', [teamId]);
-  // ...
-  if (result.response.status === 404) {
-    const fallbackResult = await attemptWebhookCreation('account', undefined, accountId);
-    // ...
-  }
-} else {
-  const result = await attemptWebhookCreation('account', undefined, accountId);
-  // ...
 }
 ```
 
 ---
 
-#### File 2: `src/components/playground/IntegrationSetupCard.tsx`
+### Immediate Fix (Database Cleanup)
 
-**Change**: Show count of unlinked campaigns after sync
+Before fixing the code, we should clean up the duplicate data:
 
-Add after sync completes - show a notification or badge indicating campaigns need to be linked:
-
-```typescript
-// In IntegrationRow, add unlinked campaign count display
-{isReplyIo && integration.sync_status === 'synced' && (
-  <span className="text-xs text-amber-600">
-    Sync complete - use "Manage Campaigns" to link campaigns for dashboard
-  </span>
-)}
+**Delete campaigns from the old integration (no workspace filter):**
+```sql
+-- This will be run as a migration to clean up duplicates
+DELETE FROM synced_campaigns 
+WHERE integration_id = '88a35dc3-241c-4140-9109-670e1ec7ccb0';
 ```
 
----
-
-#### File 3: `supabase/functions/sync-reply-campaigns/index.ts` (Optional Enhancement)
-
-**Alternative Approach**: Auto-link all campaigns during sync
-
-If the user wants all campaigns to appear in stats automatically, modify the upsert to set `is_linked: true`:
-
-```typescript
-// Around line 195, change:
-is_linked: existingCampaign?.is_linked ?? false  // preserve existing
-
-// To (if auto-link is desired):
-is_linked: true  // Auto-link all campaigns
+**Consider deleting the old integration entirely:**
+```sql
+DELETE FROM outbound_integrations 
+WHERE id = '88a35dc3-241c-4140-9109-670e1ec7ccb0';
 ```
 
 ---
 
 ### Files to Modify
 
-| File | Priority | Changes |
-|------|----------|---------|
-| `supabase/functions/setup-reply-webhook/index.ts` | **Critical** | Fetch accountId, include in payload |
-| `src/components/playground/IntegrationSetupCard.tsx` | Medium | Show campaign linking guidance |
-| `supabase/functions/sync-reply-campaigns/index.ts` | Optional | Auto-link campaigns if desired |
+| File | Changes |
+|------|---------|
+| `supabase/functions/sync-reply-campaigns/index.ts` | Add workspace filtering after fetching campaigns |
+| Database migration | Clean up duplicate campaigns from old integration |
 
 ---
 
@@ -179,16 +136,14 @@ is_linked: true  // Auto-link all campaigns
 
 | Before | After |
 |--------|-------|
-| Webhook creation: 404 error | Webhook creation: 201 success with accountId |
-| Stats appear empty after sync | Either auto-linked OR clear guidance to link campaigns |
-| Generic error messages | Specific diagnostic errors with accountId info |
+| 62 campaigns synced (all workspaces) | Only campaigns from workspace 383171 synced |
+| Two integrations with same API key | Single integration with workspace isolation |
+| Duplicate campaign data | Clean, isolated campaign data |
 
 ---
 
-### Question for You
+### Questions
 
-For the campaign linking behavior, which would you prefer?
-
-1. **Auto-link all campaigns** - Every synced campaign automatically appears in dashboard stats
-2. **Keep manual linking** - User selects which campaigns to include via "Manage Campaigns" (current behavior, but with better guidance)
+1. Should I **delete the old integration** (`88a35dc3...`) and its campaigns to clean up duplicates?
+2. For the filtering approach, should we be **conservative** (include campaigns if we can't verify their workspace) or **strict** (exclude if not verified)?
 
