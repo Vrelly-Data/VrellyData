@@ -21,6 +21,38 @@ export interface OutboundIntegration {
 export function useOutboundIntegrations() {
   const queryClient = useQueryClient();
 
+  // Sync contacts per-campaign (separate backend function) to avoid long-running sync timeouts.
+  const startContactsSync = (integrationId: string) => {
+    void (async () => {
+      try {
+        const { data: campaigns, error } = await supabase
+          .from('synced_campaigns')
+          .select('id')
+          .eq('integration_id', integrationId)
+          .eq('is_linked', true);
+
+        if (error) throw error;
+        if (!campaigns?.length) return;
+
+        for (const campaign of campaigns) {
+          const { error: syncError } = await supabase.functions.invoke('sync-reply-contacts', {
+            body: { campaignId: campaign.id, integrationId },
+          });
+
+          if (syncError) {
+            console.warn('Contact sync failed:', syncError);
+          }
+        }
+
+        queryClient.invalidateQueries({ queryKey: ['synced-contacts'] });
+        queryClient.invalidateQueries({ queryKey: ['synced-campaigns'] });
+        queryClient.invalidateQueries({ queryKey: ['playground-stats'] });
+      } catch (err) {
+        console.warn('Contacts auto-sync error:', err);
+      }
+    })();
+  };
+
   const { data: integrations, isLoading, error } = useQuery({
     queryKey: ['outbound-integrations'],
     queryFn: async () => {
@@ -70,14 +102,14 @@ export function useOutboundIntegrations() {
     onSuccess: async (data) => {
       queryClient.invalidateQueries({ queryKey: ['outbound-integrations'] });
       toast.success('Integration added - syncing campaigns...');
-      
+
       // Trigger automatic sync immediately
       if (data?.id) {
         try {
           const { error } = await supabase.functions.invoke('sync-reply-campaigns', {
             body: { integrationId: data.id },
           });
-          
+
           if (error) {
             console.error('Auto-sync failed:', error);
             toast.error('Sync failed - you can try again manually');
@@ -85,6 +117,10 @@ export function useOutboundIntegrations() {
             queryClient.invalidateQueries({ queryKey: ['outbound-integrations'] });
             queryClient.invalidateQueries({ queryKey: ['playground-stats'] });
             queryClient.invalidateQueries({ queryKey: ['synced-campaigns'] });
+
+            // Contacts + aggregate stats are synced per-campaign in the background
+            startContactsSync(data.id);
+
             toast.success('Sync complete!');
           }
         } catch (err) {
@@ -146,9 +182,14 @@ export function useOutboundIntegrations() {
       if (error) throw error;
       return data;
     },
-    onSuccess: (data) => {
+    onSuccess: (data, integrationId) => {
       queryClient.invalidateQueries({ queryKey: ['outbound-integrations'] });
+      queryClient.invalidateQueries({ queryKey: ['synced-campaigns'] });
       queryClient.invalidateQueries({ queryKey: ['playground-stats'] });
+
+      // Contacts + aggregate stats are synced per-campaign in the background
+      startContactsSync(integrationId);
+
       toast.success(`Synced ${data.campaigns} campaigns`);
     },
     onError: (error) => {

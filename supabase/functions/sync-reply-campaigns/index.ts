@@ -55,14 +55,16 @@ function normalizeStatus(status: unknown): string {
 
 async function fetchFromReplyioV3(endpoint: string, apiKey: string, teamId?: string) {
   const headers: Record<string, string> = {
-    "X-Api-Key": apiKey,
+    // Reply requires strict header casing
+    "X-API-Key": apiKey,
+    "Accept": "application/json",
     "Content-Type": "application/json",
   };
-  
+
   if (teamId) {
     headers["X-Reply-Team-Id"] = teamId;
   }
-  
+
   const response = await fetch(`${REPLY_API_V3}${endpoint}`, { headers });
 
   if (!response.ok) {
@@ -75,14 +77,16 @@ async function fetchFromReplyioV3(endpoint: string, apiKey: string, teamId?: str
 
 async function fetchFromReplyioV1(endpoint: string, apiKey: string, teamId?: string) {
   const headers: Record<string, string> = {
-    "X-Api-Key": apiKey,
+    // Reply requires strict header casing
+    "X-API-Key": apiKey,
+    "Accept": "application/json",
     "Content-Type": "application/json",
   };
-  
+
   if (teamId) {
     headers["X-Reply-Team-Id"] = teamId;
   }
-  
+
   const response = await fetch(`${REPLY_API_V1}${endpoint}`, { headers });
 
   if (!response.ok) {
@@ -215,170 +219,13 @@ async function fetchAllPaginated<T>(
   return allResults;
 }
 
-// Contact sync for a single campaign (inline, not separate function call)
-async function syncContactsForCampaign(
-  internalCampaignId: string,
-  externalCampaignId: string,
-  apiKey: string,
-  teamId: string,
-  replyTeamId: string | null,
-  serviceClient: ReturnType<typeof createClient>
-): Promise<{ count: number }> {
-  console.log(`Syncing contacts for campaign ${externalCampaignId}`);
-  
-  interface ReplyPerson {
-    id: number;
-    email: string;
-    firstName?: string;
-    lastName?: string;
-    title?: string;
-    company?: string;
-    status?: string;
-    replied?: boolean;
-    bounced?: boolean;
-    finished?: boolean;
-    optedOut?: boolean;
-    opened?: boolean;
-    clicked?: boolean;
-    customFields?: Record<string, unknown>;
-    addedTime?: string;
-    industry?: string;
-    companySize?: string;
-    city?: string;
-    state?: string;
-    country?: string;
-    phone?: string;
-    linkedInProfile?: string;
-    addingDate?: string;
-  }
+// NOTE: Contact sync was intentionally removed from this function.
+// Rationale: syncing contacts for many campaigns can exceed request time limits,
+// causing the client to see "Failed to fetch" even though the backend keeps working.
+//
+// Contacts are synced per-campaign via the separate `sync-reply-contacts` function.
+// That function also updates per-campaign stats like peopleCount + replies.
 
-  function mapPersonStatus(person: ReplyPerson): string {
-    if (person.replied) return 'replied';
-    if (person.bounced) return 'bounced';
-    if (person.optedOut) return 'opted_out';
-    if (person.finished) return 'finished';
-    if (person.opened) return 'opened';
-    if (person.status) {
-      const statusLower = person.status.toLowerCase();
-      if (statusLower === 'inprogress' || statusLower === 'in_progress') return 'active';
-      if (statusLower === 'finished') return 'finished';
-      if (statusLower === 'paused') return 'paused';
-      return statusLower;
-    }
-    return 'active';
-  }
-
-  const uniqueContactsMap = new Map<string, ReplyPerson>();
-  let page = 1;
-  const limit = 100;
-  let hasMore = true;
-  let consecutiveDuplicatePages = 0;
-
-  while (hasMore && page <= 50) { // Limit to 50 pages (5000 contacts) per campaign to avoid timeout
-    const endpoint = `/campaigns/${externalCampaignId}/people?limit=${limit}&page=${page}`;
-    
-    try {
-      const response = await fetchWithRetryV1(endpoint, apiKey, replyTeamId || undefined) as { people?: ReplyPerson[] };
-      const people = response.people || [];
-      
-      let newUniqueCount = 0;
-      for (const person of people) {
-        if (person.email && !uniqueContactsMap.has(person.email.toLowerCase())) {
-          uniqueContactsMap.set(person.email.toLowerCase(), person);
-          newUniqueCount++;
-        }
-      }
-      
-      console.log(`  Contact page ${page}: fetched ${people.length}, new: ${newUniqueCount}, total: ${uniqueContactsMap.size}`);
-      
-      if (newUniqueCount === 0 && people.length > 0) {
-        consecutiveDuplicatePages++;
-        if (consecutiveDuplicatePages >= 3) {
-          console.log("  Stopping: duplicate pages detected");
-          break;
-        }
-      } else {
-        consecutiveDuplicatePages = 0;
-      }
-      
-      if (people.length === 0 || people.length < limit) {
-        hasMore = false;
-      }
-      
-      page++;
-      
-      if (hasMore) {
-        await new Promise(resolve => setTimeout(resolve, 200));
-      }
-    } catch (err) {
-      console.warn(`Failed to fetch contacts page ${page}:`, err);
-      break;
-    }
-  }
-
-  const allContacts = Array.from(uniqueContactsMap.values());
-  
-  if (allContacts.length === 0) {
-    return { count: 0 };
-  }
-
-  // Batch upsert
-  const BATCH_SIZE = 100;
-  let contactsSynced = 0;
-
-  for (let i = 0; i < allContacts.length; i += BATCH_SIZE) {
-    const batch = allContacts.slice(i, i + BATCH_SIZE);
-
-    const records = batch.map(person => ({
-      campaign_id: internalCampaignId,
-      team_id: teamId,
-      external_contact_id: String(person.id),
-      email: person.email,
-      first_name: person.firstName || null,
-      last_name: person.lastName || null,
-      company: person.company || null,
-      job_title: person.title || null,
-      status: mapPersonStatus(person),
-      engagement_data: {
-        replied: person.replied || false,
-        bounced: person.bounced || false,
-        opened: person.opened || false,
-        clicked: person.clicked || false,
-        optedOut: person.optedOut || false,
-        finished: person.finished || false,
-        addedTime: person.addedTime || person.addingDate,
-      },
-      custom_fields: person.customFields || {},
-      raw_data: person,
-      updated_at: new Date().toISOString(),
-      industry: person.industry || null,
-      company_size: person.companySize && person.companySize !== 'Empty' ? person.companySize : null,
-      city: person.city || null,
-      state: person.state || null,
-      country: person.country || null,
-      phone: person.phone || null,
-      linkedin_url: person.linkedInProfile || null,
-      added_at: person.addingDate || person.addedTime || null,
-    }));
-
-    try {
-      const { error: upsertError } = await serviceClient
-        .from("synced_contacts")
-        .upsert(records, {
-          onConflict: "campaign_id,email",
-        });
-
-      if (!upsertError) {
-        contactsSynced += batch.length;
-      }
-    } catch (err) {
-      console.warn(`Contact batch failed:`, err);
-    }
-  }
-
-  console.log(`  Synced ${contactsSynced} contacts for campaign ${externalCampaignId}`);
-  return { count: contactsSynced };
-}
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -406,12 +253,6 @@ Deno.serve(async (req) => {
       { global: { headers: { Authorization: authHeader } } }
     );
 
-    // Service client for bulk contact writes
-    const serviceClient = createClient(
-      Deno.env.get("SUPABASE_URL") ?? "",
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
-    );
-    
     if (!integrationId) {
       throw new Error("Missing integrationId");
     }
@@ -566,47 +407,7 @@ Deno.serve(async (req) => {
 
     console.log(`Campaign sync complete: ${campaignsProcessed}/${sequences.length} sequences`);
 
-    // Now sync contacts for each campaign and update peopleCount
-    console.log(`Starting contacts sync for ${syncedCampaignIds.length} campaigns...`);
-    
-    for (const campaign of syncedCampaignIds) {
-      try {
-        const result = await syncContactsForCampaign(
-          campaign.internal,
-          campaign.external,
-          apiKey,
-          teamId,
-          replyTeamId,
-          serviceClient
-        );
-        totalContactsSynced += result.count;
-        
-        // Update the campaign stats with peopleCount from contacts
-        if (result.count > 0) {
-          const { data: existingCampaign } = await supabase
-            .from("synced_campaigns")
-            .select("stats")
-            .eq("id", campaign.internal)
-            .single();
-          
-          const existingStats = (existingCampaign?.stats as Record<string, unknown>) || {};
-          
-          await supabase
-            .from("synced_campaigns")
-            .update({
-              stats: {
-                ...existingStats,
-                peopleCount: result.count,
-              },
-            })
-            .eq("id", campaign.internal);
-        }
-      } catch (err) {
-        console.warn(`Contact sync failed for campaign ${campaign.external}:`, err);
-      }
-    }
-
-    console.log(`Contacts sync complete: ${totalContactsSynced} total contacts`);
+    // NOTE: Contact sync is handled separately via `sync-reply-contacts`
 
     // Update integration status
     const finalStatus = campaignsFailed > 0 && campaignsProcessed === 0 ? "error" : "synced";
@@ -624,15 +425,32 @@ Deno.serve(async (req) => {
       })
       .eq("id", integrationId);
 
-    console.log(`Full sync complete: ${campaignsProcessed} campaigns, ${totalContactsSynced} contacts`);
+    console.log(`Sync complete: ${campaignsProcessed} campaigns (contacts sync runs per-campaign)`);
+
+    // Update integration status
+    const finalStatus = campaignsFailed > 0 && campaignsProcessed === 0 ? "error" : "synced";
+    const syncError = campaignsFailed > 0 
+      ? `Synced ${campaignsProcessed}/${sequences.length} sequences (${campaignsFailed} failed)` 
+      : null;
+
+    await supabase
+      .from("outbound_integrations")
+      .update({
+        sync_status: finalStatus,
+        sync_error: syncError,
+        last_synced_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", integrationId);
+
+    console.log(`Full sync complete: ${campaignsProcessed} campaigns`);
 
     return new Response(
       JSON.stringify({
         success: true,
         campaigns: campaignsProcessed,
         campaignsFailed,
-        contacts: totalContactsSynced,
-        mode: "v3-sequences-with-v1-stats",
+        mode: "v3-sequences",
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
