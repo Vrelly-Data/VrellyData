@@ -42,22 +42,24 @@ interface ReplyPerson {
 
 // Retry wrapper with exponential backoff for rate limiting
 async function fetchWithRetry(
-  endpoint: string, 
-  apiKey: string, 
-  teamId?: string, 
+  endpoint: string,
+  apiKey: string,
+  teamId?: string,
   maxRetries: number = 3
 ): Promise<unknown> {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       const headers: Record<string, string> = {
-        "X-Api-Key": apiKey,
+        // Reply requires strict header casing
+        "X-API-Key": apiKey,
+        "Accept": "application/json",
         "Content-Type": "application/json",
       };
-      
+
       if (teamId) {
         headers["X-Reply-Team-Id"] = teamId;
       }
-      
+
       const response = await fetch(`${REPLY_API_V1}${endpoint}`, { headers });
 
       if (!response.ok) {
@@ -68,11 +70,13 @@ async function fetchWithRetry(
       return response.json();
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      
+
       if (errorMessage.includes("Too much requests") && attempt < maxRetries) {
         const waitTime = 5000 * attempt;
-        console.log(`Rate limited on ${endpoint}, waiting ${waitTime/1000}s before retry ${attempt}/${maxRetries}`);
-        await new Promise(resolve => setTimeout(resolve, waitTime));
+        console.log(
+          `Rate limited on ${endpoint}, waiting ${waitTime / 1000}s before retry ${attempt}/${maxRetries}`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, waitTime));
         continue;
       }
       throw error;
@@ -294,7 +298,49 @@ Deno.serve(async (req) => {
       .select("*", { count: "exact", head: true })
       .eq("campaign_id", campaignId);
 
-    console.log(`Contacts sync complete: ${contactsSynced} processed, ${contactsFailed} failed, ${verifiedCount} verified in database`);
+    const peopleCount = verifiedCount || allContacts.length;
+
+    // Update campaign aggregate stats from contact booleans
+    // (This makes the dashboard update even if statistics endpoints are unavailable.)
+    const repliesCount = allContacts.filter(p => !!p.replied).length;
+    const opensCount = allContacts.filter(p => !!p.opened).length;
+    const clicksCount = allContacts.filter(p => !!p.clicked).length;
+    const bouncesCount = allContacts.filter(p => !!p.bounced).length;
+    const optOutsCount = allContacts.filter(p => !!p.optedOut).length;
+    const finishedCount = allContacts.filter(p => !!p.finished).length;
+
+    const { data: existingCampaign } = await serviceClient
+      .from("synced_campaigns")
+      .select("stats")
+      .eq("id", campaignId)
+      .maybeSingle();
+
+    const existingStats = (existingCampaign?.stats as Record<string, unknown>) || {};
+
+    const existingSent = typeof existingStats.sent === 'number' ? (existingStats.sent as number) : null;
+    const existingDelivered = typeof existingStats.delivered === 'number' ? (existingStats.delivered as number) : null;
+
+    await serviceClient
+      .from("synced_campaigns")
+      .update({
+        stats: {
+          ...existingStats,
+          peopleCount,
+          replies: repliesCount,
+          opens: opensCount,
+          clicked: clicksCount,
+          bounces: bouncesCount,
+          optOuts: optOutsCount,
+          peopleFinished: finishedCount,
+          // If no API delivery stats are available, fall back to peopleCount
+          delivered: existingDelivered ?? peopleCount,
+          sent: existingSent ?? existingDelivered ?? peopleCount,
+        },
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", campaignId);
+
+    console.log(`Contacts sync complete: ${contactsSynced} processed, ${contactsFailed} failed, ${peopleCount} verified in database`);
 
     return new Response(
       JSON.stringify({
@@ -303,7 +349,11 @@ Deno.serve(async (req) => {
         contactsFailed,
         totalFetched,
         uniquePrepared: allContacts.length,
-        verifiedCount: verifiedCount || 0,
+        verifiedCount: peopleCount,
+        campaignStats: {
+          peopleCount,
+          replies: repliesCount,
+        },
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
