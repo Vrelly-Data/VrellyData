@@ -227,7 +227,26 @@ Deno.serve(async (req) => {
         "campaigns",
         replyTeamId || undefined
       );
-      console.log(`Fetched ${campaigns.length} campaigns from Reply.io`);
+      console.log(`Fetched ${campaigns.length} total campaigns from Reply.io`);
+      
+      // If a workspace filter is set, filter campaigns to only include those from that workspace
+      // Reply.io API may ignore X-Reply-Team-Id header for campaign listing, so we filter client-side
+      if (replyTeamId) {
+        const teamIdNum = parseInt(replyTeamId, 10);
+        const originalCount = campaigns.length;
+        
+        campaigns = campaigns.filter(campaign => {
+          // Check if campaign has teamId field
+          if (campaign.teamId === undefined) {
+            // If campaign has no teamId info, we can't verify - skip it (strict mode)
+            console.log(`Campaign ${campaign.id} (${campaign.name}) has no teamId, excluding from sync`);
+            return false;
+          }
+          return campaign.teamId === teamIdNum;
+        });
+        
+        console.log(`After workspace filter: ${campaigns.length}/${originalCount} campaigns belong to workspace ${replyTeamId}`);
+      }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       console.error("Failed to fetch campaigns:", err);
