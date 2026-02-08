@@ -332,15 +332,18 @@ Deno.serve(async (req) => {
         
         console.log(`Processing sequence: ${sequence.name} (ID: ${sequence.id})`);
 
-        // Fetch existing campaign to preserve LinkedIn stats
+        // Fetch existing campaign to preserve LinkedIn stats and is_linked
         const { data: existingCampaign } = await supabase
           .from("synced_campaigns")
-          .select("id, stats")
+          .select("id, stats, is_linked")
           .eq("integration_id", integrationId)
           .eq("external_campaign_id", String(sequence.id))
           .maybeSingle();
 
         const existingStats = (existingCampaign?.stats as Record<string, unknown>) || {};
+        
+        // Preserve is_linked: if campaign exists, keep user's choice; if new, default to true
+        const isLinked = existingCampaign ? existingCampaign.is_linked : true;
 
         // Preserve LinkedIn fields from existing stats
         const linkedinStats: Record<string, unknown> = {};
@@ -375,7 +378,7 @@ Deno.serve(async (req) => {
           peopleCount: existingPeopleCount || 0,
         };
 
-        // Upsert sequence as campaign
+        // Upsert sequence as campaign - preserve is_linked choice
         const { data: upsertedCampaign, error: campaignError } = await supabase
           .from("synced_campaigns")
           .upsert({
@@ -386,7 +389,7 @@ Deno.serve(async (req) => {
             status: normalizeStatus(sequence.status),
             stats: mergedStats,
             raw_data: sequence,
-            is_linked: true,
+            is_linked: isLinked,
             updated_at: new Date().toISOString(),
           }, {
             onConflict: "integration_id,external_campaign_id",

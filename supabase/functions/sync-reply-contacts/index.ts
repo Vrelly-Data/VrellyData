@@ -5,34 +5,25 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-// Use V3 API for extended contacts with engagement data
-const REPLY_API_V3 = "https://api.reply.io/v3";
+// Use V1 API for reliable contact listing with page-based pagination
+const REPLY_API_V1 = "https://api.reply.io/v1";
 
-// V3 Extended Contact response structure
-interface V3ExtendedContact {
+// V1 Contact response structure
+interface V1Contact {
+  id: number;
   email: string;
   firstName?: string;
   lastName?: string;
   title?: string;
   company?: string;
   addedAt?: string;
-  currentStep?: {
-    stepId: number;
-    displayStepNumber: string;
-    stepNumber: number;
-  };
-  lastStepCompletedAt?: string | null;
-  status?: {
-    status: string;
-    replied: boolean;
-    delivered: boolean;
-    bounced: boolean;
-    opened: boolean;
-    clicked: boolean;
-    optedOut?: boolean;
-    finished?: boolean;
-  };
-  // Additional fields from the API
+  finished?: boolean;
+  replied?: boolean;
+  bounced?: boolean;
+  opened?: boolean;
+  clicked?: boolean;
+  optedOut?: boolean;
+  // Additional fields
   industry?: string;
   companySize?: string;
   city?: string;
@@ -40,13 +31,6 @@ interface V3ExtendedContact {
   country?: string;
   phone?: string;
   linkedInProfile?: string;
-}
-
-interface V3ExtendedResponse {
-  items?: V3ExtendedContact[];
-  info?: {
-    hasMore: boolean;
-  };
 }
 
 // Retry wrapper with exponential backoff for rate limiting
@@ -68,11 +52,11 @@ async function fetchWithRetry(
         headers["X-Reply-Team-Id"] = teamId;
       }
 
-      const response = await fetch(`${REPLY_API_V3}${endpoint}`, { headers });
+      const response = await fetch(`${REPLY_API_V1}${endpoint}`, { headers });
 
       if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(`Reply.io V3 API error (${response.status}): ${errorText}`);
+        throw new Error(`Reply.io V1 API error (${response.status}): ${errorText}`);
       }
 
       return response.json();
@@ -93,26 +77,22 @@ async function fetchWithRetry(
   throw new Error(`Max retries exceeded for ${endpoint}`);
 }
 
-// Map V3 contact status to simplified status string
-function mapContactStatus(contact: V3ExtendedContact): string {
-  const status = contact.status;
-  if (!status) {
-    return 'active';
-  }
-  
-  if (status.replied) return 'replied';
-  if (status.bounced) return 'bounced';
-  if (status.optedOut) return 'opted_out';
-  if (status.finished) return 'finished';
-  if (status.opened) return 'opened';
-  
-  // Use the status string from API
-  const statusStr = status.status?.toLowerCase();
-  if (statusStr === 'active' || statusStr === 'inprogress') return 'active';
-  if (statusStr === 'finished') return 'finished';
-  if (statusStr === 'paused') return 'paused';
-  
-  return statusStr || 'active';
+// Map contact to simplified status string
+function mapContactStatus(contact: V1Contact): string {
+  if (contact.replied) return 'replied';
+  if (contact.bounced) return 'bounced';
+  if (contact.optedOut) return 'opted_out';
+  if (contact.finished) return 'finished';
+  if (contact.opened) return 'opened';
+  return 'active';
+}
+
+// Generate a page signature to detect duplicate pages
+function getPageSignature(contacts: V1Contact[]): string {
+  if (contacts.length === 0) return 'empty';
+  const first = contacts[0].email;
+  const last = contacts[contacts.length - 1].email;
+  return `${first}|${last}|${contacts.length}`;
 }
 
 Deno.serve(async (req) => {
@@ -171,42 +151,111 @@ Deno.serve(async (req) => {
     const apiKey = integration.api_key_encrypted;
     const teamId = integration.team_id;
     const replyTeamId = integration.reply_team_id;
-    // V3 API uses sequence ID (same as external_campaign_id)
-    const sequenceId = campaign.external_campaign_id;
+    const externalCampaignId = campaign.external_campaign_id;
 
-    console.log(`Fetching contacts for sequence ${sequenceId} using V3 extended API`);
+    console.log(`Fetching contacts for campaign ${externalCampaignId} using V1 API with page-based pagination`);
 
-    // Fetch contacts from Reply.io V3 API using offset pagination
-    const allContacts: V3ExtendedContact[] = [];
-    let offset = 0;
+    // Use Map for deduplication - key by email
+    const contactsMap = new Map<string, V1Contact>();
+    
+    // Pagination with page numbers (V1 API uses 1-indexed pages)
+    let page = 1;
     const limit = 100;
+    const maxPages = 100; // Safety cap: 100 * 100 = 10,000 max
     let hasMore = true;
-    const maxIterations = 100; // Safety cap: 100 * 100 = 10,000 max
-    let iteration = 0;
+    
+    // Diagnostics
+    let totalFetchedRaw = 0;
+    let duplicatePagesDetected = 0;
+    let emptyPagesInRow = 0;
+    let stopReason = 'unknown';
+    const seenSignatures = new Set<string>();
 
-    while (hasMore && iteration < maxIterations) {
-      const endpoint = `/sequences/${sequenceId}/contacts/extended?limit=${limit}&offset=${offset}`;
-      console.log(`Fetching V3 extended contacts: offset=${offset}, limit=${limit}`);
+    while (hasMore && page <= maxPages) {
+      const endpoint = `/campaigns/${externalCampaignId}/people?page=${page}&limit=${limit}`;
+      console.log(`Fetching V1 contacts: page=${page}, limit=${limit}`);
       
-      const response = await fetchWithRetry(endpoint, apiKey, replyTeamId || undefined) as V3ExtendedResponse;
+      let contacts: V1Contact[] = [];
+      try {
+        const response = await fetchWithRetry(endpoint, apiKey, replyTeamId || undefined);
+        contacts = (response as V1Contact[]) || [];
+      } catch (err) {
+        console.error(`Error fetching page ${page}:`, err);
+        // If API fails, stop gracefully
+        stopReason = `api_error_page_${page}`;
+        break;
+      }
       
-      const items = response.items || [];
-      allContacts.push(...items);
+      totalFetchedRaw += contacts.length;
+      console.log(`Fetched ${contacts.length} contacts, raw total: ${totalFetchedRaw}`);
+
+      // Check for empty page
+      if (contacts.length === 0) {
+        emptyPagesInRow++;
+        if (emptyPagesInRow >= 2) {
+          stopReason = 'empty_pages';
+          console.log('Stopping: received 2 consecutive empty pages');
+          break;
+        }
+        page++;
+        continue;
+      }
       
-      console.log(`Fetched ${items.length} contacts, total: ${allContacts.length}`);
+      emptyPagesInRow = 0;
+
+      // Check for duplicate page (same signature = paging is stuck)
+      const pageSignature = getPageSignature(contacts);
+      if (seenSignatures.has(pageSignature)) {
+        duplicatePagesDetected++;
+        console.warn(`Duplicate page detected! Signature: ${pageSignature}`);
+        if (duplicatePagesDetected >= 2) {
+          stopReason = 'repeating_page_guard';
+          console.log('Stopping: detected 2 duplicate pages - API paging is stuck');
+          break;
+        }
+      }
+      seenSignatures.add(pageSignature);
+
+      // Track how many new unique emails we get this page
+      const uniquesBefore = contactsMap.size;
       
-      // Check if there are more pages
-      hasMore = response.info?.hasMore ?? false;
+      // Deduplicate: add to map, newer entries overwrite older
+      for (const contact of contacts) {
+        if (contact.email) {
+          contactsMap.set(contact.email.toLowerCase(), contact);
+        }
+      }
       
-      if (hasMore) {
-        offset += limit;
-        iteration++;
+      const newUniques = contactsMap.size - uniquesBefore;
+      console.log(`Page ${page}: ${newUniques} new unique contacts (total unique: ${contactsMap.size})`);
+
+      // If we got 0 new uniques for this page, it's likely repeating data
+      if (newUniques === 0) {
+        duplicatePagesDetected++;
+        if (duplicatePagesDetected >= 3) {
+          stopReason = 'no_new_contacts_guard';
+          console.log('Stopping: 3 pages with 0 new contacts');
+          break;
+        }
+      }
+
+      // Check if this was a full page (might have more)
+      if (contacts.length < limit) {
+        stopReason = 'partial_page';
+        hasMore = false;
+      } else {
+        page++;
         // Rate limit protection between pages
         await new Promise(resolve => setTimeout(resolve, 300));
       }
     }
 
-    console.log(`Total contacts fetched from V3 API: ${allContacts.length}`);
+    if (page > maxPages) {
+      stopReason = 'max_pages_reached';
+    }
+
+    const uniqueContacts = Array.from(contactsMap.values());
+    console.log(`Paging complete. Reason: ${stopReason}. Raw fetched: ${totalFetchedRaw}, Unique: ${uniqueContacts.length}`);
 
     // Batch upsert contacts to database
     const BATCH_SIZE = 100;
@@ -222,42 +271,44 @@ Deno.serve(async (req) => {
     let optOutsCount = 0;
     let finishedCount = 0;
 
-    for (let i = 0; i < allContacts.length; i += BATCH_SIZE) {
-      const batch = allContacts.slice(i, i + BATCH_SIZE);
+    for (let i = 0; i < uniqueContacts.length; i += BATCH_SIZE) {
+      const batch = uniqueContacts.slice(i, i + BATCH_SIZE);
       const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
-      const totalBatches = Math.ceil(allContacts.length / BATCH_SIZE);
+      const totalBatches = Math.ceil(uniqueContacts.length / BATCH_SIZE);
       
       console.log(`Processing batch ${batchNumber}/${totalBatches} (${batch.length} contacts)`);
 
       const records = batch.map(contact => {
-        const status = contact.status;
+        // Count engagement stats
+        // In V1 API, if a contact has been engaged (opened, replied, etc), they've received email
+        const hasEngagement = contact.opened || contact.replied || contact.clicked || 
+                              contact.bounced || contact.finished;
         
-        // Count engagement stats from V3 status object
-        if (status?.delivered) deliveredCount++;
-        if (status?.replied) repliesCount++;
-        if (status?.opened) opensCount++;
-        if (status?.clicked) clicksCount++;
-        if (status?.bounced) bouncesCount++;
-        if (status?.optedOut) optOutsCount++;
-        if (status?.finished) finishedCount++;
+        if (hasEngagement) deliveredCount++;
+        if (contact.replied) repliesCount++;
+        if (contact.opened) opensCount++;
+        if (contact.clicked) clicksCount++;
+        if (contact.bounced) bouncesCount++;
+        if (contact.optedOut) optOutsCount++;
+        if (contact.finished) finishedCount++;
         
         const engagementData = {
-          replied: status?.replied || false,
-          bounced: status?.bounced || false,
-          opened: status?.opened || false,
-          clicked: status?.clicked || false,
-          optedOut: status?.optedOut || false,
-          finished: status?.finished || false,
-          delivered: status?.delivered || false, // NEW: V3 provides delivered status
+          replied: contact.replied || false,
+          bounced: contact.bounced || false,
+          opened: contact.opened || false,
+          clicked: contact.clicked || false,
+          optedOut: contact.optedOut || false,
+          finished: contact.finished || false,
+          // Infer delivered from any engagement activity
+          delivered: hasEngagement,
           addedAt: contact.addedAt,
-          lastStepCompletedAt: contact.lastStepCompletedAt,
         };
 
         return {
           campaign_id: campaignId,
           team_id: teamId,
-          external_contact_id: null, // V3 extended doesn't return contact ID
-          email: contact.email,
+          external_contact_id: contact.id ? String(contact.id) : null,
+          email: contact.email.toLowerCase(),
           first_name: contact.firstName || null,
           last_name: contact.lastName || null,
           company: contact.company || null,
@@ -304,7 +355,7 @@ Deno.serve(async (req) => {
       .select("*", { count: "exact", head: true })
       .eq("campaign_id", campaignId);
 
-    const peopleCount = verifiedCount || allContacts.length;
+    const peopleCount = verifiedCount || uniqueContacts.length;
 
     // Get existing campaign stats to preserve LinkedIn metrics
     const { data: existingCampaign } = await serviceClient
@@ -321,14 +372,14 @@ Deno.serve(async (req) => {
     const linkedinConnectionsAccepted = existingStats.linkedinConnectionsAccepted || 0;
     const linkedinReplies = existingStats.linkedinReplies || 0;
 
-    // Update campaign stats with actual counts from V3 engagement data
+    // Update campaign stats with actual counts from contact engagement data
     await serviceClient
       .from("synced_campaigns")
       .update({
         stats: {
           ...existingStats,
           peopleCount,
-          // Use V3 delivered count - this is the actual "emails sent" metric
+          // Use delivered count from contacts with engagement
           sent: deliveredCount,
           delivered: deliveredCount,
           replies: repliesCount,
@@ -355,7 +406,14 @@ Deno.serve(async (req) => {
         success: true,
         contactsSynced,
         contactsFailed,
-        totalFetched: allContacts.length,
+        // Diagnostics for debugging
+        diagnostics: {
+          totalFetchedRaw,
+          uniquePrepared: uniqueContacts.length,
+          duplicatePagesDetected,
+          stopReason,
+          pagesProcessed: page,
+        },
         verifiedCount: peopleCount,
         campaignStats: {
           peopleCount,
