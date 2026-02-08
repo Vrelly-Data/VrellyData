@@ -129,6 +129,16 @@ export function useOutboundIntegrations() {
       // Trigger automatic sync immediately
       if (data?.id) {
         try {
+          // Step 1: Fetch available campaigns first (for peopleCount from V1)
+          try {
+            await supabase.functions.invoke('fetch-available-campaigns', {
+              body: { integrationId: data.id },
+            });
+          } catch (err) {
+            console.warn('fetch-available-campaigns error (continuing):', err);
+          }
+
+          // Step 2: Run main sync
           const { error } = await supabase.functions.invoke('sync-reply-campaigns', {
             body: { integrationId: data.id },
           });
@@ -144,7 +154,7 @@ export function useOutboundIntegrations() {
             // Contacts + aggregate stats are synced per-campaign in the background
             startContactsSync(data.id);
 
-            toast.success('Sync complete!');
+            toast.success('Sync complete - syncing contacts in background...');
           }
         } catch (err) {
           console.error('Auto-sync error:', err);
@@ -198,6 +208,22 @@ export function useOutboundIntegrations() {
         old?.map(i => i.id === integrationId ? { ...i, sync_status: 'syncing' } : i)
       );
 
+      // Step 1: Call fetch-available-campaigns FIRST to get peopleCount from V1 API
+      // This populates the "contacts enrolled" metric before we run V3 sync
+      try {
+        const { error: availableError } = await supabase.functions.invoke('fetch-available-campaigns', {
+          body: { integrationId },
+        });
+        if (availableError) {
+          console.warn('fetch-available-campaigns failed (peopleCount may be 0):', availableError);
+          // Don't throw - continue with sync even if this fails
+        }
+      } catch (err) {
+        console.warn('fetch-available-campaigns error:', err);
+        // Don't throw - continue with sync
+      }
+
+      // Step 2: Run the main V3 sync for status/name consistency
       const { data, error } = await supabase.functions.invoke('sync-reply-campaigns', {
         body: { integrationId },
       });
@@ -213,7 +239,7 @@ export function useOutboundIntegrations() {
       // Contacts + aggregate stats are synced per-campaign in the background
       startContactsSync(integrationId);
 
-      toast.success(`Synced ${data.campaigns} campaigns`);
+      toast.success(`Synced ${data.campaigns} campaigns - syncing contacts...`);
     },
     onError: (error) => {
       queryClient.invalidateQueries({ queryKey: ['outbound-integrations'] });
