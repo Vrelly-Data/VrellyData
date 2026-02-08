@@ -332,9 +332,10 @@ Deno.serve(async (req) => {
           bounces: bouncesCount,
           optOuts: optOutsCount,
           peopleFinished: finishedCount,
-          // If no API delivery stats are available, fall back to peopleCount
-          delivered: existingDelivered ?? peopleCount,
-          sent: existingSent ?? existingDelivered ?? peopleCount,
+          // DO NOT use peopleCount as fallback for sent/delivered
+          // sent/delivered can only come from Statistics API - don't override with contact count
+          delivered: existingDelivered ?? 0,
+          sent: existingSent ?? 0,
         },
         updated_at: new Date().toISOString(),
       })
