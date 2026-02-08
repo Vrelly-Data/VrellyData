@@ -22,17 +22,16 @@ interface DiscoveredTeam {
 
 // Reply.io v1 Campaign Status Codes (verified from API docs):
 // 0 = New/Draft, 2 = Active, 4 = Paused, 7 = Finished
-// NOTE: This differs from sequence status codes - campaigns use 2=active, 4=paused
 function normalizeStatus(status: unknown): string {
   if (typeof status === 'string') {
     return status.toLowerCase();
   }
   if (typeof status === 'number') {
     const statusMap: Record<number, string> = {
-      0: 'draft',      // New campaign
-      2: 'active',     // Currently running
-      4: 'paused',     // Paused by user
-      7: 'finished',   // Completed
+      0: 'draft',
+      2: 'active',
+      4: 'paused',
+      7: 'finished',
     };
     return statusMap[status] || 'unknown';
   }
@@ -88,8 +87,6 @@ async function discoverAllTeams(apiKey: string): Promise<DiscoveredTeam[]> {
     try {
       const url = `/sequences?limit=${pageSize}&page=${page}`;
       const response = await fetchFromReplyioV3(url, apiKey) as Record<string, unknown>;
-      
-      // V3 API returns items array, not sequences
       const sequences = (response.items || []) as Array<Record<string, unknown>>;
       
       console.log(`V3 /sequences page ${page}: got ${sequences.length} items`);
@@ -100,7 +97,6 @@ async function discoverAllTeams(apiKey: string): Promise<DiscoveredTeam[]> {
       }
       
       for (const seq of sequences) {
-        // Extract teamId and ownerId from each sequence
         const teamId = seq.teamId?.toString() || seq.ownerId?.toString();
         if (teamId && !teamsMap.has(teamId)) {
           teamsMap.set(teamId, {
@@ -111,12 +107,10 @@ async function discoverAllTeams(apiKey: string): Promise<DiscoveredTeam[]> {
         }
       }
       
-      // V3 API uses info.hasMore for pagination
       const info = response.info as { hasMore?: boolean } | undefined;
       hasMore = info?.hasMore ?? (sequences.length === pageSize);
       page++;
       
-      // Safety limit
       if (page > 20) {
         console.warn("Reached page limit (20) during team discovery");
         break;
@@ -186,7 +180,6 @@ async function fetchAllTeamsCampaigns(apiKey: string): Promise<{
   campaigns: (ReplyioCampaign & { teamId: string })[], 
   teamsCount: number 
 }> {
-  // Step 1: Discover all teams
   const teams = await discoverAllTeams(apiKey);
   
   if (teams.length === 0) {
@@ -198,7 +191,6 @@ async function fetchAllTeamsCampaigns(apiKey: string): Promise<{
     };
   }
   
-  // Step 2: Fetch campaigns from each team sequentially (to respect rate limits)
   const allCampaigns: (ReplyioCampaign & { teamId: string })[] = [];
   
   for (let i = 0; i < teams.length; i++) {
@@ -215,10 +207,8 @@ async function fetchAllTeamsCampaigns(apiKey: string): Promise<{
       console.log(`Got ${result.campaigns.length} campaigns from team ${team.teamId}`);
     } catch (err) {
       console.error(`Failed to fetch campaigns for team ${team.teamId}:`, err);
-      // Continue with other teams
     }
     
-    // Rate limit delay between teams
     if (i < teams.length - 1) {
       await new Promise(resolve => setTimeout(resolve, 300));
     }
@@ -282,7 +272,7 @@ Deno.serve(async (req) => {
     }
 
     const body = await req.json();
-    const { integrationId, skipTeamFilter } = body;
+    const { integrationId, skipTeamFilter, autoLinkOnFirstSync } = body;
 
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL") ?? "",
@@ -294,10 +284,10 @@ Deno.serve(async (req) => {
       throw new Error("Missing integrationId");
     }
 
-    // Fetch the integration
+    // Fetch the integration including links_initialized flag
     const { data: integration, error: integrationError } = await supabase
       .from("outbound_integrations")
-      .select("id, team_id, api_key_encrypted, platform, reply_team_id")
+      .select("id, team_id, api_key_encrypted, platform, reply_team_id, links_initialized")
       .eq("id", integrationId)
       .single();
 
@@ -312,6 +302,15 @@ Deno.serve(async (req) => {
     const apiKey = integration.api_key_encrypted;
     const teamId = integration.team_id;
     const replyTeamId = integration.reply_team_id;
+    const linksInitialized = integration.links_initialized ?? false;
+
+    // Determine if we should auto-link campaigns
+    // Only auto-link if:
+    // 1. autoLinkOnFirstSync flag is true (from sync flow)
+    // 2. links_initialized is false (first time setup)
+    const shouldAutoLink = autoLinkOnFirstSync === true && !linksInitialized;
+    
+    console.log(`Auto-link decision: autoLinkOnFirstSync=${autoLinkOnFirstSync}, linksInitialized=${linksInitialized}, shouldAutoLink=${shouldAutoLink}`);
 
     let campaigns: (ReplyioCampaign & { teamId?: string })[];
     let teamsCount = 1;
@@ -319,7 +318,6 @@ Deno.serve(async (req) => {
     let effectiveTeamId: string | null;
 
     if (skipTeamFilter) {
-      // Fetch from ALL teams (agency mode)
       console.log(`Fetching campaigns from ALL teams for integration ${integrationId}`);
       const result = await fetchAllTeamsCampaigns(apiKey);
       campaigns = result.campaigns;
@@ -327,7 +325,6 @@ Deno.serve(async (req) => {
       teamFiltered = false;
       effectiveTeamId = null;
     } else {
-      // Fetch from single team only
       effectiveTeamId = replyTeamId || null;
       console.log(`Fetching campaigns for integration ${integrationId}${effectiveTeamId ? ` (team: ${effectiveTeamId})` : ' (default team)'}`);
       const singleTeamCampaigns = await fetchAllCampaigns(apiKey, effectiveTeamId ?? undefined);
@@ -337,31 +334,57 @@ Deno.serve(async (req) => {
     
     console.log(`Found ${campaigns.length} campaigns from Reply.io (${teamsCount} teams)`);
 
-    // Get existing linked status from database
+    // Get existing campaigns from database (scoped to this integration)
     const { data: existingCampaigns } = await supabase
       .from("synced_campaigns")
-      .select("external_campaign_id, is_linked")
-      .eq("team_id", teamId);
+      .select("external_campaign_id, is_linked, stats")
+      .eq("integration_id", integrationId);
 
-    const linkedMap = new Map<string, boolean>();
+    const existingMap = new Map<string, { is_linked: boolean; stats: Record<string, unknown> | null }>();
     (existingCampaigns || []).forEach(c => {
-      linkedMap.set(c.external_campaign_id, c.is_linked);
+      existingMap.set(c.external_campaign_id, { 
+        is_linked: c.is_linked, 
+        stats: c.stats as Record<string, unknown> | null 
+      });
     });
 
-    // Store campaigns in database (with is_linked = false for new ones)
-    const campaignsToUpsert = campaigns.map(campaign => ({
-      integration_id: integrationId,
-      team_id: teamId,
-      external_campaign_id: String(campaign.id),
-      name: String(campaign.name || 'Unnamed Campaign'),
-      status: normalizeStatus(campaign.status),
-      stats: { 
+    // Determine is_linked for each campaign
+    const campaignsToUpsert = campaigns.map(campaign => {
+      const existing = existingMap.get(String(campaign.id));
+      
+      // Merge stats to preserve any existing stats while updating peopleCount
+      const existingStats = existing?.stats || {};
+      const mergedStats = {
+        ...existingStats,
         peopleCount: campaign.peopleCount || 0,
         replyTeamId: campaign.teamId || null,
-      },
-      is_linked: linkedMap.get(String(campaign.id)) ?? false,
-      updated_at: new Date().toISOString(),
-    }));
+      };
+      
+      // Determine is_linked:
+      // - If campaign exists in DB, preserve its is_linked value
+      // - If new campaign AND shouldAutoLink is true, set to true
+      // - Otherwise default to false
+      let isLinked: boolean;
+      if (existing !== undefined) {
+        isLinked = existing.is_linked;
+      } else if (shouldAutoLink) {
+        isLinked = true;
+        console.log(`Auto-linking new campaign: ${campaign.name} (${campaign.id})`);
+      } else {
+        isLinked = false;
+      }
+      
+      return {
+        integration_id: integrationId,
+        team_id: teamId,
+        external_campaign_id: String(campaign.id),
+        name: String(campaign.name || 'Unnamed Campaign'),
+        status: normalizeStatus(campaign.status),
+        stats: mergedStats,
+        is_linked: isLinked,
+        updated_at: new Date().toISOString(),
+      };
+    });
 
     if (campaignsToUpsert.length > 0) {
       const { error: upsertError } = await supabase
@@ -374,19 +397,46 @@ Deno.serve(async (req) => {
         console.error("Failed to upsert campaigns:", upsertError);
         throw new Error(`Failed to save campaigns: ${upsertError.message}`);
       }
+      
+      console.log(`Upserted ${campaignsToUpsert.length} campaigns`);
     }
 
-    // Return campaigns with linked status and team context for UI
-    const result = campaigns.map(campaign => ({
-      id: String(campaign.id),
-      name: campaign.name,
-      status: normalizeStatus(campaign.status),
-      peopleCount: campaign.peopleCount || 0,
-      isLinked: linkedMap.get(String(campaign.id)) ?? false,
-      replyTeamId: campaign.teamId || null,
-    }));
+    // If we auto-linked, mark the integration as initialized
+    if (shouldAutoLink && campaignsToUpsert.length > 0) {
+      const { error: updateError } = await supabase
+        .from("outbound_integrations")
+        .update({ links_initialized: true })
+        .eq("id", integrationId);
+      
+      if (updateError) {
+        console.warn("Failed to set links_initialized:", updateError);
+      } else {
+        console.log("Set links_initialized = true for integration");
+      }
+    }
 
-    // Build response with debug info when fetching all teams
+    // Return campaigns with updated linked status
+    const result = campaigns.map(campaign => {
+      const existing = existingMap.get(String(campaign.id));
+      let isLinked: boolean;
+      if (existing !== undefined) {
+        isLinked = existing.is_linked;
+      } else if (shouldAutoLink) {
+        isLinked = true;
+      } else {
+        isLinked = false;
+      }
+      
+      return {
+        id: String(campaign.id),
+        name: campaign.name,
+        status: normalizeStatus(campaign.status),
+        peopleCount: campaign.peopleCount || 0,
+        isLinked,
+        replyTeamId: campaign.teamId || null,
+      };
+    });
+
     const responsePayload: Record<string, unknown> = {
       success: true,
       campaigns: result,
@@ -394,9 +444,10 @@ Deno.serve(async (req) => {
       teamsCount,
       teamFiltered,
       teamId: effectiveTeamId || null,
+      autoLinked: shouldAutoLink,
+      linkedCount: result.filter(c => c.isLinked).length,
     };
 
-    // Add discovered team IDs for debugging when showing all teams
     if (!teamFiltered) {
       const discoveredTeamIds = [...new Set(campaigns.map(c => c.teamId).filter(Boolean))];
       responsePayload.discoveredTeamIds = discoveredTeamIds.slice(0, 50);

@@ -16,6 +16,7 @@ export interface OutboundIntegration {
   reply_team_id?: string | null;
   webhook_status?: string | null;
   webhook_subscription_id?: string | null;
+  links_initialized?: boolean;
 }
 
 export function useOutboundIntegrations() {
@@ -32,10 +33,16 @@ export function useOutboundIntegrations() {
           .eq('is_linked', true);
 
         if (error) throw error;
-        if (!campaigns?.length) return;
+        if (!campaigns?.length) {
+          console.log('No linked campaigns found for contact sync');
+          return;
+        }
 
+        console.log(`Starting contact sync for ${campaigns.length} linked campaigns`);
         const MAX_RETRIES = 3;
-        const RETRY_DELAY = 2000; // 2 seconds
+        const RETRY_DELAY = 2000;
+        let successCount = 0;
+        let failCount = 0;
 
         for (const campaign of campaigns) {
           let success = false;
@@ -53,6 +60,7 @@ export function useOutboundIntegrations() {
                 }
               } else {
                 success = true;
+                successCount++;
                 console.log(`Contact sync succeeded for campaign ${campaign.name}`);
               }
             } catch (err) {
@@ -63,6 +71,10 @@ export function useOutboundIntegrations() {
             }
           }
 
+          if (!success) {
+            failCount++;
+          }
+
           // Invalidate after EACH campaign to show progressive updates
           queryClient.invalidateQueries({ queryKey: ['synced-campaigns'] });
           queryClient.invalidateQueries({ queryKey: ['playground-stats'] });
@@ -70,6 +82,10 @@ export function useOutboundIntegrations() {
 
         // Final invalidation for contacts list
         queryClient.invalidateQueries({ queryKey: ['synced-contacts'] });
+        
+        if (failCount > 0) {
+          toast.warning(`Contact sync: ${successCount} succeeded, ${failCount} failed`);
+        }
       } catch (err) {
         console.warn('Contacts auto-sync error:', err);
       }
@@ -81,7 +97,7 @@ export function useOutboundIntegrations() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('outbound_integrations')
-        .select('id, team_id, platform, name, is_active, sync_status, sync_error, last_synced_at, created_at, updated_at, reply_team_id, webhook_status, webhook_subscription_id')
+        .select('id, team_id, platform, name, is_active, sync_status, sync_error, last_synced_at, created_at, updated_at, reply_team_id, webhook_status, webhook_subscription_id, links_initialized')
         .order('created_at', { ascending: false });
 
       if (error) throw error;
@@ -91,7 +107,6 @@ export function useOutboundIntegrations() {
 
   const addIntegration = useMutation({
     mutationFn: async ({ platform, name, apiKey, replyTeamId }: { platform: string; name: string; apiKey: string; replyTeamId?: string }) => {
-      // Get user's team_id
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('Not authenticated');
 
@@ -103,7 +118,6 @@ export function useOutboundIntegrations() {
 
       if (!membership) throw new Error('No team found');
 
-      // Create integration with 'syncing' status since we'll auto-sync
       const { data, error } = await supabase
         .from('outbound_integrations')
         .insert({
@@ -113,8 +127,9 @@ export function useOutboundIntegrations() {
           api_key_encrypted: apiKey,
           created_by: user.id,
           is_active: true,
-          sync_status: 'syncing', // Start as syncing since we auto-sync
+          sync_status: 'syncing',
           reply_team_id: replyTeamId || null,
+          links_initialized: false,
         })
         .select()
         .single();
@@ -126,19 +141,24 @@ export function useOutboundIntegrations() {
       queryClient.invalidateQueries({ queryKey: ['outbound-integrations'] });
       toast.success('Integration added - syncing campaigns...');
 
-      // Trigger automatic sync immediately
       if (data?.id) {
         try {
-          // Step 1: Fetch available campaigns first (for peopleCount from V1)
+          // Step 1: Fetch available campaigns with AUTO-LINK enabled for first sync
           try {
-            await supabase.functions.invoke('fetch-available-campaigns', {
-              body: { integrationId: data.id },
+            const { data: fetchResult, error: availableError } = await supabase.functions.invoke('fetch-available-campaigns', {
+              body: { integrationId: data.id, autoLinkOnFirstSync: true },
             });
+            
+            if (availableError) {
+              console.warn('fetch-available-campaigns error (continuing):', availableError);
+            } else {
+              console.log('fetch-available-campaigns result:', fetchResult);
+            }
           } catch (err) {
             console.warn('fetch-available-campaigns error (continuing):', err);
           }
 
-          // Step 2: Run main sync
+          // Step 2: Run main sync (preserves the linked status we just set)
           const { error } = await supabase.functions.invoke('sync-reply-campaigns', {
             body: { integrationId: data.id },
           });
@@ -151,10 +171,10 @@ export function useOutboundIntegrations() {
             queryClient.invalidateQueries({ queryKey: ['playground-stats'] });
             queryClient.invalidateQueries({ queryKey: ['synced-campaigns'] });
 
-            // Contacts + aggregate stats are synced per-campaign in the background
+            // Start background contact sync for linked campaigns
             startContactsSync(data.id);
 
-            toast.success('Sync complete - syncing contacts in background...');
+            toast.success('Campaigns synced - contacts syncing in background...');
           }
         } catch (err) {
           console.error('Auto-sync error:', err);
@@ -208,19 +228,22 @@ export function useOutboundIntegrations() {
         old?.map(i => i.id === integrationId ? { ...i, sync_status: 'syncing' } : i)
       );
 
-      // Step 1: Call fetch-available-campaigns FIRST to get peopleCount from V1 API
-      // This populates the "contacts enrolled" metric before we run V3 sync
+      // Step 1: Call fetch-available-campaigns FIRST with auto-link enabled
+      // This populates peopleCount AND auto-links campaigns on first sync
       try {
-        const { error: availableError } = await supabase.functions.invoke('fetch-available-campaigns', {
-          body: { integrationId },
+        const { data: fetchResult, error: availableError } = await supabase.functions.invoke('fetch-available-campaigns', {
+          body: { integrationId, autoLinkOnFirstSync: true },
         });
         if (availableError) {
           console.warn('fetch-available-campaigns failed (peopleCount may be 0):', availableError);
-          // Don't throw - continue with sync even if this fails
+        } else {
+          console.log('fetch-available-campaigns result:', fetchResult);
+          if (fetchResult?.autoLinked) {
+            toast.info(`Auto-linked ${fetchResult.linkedCount} campaigns`);
+          }
         }
       } catch (err) {
         console.warn('fetch-available-campaigns error:', err);
-        // Don't throw - continue with sync
       }
 
       // Step 2: Run the main V3 sync for status/name consistency
@@ -236,7 +259,7 @@ export function useOutboundIntegrations() {
       queryClient.invalidateQueries({ queryKey: ['synced-campaigns'] });
       queryClient.invalidateQueries({ queryKey: ['playground-stats'] });
 
-      // Contacts + aggregate stats are synced per-campaign in the background
+      // Start background contact sync for linked campaigns
       startContactsSync(integrationId);
 
       toast.success(`Synced ${data.campaigns} campaigns - syncing contacts...`);
@@ -253,12 +276,10 @@ export function useOutboundIntegrations() {
         body: { integrationId },
       });
 
-      // Edge function returns 200 with success: false for failures
       if (error) {
         throw new Error(error.message || 'Failed to call webhook setup function');
       }
       
-      // Check the success field in the response
       const result = data as { 
         success: boolean; 
         error?: string; 
@@ -309,6 +330,46 @@ export function useOutboundIntegrations() {
     },
   });
 
+  // Link all campaigns for an integration (recovery action)
+  const linkAllCampaigns = useMutation({
+    mutationFn: async (integrationId: string) => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('Not authenticated');
+
+      const { data: membership } = await supabase
+        .from('team_memberships')
+        .select('team_id')
+        .eq('user_id', user.id)
+        .single();
+
+      if (!membership) throw new Error('No team found');
+
+      // Update all campaigns for this integration to is_linked = true
+      const { data, error } = await supabase
+        .from('synced_campaigns')
+        .update({ is_linked: true })
+        .eq('integration_id', integrationId)
+        .eq('team_id', membership.team_id)
+        .select('id');
+
+      if (error) throw error;
+      return { linkedCount: data?.length || 0, integrationId };
+    },
+    onSuccess: ({ linkedCount, integrationId }) => {
+      queryClient.invalidateQueries({ queryKey: ['synced-campaigns'] });
+      queryClient.invalidateQueries({ queryKey: ['playground-stats'] });
+      queryClient.invalidateQueries({ queryKey: ['available-campaigns'] });
+      
+      toast.success(`Linked ${linkedCount} campaigns`);
+      
+      // Trigger contact sync for the newly linked campaigns
+      startContactsSync(integrationId);
+    },
+    onError: (error) => {
+      toast.error(`Failed to link campaigns: ${error.message}`);
+    },
+  });
+
   return {
     integrations: integrations ?? [],
     isLoading,
@@ -319,5 +380,7 @@ export function useOutboundIntegrations() {
     syncIntegration,
     setupWebhook,
     resetSyncStatus,
+    linkAllCampaigns,
+    startContactsSync,
   };
 }

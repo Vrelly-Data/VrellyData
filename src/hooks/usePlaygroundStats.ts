@@ -43,10 +43,16 @@ export function usePlaygroundStats() {
 
       if (campaignsError) throw campaignsError;
 
-      // Fetch contacts to calculate stats from engagement data
-      const { data: contacts, error: contactsError } = await supabase
-        .from('synced_contacts')
-        .select('id, engagement_data, campaign_id');
+      // Get the IDs of linked campaigns to scope contact query
+      const linkedCampaignIds = (campaigns || []).map(c => c.id);
+
+      // Fetch contacts only for linked campaigns
+      const { data: contacts, error: contactsError } = linkedCampaignIds.length > 0
+        ? await supabase
+            .from('synced_contacts')
+            .select('id, engagement_data, campaign_id')
+            .in('campaign_id', linkedCampaignIds)
+        : { data: [], error: null };
 
       if (contactsError) throw contactsError;
 
