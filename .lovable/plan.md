@@ -1,82 +1,94 @@
 
 
-## Fix: Remove Duplicate Code Block Breaking Sync
+## Fix: Dashboard Not Auto-Refreshing After Background Sync
 
-### The Problem
+### Current Problem
 
-The `sync-reply-campaigns` edge function has **duplicate code** that prevents it from loading:
+The sync **is working correctly** - I verified the database has:
+- 6 campaigns synced and linked
+- 574 contacts synced with stats (sent: 574, peopleCount: 574)
+
+But the dashboard shows 0 because:
+
+1. Campaign sync completes → triggers query invalidation → dashboard shows 0 (contacts not synced yet)
+2. Contact sync starts in background (takes 30-60 seconds due to rate limiting)
+3. Contact sync completes → **no query invalidation** → dashboard still shows stale data
+
+The `startContactsSync` function invalidates queries **after the for-loop**, but by the time the user looks at the dashboard, React Query has already fetched stale data.
+
+### Solution
+
+Add a final query invalidation **after all campaigns have been synced** and add a slight delay to ensure the database has committed:
 
 ```text
-Lines 412-428: First declaration of finalStatus and syncError ✓
-Lines 430-446: DUPLICATE declaration of finalStatus and syncError ✗
+Current flow:
+1. sync-reply-campaigns completes
+2. invalidateQueries() fires → React Query fetches (contacts not synced yet)
+3. startContactsSync runs per-campaign (async, takes 30-60s)
+4. invalidateQueries() fires again at end → but page may be stale
+
+Fixed flow:
+1. sync-reply-campaigns completes  
+2. startContactsSync runs per-campaign (async)
+3. After EACH campaign syncs → invalidateQueries() (incremental updates)
+4. User sees stats updating progressively
 ```
 
-This causes: `SyntaxError: Identifier 'finalStatus' has already been declared`
+### Technical Changes
 
-The function literally cannot boot, so clicking "Sync" does nothing.
+**File: `src/hooks/useOutboundIntegrations.ts`**
 
----
+Update `startContactsSync` to invalidate queries after **each** campaign syncs (not just at the end):
 
-### The Fix
-
-Delete lines 430-446 (the duplicate block). Keep lines 412-428.
-
-**Before (broken):**
 ```typescript
-// Lines 412-428 - KEEP THIS
-const finalStatus = campaignsFailed > 0 && campaignsProcessed === 0 ? "error" : "synced";
-const syncError = campaignsFailed > 0 
-  ? `Synced ${campaignsProcessed}/${sequences.length} sequences (${campaignsFailed} failed)` 
-  : null;
-await supabase.from("outbound_integrations").update({...}).eq("id", integrationId);
-console.log(`Sync complete: ${campaignsProcessed} campaigns (contacts sync runs per-campaign)`);
+const startContactsSync = (integrationId: string) => {
+  void (async () => {
+    try {
+      const { data: campaigns, error } = await supabase
+        .from('synced_campaigns')
+        .select('id')
+        .eq('integration_id', integrationId)
+        .eq('is_linked', true);
 
-// Lines 430-446 - DELETE THIS (exact duplicate)
-const finalStatus = ...  // ❌ Already declared!
-const syncError = ...
-await supabase.from("outbound_integrations").update({...});
-console.log(`Full sync complete: ${campaignsProcessed} campaigns`);
+      if (error) throw error;
+      if (!campaigns?.length) return;
+
+      for (const campaign of campaigns) {
+        const { error: syncError } = await supabase.functions.invoke('sync-reply-contacts', {
+          body: { campaignId: campaign.id, integrationId },
+        });
+
+        if (syncError) {
+          console.warn('Contact sync failed:', syncError);
+        }
+
+        // Invalidate after EACH campaign to show progressive updates
+        queryClient.invalidateQueries({ queryKey: ['synced-campaigns'] });
+        queryClient.invalidateQueries({ queryKey: ['playground-stats'] });
+      }
+
+      // Final invalidation for contacts list
+      queryClient.invalidateQueries({ queryKey: ['synced-contacts'] });
+    } catch (err) {
+      console.warn('Contacts auto-sync error:', err);
+    }
+  })();
+};
 ```
 
-**After (fixed):**
-```typescript
-// Update integration status (single block)
-const finalStatus = campaignsFailed > 0 && campaignsProcessed === 0 ? "error" : "synced";
-const syncError = campaignsFailed > 0 
-  ? `Synced ${campaignsProcessed}/${sequences.length} sequences (${campaignsFailed} failed)` 
-  : null;
+### Additional UX Improvement
 
-await supabase
-  .from("outbound_integrations")
-  .update({
-    sync_status: finalStatus,
-    sync_error: syncError,
-    last_synced_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  })
-  .eq("id", integrationId);
+Add a "syncing contacts" indicator so users know the background sync is running:
 
-console.log(`Sync complete: ${campaignsProcessed} campaigns`);
+The integration card could show "Syncing contacts..." during background sync, but this requires tracking state across the async operation. For now, the progressive invalidation will update the dashboard in real-time as each campaign's contacts are synced.
 
-return new Response(...);
-```
+### Quick Workaround (For Now)
 
----
+**Hard refresh the page** - the data IS in the database, it's just the React Query cache that's stale. Press `Cmd/Ctrl + Shift + R` or click the browser refresh button.
 
-### File to Modify
+### Files to Modify
 
 | File | Change |
 |------|--------|
-| `supabase/functions/sync-reply-campaigns/index.ts` | Delete lines 430-446 (duplicate status update block) |
-
----
-
-### After This Fix
-
-1. Edge function will load without syntax error
-2. Sync will execute: fetch V3 sequences → fetch V3 stats → save to `synced_campaigns`
-3. Status will update to "synced"
-4. Dashboard will show email engagement data (sent, replies, etc.)
-5. Contacts sync runs separately per-campaign via `sync-reply-contacts`
-6. LinkedIn stats from webhooks and CSV uploads remain preserved
+| `src/hooks/useOutboundIntegrations.ts` | Move query invalidation inside the for-loop so dashboard updates progressively |
 
