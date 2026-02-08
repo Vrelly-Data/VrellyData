@@ -362,15 +362,17 @@ Deno.serve(async (req) => {
         const existingReplies = existingStats.replies as number | undefined;
 
         // Merge: preserve existing stats, overlay API data, preserve LinkedIn stats
-        // Use peopleCount as fallback for sent/delivered when V3 API returns 404
+        // DO NOT use peopleCount as fallback - it's "contacts added", not "emails sent"
         const mergedStats = {
           ...existingStats,      // Preserve ALL existing stats (including peopleCount, replies, etc.)
           ...apiStats,           // Overlay with fresh API data (if available)
           ...linkedinStats,      // Preserve LinkedIn fields from CSV uploads
-          // Fallback chain: API data → existing sent/delivered → peopleCount
-          sent: apiStats.sent || existingSent || existingDelivered || existingPeopleCount || 0,
-          delivered: apiStats.delivered || existingDelivered || existingSent || existingPeopleCount || 0,
+          // Only use actual API data or existing values - NOT peopleCount
+          sent: apiStats.sent || existingSent || 0,
+          delivered: apiStats.delivered || existingDelivered || 0,
           replies: apiStats.replies || existingReplies || 0,
+          // Keep peopleCount separate - it represents contacts enrolled, not emails sent
+          peopleCount: existingPeopleCount || 0,
         };
 
         // Upsert sequence as campaign
