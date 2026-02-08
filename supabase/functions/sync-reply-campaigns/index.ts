@@ -355,10 +355,22 @@ Deno.serve(async (req) => {
         const apiStats = await fetchSequenceStats(sequence.id, apiKey, replyTeamId || undefined);
         console.log(`  Stats: sent=${apiStats.sent || 0}, replies=${apiStats.replies || 0}`);
 
-        // Merge: API stats + preserve LinkedIn stats from CSV
+        // Extract existing values for fallback logic
+        const existingPeopleCount = existingStats.peopleCount as number | undefined;
+        const existingSent = existingStats.sent as number | undefined;
+        const existingDelivered = existingStats.delivered as number | undefined;
+        const existingReplies = existingStats.replies as number | undefined;
+
+        // Merge: preserve existing stats, overlay API data, preserve LinkedIn stats
+        // Use peopleCount as fallback for sent/delivered when V3 API returns 404
         const mergedStats = {
-          ...apiStats,
-          ...linkedinStats,
+          ...existingStats,      // Preserve ALL existing stats (including peopleCount, replies, etc.)
+          ...apiStats,           // Overlay with fresh API data (if available)
+          ...linkedinStats,      // Preserve LinkedIn fields from CSV uploads
+          // Fallback chain: API data → existing sent/delivered → peopleCount
+          sent: apiStats.sent || existingSent || existingDelivered || existingPeopleCount || 0,
+          delivered: apiStats.delivered || existingDelivered || existingSent || existingPeopleCount || 0,
+          replies: apiStats.replies || existingReplies || 0,
         };
 
         // Upsert sequence as campaign
