@@ -90,9 +90,28 @@ function mapContactStatus(contact: V1Contact): string {
 // Generate a page signature to detect duplicate pages
 function getPageSignature(contacts: V1Contact[]): string {
   if (contacts.length === 0) return 'empty';
+  if (!contacts[0]?.email) return 'invalid_first';
   const first = contacts[0].email;
-  const last = contacts[contacts.length - 1].email;
+  const last = contacts[contacts.length - 1]?.email || first;
   return `${first}|${last}|${contacts.length}`;
+}
+
+// Parse API response - handles both array and object formats
+function parseContactsResponse(response: unknown): V1Contact[] {
+  if (Array.isArray(response)) {
+    return response as V1Contact[];
+  }
+  if (response && typeof response === 'object') {
+    const obj = response as Record<string, unknown>;
+    // Log response structure for debugging
+    console.log(`API response keys: ${Object.keys(obj).join(', ')}`);
+    const rawContacts = obj.people || obj.contacts || obj.items || obj.data;
+    if (Array.isArray(rawContacts)) {
+      return rawContacts as V1Contact[];
+    }
+  }
+  console.warn(`Unexpected response format: ${typeof response}`);
+  return [];
 }
 
 Deno.serve(async (req) => {
@@ -178,7 +197,7 @@ Deno.serve(async (req) => {
       let contacts: V1Contact[] = [];
       try {
         const response = await fetchWithRetry(endpoint, apiKey, replyTeamId || undefined);
-        contacts = (response as V1Contact[]) || [];
+        contacts = parseContactsResponse(response);
       } catch (err) {
         console.error(`Error fetching page ${page}:`, err);
         // If API fails, stop gracefully
