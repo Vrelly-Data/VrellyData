@@ -1,140 +1,271 @@
 
-## What’s happening (why it feels like “nothing happens”)
-Right now the sync is actually pulling the correct “contacts enrolled” number into the database, but the UI is hiding it.
+# Update Documentation and Establish Stable State v3.4
 
-**Confirmed from the backend data:**
-- Your latest integration (`Incrementums`) has **6 campaigns** synced.
-- Those campaigns have `stats.peopleCount` totaling **1053** (the enrolled-in-sequences number we agreed is correct).
-- But **all 6 campaigns are currently `is_linked = false` (linked = 0)**.
+## Summary
 
-**Your dashboard and campaigns table only show “linked” campaigns:**
-- `usePlaygroundStats()` queries `synced_campaigns` with `.eq('is_linked', true)`
-- `CampaignsTable` uses `useSyncedCampaigns()` which defaults to `onlyLinked=true`
-- Background contact sync (`startContactsSync`) only runs for `.eq('is_linked', true)`
-
-So when nothing is linked, you see:
-- **0 contacts**
-- **0 messages**
-- and `sync-reply-contacts` never even runs (explains why we see no logs for it).
-
-### Why everything ended up unlinked
-Your sync flow calls **`fetch-available-campaigns` first**, and that function currently **upserts campaigns with `is_linked = false` for new ones**:
-- `fetch-available-campaigns` explicitly does: `is_linked: linkedMap.get(...) ?? false`
-- Then `sync-reply-campaigns` “preserves existing is_linked” (which is now false), so it stays false.
-
-Net effect: the sync is populating enrolled counts, but also guaranteeing the dashboard filters everything out.
+This documentation update will capture the significant Data Playground improvements made on February 8, 2026, including the auto-linking fix that resolved the "0/0 dashboard" issue.
 
 ---
 
-## Goal (based on what you told me)
-When you click **Sync**, the dashboard should immediately show:
-- **Contacts enrolled** ≈ **1053**
-And then background sync should populate:
-- **Messages sent** (or our best available proxy) and engagement metrics
+## What Will Be Updated
 
-This requires that campaigns are **linked by default** (at least on first setup), or the dashboard must stop filtering them out.
+### 1. docs/STABLE_CHECKPOINTS.md
+Update to v3.4 stable state with:
+- New date: February 8, 2026
+- Add Data Playground section documenting stable sync architecture
+- Document the `links_initialized` column and auto-link behavior
+- Add quick revert commands for Data Playground
 
----
+### 2. docs/V3.4_RELEASE_NOTES.md (new file)
+Create release notes documenting:
+- Auto-link on first sync feature
+- `links_initialized` column addition
+- Recovery tools (Link All Campaigns button)
+- Integration-scoped statistics
+- Page signature guard for contact sync
+- V1 API migration for reliable contact paging
 
-## Implementation approach (fix the root cause, not another workaround)
-We’ll do two things:
-1) **Make Sync automatically link campaigns on first-time setup** (so numbers appear immediately)
-2) **Add a visible “Link all campaigns” recovery button** (so existing integrations stuck with 0 linked can be fixed in 1 click)
+### 3. LOGIC_README.md
+Add new section for Data Playground architecture:
+- Edge function flow documentation
+- Sync order (fetch-available-campaigns → sync-reply-campaigns → sync-reply-contacts)
+- Key files involved
+- DO NOT CHANGE items for the Data Playground
 
-This avoids endless retrying and makes the system predictable.
-
----
-
-## Changes to implement
-
-### 1) Update backend “fetch available campaigns” to support auto-linking during sync
-**File:** `supabase/functions/fetch-available-campaigns/index.ts`
-
-Add a request flag like:
-- `autoLinkOnFirstSync: boolean`
-
-Logic:
-- Load existing campaigns **for this integration** (important: currently it looks up by `team_id` only; we’ll scope it to `integration_id` to avoid cross-integration leakage)
-- If `autoLinkOnFirstSync` is true:
-  - If this integration has **never had any linked campaigns** (or a “first sync” marker — see below), then set `is_linked=true` for campaigns as they are inserted/upserted.
-  - Preserve existing user choices otherwise.
-
-Recommended robust guard (so we don’t re-link after users intentionally unlink later):
-- Add a boolean field on integrations (example: `links_initialized`) and only auto-link while it is false.
-- After auto-linking once, set it to true.
-
-This prevents the “user unlinked on purpose, then Sync relinks everything” problem.
-
-### 2) Add the one-time link initialization flag to integrations
-**Backend schema change (migration):**
-- Add `links_initialized boolean not null default false` to `outbound_integrations`
-
-### 3) Ensure the Sync flow enables “autoLinkOnFirstSync”
-**File:** `src/hooks/useOutboundIntegrations.ts`
-
-When calling `fetch-available-campaigns` during:
-- `addIntegration.onSuccess` auto-sync
-- `syncIntegration.mutationFn`
-
-Pass:
-- `{ integrationId, autoLinkOnFirstSync: true }`
-
-But when opening **Manage Campaigns** (user browsing), we do **not** auto-link:
-- `src/hooks/useAvailableCampaigns.ts` keeps calling `fetch-available-campaigns` without that flag.
-
-### 4) Add a one-click recovery CTA when there are zero linked campaigns
-**File:** `src/components/playground/CampaignsTable.tsx` (and/or `IntegrationSetupCard.tsx`)
-
-When `useSyncedCampaigns()` returns empty (no linked campaigns), show:
-- Button: “Link all campaigns”
-- This performs a scoped update like:
-  - link all campaigns for the currently-active Reply integration (or the most recent integration), not the entire team.
-- Then invalidate:
-  - `synced-campaigns`
-  - `playground-stats`
-…and immediately start contact background sync.
-
-This gives you a deterministic way out even if something goes wrong again.
-
-### 5) Make stats/contact aggregation integration-safe (prevents future “weird totals”)
-**File:** `src/hooks/usePlaygroundStats.ts`
-
-Right now it fetches **all contacts for the team**, even if multiple integrations exist.
-We’ll change stats computation to only consider:
-- contacts whose `campaign_id` belongs to the campaigns we are aggregating (linked ones), and
-- optionally filter by integration_id via campaign IDs.
-
-This avoids mixing data if you add another workspace/integration later.
+### 4. .lovable/plan.md
+Clear outdated plan and replace with current stable state reference
 
 ---
 
-## How we’ll verify end-to-end (no guessing)
-1) Go to **/playground**
-2) Click **Sync** on the Reply integration
-3) Confirm in UI:
-   - campaigns are linked automatically (table no longer says “No linked campaigns yet”)
-   - Overview shows **Contacts enrolled ~1053**
-4) Confirm background contact sync starts:
-   - network shows calls to `sync-reply-contacts`
-   - People tab starts populating
-5) Confirm messages metric starts reflecting contact engagement-derived counts (since Reply stats endpoint is 404).
+## Detailed Changes
+
+### docs/STABLE_CHECKPOINTS.md
+
+Add after existing v3.3 section:
+
+```text
+## Data Playground Stable State (v3.4)
+
+**Date**: February 8, 2026
+**Status**: Sync working, auto-link enabled
+
+### Key Components
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| Auto-link on first sync | Working | Campaigns visible immediately |
+| links_initialized flag | Working | Prevents re-linking after user unlinking |
+| Link All Campaigns button | Working | Recovery for 0-linked state |
+| Contact sync paging | Working | Page signature guard prevents loops |
+| Engagement stats derivation | Working | Uses V1 contact engagement flags |
+
+### Database Schema Additions (v3.4)
+
+| Table | Column | Type | Purpose |
+|-------|--------|------|---------|
+| outbound_integrations | links_initialized | boolean | Tracks first-sync auto-link |
+
+### Edge Function Sync Order
+
+1. fetch-available-campaigns (V1 API) - Gets peopleCount, auto-links
+2. sync-reply-campaigns (V3 API) - Gets campaign status, preserves links
+3. sync-reply-contacts (V1 API) - Background, per-campaign, page-guarded
+
+### Recovery Commands
+
+- "Link all campaigns for integration" - Uses linkAllCampaigns mutation
+- "Sync contacts for all linked campaigns" - Uses startContactsSync
+```
 
 ---
 
-## Expected result after this fix
-- You will stop getting “0 / 0” after sync.
-- The dashboard will show the enrolled total immediately (1053).
-- Background contact sync will actually run (because there are linked campaigns).
-- “Messages sent” will reflect whatever reliable proxy we derive from contact engagement data, until Reply’s stats endpoint stops 404ing.
+### docs/V3.4_RELEASE_NOTES.md (new file)
+
+```text
+# V3.4 Release Notes
+
+**Release Date**: February 8, 2026
+**Status**: STABLE
+**Previous Version**: v3.3
+
+## Summary
+
+V3.4 focuses entirely on Data Playground stability, resolving the 
+"0/0 dashboard" issue where campaigns were synced but not visible.
+
+## Key Changes
+
+| Feature | Before | After |
+|---------|--------|-------|
+| Campaigns on first sync | Unlinked (hidden) | Auto-linked (visible) |
+| Dashboard contacts | 0 | 1,053 (enrolled) |
+| Recovery option | None | "Link All Campaigns" button |
+| Contact sync paging | Infinite loops possible | Page signature guard |
+
+## Root Cause Fixed
+
+Campaigns were being created with `is_linked: false` during sync, 
+causing the dashboard to filter them out. Stats and contact sync 
+only ran for linked campaigns, resulting in 0/0 appearing.
+
+## New Database Column
+
+| Column | Table | Type | Default |
+|--------|-------|------|---------|
+| links_initialized | outbound_integrations | boolean | false |
+
+## Edge Function Changes
+
+### fetch-available-campaigns
+- Added `autoLinkOnFirstSync` parameter
+- Sets `is_linked: true` for new campaigns when `links_initialized: false`
+- Sets `links_initialized: true` after first auto-link
+
+### sync-reply-contacts
+- Switched from V3 to V1 API for reliable paging
+- Page signature detection prevents infinite loops
+- Deduplication map eliminates redundant upserts
+- Engagement stats derived from contact flags
+
+### sync-reply-campaigns
+- Preserves existing `is_linked` values
+- Preserves existing `stats.peopleCount` values
+
+## Frontend Changes
+
+### useOutboundIntegrations.ts
+- Passes `autoLinkOnFirstSync: true` during sync flows
+- Added `linkAllCampaigns` mutation for recovery
+- Integration-scoped contact sync
+
+### CampaignsTable.tsx
+- "Link All Campaigns" button when no campaigns linked
+
+### usePlaygroundStats.ts
+- Stats scoped to linked campaign IDs only
+
+## Files Modified
+
+| File | Change |
+|------|--------|
+| supabase/functions/fetch-available-campaigns/index.ts | Auto-link logic |
+| supabase/functions/sync-reply-contacts/index.ts | V1 paging + guards |
+| supabase/functions/sync-reply-campaigns/index.ts | Preserve link state |
+| src/hooks/useOutboundIntegrations.ts | linkAllCampaigns, autoLink flag |
+| src/hooks/usePlaygroundStats.ts | Scoped contact aggregation |
+| src/components/playground/CampaignsTable.tsx | Link All button |
+
+## Verified Working
+
+- 6 campaigns synced with correct peopleCount
+- 1,053 contacts enrolled across campaigns
+- Auto-linking on first integration setup
+- Recovery button for existing integrations
+- No infinite paging loops during contact sync
+```
 
 ---
 
-## Why this is the correct fix
-We’re not changing Reply logic again “hoping it works.”
-We’re fixing the real blocker:
-- **The UI is filtering out every campaign**
-- **The contact sync is never being invoked**
-because the system currently creates campaigns as unlinked during the sync flow.
+### LOGIC_README.md
 
-Once linking is deterministic, the rest of the pipeline can work (or fail) visibly, instead of silently resulting in 0.
+Add new section 11 after existing content:
 
+```text
+## 11. Data Playground Architecture
+
+### Overview
+
+The Data Playground syncs outbound sales data from Reply.io (and planned 
+Smartlead/Instantly.ai support). It operates independently from the main 
+Audience Builder.
+
+### Database Tables
+
+| Table | Purpose |
+|-------|---------|
+| outbound_integrations | API keys, sync status, webhook config |
+| synced_campaigns | Campaign metadata and aggregate stats |
+| synced_contacts | Individual contact engagement data |
+| synced_sequences | Email step content (for Copy tab) |
+| copy_templates | AI-generated email variants |
+
+### Sync Flow
+
+1. User clicks "Sync" on integration
+2. Frontend calls `fetch-available-campaigns` with `autoLinkOnFirstSync: true`
+   - Uses Reply V1 `/campaigns` to get peopleCount
+   - Auto-links campaigns if `links_initialized: false`
+3. Frontend calls `sync-reply-campaigns`
+   - Uses Reply V3 `/sequences` for status consistency
+   - Preserves existing `is_linked` values
+4. Frontend triggers background `startContactsSync`
+   - Iterates through linked campaigns only
+   - Calls `sync-reply-contacts` per campaign
+
+### Edge Functions
+
+| Function | API Version | Purpose |
+|----------|-------------|---------|
+| fetch-available-campaigns | V1 | Campaign discovery + peopleCount |
+| sync-reply-campaigns | V3 | Campaign status/name updates |
+| sync-reply-contacts | V1 | Contact listing with engagement |
+| setup-reply-webhook | V2 | Webhook registration |
+| reply-webhook | N/A | Incoming webhook handler |
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| src/hooks/useOutboundIntegrations.ts | Integration CRUD, sync orchestration |
+| src/hooks/useSyncedCampaigns.ts | Campaign data fetching |
+| src/hooks/usePlaygroundStats.ts | Dashboard aggregation |
+| src/components/playground/CampaignsTable.tsx | Campaign list UI |
+| src/components/playground/PeopleTab.tsx | Contact list with engagement |
+
+### DO NOT CHANGE
+
+| Item | Reason |
+|------|--------|
+| Auto-link logic in fetch-available-campaigns | Breaks first-sync visibility |
+| Page signature guard in sync-reply-contacts | Prevents infinite API loops |
+| links_initialized column | Required for one-time auto-link |
+| Sync order (fetch → sync → contacts) | peopleCount must populate first |
+```
+
+---
+
+### .lovable/plan.md
+
+Replace with current stable reference:
+
+```text
+# Current Stable State
+
+**Version**: v3.4
+**Date**: February 8, 2026
+
+## Audience Builder
+- 18 working filters
+- 724 total records (400 Person + 324 Company)
+- search_free_data_builder function: 29 parameters
+
+## Data Playground
+- Auto-link on first sync enabled
+- links_initialized tracking active
+- V1 API with page signature guards
+- Link All Campaigns recovery button available
+
+## Revert Commands
+- Audience Builder: "Revert to v3.3 stable state"
+- Data Playground: "Reset integration and re-sync"
+```
+
+---
+
+## Implementation Steps
+
+1. Create `docs/V3.4_RELEASE_NOTES.md` with full release notes
+2. Update `docs/STABLE_CHECKPOINTS.md` to add v3.4 section
+3. Update `LOGIC_README.md` to add Data Playground section
+4. Update `.lovable/plan.md` to reflect current stable state
+5. Optionally add memory entries for quick AI context
