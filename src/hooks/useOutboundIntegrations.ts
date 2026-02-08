@@ -42,11 +42,14 @@ export function useOutboundIntegrations() {
           if (syncError) {
             console.warn('Contact sync failed:', syncError);
           }
+
+          // Invalidate after EACH campaign to show progressive updates
+          queryClient.invalidateQueries({ queryKey: ['synced-campaigns'] });
+          queryClient.invalidateQueries({ queryKey: ['playground-stats'] });
         }
 
+        // Final invalidation for contacts list
         queryClient.invalidateQueries({ queryKey: ['synced-contacts'] });
-        queryClient.invalidateQueries({ queryKey: ['synced-campaigns'] });
-        queryClient.invalidateQueries({ queryKey: ['playground-stats'] });
       } catch (err) {
         console.warn('Contacts auto-sync error:', err);
       }
