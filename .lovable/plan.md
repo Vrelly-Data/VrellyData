@@ -1,70 +1,78 @@
 
+## Fix: Incorrect Email Stats (Showing 1,053 Instead of 114)
 
-## Fix: Email Stats Not Appearing in Dashboard
+### Root Cause
 
-### Root Cause Identified
+The dashboard shows 1,053 "emails sent" because **both sync functions** are using `peopleCount` as a fallback:
 
-The dashboard shows "0 emails sent" because there's a **data flow gap** between the sync functions:
+| Source | Value | What it actually means |
+|--------|-------|------------------------|
+| `peopleCount` | 1,053 | Contacts added to campaigns |
+| Actual emails sent | 114 | What Reply.io reports |
+| V3 Statistics API | 404 | Not working - returns empty data |
 
-```text
-Flow Timeline:
-1. fetch-available-campaigns → writes {peopleCount: 378, replyTeamId: "383893"}
-2. sync-reply-campaigns → overwrites with {} (V3 Stats API returns 404)
-3. sync-reply-contacts → tries to update stats but runs after campaign already saved with empty stats
-```
+The fallback chain `sent: apiStats.sent || existingSent || peopleCount || 0` is using `peopleCount` since the V3 Statistics API returns 404.
 
-The V3 Statistics API (`/v3/statistics/sequences/{id}`) is returning **404 for all sequences**, so `apiStats` is empty. The current code doesn't preserve existing stats when the API fails.
+### The Real Problem
 
-### The Fix
+Reply.io's V3 Statistics API (`/v3/statistics/sequences/{id}`) is returning 404 for all sequences. This API is supposed to provide `deliveredContacts` (actual emails sent), but it's not accessible.
 
-Modify `sync-reply-campaigns` to:
-1. **Preserve existing stats** when V3 API returns 404
-2. **Use `peopleCount` as fallback** for `sent`/`delivered` when no API data is available
+### Solution: Remove the peopleCount Fallback
 
-**Current code (broken):**
-```typescript
-// Lines 358-362 - does NOT preserve existing stats
-const mergedStats = {
-  ...apiStats,           // empty when V3 returns 404
-  ...linkedinStats,      // only LinkedIn fields
-};
-```
+Since `peopleCount` (contacts in campaign) ≠ "emails sent", we should **not** use it as a fallback. Instead:
 
-**Fixed code:**
-```typescript
-// Preserve existing stats, overlay with API data and LinkedIn stats
-const existingPeopleCount = existingStats.peopleCount as number | undefined;
-const existingSent = existingStats.sent as number | undefined;
-const existingDelivered = existingStats.delivered as number | undefined;
-const existingReplies = existingStats.replies as number | undefined;
-
-const mergedStats = {
-  ...existingStats,      // Preserve ALL existing stats (including peopleCount, replies, etc.)
-  ...apiStats,           // Overlay with fresh API data (if available)
-  ...linkedinStats,      // Preserve LinkedIn fields from CSV uploads
-  // Fallback: use existing or peopleCount if no sent/delivered data
-  sent: apiStats.sent || existingSent || existingDelivered || existingPeopleCount || 0,
-  delivered: apiStats.delivered || existingDelivered || existingSent || existingPeopleCount || 0,
-};
-```
+1. **Only use actual delivery data** when available from the Statistics API
+2. **Don't show inflated numbers** - better to show 0 than incorrect data
+3. **Derive stats from contacts** where possible (replies, opens, clicks are accurate)
 
 ### Technical Changes
 
 | File | Change |
 |------|--------|
-| `supabase/functions/sync-reply-campaigns/index.ts` | Preserve existing stats when V3 API fails, add fallback logic |
+| `supabase/functions/sync-reply-campaigns/index.ts` | Remove `peopleCount` fallback for `sent`/`delivered` - only use actual API data or existing values |
+| `supabase/functions/sync-reply-contacts/index.ts` | Remove `peopleCount` fallback for `sent`/`delivered` - these can only come from Statistics API |
+
+### Updated Logic
+
+**sync-reply-campaigns (line ~365):**
+```typescript
+const mergedStats = {
+  ...existingStats,
+  ...apiStats,
+  ...linkedinStats,
+  // Only use actual API data or existing values - NOT peopleCount
+  sent: apiStats.sent || existingSent || 0,
+  delivered: apiStats.delivered || existingDelivered || 0,
+  replies: apiStats.replies || existingReplies || 0,
+  // Keep peopleCount separate - it's "contacts in campaign", not "emails sent"
+  peopleCount: existingPeopleCount || 0,
+};
+```
+
+**sync-reply-contacts (line ~336-337):**
+```typescript
+// Don't override sent/delivered with peopleCount
+delivered: existingDelivered ?? undefined,
+sent: existingSent ?? undefined,
+```
 
 ### After This Fix
 
-1. Campaign sync will preserve existing stats when V3 Statistics API returns 404
-2. Dashboard will show `peopleCount` as "Emails Sent" (since that's the number of people who received the sequence)
-3. As contacts sync, actual engagement data (replies, opens) will be added to the stats
-4. LinkedIn stats from CSV uploads remain preserved
+1. Dashboard will show 0 emails sent (accurate when V3 API fails)
+2. `peopleCount` will be tracked separately as "Contacts in Campaigns"
+3. Replies, opens, clicks will still show accurate data from contacts
+4. When the V3 Statistics API works again, actual delivery numbers will appear
 
-### Why This Is Correct
+### Future Improvement (Optional)
 
-- `peopleCount` represents contacts added to the campaign/sequence
-- In Reply.io, a contact added to a sequence will receive emails (unless bounced/opted out)
-- Using `peopleCount` as a baseline for "sent" is a reasonable approximation when the Statistics API is unavailable
-- The `sync-reply-contacts` function will later update with actual engagement data
+If you want to display email stats when the V3 API is unavailable, we could:
+- Add a V1 campaign stats endpoint call (if Reply.io has one)
+- Use `finished` contacts as a proxy for "emails sent" (contacts who completed the sequence)
+- Display a different metric like "Contacts Enrolled" instead of "Emails Sent"
 
+### Why This Is The Right Fix
+
+- `peopleCount` = 1,053 contacts added
+- Emails actually sent = 114 (per Reply.io dashboard)
+- **Showing 1,053 as "Emails Sent" is misleading**
+- Better to show 0 (with proper messaging) than inflate numbers 9x
