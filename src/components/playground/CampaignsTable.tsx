@@ -1,7 +1,9 @@
 import { useSyncedCampaigns } from '@/hooks/useSyncedCampaigns';
+import { useOutboundIntegrations } from '@/hooks/useOutboundIntegrations';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { Loader2 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Loader2, Link2 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 
 function getStatusBadge(status: string | null) {
@@ -25,6 +27,16 @@ function getStatusBadge(status: string | null) {
 
 export function CampaignsTable() {
   const { data: campaigns, isLoading, error } = useSyncedCampaigns();
+  const { integrations, linkAllCampaigns } = useOutboundIntegrations();
+  
+  // Get the most recent active Reply.io integration
+  const activeIntegration = integrations.find(i => i.platform === 'reply.io' && i.is_active);
+
+  const handleLinkAll = () => {
+    if (activeIntegration) {
+      linkAllCampaigns.mutate(activeIntegration.id);
+    }
+  };
 
   if (isLoading) {
     return (
@@ -44,8 +56,25 @@ export function CampaignsTable() {
 
   if (!campaigns || campaigns.length === 0) {
     return (
-      <div className="text-center py-8 text-muted-foreground">
-        No linked campaigns yet. Use "Manage Campaigns" to select which campaigns to track.
+      <div className="text-center py-8 space-y-4">
+        <p className="text-muted-foreground">
+          No linked campaigns yet. Use "Manage Campaigns" to select which campaigns to track.
+        </p>
+        {activeIntegration && (
+          <Button 
+            onClick={handleLinkAll} 
+            disabled={linkAllCampaigns.isPending}
+            variant="outline"
+            className="gap-2"
+          >
+            {linkAllCampaigns.isPending ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Link2 className="h-4 w-4" />
+            )}
+            Link All Campaigns
+          </Button>
+        )}
       </div>
     );
   }

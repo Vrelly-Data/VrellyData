@@ -604,6 +604,7 @@ export type Database = {
           id: string
           is_active: boolean
           last_synced_at: string | null
+          links_initialized: boolean
           name: string
           platform: string
           reply_team_id: string | null
@@ -622,6 +623,7 @@ export type Database = {
           id?: string
           is_active?: boolean
           last_synced_at?: string | null
+          links_initialized?: boolean
           name: string
           platform: string
           reply_team_id?: string | null
@@ -640,6 +642,7 @@ export type Database = {
           id?: string
           is_active?: boolean
           last_synced_at?: string | null
+          links_initialized?: boolean
           name?: string
           platform?: string
           reply_team_id?: string | null
