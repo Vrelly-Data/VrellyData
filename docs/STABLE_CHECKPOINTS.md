@@ -1,8 +1,8 @@
 # Stable Checkpoints
 
-**Purpose**: Document stable states for easy recovery. Say "Revert to v3.3 stable state" to restore.  
-**Last Updated**: January 21, 2026  
-**Current Stable Version**: v3.3
+**Purpose**: Document stable states for easy recovery. Say "Revert to v3.4 stable state" to restore.  
+**Last Updated**: February 8, 2026  
+**Current Stable Version**: v3.4
 
 ---
 
@@ -138,6 +138,7 @@ This ensures the UI uses human-readable labels while the database uses short cod
 
 | Version | Date | Changes |
 |---------|------|---------|
+| v3.4 | 2026-02-08 | Data Playground: auto-link on first sync, links_initialized column, Link All recovery button |
 | v3.3 | 2026-01-21 | Updated baseline counts, documented Gender M/F format, verified 137 Male / 55 Female |
 | v3.2 | 2026-01-17 | Established stable state with 724 records, 18 filters, updated baselines |
 | v3.1.1 | 2026-01-17 | Frontend industry suggestion normalization (Title Case + dedup) |
@@ -175,3 +176,38 @@ If the quick command doesn't work:
 3. Create new migration with `CREATE OR REPLACE FUNCTION`
 4. Verify single function exists with 29 parameters
 5. Restore frontend gender conversion in `src/hooks/useFreeDataSearch.ts`
+
+---
+
+## 🎮 Data Playground Stable State (v3.4)
+
+**Date**: February 8, 2026  
+**Status**: Sync working, auto-link enabled
+
+### Key Components
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| Auto-link on first sync | ✅ Working | Campaigns visible immediately |
+| links_initialized flag | ✅ Working | Prevents re-linking after user unlinking |
+| Link All Campaigns button | ✅ Working | Recovery for 0-linked state |
+| Contact sync paging | ✅ Working | Page signature guard prevents loops |
+| Engagement stats derivation | ✅ Working | Uses V1 contact engagement flags |
+
+### Database Schema Additions (v3.4)
+
+| Table | Column | Type | Purpose |
+|-------|--------|------|---------|
+| outbound_integrations | links_initialized | boolean | Tracks first-sync auto-link |
+
+### Edge Function Sync Order
+
+1. `fetch-available-campaigns` (V1 API) - Gets peopleCount, auto-links
+2. `sync-reply-campaigns` (V3 API) - Gets campaign status, preserves links
+3. `sync-reply-contacts` (V1 API) - Background, per-campaign, page-guarded
+
+### Recovery Commands
+
+- **"Link all campaigns for integration"** - Uses `linkAllCampaigns` mutation
+- **"Sync contacts for all linked campaigns"** - Uses `startContactsSync`
+- **"Reset integration and re-sync"** - Delete integration, recreate, auto-links fresh

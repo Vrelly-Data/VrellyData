@@ -642,6 +642,66 @@ AND p.proname = 'search_free_data_builder';
 
 ---
 
-**Document Version:** 2.1  
+## 11. Data Playground Architecture
+
+### Overview
+
+The Data Playground syncs outbound sales data from Reply.io (and planned Smartlead/Instantly.ai support). It operates independently from the main Audience Builder.
+
+### Database Tables
+
+| Table | Purpose |
+|-------|---------|
+| outbound_integrations | API keys, sync status, webhook config |
+| synced_campaigns | Campaign metadata and aggregate stats |
+| synced_contacts | Individual contact engagement data |
+| synced_sequences | Email step content (for Copy tab) |
+| copy_templates | AI-generated email variants |
+
+### Sync Flow
+
+1. User clicks "Sync" on integration
+2. Frontend calls `fetch-available-campaigns` with `autoLinkOnFirstSync: true`
+   - Uses Reply V1 `/campaigns` to get peopleCount
+   - Auto-links campaigns if `links_initialized: false`
+3. Frontend calls `sync-reply-campaigns`
+   - Uses Reply V3 `/sequences` for status consistency
+   - Preserves existing `is_linked` values
+4. Frontend triggers background `startContactsSync`
+   - Iterates through linked campaigns only
+   - Calls `sync-reply-contacts` per campaign
+
+### Edge Functions
+
+| Function | API Version | Purpose |
+|----------|-------------|---------|
+| fetch-available-campaigns | V1 | Campaign discovery + peopleCount |
+| sync-reply-campaigns | V3 | Campaign status/name updates |
+| sync-reply-contacts | V1 | Contact listing with engagement |
+| setup-reply-webhook | V2 | Webhook registration |
+| reply-webhook | N/A | Incoming webhook handler |
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| src/hooks/useOutboundIntegrations.ts | Integration CRUD, sync orchestration |
+| src/hooks/useSyncedCampaigns.ts | Campaign data fetching |
+| src/hooks/usePlaygroundStats.ts | Dashboard aggregation |
+| src/components/playground/CampaignsTable.tsx | Campaign list UI |
+| src/components/playground/PeopleTab.tsx | Contact list with engagement |
+
+### DO NOT CHANGE
+
+| Item | Reason |
+|------|--------|
+| Auto-link logic in fetch-available-campaigns | Breaks first-sync visibility |
+| Page signature guard in sync-reply-contacts | Prevents infinite API loops |
+| links_initialized column | Required for one-time auto-link |
+| Sync order (fetch → sync → contacts) | peopleCount must populate first |
+
+---
+
+**Document Version:** 2.2  
 **Maintained By:** Development Team  
-**Last Review:** January 16, 2026
+**Last Review:** February 8, 2026
