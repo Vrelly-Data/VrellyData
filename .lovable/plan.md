@@ -1,94 +1,70 @@
 
 
-## Fix: Dashboard Not Auto-Refreshing After Background Sync
+## Fix: Email Stats Not Appearing in Dashboard
 
-### Current Problem
+### Root Cause Identified
 
-The sync **is working correctly** - I verified the database has:
-- 6 campaigns synced and linked
-- 574 contacts synced with stats (sent: 574, peopleCount: 574)
-
-But the dashboard shows 0 because:
-
-1. Campaign sync completes → triggers query invalidation → dashboard shows 0 (contacts not synced yet)
-2. Contact sync starts in background (takes 30-60 seconds due to rate limiting)
-3. Contact sync completes → **no query invalidation** → dashboard still shows stale data
-
-The `startContactsSync` function invalidates queries **after the for-loop**, but by the time the user looks at the dashboard, React Query has already fetched stale data.
-
-### Solution
-
-Add a final query invalidation **after all campaigns have been synced** and add a slight delay to ensure the database has committed:
+The dashboard shows "0 emails sent" because there's a **data flow gap** between the sync functions:
 
 ```text
-Current flow:
-1. sync-reply-campaigns completes
-2. invalidateQueries() fires → React Query fetches (contacts not synced yet)
-3. startContactsSync runs per-campaign (async, takes 30-60s)
-4. invalidateQueries() fires again at end → but page may be stale
+Flow Timeline:
+1. fetch-available-campaigns → writes {peopleCount: 378, replyTeamId: "383893"}
+2. sync-reply-campaigns → overwrites with {} (V3 Stats API returns 404)
+3. sync-reply-contacts → tries to update stats but runs after campaign already saved with empty stats
+```
 
-Fixed flow:
-1. sync-reply-campaigns completes  
-2. startContactsSync runs per-campaign (async)
-3. After EACH campaign syncs → invalidateQueries() (incremental updates)
-4. User sees stats updating progressively
+The V3 Statistics API (`/v3/statistics/sequences/{id}`) is returning **404 for all sequences**, so `apiStats` is empty. The current code doesn't preserve existing stats when the API fails.
+
+### The Fix
+
+Modify `sync-reply-campaigns` to:
+1. **Preserve existing stats** when V3 API returns 404
+2. **Use `peopleCount` as fallback** for `sent`/`delivered` when no API data is available
+
+**Current code (broken):**
+```typescript
+// Lines 358-362 - does NOT preserve existing stats
+const mergedStats = {
+  ...apiStats,           // empty when V3 returns 404
+  ...linkedinStats,      // only LinkedIn fields
+};
+```
+
+**Fixed code:**
+```typescript
+// Preserve existing stats, overlay with API data and LinkedIn stats
+const existingPeopleCount = existingStats.peopleCount as number | undefined;
+const existingSent = existingStats.sent as number | undefined;
+const existingDelivered = existingStats.delivered as number | undefined;
+const existingReplies = existingStats.replies as number | undefined;
+
+const mergedStats = {
+  ...existingStats,      // Preserve ALL existing stats (including peopleCount, replies, etc.)
+  ...apiStats,           // Overlay with fresh API data (if available)
+  ...linkedinStats,      // Preserve LinkedIn fields from CSV uploads
+  // Fallback: use existing or peopleCount if no sent/delivered data
+  sent: apiStats.sent || existingSent || existingDelivered || existingPeopleCount || 0,
+  delivered: apiStats.delivered || existingDelivered || existingSent || existingPeopleCount || 0,
+};
 ```
 
 ### Technical Changes
 
-**File: `src/hooks/useOutboundIntegrations.ts`**
-
-Update `startContactsSync` to invalidate queries after **each** campaign syncs (not just at the end):
-
-```typescript
-const startContactsSync = (integrationId: string) => {
-  void (async () => {
-    try {
-      const { data: campaigns, error } = await supabase
-        .from('synced_campaigns')
-        .select('id')
-        .eq('integration_id', integrationId)
-        .eq('is_linked', true);
-
-      if (error) throw error;
-      if (!campaigns?.length) return;
-
-      for (const campaign of campaigns) {
-        const { error: syncError } = await supabase.functions.invoke('sync-reply-contacts', {
-          body: { campaignId: campaign.id, integrationId },
-        });
-
-        if (syncError) {
-          console.warn('Contact sync failed:', syncError);
-        }
-
-        // Invalidate after EACH campaign to show progressive updates
-        queryClient.invalidateQueries({ queryKey: ['synced-campaigns'] });
-        queryClient.invalidateQueries({ queryKey: ['playground-stats'] });
-      }
-
-      // Final invalidation for contacts list
-      queryClient.invalidateQueries({ queryKey: ['synced-contacts'] });
-    } catch (err) {
-      console.warn('Contacts auto-sync error:', err);
-    }
-  })();
-};
-```
-
-### Additional UX Improvement
-
-Add a "syncing contacts" indicator so users know the background sync is running:
-
-The integration card could show "Syncing contacts..." during background sync, but this requires tracking state across the async operation. For now, the progressive invalidation will update the dashboard in real-time as each campaign's contacts are synced.
-
-### Quick Workaround (For Now)
-
-**Hard refresh the page** - the data IS in the database, it's just the React Query cache that's stale. Press `Cmd/Ctrl + Shift + R` or click the browser refresh button.
-
-### Files to Modify
-
 | File | Change |
 |------|--------|
-| `src/hooks/useOutboundIntegrations.ts` | Move query invalidation inside the for-loop so dashboard updates progressively |
+| `supabase/functions/sync-reply-campaigns/index.ts` | Preserve existing stats when V3 API fails, add fallback logic |
+
+### After This Fix
+
+1. Campaign sync will preserve existing stats when V3 Statistics API returns 404
+2. Dashboard will show `peopleCount` as "Emails Sent" (since that's the number of people who received the sequence)
+3. As contacts sync, actual engagement data (replies, opens) will be added to the stats
+4. LinkedIn stats from CSV uploads remain preserved
+
+### Why This Is Correct
+
+- `peopleCount` represents contacts added to the campaign/sequence
+- In Reply.io, a contact added to a sequence will receive emails (unless bounced/opted out)
+- Using `peopleCount` as a baseline for "sent" is a reasonable approximation when the Statistics API is unavailable
+- The `sync-reply-contacts` function will later update with actual engagement data
 
