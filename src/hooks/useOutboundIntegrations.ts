@@ -21,26 +21,46 @@ export interface OutboundIntegration {
 export function useOutboundIntegrations() {
   const queryClient = useQueryClient();
 
-  // Sync contacts per-campaign (separate backend function) to avoid long-running sync timeouts.
+  // Sync contacts per-campaign with retry logic
   const startContactsSync = (integrationId: string) => {
     void (async () => {
       try {
         const { data: campaigns, error } = await supabase
           .from('synced_campaigns')
-          .select('id')
+          .select('id, name')
           .eq('integration_id', integrationId)
           .eq('is_linked', true);
 
         if (error) throw error;
         if (!campaigns?.length) return;
 
-        for (const campaign of campaigns) {
-          const { error: syncError } = await supabase.functions.invoke('sync-reply-contacts', {
-            body: { campaignId: campaign.id, integrationId },
-          });
+        const MAX_RETRIES = 3;
+        const RETRY_DELAY = 2000; // 2 seconds
 
-          if (syncError) {
-            console.warn('Contact sync failed:', syncError);
+        for (const campaign of campaigns) {
+          let success = false;
+          
+          for (let attempt = 1; attempt <= MAX_RETRIES && !success; attempt++) {
+            try {
+              const { error: syncError } = await supabase.functions.invoke('sync-reply-contacts', {
+                body: { campaignId: campaign.id, integrationId },
+              });
+
+              if (syncError) {
+                console.warn(`Contact sync attempt ${attempt}/${MAX_RETRIES} failed for campaign ${campaign.name}:`, syncError);
+                if (attempt < MAX_RETRIES) {
+                  await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * attempt));
+                }
+              } else {
+                success = true;
+                console.log(`Contact sync succeeded for campaign ${campaign.name}`);
+              }
+            } catch (err) {
+              console.warn(`Contact sync error attempt ${attempt}/${MAX_RETRIES}:`, err);
+              if (attempt < MAX_RETRIES) {
+                await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * attempt));
+              }
+            }
           }
 
           // Invalidate after EACH campaign to show progressive updates
