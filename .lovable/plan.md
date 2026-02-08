@@ -1,134 +1,140 @@
 
-## What’s actually happening (why you’re seeing 0 / 0)
+## What’s happening (why it feels like “nothing happens”)
+Right now the sync is actually pulling the correct “contacts enrolled” number into the database, but the UI is hiding it.
 
-Two separate issues are stacking on top of each other:
+**Confirmed from the backend data:**
+- Your latest integration (`Incrementums`) has **6 campaigns** synced.
+- Those campaigns have `stats.peopleCount` totaling **1053** (the enrolled-in-sequences number we agreed is correct).
+- But **all 6 campaigns are currently `is_linked = false` (linked = 0)**.
 
-1) **“Contacts enrolled” is currently not being populated during the normal Sync flow**
-- The integration “Sync” button runs `sync-reply-campaigns`.
-- `sync-reply-campaigns` uses Reply V3 `/sequences` and **does not provide `peopleCount`**.
-- We *used* to have `peopleCount` coming from the “Available campaigns” flow (Reply V1 `/campaigns`), but that only runs when you open **Manage Campaigns** (via `fetch-available-campaigns`) — not during a normal “Sync”.
-- Result: campaign rows exist, but `stats.peopleCount` stays 0 → dashboard shows **0 contacts**.
+**Your dashboard and campaigns table only show “linked” campaigns:**
+- `usePlaygroundStats()` queries `synced_campaigns` with `.eq('is_linked', true)`
+- `CampaignsTable` uses `useSyncedCampaigns()` which defaults to `onlyLinked=true`
+- Background contact sync (`startContactsSync`) only runs for `.eq('is_linked', true)`
 
-2) **The contact sync is currently “fake paging” and repeatedly re-fetching the same page**
-- `sync-reply-contacts` is using V3 `GET /sequences/{id}/contacts/extended?limit=100&offset=...`.
-- The function logs show it fetched **10,000** items but only **100 verified** in the database.
-- That means the API is effectively returning the same 100 contacts over and over (offset not being applied reliably), so your DB ends up with only the first page’s unique emails.
-- Result: even when you do run contact sync, it doesn’t reach the real enrolled count (1,053) and can’t compute “sent” correctly.
+So when nothing is linked, you see:
+- **0 contacts**
+- **0 messages**
+- and `sync-reply-contacts` never even runs (explains why we see no logs for it).
 
-## Goal metrics (based on what you confirmed)
-- **Contacts count**: total *enrolled in sequences* (your 1,053 is the right target).
-- **Emails sent**: “total messages sent” (Reply says 114). With the available data, the closest reliable proxy we can compute is “contacts with Delivered=true” from the extended contacts endpoint; for your account right now that should line up with 114 if each delivered contact has received one message so far. We’ll label it clearly in UI to avoid future confusion.
+### Why everything ended up unlinked
+Your sync flow calls **`fetch-available-campaigns` first**, and that function currently **upserts campaigns with `is_linked = false` for new ones**:
+- `fetch-available-campaigns` explicitly does: `is_linked: linkedMap.get(...) ?? false`
+- Then `sync-reply-campaigns` “preserves existing is_linked” (which is now false), so it stays false.
 
----
-
-## Implementation plan (to make this reliably work again)
-
-### A) Fix the contact sync paging so it can actually reach 1,053
-**File:** `supabase/functions/sync-reply-contacts/index.ts`
-
-1. **Add guardrails against “repeating pages”**
-   - Track a lightweight “page signature” for each page (e.g., firstEmail + lastEmail + count).
-   - Track how many **new unique emails** we get per page.
-   - If a page is identical to the previous one, or yields 0 new emails for N consecutive pages (e.g., 2–3), stop paging and return a clear “paging-stuck” reason.
-
-2. **Deduplicate while fetching**
-   - Maintain a `Map<email, contact>` and only keep the newest/most complete version.
-   - This prevents the “10,000 processed but only 100 unique” situation from wasting time.
-
-3. **Upsert only the unique set**
-   - Build `records` from the `Map` values and upsert in batches.
-   - Compute stats (delivered/replies/opens/etc.) from the unique set.
-
-4. **Return and log diagnostics**
-   - Include fields like:
-     - `totalFetchedRaw`
-     - `uniquePrepared`
-     - `duplicatePagesDetected`
-     - `stopReason` (e.g., `hasMore_false`, `empty_page`, `repeating_page_guard`)
-   - This will make future debugging immediate (instead of guessing).
-
-Why this works:
-- Even if Reply’s offset paging is flaky, we’ll detect it early and avoid infinite/huge loops.
-- If offset *does* work, we’ll fetch the full enrolled set and peopleCount will land at ~1,053.
+Net effect: the sync is populating enrolled counts, but also guaranteeing the dashboard filters everything out.
 
 ---
 
-### B) Ensure “Contacts enrolled” (peopleCount) is populated during the normal Sync button flow
-Right now, your normal “Sync” does not call the function that pulls peopleCount.
+## Goal (based on what you told me)
+When you click **Sync**, the dashboard should immediately show:
+- **Contacts enrolled** ≈ **1053**
+And then background sync should populate:
+- **Messages sent** (or our best available proxy) and engagement metrics
 
+This requires that campaigns are **linked by default** (at least on first setup), or the dashboard must stop filtering them out.
+
+---
+
+## Implementation approach (fix the root cause, not another workaround)
+We’ll do two things:
+1) **Make Sync automatically link campaigns on first-time setup** (so numbers appear immediately)
+2) **Add a visible “Link all campaigns” recovery button** (so existing integrations stuck with 0 linked can be fixed in 1 click)
+
+This avoids endless retrying and makes the system predictable.
+
+---
+
+## Changes to implement
+
+### 1) Update backend “fetch available campaigns” to support auto-linking during sync
+**File:** `supabase/functions/fetch-available-campaigns/index.ts`
+
+Add a request flag like:
+- `autoLinkOnFirstSync: boolean`
+
+Logic:
+- Load existing campaigns **for this integration** (important: currently it looks up by `team_id` only; we’ll scope it to `integration_id` to avoid cross-integration leakage)
+- If `autoLinkOnFirstSync` is true:
+  - If this integration has **never had any linked campaigns** (or a “first sync” marker — see below), then set `is_linked=true` for campaigns as they are inserted/upserted.
+  - Preserve existing user choices otherwise.
+
+Recommended robust guard (so we don’t re-link after users intentionally unlink later):
+- Add a boolean field on integrations (example: `links_initialized`) and only auto-link while it is false.
+- After auto-linking once, set it to true.
+
+This prevents the “user unlinked on purpose, then Sync relinks everything” problem.
+
+### 2) Add the one-time link initialization flag to integrations
+**Backend schema change (migration):**
+- Add `links_initialized boolean not null default false` to `outbound_integrations`
+
+### 3) Ensure the Sync flow enables “autoLinkOnFirstSync”
 **File:** `src/hooks/useOutboundIntegrations.ts`
 
-1. In `syncIntegration` (and the post-add auto sync), change the flow to:
-   - Call `fetch-available-campaigns` first (Reply V1 `/campaigns` is where `peopleCount` comes from in your codebase).
-   - Then call `sync-reply-campaigns` (Reply V3 sequences for status/name consistency).
-   - Then run the background per-campaign contact sync (existing `startContactsSync`).
+When calling `fetch-available-campaigns` during:
+- `addIntegration.onSuccess` auto-sync
+- `syncIntegration.mutationFn`
 
-2. Add better surfaced errors:
-   - If `fetch-available-campaigns` fails, show a toast that the dashboard will show 0 contacts until it’s fixed.
-   - If contact sync for a campaign fails, store the message in console + show a warning toast with “X campaigns failed” (you already collect errors in People tab; we’ll mirror that in the auto background sync).
+Pass:
+- `{ integrationId, autoLinkOnFirstSync: true }`
 
-Why this works:
-- You’ll immediately see enrolled counts (1,053) on the dashboard after clicking Sync, even before detailed contacts finish syncing.
-- This restores the “it worked before” behavior because your codebase already had a working path to populate peopleCount; it just wasn’t wired into the Sync button.
+But when opening **Manage Campaigns** (user browsing), we do **not** auto-link:
+- `src/hooks/useAvailableCampaigns.ts` keeps calling `fetch-available-campaigns` without that flag.
 
----
+### 4) Add a one-click recovery CTA when there are zero linked campaigns
+**File:** `src/components/playground/CampaignsTable.tsx` (and/or `IntegrationSetupCard.tsx`)
 
-### C) Stop `sync-reply-campaigns` from overwriting user link choices
-**File:** `supabase/functions/sync-reply-campaigns/index.ts`
+When `useSyncedCampaigns()` returns empty (no linked campaigns), show:
+- Button: “Link all campaigns”
+- This performs a scoped update like:
+  - link all campaigns for the currently-active Reply integration (or the most recent integration), not the entire team.
+- Then invalidate:
+  - `synced-campaigns`
+  - `playground-stats`
+…and immediately start contact background sync.
 
-Currently it sets `is_linked: true` on every upsert.
+This gives you a deterministic way out even if something goes wrong again.
 
-We will change it to:
-- Read `existingCampaign.is_linked` (if present) and preserve it.
-- Default to `false` for brand new campaigns unless the user explicitly links them in Manage Campaigns.
+### 5) Make stats/contact aggregation integration-safe (prevents future “weird totals”)
+**File:** `src/hooks/usePlaygroundStats.ts`
 
-Why this matters:
-- Prevents accidental “everything linked” which then triggers huge background syncs unexpectedly.
-- Keeps the system predictable.
+Right now it fetches **all contacts for the team**, even if multiple integrations exist.
+We’ll change stats computation to only consider:
+- contacts whose `campaign_id` belongs to the campaigns we are aggregating (linked ones), and
+- optionally filter by integration_id via campaign IDs.
 
----
-
-### D) Make the UI reflect the intended metrics and progress so it doesn’t feel “broken”
-**Files:** 
-- `src/hooks/usePlaygroundStats.ts`
-- `src/components/playground/PlaygroundStatsGrid.tsx` (or wherever the cards are rendered)
-- (optional) `src/components/playground/IntegrationSetupCard.tsx`
-
-1. **Show “Enrolled” explicitly (sum of peopleCount across linked campaigns)**
-   - This matches your definition of contacts.
-
-2. **Show “Messages sent” as delivered-contact proxy when stats API is unavailable**
-   - Use contact engagement (`engagement_data.delivered`) aggregated across synced contacts.
-   - Add a tooltip/subtitle like “Derived from delivered contacts” to avoid future confusion.
-
-3. **Progress / clarity**
-   - When background contact sync is running, show a visible “Syncing contacts…” indicator (not just the integration badge).
-   - If the user clicks Sync and immediately sees 0, it should say “Campaigns synced; contacts syncing next…” rather than silently doing work.
+This avoids mixing data if you add another workspace/integration later.
 
 ---
 
-## How we’ll verify it’s fixed (end-to-end)
-1. On `/playground`, click **Sync** on the Reply integration.
-2. Confirm:
-   - Campaign list appears.
-   - Total **Enrolled contacts** becomes ~**1,053** after the discovery step finishes.
-3. Let contact sync complete (or run it from People tab “Sync All”).
-4. Confirm:
-   - People tab shows close to the enrolled count for linked campaigns.
-   - “Messages sent” becomes ~**114** (from delivered contacts), assuming Reply’s delivered flag aligns with that number for your account.
-5. Confirm we no longer see “10,000 fetched” for a sequence that should have ~1,053; if offset is broken, we should see a clean early stop with `stopReason=repeating_page_guard` and a warning that the API paging is misbehaving.
+## How we’ll verify end-to-end (no guessing)
+1) Go to **/playground**
+2) Click **Sync** on the Reply integration
+3) Confirm in UI:
+   - campaigns are linked automatically (table no longer says “No linked campaigns yet”)
+   - Overview shows **Contacts enrolled ~1053**
+4) Confirm background contact sync starts:
+   - network shows calls to `sync-reply-contacts`
+   - People tab starts populating
+5) Confirm messages metric starts reflecting contact engagement-derived counts (since Reply stats endpoint is 404).
 
 ---
 
-## Risks / fallback
-- If Reply’s extended contacts endpoint truly cannot page correctly for your account, we’ll still be protected from infinite loops.
-- In that case, the fallback is to:
-  - Use Reply V1 people listing for full enrollment counts (reliable),
-  - And show “Messages sent” as “unknown / requires webhooks or stats endpoint” until we can access a reliable per-sequence stats endpoint.
+## Expected result after this fix
+- You will stop getting “0 / 0” after sync.
+- The dashboard will show the enrolled total immediately (1053).
+- Background contact sync will actually run (because there are linked campaigns).
+- “Messages sent” will reflect whatever reliable proxy we derive from contact engagement data, until Reply’s stats endpoint stops 404ing.
 
-## Files we will change
-- `supabase/functions/sync-reply-contacts/index.ts` (paging + dedupe + diagnostics)
-- `src/hooks/useOutboundIntegrations.ts` (wire `fetch-available-campaigns` into Sync flow + better error surfacing)
-- `supabase/functions/sync-reply-campaigns/index.ts` (preserve `is_linked`)
-- `src/hooks/usePlaygroundStats.ts` (+ optional UI files for clearer cards/progress)
+---
+
+## Why this is the correct fix
+We’re not changing Reply logic again “hoping it works.”
+We’re fixing the real blocker:
+- **The UI is filtering out every campaign**
+- **The contact sync is never being invoked**
+because the system currently creates campaigns as unlinked during the sync flow.
+
+Once linking is deterministic, the rest of the pipeline can work (or fail) visibly, instead of silently resulting in 0.
 
