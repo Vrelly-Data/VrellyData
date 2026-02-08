@@ -425,25 +425,7 @@ Deno.serve(async (req) => {
       })
       .eq("id", integrationId);
 
-    console.log(`Sync complete: ${campaignsProcessed} campaigns (contacts sync runs per-campaign)`);
-
-    // Update integration status
-    const finalStatus = campaignsFailed > 0 && campaignsProcessed === 0 ? "error" : "synced";
-    const syncError = campaignsFailed > 0 
-      ? `Synced ${campaignsProcessed}/${sequences.length} sequences (${campaignsFailed} failed)` 
-      : null;
-
-    await supabase
-      .from("outbound_integrations")
-      .update({
-        sync_status: finalStatus,
-        sync_error: syncError,
-        last_synced_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", integrationId);
-
-    console.log(`Full sync complete: ${campaignsProcessed} campaigns`);
+    console.log(`Sync complete: ${campaignsProcessed} campaigns`);
 
     return new Response(
       JSON.stringify({
