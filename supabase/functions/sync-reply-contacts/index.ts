@@ -5,31 +5,34 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-// Use V1 API which has working page-based pagination
-const REPLY_API_V1 = "https://api.reply.io/v1";
+// Use V3 API for extended contacts with engagement data
+const REPLY_API_V3 = "https://api.reply.io/v3";
 
-interface ReplyPeopleResponse {
-  people?: ReplyPerson[];
-  totalCount?: number;
-}
-
-interface ReplyPerson {
-  id: number;
+// V3 Extended Contact response structure
+interface V3ExtendedContact {
   email: string;
   firstName?: string;
   lastName?: string;
   title?: string;
   company?: string;
-  status?: string;
-  replied?: boolean;
-  bounced?: boolean;
-  finished?: boolean;
-  optedOut?: boolean;
-  opened?: boolean;
-  clicked?: boolean;
-  customFields?: Record<string, unknown>;
-  addedTime?: string;
-  // Additional contact data fields
+  addedAt?: string;
+  currentStep?: {
+    stepId: number;
+    displayStepNumber: string;
+    stepNumber: number;
+  };
+  lastStepCompletedAt?: string | null;
+  status?: {
+    status: string;
+    replied: boolean;
+    delivered: boolean;
+    bounced: boolean;
+    opened: boolean;
+    clicked: boolean;
+    optedOut?: boolean;
+    finished?: boolean;
+  };
+  // Additional fields from the API
   industry?: string;
   companySize?: string;
   city?: string;
@@ -37,7 +40,13 @@ interface ReplyPerson {
   country?: string;
   phone?: string;
   linkedInProfile?: string;
-  addingDate?: string;
+}
+
+interface V3ExtendedResponse {
+  items?: V3ExtendedContact[];
+  info?: {
+    hasMore: boolean;
+  };
 }
 
 // Retry wrapper with exponential backoff for rate limiting
@@ -50,7 +59,6 @@ async function fetchWithRetry(
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       const headers: Record<string, string> = {
-        // Reply requires strict header casing
         "X-API-Key": apiKey,
         "Accept": "application/json",
         "Content-Type": "application/json",
@@ -60,11 +68,11 @@ async function fetchWithRetry(
         headers["X-Reply-Team-Id"] = teamId;
       }
 
-      const response = await fetch(`${REPLY_API_V1}${endpoint}`, { headers });
+      const response = await fetch(`${REPLY_API_V3}${endpoint}`, { headers });
 
       if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(`Reply.io API error (${response.status}): ${errorText}`);
+        throw new Error(`Reply.io V3 API error (${response.status}): ${errorText}`);
       }
 
       return response.json();
@@ -85,22 +93,26 @@ async function fetchWithRetry(
   throw new Error(`Max retries exceeded for ${endpoint}`);
 }
 
-// Map Reply.io person status to simplified status string
-function mapPersonStatus(person: ReplyPerson): string {
-  if (person.replied) return 'replied';
-  if (person.bounced) return 'bounced';
-  if (person.optedOut) return 'opted_out';
-  if (person.finished) return 'finished';
-  if (person.opened) return 'opened';
-  // V1 API uses string status like "InProgress", "Finished", etc.
-  if (person.status) {
-    const statusLower = person.status.toLowerCase();
-    if (statusLower === 'inprogress' || statusLower === 'in_progress') return 'active';
-    if (statusLower === 'finished') return 'finished';
-    if (statusLower === 'paused') return 'paused';
-    return statusLower;
+// Map V3 contact status to simplified status string
+function mapContactStatus(contact: V3ExtendedContact): string {
+  const status = contact.status;
+  if (!status) {
+    return 'active';
   }
-  return 'active';
+  
+  if (status.replied) return 'replied';
+  if (status.bounced) return 'bounced';
+  if (status.optedOut) return 'opted_out';
+  if (status.finished) return 'finished';
+  if (status.opened) return 'opened';
+  
+  // Use the status string from API
+  const statusStr = status.status?.toLowerCase();
+  if (statusStr === 'active' || statusStr === 'inprogress') return 'active';
+  if (statusStr === 'finished') return 'finished';
+  if (statusStr === 'paused') return 'paused';
+  
+  return statusStr || 'active';
 }
 
 Deno.serve(async (req) => {
@@ -159,75 +171,56 @@ Deno.serve(async (req) => {
     const apiKey = integration.api_key_encrypted;
     const teamId = integration.team_id;
     const replyTeamId = integration.reply_team_id;
-    // V1 API uses campaign ID directly
-    const replyCampaignId = campaign.external_campaign_id;
+    // V3 API uses sequence ID (same as external_campaign_id)
+    const sequenceId = campaign.external_campaign_id;
 
-    console.log(`Fetching contacts for campaign ${replyCampaignId} using V1 API`);
+    console.log(`Fetching contacts for sequence ${sequenceId} using V3 extended API`);
 
-    // Fetch contacts from Reply.io V1 API using PAGE pagination (1-indexed)
-    const uniqueContactsMap = new Map<string, ReplyPerson>();
-    let page = 1;
+    // Fetch contacts from Reply.io V3 API using offset pagination
+    const allContacts: V3ExtendedContact[] = [];
+    let offset = 0;
     const limit = 100;
     let hasMore = true;
-    let totalFetched = 0;
-    const maxPages = 100; // Safety cap: 100 pages * 100 contacts = 10,000 max
-    let consecutiveDuplicatePages = 0;
+    const maxIterations = 100; // Safety cap: 100 * 100 = 10,000 max
+    let iteration = 0;
 
-    while (hasMore && page <= maxPages) {
-      const endpoint = `/campaigns/${replyCampaignId}/people?limit=${limit}&page=${page}`;
-      console.log(`Fetching page ${page}: limit=${limit}`);
+    while (hasMore && iteration < maxIterations) {
+      const endpoint = `/sequences/${sequenceId}/contacts/extended?limit=${limit}&offset=${offset}`;
+      console.log(`Fetching V3 extended contacts: offset=${offset}, limit=${limit}`);
       
-      const response = await fetchWithRetry(endpoint, apiKey, replyTeamId || undefined) as ReplyPeopleResponse;
+      const response = await fetchWithRetry(endpoint, apiKey, replyTeamId || undefined) as V3ExtendedResponse;
       
-      const people = response.people || [];
-      totalFetched += people.length;
+      const items = response.items || [];
+      allContacts.push(...items);
       
-      // Track unique contacts by email to avoid duplicates
-      let newUniqueCount = 0;
-      for (const person of people) {
-        if (person.email && !uniqueContactsMap.has(person.email.toLowerCase())) {
-          uniqueContactsMap.set(person.email.toLowerCase(), person);
-          newUniqueCount++;
-        }
-      }
+      console.log(`Fetched ${items.length} contacts, total: ${allContacts.length}`);
       
-      console.log(`Page ${page}: fetched ${people.length}, new unique: ${newUniqueCount}, total unique: ${uniqueContactsMap.size}`);
+      // Check if there are more pages
+      hasMore = response.info?.hasMore ?? false;
       
-      // Track consecutive pages with no new contacts (API returning same data)
-      if (newUniqueCount === 0 && people.length > 0) {
-        consecutiveDuplicatePages++;
-        console.log(`Page ${page} returned duplicates (${consecutiveDuplicatePages} consecutive)`);
-        // Stop if we get 3 consecutive pages of duplicates - API is stuck
-        if (consecutiveDuplicatePages >= 3) {
-          console.log("Stopping: 3 consecutive duplicate pages detected");
-          break;
-        }
-      } else {
-        consecutiveDuplicatePages = 0; // Reset counter on new unique contacts
-      }
-      
-      // Stop conditions:
-      // 1. Empty page (no more contacts)
-      // 2. Fewer items than limit (last page)
-      if (people.length === 0 || people.length < limit) {
-        hasMore = false;
-      }
-      
-      page++;
-      
-      // Rate limit protection between pages
       if (hasMore) {
+        offset += limit;
+        iteration++;
+        // Rate limit protection between pages
         await new Promise(resolve => setTimeout(resolve, 300));
       }
     }
 
-    const allContacts = Array.from(uniqueContactsMap.values());
-    console.log(`Fetched ${totalFetched} total items, ${allContacts.length} unique contacts from Reply.io V1 API`);
+    console.log(`Total contacts fetched from V3 API: ${allContacts.length}`);
 
     // Batch upsert contacts to database
     const BATCH_SIZE = 100;
     let contactsSynced = 0;
     let contactsFailed = 0;
+
+    // Track engagement stats from contacts
+    let deliveredCount = 0;
+    let repliesCount = 0;
+    let opensCount = 0;
+    let clicksCount = 0;
+    let bouncesCount = 0;
+    let optOutsCount = 0;
+    let finishedCount = 0;
 
     for (let i = 0; i < allContacts.length; i += BATCH_SIZE) {
       const batch = allContacts.slice(i, i + BATCH_SIZE);
@@ -236,40 +229,53 @@ Deno.serve(async (req) => {
       
       console.log(`Processing batch ${batchNumber}/${totalBatches} (${batch.length} contacts)`);
 
-      const records = batch.map(person => {
+      const records = batch.map(contact => {
+        const status = contact.status;
+        
+        // Count engagement stats from V3 status object
+        if (status?.delivered) deliveredCount++;
+        if (status?.replied) repliesCount++;
+        if (status?.opened) opensCount++;
+        if (status?.clicked) clicksCount++;
+        if (status?.bounced) bouncesCount++;
+        if (status?.optedOut) optOutsCount++;
+        if (status?.finished) finishedCount++;
+        
         const engagementData = {
-          replied: person.replied || false,
-          bounced: person.bounced || false,
-          opened: person.opened || false,
-          clicked: person.clicked || false,
-          optedOut: person.optedOut || false,
-          finished: person.finished || false,
-          addedTime: person.addedTime || person.addingDate,
+          replied: status?.replied || false,
+          bounced: status?.bounced || false,
+          opened: status?.opened || false,
+          clicked: status?.clicked || false,
+          optedOut: status?.optedOut || false,
+          finished: status?.finished || false,
+          delivered: status?.delivered || false, // NEW: V3 provides delivered status
+          addedAt: contact.addedAt,
+          lastStepCompletedAt: contact.lastStepCompletedAt,
         };
 
         return {
           campaign_id: campaignId,
           team_id: teamId,
-          external_contact_id: String(person.id),
-          email: person.email,
-          first_name: person.firstName || null,
-          last_name: person.lastName || null,
-          company: person.company || null,
-          job_title: person.title || null,
-          status: mapPersonStatus(person),
+          external_contact_id: null, // V3 extended doesn't return contact ID
+          email: contact.email,
+          first_name: contact.firstName || null,
+          last_name: contact.lastName || null,
+          company: contact.company || null,
+          job_title: contact.title || null,
+          status: mapContactStatus(contact),
           engagement_data: engagementData,
-          custom_fields: person.customFields || {},
-          raw_data: person,
+          custom_fields: {},
+          raw_data: contact,
           updated_at: new Date().toISOString(),
-          // New fields from Reply.io
-          industry: person.industry || null,
-          company_size: person.companySize && person.companySize !== 'Empty' ? person.companySize : null,
-          city: person.city || null,
-          state: person.state || null,
-          country: person.country || null,
-          phone: person.phone || null,
-          linkedin_url: person.linkedInProfile || null,
-          added_at: person.addingDate || person.addedTime || null,
+          // Additional fields
+          industry: contact.industry || null,
+          company_size: contact.companySize && contact.companySize !== 'Empty' ? contact.companySize : null,
+          city: contact.city || null,
+          state: contact.state || null,
+          country: contact.country || null,
+          phone: contact.phone || null,
+          linkedin_url: contact.linkedInProfile || null,
+          added_at: contact.addedAt || null,
         };
       });
 
@@ -300,15 +306,7 @@ Deno.serve(async (req) => {
 
     const peopleCount = verifiedCount || allContacts.length;
 
-    // Update campaign aggregate stats from contact booleans
-    // (This makes the dashboard update even if statistics endpoints are unavailable.)
-    const repliesCount = allContacts.filter(p => !!p.replied).length;
-    const opensCount = allContacts.filter(p => !!p.opened).length;
-    const clicksCount = allContacts.filter(p => !!p.clicked).length;
-    const bouncesCount = allContacts.filter(p => !!p.bounced).length;
-    const optOutsCount = allContacts.filter(p => !!p.optedOut).length;
-    const finishedCount = allContacts.filter(p => !!p.finished).length;
-
+    // Get existing campaign stats to preserve LinkedIn metrics
     const { data: existingCampaign } = await serviceClient
       .from("synced_campaigns")
       .select("stats")
@@ -317,43 +315,54 @@ Deno.serve(async (req) => {
 
     const existingStats = (existingCampaign?.stats as Record<string, unknown>) || {};
 
-    const existingSent = typeof existingStats.sent === 'number' ? (existingStats.sent as number) : null;
-    const existingDelivered = typeof existingStats.delivered === 'number' ? (existingStats.delivered as number) : null;
+    // Preserve LinkedIn stats that came from CSV upload
+    const linkedinMessagesSent = existingStats.linkedinMessagesSent || 0;
+    const linkedinConnectionsSent = existingStats.linkedinConnectionsSent || 0;
+    const linkedinConnectionsAccepted = existingStats.linkedinConnectionsAccepted || 0;
+    const linkedinReplies = existingStats.linkedinReplies || 0;
 
+    // Update campaign stats with actual counts from V3 engagement data
     await serviceClient
       .from("synced_campaigns")
       .update({
         stats: {
           ...existingStats,
           peopleCount,
+          // Use V3 delivered count - this is the actual "emails sent" metric
+          sent: deliveredCount,
+          delivered: deliveredCount,
           replies: repliesCount,
           opens: opensCount,
           clicked: clicksCount,
           bounces: bouncesCount,
           optOuts: optOutsCount,
           peopleFinished: finishedCount,
-          // DO NOT use peopleCount as fallback for sent/delivered
-          // sent/delivered can only come from Statistics API - don't override with contact count
-          delivered: existingDelivered ?? 0,
-          sent: existingSent ?? 0,
+          // Preserve LinkedIn stats
+          linkedinMessagesSent,
+          linkedinConnectionsSent,
+          linkedinConnectionsAccepted,
+          linkedinReplies,
         },
         updated_at: new Date().toISOString(),
       })
       .eq("id", campaignId);
 
-    console.log(`Contacts sync complete: ${contactsSynced} processed, ${contactsFailed} failed, ${peopleCount} verified in database`);
+    console.log(`Contacts sync complete: ${contactsSynced} processed, ${contactsFailed} failed, ${peopleCount} verified`);
+    console.log(`Engagement stats: ${deliveredCount} delivered, ${repliesCount} replies, ${opensCount} opens`);
 
     return new Response(
       JSON.stringify({
         success: true,
         contactsSynced,
         contactsFailed,
-        totalFetched,
-        uniquePrepared: allContacts.length,
+        totalFetched: allContacts.length,
         verifiedCount: peopleCount,
         campaignStats: {
           peopleCount,
+          sent: deliveredCount,
+          delivered: deliveredCount,
           replies: repliesCount,
+          opens: opensCount,
         },
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
