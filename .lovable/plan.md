@@ -1,78 +1,154 @@
 
-## Fix: Incorrect Email Stats (Showing 1,053 Instead of 114)
 
-### Root Cause
+# Fix: Contact Count and Email Stats Discrepancy
 
-The dashboard shows 1,053 "emails sent" because **both sync functions** are using `peopleCount` as a fallback:
+## Summary of Issues
 
-| Source | Value | What it actually means |
-|--------|-------|------------------------|
-| `peopleCount` | 1,053 | Contacts added to campaigns |
-| Actual emails sent | 114 | What Reply.io reports |
-| V3 Statistics API | 404 | Not working - returns empty data |
+You're experiencing three related problems:
 
-The fallback chain `sent: apiStats.sent || existingSent || peopleCount || 0` is using `peopleCount` since the V3 Statistics API returns 404.
+1. **Contact count shows 737 instead of 1,053** - Some campaigns didn't sync their contacts
+2. **Emails sent shows 0 instead of 114** - The V3 Statistics API is returning 404 errors
+3. **3 campaigns have 0 synced contacts** - Campaigns 1451359, 1496434, and 1606099 failed to sync
 
-### The Real Problem
+## Root Cause Analysis
 
-Reply.io's V3 Statistics API (`/v3/statistics/sequences/{id}`) is returning 404 for all sequences. This API is supposed to provide `deliveredContacts` (actual emails sent), but it's not accessible.
+| Issue | Cause | Evidence |
+|-------|-------|----------|
+| Missing 316 contacts | 3 campaigns have 0 synced contacts | Database shows campaigns 1451359, 1496434, 1606099 have 0 contacts |
+| Emails sent = 0 | V3 Statistics API returns 404 | Edge function logs show `Reply.io V3 API error (404)` for all 6 sequences |
+| Dashboard shows wrong number | `usePlaygroundStats` sums `peopleCount` from campaigns | Only synced campaigns have `peopleCount` populated |
 
-### Solution: Remove the peopleCount Fallback
+## Technical Details
 
-Since `peopleCount` (contacts in campaign) ≠ "emails sent", we should **not** use it as a fallback. Instead:
+### The V3 Statistics API Problem
 
-1. **Only use actual delivery data** when available from the Statistics API
-2. **Don't show inflated numbers** - better to show 0 than incorrect data
-3. **Derive stats from contacts** where possible (replies, opens, clicks are accurate)
+The Reply.io V3 Statistics endpoint `/v3/statistics/sequences/{id}` is consistently returning 404 errors. This endpoint is supposed to return `deliveredContacts` (actual emails sent), but it's not accessible with the current API key/permissions.
 
-### Technical Changes
+### The V3 Extended Contacts Endpoint
+
+Reply.io has a V3 endpoint `/v3/sequences/{id}/contacts/extended` that returns per-contact engagement data including a `sent` boolean:
+
+```text
+GET /v3/sequences/{id}/contacts/extended
+Response:
+{
+  "items": [{
+    "email": "...",
+    "engagement": {
+      "sent": true/false,
+      "opened": true/false,
+      "clicked": true/false,
+      "replied": true/false
+    }
+  }]
+}
+```
+
+Currently, the system uses the V1 endpoint which only returns boolean flags for `replied`, `opened`, `bounced`, `clicked`, but **not** `sent`.
+
+## Solution
+
+### Part 1: Switch to V3 Extended Contacts Endpoint
+
+Migrate from V1 `/campaigns/{id}/people` to V3 `/sequences/{id}/contacts/extended`:
+
+- This endpoint returns per-contact `sent` status
+- We can count contacts with `sent: true` to get actual emails sent
+- Provides richer engagement data
+
+### Part 2: Calculate "Emails Sent" from Contact Data
+
+Since the V3 Statistics API is unreliable, derive the count from synced contacts:
+
+```text
+sent = COUNT of contacts WHERE engagement_data->>'sent' = true
+  OR status IN ('finished', 'replied', 'opened', 'bounced')
+```
+
+Logic: If a contact has any engagement (opened, replied, bounced, finished), they must have received at least one email.
+
+### Part 3: Ensure All Campaigns Sync Contacts
+
+Add retry logic and better error handling so all 6 campaigns sync their contacts.
+
+## File Changes
 
 | File | Change |
 |------|--------|
-| `supabase/functions/sync-reply-campaigns/index.ts` | Remove `peopleCount` fallback for `sent`/`delivered` - only use actual API data or existing values |
-| `supabase/functions/sync-reply-contacts/index.ts` | Remove `peopleCount` fallback for `sent`/`delivered` - these can only come from Statistics API |
+| `supabase/functions/sync-reply-contacts/index.ts` | Switch to V3 `/sequences/{id}/contacts/extended` endpoint; capture `sent` status per contact |
+| `supabase/functions/sync-reply-contacts/index.ts` | Calculate `sent` count from contact engagement data |
+| `src/hooks/usePlaygroundStats.ts` | Derive "emails sent" by counting contacts with engagement (sent/opened/replied/finished) |
+| `src/hooks/useOutboundIntegrations.ts` | Add retry logic for campaigns that fail to sync contacts |
 
-### Updated Logic
+## Implementation Details
 
-**sync-reply-campaigns (line ~365):**
-```typescript
-const mergedStats = {
-  ...existingStats,
-  ...apiStats,
-  ...linkedinStats,
-  // Only use actual API data or existing values - NOT peopleCount
-  sent: apiStats.sent || existingSent || 0,
-  delivered: apiStats.delivered || existingDelivered || 0,
-  replies: apiStats.replies || existingReplies || 0,
-  // Keep peopleCount separate - it's "contacts in campaign", not "emails sent"
-  peopleCount: existingPeopleCount || 0,
-};
+### sync-reply-contacts Changes
+
+```text
+1. Change endpoint from:
+   /v1/campaigns/{id}/people
+   
+   To:
+   /v3/sequences/{id}/contacts/extended
+
+2. Map V3 response fields:
+   - engagement.sent → Calculate sent count
+   - engagement.opened → opened flag
+   - engagement.replied → replied flag
+   - engagement.clicked → clicked flag
+
+3. Update campaign stats:
+   sent = COUNT of contacts with (engagement.sent = true OR any engagement)
+   delivered = sent (same value)
 ```
 
-**sync-reply-contacts (line ~336-337):**
-```typescript
-// Don't override sent/delivered with peopleCount
-delivered: existingDelivered ?? undefined,
-sent: existingSent ?? undefined,
+### usePlaygroundStats Changes
+
+```text
+Current:
+  totalMessagesSent += stats.sent || stats.delivered || 0
+
+New (fallback when sent=0):
+  If sent = 0 but peopleCount > 0:
+    Calculate sent from contacts with engagement
+    sent = contacts with (opened OR replied OR finished OR bounced)
 ```
 
-### After This Fix
+### Contact Sync Retry Logic
 
-1. Dashboard will show 0 emails sent (accurate when V3 API fails)
-2. `peopleCount` will be tracked separately as "Contacts in Campaigns"
-3. Replies, opens, clicks will still show accurate data from contacts
-4. When the V3 Statistics API works again, actual delivery numbers will appear
+```text
+For each campaign:
+  Try sync contacts
+  If fails: wait 2 seconds, retry up to 3 times
+  If still fails: log error but continue with other campaigns
+```
 
-### Future Improvement (Optional)
+## Expected Outcome
 
-If you want to display email stats when the V3 API is unavailable, we could:
-- Add a V1 campaign stats endpoint call (if Reply.io has one)
-- Use `finished` contacts as a proxy for "emails sent" (contacts who completed the sequence)
-- Display a different metric like "Contacts Enrolled" instead of "Emails Sent"
+After implementation:
 
-### Why This Is The Right Fix
+| Metric | Current | Expected |
+|--------|---------|----------|
+| Total Contacts | 737 | ~1,053 |
+| Emails Sent | 0 | ~114 |
+| Campaigns with data | 3/6 | 6/6 |
 
-- `peopleCount` = 1,053 contacts added
-- Emails actually sent = 114 (per Reply.io dashboard)
-- **Showing 1,053 as "Emails Sent" is misleading**
-- Better to show 0 (with proper messaging) than inflate numbers 9x
+## Alternative Approach (Simpler)
+
+If the V3 extended endpoint also fails, we can use a heuristic:
+
+```text
+"Emails Sent" = COUNT of contacts with ANY engagement
+  (opened = true OR replied = true OR finished = true OR bounced = true)
+```
+
+This undercounts (misses contacts who received but never engaged), but is better than 0.
+
+## Risks and Mitigations
+
+| Risk | Mitigation |
+|------|------------|
+| V3 Extended endpoint also returns 404 | Fall back to V1 + heuristic counting |
+| Rate limiting during sync | Already have retry with exponential backoff |
+| Existing data loss | Merge new data with existing, never overwrite with empty |
+
