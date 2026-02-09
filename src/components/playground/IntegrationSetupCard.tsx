@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { Progress } from '@/components/ui/progress';
-import { Plus, Plug, RefreshCw, Trash2, AlertCircle, Loader2, Pencil, Building2, Zap, Upload, Settings2 } from 'lucide-react';
+import { Plus, Plug, RefreshCw, Trash2, AlertCircle, Loader2, Pencil, Building2, Upload, Settings2 } from 'lucide-react';
 import { OutboundIntegration, useOutboundIntegrations } from '@/hooks/useOutboundIntegrations';
 import { useState, useEffect } from 'react';
 import { AddIntegrationDialog } from './AddIntegrationDialog';
@@ -52,20 +52,17 @@ interface IntegrationRowProps {
   onDelete: (id: string) => void;
   onSync: (id: string) => void;
   onEdit: (integration: OutboundIntegration) => void;
-  onSetupWebhook: (id: string) => void;
   onResetSync: (id: string) => void;
   onManageCampaigns: (integration: OutboundIntegration) => void;
   isSyncing: boolean;
-  isSettingUpWebhook: boolean;
   elapsedSeconds?: number;
 }
 
-function IntegrationRow({ integration, onToggle, onDelete, onSync, onEdit, onSetupWebhook, onResetSync, onManageCampaigns, isSyncing, isSettingUpWebhook, elapsedSeconds }: IntegrationRowProps) {
+function IntegrationRow({ integration, onToggle, onDelete, onSync, onEdit, onResetSync, onManageCampaigns, isSyncing, elapsedSeconds }: IntegrationRowProps) {
   const icon = platformIcons[integration.platform.toLowerCase()] || '🔌';
   const isCurrentlySyncing = isSyncing || integration.sync_status === 'syncing';
   // Access reply_team_id from extended integration type
   const replyTeamId = (integration as OutboundIntegration & { reply_team_id?: string }).reply_team_id;
-  const webhookStatus = integration.webhook_status;
   const isReplyIo = integration.platform.toLowerCase() === 'reply.io';
   
   // Check if sync is stuck (syncing for more than 5 minutes)
@@ -85,34 +82,6 @@ function IntegrationRow({ integration, onToggle, onDelete, onSync, onEdit, onSet
               <Badge variant="outline" className="text-xs flex items-center gap-1">
                 <Building2 className="h-3 w-3" />
                 Team: {replyTeamId}
-              </Badge>
-            )}
-            {isReplyIo && webhookStatus === 'active' && (
-              <div className="flex items-center gap-1">
-                <Badge variant="secondary" className="text-xs flex items-center gap-1 bg-primary/10 text-primary border-primary/30">
-                  <Zap className="h-3 w-3" />
-                  Live
-                </Badge>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-6 w-6"
-                  onClick={() => onSetupWebhook(integration.id)}
-                  disabled={isSettingUpWebhook || !integration.is_active}
-                  title="Refresh webhook connection"
-                >
-                  {isSettingUpWebhook ? (
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                  ) : (
-                    <RefreshCw className="h-3 w-3" />
-                  )}
-                </Button>
-              </div>
-            )}
-            {isReplyIo && webhookStatus === 'error' && (
-              <Badge variant="destructive" className="text-xs flex items-center gap-1">
-                <AlertCircle className="h-3 w-3" />
-                Webhook Error
               </Badge>
             )}
           </div>
@@ -151,33 +120,6 @@ function IntegrationRow({ integration, onToggle, onDelete, onSync, onEdit, onSet
             <Settings2 className="h-4 w-4" />
             <span className="ml-1.5">Manage Campaigns</span>
           </Button>
-        )}
-        {isReplyIo && webhookStatus !== 'active' && (
-          <div className="flex items-center gap-2">
-            {webhookStatus === 'error' && (
-              <span className="text-xs text-destructive">Webhook disabled - click to re-enable →</span>
-            )}
-            <Button
-              variant={webhookStatus === 'error' ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => onSetupWebhook(integration.id)}
-              disabled={isSettingUpWebhook || !integration.is_active}
-              className="h-8"
-            >
-              {isSettingUpWebhook ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Zap className="h-4 w-4" />
-              )}
-              <span className="ml-1.5">
-                {isSettingUpWebhook 
-                  ? 'Setting up...' 
-                  : webhookStatus === 'error' 
-                    ? 'Re-enable Live Updates' 
-                    : 'Enable Live'}
-              </span>
-            </Button>
-          </div>
         )}
         {isStuck ? (
           <Button
@@ -246,10 +188,9 @@ export function IntegrationSetupCard() {
   const [editingIntegration, setEditingIntegration] = useState<OutboundIntegration | null>(null);
   const [managingIntegration, setManagingIntegration] = useState<OutboundIntegration | null>(null);
   const [syncingId, setSyncingId] = useState<string | null>(null);
-  const [webhookSetupId, setWebhookSetupId] = useState<string | null>(null);
   const [syncStartTimes, setSyncStartTimes] = useState<Record<string, number>>({});
   const [elapsedTimes, setElapsedTimes] = useState<Record<string, number>>({});
-  const { integrations, isLoading, toggleIntegration, deleteIntegration, syncIntegration, setupWebhook, resetSyncStatus } = useOutboundIntegrations();
+  const { integrations, isLoading, toggleIntegration, deleteIntegration, syncIntegration, resetSyncStatus } = useOutboundIntegrations();
 
   // Track elapsed time for syncing integrations
   useEffect(() => {
@@ -303,12 +244,6 @@ export function IntegrationSetupCard() {
     });
   };
 
-  const handleSetupWebhook = (id: string) => {
-    setWebhookSetupId(id);
-    setupWebhook.mutate(id, {
-      onSettled: () => setWebhookSetupId(null),
-    });
-  };
 
   const handleEdit = (integration: OutboundIntegration) => {
     setEditingIntegration(integration);
@@ -370,11 +305,9 @@ export function IntegrationSetupCard() {
                   onDelete={handleDelete}
                   onSync={handleSync}
                   onEdit={handleEdit}
-                  onSetupWebhook={handleSetupWebhook}
                   onResetSync={handleResetSync}
                   onManageCampaigns={handleManageCampaigns}
                   isSyncing={syncingId === integration.id}
-                  isSettingUpWebhook={webhookSetupId === integration.id}
                   elapsedSeconds={elapsedTimes[integration.id]}
                 />
               ))}
