@@ -166,7 +166,33 @@ async function fetchSequenceStats(
       openRate: data.openRate || 0,
     };
   } catch (err) {
-    console.warn(`Could not fetch stats for sequence ${sequenceId}:`, err);
+    console.warn(`Could not fetch V3 stats for sequence ${sequenceId}:`, err);
+    return {};
+  }
+}
+
+// Fetch campaign stats from V1 single campaign endpoint (fallback when V3 fails)
+async function fetchCampaignStatsV1(
+  campaignId: number,
+  apiKey: string,
+  teamId?: string
+): Promise<Record<string, number>> {
+  try {
+    const data = await fetchWithRetryV1(`/campaigns/${campaignId}`, apiKey, teamId);
+    const campaign = data as Record<string, unknown>;
+    
+    // V1 campaign response includes aggregate stats directly
+    return {
+      sent: (campaign.peopleSent as number) || (campaign.peopleDelivered as number) || 0,
+      delivered: (campaign.peopleDelivered as number) || (campaign.peopleSent as number) || 0,
+      replies: (campaign.peopleReplied as number) || 0,
+      opens: (campaign.peopleOpened as number) || 0,
+      clicks: (campaign.peopleClicked as number) || 0,
+      bounces: (campaign.peopleBounced as number) || 0,
+      peopleFinished: (campaign.peopleFinished as number) || 0,
+    };
+  } catch (err) {
+    console.warn(`Could not fetch V1 stats for campaign ${campaignId}:`, err);
     return {};
   }
 }
@@ -353,9 +379,16 @@ Deno.serve(async (req) => {
           }
         }
 
-        // Fetch stats from V3 Statistics API
+        // Fetch stats - try V3 first, fall back to V1
         console.log(`  Fetching stats from V3 Statistics API...`);
-        const apiStats = await fetchSequenceStats(sequence.id, apiKey, replyTeamId || undefined);
+        let apiStats = await fetchSequenceStats(sequence.id, apiKey, replyTeamId || undefined);
+        
+        // If V3 returned no data, try V1 single campaign endpoint
+        if (!apiStats.sent && !apiStats.replies) {
+          console.log(`  V3 stats empty, trying V1 /campaigns/${sequence.id}...`);
+          apiStats = await fetchCampaignStatsV1(sequence.id, apiKey, replyTeamId || undefined);
+        }
+        
         console.log(`  Stats: sent=${apiStats.sent || 0}, replies=${apiStats.replies || 0}`);
 
         // Extract existing values for fallback logic
