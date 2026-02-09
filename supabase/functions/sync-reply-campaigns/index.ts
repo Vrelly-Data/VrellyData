@@ -410,13 +410,24 @@ Deno.serve(async (req) => {
         
         console.log(`Processing sequence: ${sequence.name} (ID: ${sequence.id})`);
 
-        // Fetch existing campaign to preserve LinkedIn stats and is_linked
-        const { data: existingCampaign } = await supabase
+        // DEDUPLICATION FIX: Check for ANY existing campaign with this external_id for this team
+        // (not scoped to integration_id to catch orphaned duplicates from previous syncs)
+        const { data: existingCampaigns } = await supabase
           .from("synced_campaigns")
-          .select("id, stats, is_linked")
-          .eq("integration_id", integrationId)
+          .select("id, stats, is_linked, integration_id")
+          .eq("team_id", teamId)
           .eq("external_campaign_id", String(sequence.id))
-          .maybeSingle();
+          .order("created_at", { ascending: true });
+
+        // Use the FIRST existing campaign (oldest) to prevent duplicates
+        const existingCampaign = existingCampaigns && existingCampaigns.length > 0 
+          ? existingCampaigns[0] 
+          : null;
+        
+        // Log if we found duplicates (for debugging)
+        if (existingCampaigns && existingCampaigns.length > 1) {
+          console.log(`Found ${existingCampaigns.length} duplicate campaigns for ${sequence.id}, using oldest: ${existingCampaign?.id}`);
+        }
 
         const existingStats = (existingCampaign?.stats as Record<string, unknown>) || {};
         
@@ -475,24 +486,56 @@ Deno.serve(async (req) => {
           peopleCount: existingPeopleCount || 0,
         };
 
-        // Upsert sequence as campaign - preserve is_linked choice
-        const { data: upsertedCampaign, error: campaignError } = await supabase
-          .from("synced_campaigns")
-          .upsert({
-            integration_id: integrationId,
-            team_id: teamId,
-            external_campaign_id: String(sequence.id),
-            name: String(sequence.name || 'Unnamed Sequence'),
-            status: normalizeStatus(sequence.status),
-            stats: mergedStats,
-            raw_data: sequence,
-            is_linked: isLinked,
-            updated_at: new Date().toISOString(),
-          }, {
-            onConflict: "integration_id,external_campaign_id",
-          })
-          .select("id")
-          .single();
+        // Update existing campaign or insert new one
+        // Use the existing campaign's ID if it exists to prevent duplicates
+        let upsertedCampaignId: string | null = null;
+        let campaignError: { message: string } | null = null;
+        
+        if (existingCampaign) {
+          // UPDATE existing campaign (preserves the same UUID for contacts)
+          const { error } = await supabase
+            .from("synced_campaigns")
+            .update({
+              integration_id: integrationId, // Update to current integration
+              name: String(sequence.name || 'Unnamed Sequence'),
+              status: normalizeStatus(sequence.status),
+              stats: mergedStats,
+              raw_data: sequence,
+              is_linked: isLinked,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", existingCampaign.id);
+          
+          if (error) {
+            campaignError = error;
+          } else {
+            upsertedCampaignId = existingCampaign.id;
+            console.log(`Updated existing campaign ${existingCampaign.id} for sequence ${sequence.id}`);
+          }
+        } else {
+          // INSERT new campaign
+          const { data, error } = await supabase
+            .from("synced_campaigns")
+            .insert({
+              integration_id: integrationId,
+              team_id: teamId,
+              external_campaign_id: String(sequence.id),
+              name: String(sequence.name || 'Unnamed Sequence'),
+              status: normalizeStatus(sequence.status),
+              stats: mergedStats,
+              raw_data: sequence,
+              is_linked: isLinked,
+            })
+            .select("id")
+            .single();
+          
+          if (error) {
+            campaignError = error;
+          } else {
+            upsertedCampaignId = data?.id || null;
+            console.log(`Created new campaign ${upsertedCampaignId} for sequence ${sequence.id}`);
+          }
+        }
 
         if (campaignError) {
           console.error(`Failed to upsert sequence ${sequence.id}:`, campaignError);
@@ -503,9 +546,9 @@ Deno.serve(async (req) => {
         campaignsProcessed++;
         
         // Track for contact sync
-        if (upsertedCampaign?.id) {
+        if (upsertedCampaignId) {
           syncedCampaignIds.push({
-            internal: upsertedCampaign.id,
+            internal: upsertedCampaignId,
             external: String(sequence.id),
           });
         }

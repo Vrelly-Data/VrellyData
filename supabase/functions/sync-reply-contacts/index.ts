@@ -326,15 +326,16 @@ async function fetchContactsV3Extended(
   const contactsMap = new Map<string, UnifiedContact>();
   let offset = 0;
   const limit = 100;
-  const maxPages = 100;
+  const maxOffset = 50000; // Safety limit: 500 pages max
   let hasMore = true;
+  let emptyPageCount = 0; // Track consecutive empty pages
   
   console.log(`Attempting V3 extended contacts for sequence ${sequenceId}`);
   
   try {
     let isFirstBatch = true;
     
-    while (hasMore && offset < maxPages * limit) {
+    while (hasMore && offset < maxOffset) {
       // CRITICAL: Include additionalColumns=Status to get engagement flags
       const endpoint = `/sequences/${sequenceId}/contacts/extended?limit=${limit}&offset=${offset}&additionalColumns=Status`;
       console.log(`V3 fetch: offset=${offset}, limit=${limit}, with Status column`);
@@ -359,10 +360,20 @@ async function fetchContactsV3Extended(
       }
       
       if (contacts.length === 0) {
-        hasMore = false;
-        break;
+        emptyPageCount++;
+        // Allow 2 consecutive empty pages before stopping (API quirk protection)
+        if (emptyPageCount >= 2) {
+          console.log(`Got ${emptyPageCount} consecutive empty pages, stopping pagination`);
+          hasMore = false;
+          break;
+        }
+        offset += limit;
+        await new Promise(resolve => setTimeout(resolve, 300));
+        continue;
       }
       
+      // Reset empty page counter on successful page
+      emptyPageCount = 0;
       // Check for hasMore in response
       const responseObj = response as Record<string, unknown>;
       const info = responseObj.info as Record<string, unknown> | undefined;
