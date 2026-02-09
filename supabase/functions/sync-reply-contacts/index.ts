@@ -5,10 +5,40 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-// Use V1 API for reliable contact listing with page-based pagination
+// V3 API for extended contacts with engagement data
+const REPLY_API_V3 = "https://api.reply.io/v3";
+// V1 API as fallback
 const REPLY_API_V1 = "https://api.reply.io/v1";
 
-// V1 Contact response structure
+// V3 Extended Contact response structure
+interface V3ExtendedContact {
+  id?: number;
+  email: string;
+  firstName?: string;
+  lastName?: string;
+  title?: string;
+  company?: string;
+  addedTime?: string;
+  status?: {
+    replied?: boolean;
+    delivered?: boolean;
+    opened?: boolean;
+    clicked?: boolean;
+    bounced?: boolean;
+    finished?: boolean;
+    optedOut?: boolean;
+  };
+  // Additional fields
+  industry?: string;
+  companySize?: string;
+  city?: string;
+  state?: string;
+  country?: string;
+  phone?: string;
+  linkedInProfile?: string;
+}
+
+// V1 Contact response structure (fallback)
 interface V1Contact {
   id: number;
   email: string;
@@ -23,7 +53,6 @@ interface V1Contact {
   opened?: boolean;
   clicked?: boolean;
   optedOut?: boolean;
-  // Additional fields
   industry?: string;
   companySize?: string;
   city?: string;
@@ -33,8 +62,87 @@ interface V1Contact {
   linkedInProfile?: string;
 }
 
-// Retry wrapper with exponential backoff for rate limiting
-async function fetchWithRetry(
+// Unified contact structure for processing
+interface UnifiedContact {
+  id?: number;
+  email: string;
+  firstName?: string;
+  lastName?: string;
+  title?: string;
+  company?: string;
+  addedAt?: string;
+  industry?: string;
+  companySize?: string;
+  city?: string;
+  state?: string;
+  country?: string;
+  phone?: string;
+  linkedInProfile?: string;
+  // Engagement flags
+  delivered: boolean;
+  replied: boolean;
+  opened: boolean;
+  clicked: boolean;
+  bounced: boolean;
+  finished: boolean;
+  optedOut: boolean;
+  rawData: unknown;
+}
+
+// Engagement counters
+interface EngagementStats {
+  deliveredCount: number;
+  repliesCount: number;
+  opensCount: number;
+  clicksCount: number;
+  bouncesCount: number;
+  optedOutCount: number;
+}
+
+// V3 API fetch with retry
+async function fetchWithRetryV3(
+  endpoint: string,
+  apiKey: string,
+  teamId?: string,
+  maxRetries: number = 3
+): Promise<unknown> {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const headers: Record<string, string> = {
+        "X-API-Key": apiKey,
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+      };
+
+      if (teamId) {
+        headers["X-Reply-Team-Id"] = teamId;
+      }
+
+      const response = await fetch(`${REPLY_API_V3}${endpoint}`, { headers });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Reply.io V3 API error (${response.status}): ${errorText}`);
+      }
+
+      return response.json();
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+
+      if (errorMessage.includes("Too much requests") && attempt < maxRetries) {
+        const waitTime = 5000 * attempt;
+        console.log(`V3 Rate limited, waiting ${waitTime / 1000}s before retry ${attempt}/${maxRetries}`);
+        await new Promise((resolve) => setTimeout(resolve, waitTime));
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error(`Max retries exceeded for V3 ${endpoint}`);
+}
+
+// V1 API fetch with retry (fallback)
+async function fetchWithRetryV1(
   endpoint: string,
   apiKey: string,
   teamId?: string,
@@ -65,20 +173,116 @@ async function fetchWithRetry(
 
       if (errorMessage.includes("Too much requests") && attempt < maxRetries) {
         const waitTime = 5000 * attempt;
-        console.log(
-          `Rate limited on ${endpoint}, waiting ${waitTime / 1000}s before retry ${attempt}/${maxRetries}`,
-        );
+        console.log(`V1 Rate limited, waiting ${waitTime / 1000}s before retry ${attempt}/${maxRetries}`);
         await new Promise((resolve) => setTimeout(resolve, waitTime));
         continue;
       }
       throw error;
     }
   }
-  throw new Error(`Max retries exceeded for ${endpoint}`);
+  throw new Error(`Max retries exceeded for V1 ${endpoint}`);
 }
 
-// Map contact to simplified status string
-function mapContactStatus(contact: V1Contact): string {
+// Parse V3 extended contacts response
+function parseV3ContactsResponse(response: unknown): V3ExtendedContact[] {
+  if (!response || typeof response !== 'object') {
+    console.warn(`V3 response is not an object`);
+    return [];
+  }
+  
+  const obj = response as Record<string, unknown>;
+  console.log(`V3 response keys: ${Object.keys(obj).join(', ')}`);
+  
+  // Try different possible array locations
+  const rawContacts = obj.items || obj.contacts || obj.data || obj.people;
+  if (Array.isArray(rawContacts)) {
+    return rawContacts as V3ExtendedContact[];
+  }
+  
+  // If response itself is an array
+  if (Array.isArray(response)) {
+    return response as V3ExtendedContact[];
+  }
+  
+  console.warn(`Could not find contacts array in V3 response`);
+  return [];
+}
+
+// Parse V1 contacts response (fallback)
+function parseV1ContactsResponse(response: unknown): V1Contact[] {
+  if (Array.isArray(response)) {
+    return response as V1Contact[];
+  }
+  if (response && typeof response === 'object') {
+    const obj = response as Record<string, unknown>;
+    const rawContacts = obj.people || obj.contacts || obj.items || obj.data;
+    if (Array.isArray(rawContacts)) {
+      return rawContacts as V1Contact[];
+    }
+  }
+  return [];
+}
+
+// Convert V3 contact to unified format
+function v3ToUnified(contact: V3ExtendedContact): UnifiedContact {
+  const status = contact.status || {};
+  return {
+    id: contact.id,
+    email: contact.email,
+    firstName: contact.firstName,
+    lastName: contact.lastName,
+    title: contact.title,
+    company: contact.company,
+    addedAt: contact.addedTime,
+    industry: contact.industry,
+    companySize: contact.companySize,
+    city: contact.city,
+    state: contact.state,
+    country: contact.country,
+    phone: contact.phone,
+    linkedInProfile: contact.linkedInProfile,
+    delivered: status.delivered === true,
+    replied: status.replied === true,
+    opened: status.opened === true,
+    clicked: status.clicked === true,
+    bounced: status.bounced === true,
+    finished: status.finished === true,
+    optedOut: status.optedOut === true,
+    rawData: contact,
+  };
+}
+
+// Convert V1 contact to unified format
+function v1ToUnified(contact: V1Contact): UnifiedContact {
+  return {
+    id: contact.id,
+    email: contact.email,
+    firstName: contact.firstName,
+    lastName: contact.lastName,
+    title: contact.title,
+    company: contact.company,
+    addedAt: contact.addedAt,
+    industry: contact.industry,
+    companySize: contact.companySize,
+    city: contact.city,
+    state: contact.state,
+    country: contact.country,
+    phone: contact.phone,
+    linkedInProfile: contact.linkedInProfile,
+    // V1 API does include these flags at contact level
+    delivered: false, // V1 doesn't have delivered flag
+    replied: contact.replied === true,
+    opened: contact.opened === true,
+    clicked: contact.clicked === true,
+    bounced: contact.bounced === true,
+    finished: contact.finished === true,
+    optedOut: contact.optedOut === true,
+    rawData: contact,
+  };
+}
+
+// Map contact status string
+function mapContactStatus(contact: UnifiedContact): string {
   if (contact.replied) return 'replied';
   if (contact.bounced) return 'bounced';
   if (contact.optedOut) return 'opted_out';
@@ -87,31 +291,140 @@ function mapContactStatus(contact: V1Contact): string {
   return 'active';
 }
 
-// Generate a page signature to detect duplicate pages
-function getPageSignature(contacts: V1Contact[]): string {
-  if (contacts.length === 0) return 'empty';
-  if (!contacts[0]?.email) return 'invalid_first';
-  const first = contacts[0].email;
-  const last = contacts[contacts.length - 1]?.email || first;
-  return `${first}|${last}|${contacts.length}`;
+// Fetch contacts using V3 extended endpoint (primary)
+async function fetchContactsV3Extended(
+  sequenceId: string,
+  apiKey: string,
+  teamId?: string
+): Promise<{ contacts: UnifiedContact[]; success: boolean }> {
+  const contactsMap = new Map<string, UnifiedContact>();
+  let offset = 0;
+  const limit = 100;
+  const maxPages = 100;
+  let hasMore = true;
+  
+  console.log(`Attempting V3 extended contacts for sequence ${sequenceId}`);
+  
+  try {
+    while (hasMore && offset < maxPages * limit) {
+      const endpoint = `/sequences/${sequenceId}/contacts/extended?limit=${limit}&offset=${offset}`;
+      console.log(`V3 fetch: offset=${offset}, limit=${limit}`);
+      
+      const response = await fetchWithRetryV3(endpoint, apiKey, teamId);
+      const contacts = parseV3ContactsResponse(response);
+      
+      console.log(`V3 returned ${contacts.length} contacts`);
+      
+      if (contacts.length === 0) {
+        hasMore = false;
+        break;
+      }
+      
+      // Check for hasMore in response
+      const responseObj = response as Record<string, unknown>;
+      const info = responseObj.info as Record<string, unknown> | undefined;
+      if (info && info.hasMore === false) {
+        hasMore = false;
+      }
+      
+      // Deduplicate by email
+      for (const contact of contacts) {
+        if (contact.email) {
+          contactsMap.set(contact.email.toLowerCase(), v3ToUnified(contact));
+        }
+      }
+      
+      if (contacts.length < limit) {
+        hasMore = false;
+      } else {
+        offset += limit;
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
+    }
+    
+    const uniqueContacts = Array.from(contactsMap.values());
+    console.log(`V3 extended: fetched ${uniqueContacts.length} unique contacts with engagement data`);
+    return { contacts: uniqueContacts, success: true };
+    
+  } catch (error) {
+    console.warn(`V3 extended contacts failed:`, error);
+    return { contacts: [], success: false };
+  }
 }
 
-// Parse API response - handles both array and object formats
-function parseContactsResponse(response: unknown): V1Contact[] {
-  if (Array.isArray(response)) {
-    return response as V1Contact[];
-  }
-  if (response && typeof response === 'object') {
-    const obj = response as Record<string, unknown>;
-    // Log response structure for debugging
-    console.log(`API response keys: ${Object.keys(obj).join(', ')}`);
-    const rawContacts = obj.people || obj.contacts || obj.items || obj.data;
-    if (Array.isArray(rawContacts)) {
-      return rawContacts as V1Contact[];
+// Fetch contacts using V1 endpoint (fallback)
+async function fetchContactsV1(
+  campaignId: string,
+  apiKey: string,
+  teamId?: string
+): Promise<{ contacts: UnifiedContact[]; success: boolean }> {
+  const contactsMap = new Map<string, UnifiedContact>();
+  let page = 1;
+  const limit = 100;
+  const maxPages = 100;
+  let hasMore = true;
+  
+  console.log(`Falling back to V1 contacts for campaign ${campaignId}`);
+  
+  try {
+    while (hasMore && page <= maxPages) {
+      const endpoint = `/campaigns/${campaignId}/people?page=${page}&limit=${limit}`;
+      console.log(`V1 fetch: page=${page}, limit=${limit}`);
+      
+      const response = await fetchWithRetryV1(endpoint, apiKey, teamId);
+      const contacts = parseV1ContactsResponse(response);
+      
+      console.log(`V1 returned ${contacts.length} contacts`);
+      
+      if (contacts.length === 0) {
+        hasMore = false;
+        break;
+      }
+      
+      // Deduplicate by email
+      for (const contact of contacts) {
+        if (contact.email) {
+          contactsMap.set(contact.email.toLowerCase(), v1ToUnified(contact));
+        }
+      }
+      
+      if (contacts.length < limit) {
+        hasMore = false;
+      } else {
+        page++;
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
     }
+    
+    const uniqueContacts = Array.from(contactsMap.values());
+    console.log(`V1 fallback: fetched ${uniqueContacts.length} unique contacts`);
+    return { contacts: uniqueContacts, success: true };
+    
+  } catch (error) {
+    console.error(`V1 contacts also failed:`, error);
+    return { contacts: [], success: false };
   }
-  console.warn(`Unexpected response format: ${typeof response}`);
-  return [];
+}
+
+// Compute engagement stats from contacts
+function computeEngagementStats(contacts: UnifiedContact[]): EngagementStats {
+  let deliveredCount = 0;
+  let repliesCount = 0;
+  let opensCount = 0;
+  let clicksCount = 0;
+  let bouncesCount = 0;
+  let optedOutCount = 0;
+  
+  for (const contact of contacts) {
+    if (contact.delivered) deliveredCount++;
+    if (contact.replied) repliesCount++;
+    if (contact.opened) opensCount++;
+    if (contact.clicked) clicksCount++;
+    if (contact.bounced) bouncesCount++;
+    if (contact.optedOut) optedOutCount++;
+  }
+  
+  return { deliveredCount, repliesCount, opensCount, clicksCount, bouncesCount, optedOutCount };
 }
 
 Deno.serve(async (req) => {
@@ -132,7 +445,7 @@ Deno.serve(async (req) => {
       throw new Error("Missing campaignId or integrationId");
     }
 
-    // Use user's auth to validate access to integration/campaign
+    // Use user's auth to validate access
     const userClient = createClient(
       Deno.env.get("SUPABASE_URL") ?? "",
       Deno.env.get("SUPABASE_ANON_KEY") ?? "",
@@ -150,159 +463,77 @@ Deno.serve(async (req) => {
       throw new Error("Integration not found or access denied");
     }
 
-    // Fetch the campaign to get external_campaign_id (validates access via RLS)
+    // Fetch the campaign
     const { data: campaign, error: campaignError } = await userClient
       .from("synced_campaigns")
       .select("id, external_campaign_id, team_id")
       .eq("id", campaignId)
       .single();
 
-    // Use service role for bulk data operations (after access is validated)
+    if (campaignError || !campaign) {
+      throw new Error("Campaign not found");
+    }
+
+    // Service role for bulk operations
     const serviceClient = createClient(
       Deno.env.get("SUPABASE_URL") ?? "",
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
     );
-
-    if (campaignError || !campaign) {
-      throw new Error("Campaign not found");
-    }
 
     const apiKey = integration.api_key_encrypted;
     const teamId = integration.team_id;
     const replyTeamId = integration.reply_team_id;
     const externalCampaignId = campaign.external_campaign_id;
 
-    console.log(`Fetching contacts for campaign ${externalCampaignId} using V1 API with page-based pagination`);
+    console.log(`Syncing contacts for campaign ${externalCampaignId}`);
 
-    // Use Map for deduplication - key by email
-    const contactsMap = new Map<string, V1Contact>();
+    // Try V3 extended first (has engagement data)
+    let { contacts, success: v3Success } = await fetchContactsV3Extended(
+      externalCampaignId,
+      apiKey,
+      replyTeamId || undefined
+    );
     
-    // Pagination with page numbers (V1 API uses 1-indexed pages)
-    let page = 1;
-    const limit = 100;
-    const maxPages = 100; // Safety cap: 100 * 100 = 10,000 max
-    let hasMore = true;
+    let usedV3 = v3Success;
     
-    // Diagnostics
-    let totalFetchedRaw = 0;
-    let duplicatePagesDetected = 0;
-    let emptyPagesInRow = 0;
-    let stopReason = 'unknown';
-    const seenSignatures = new Set<string>();
-
-    while (hasMore && page <= maxPages) {
-      const endpoint = `/campaigns/${externalCampaignId}/people?page=${page}&limit=${limit}`;
-      console.log(`Fetching V1 contacts: page=${page}, limit=${limit}`);
-      
-      let contacts: V1Contact[] = [];
-      try {
-        const response = await fetchWithRetry(endpoint, apiKey, replyTeamId || undefined);
-        contacts = parseContactsResponse(response);
-      } catch (err) {
-        console.error(`Error fetching page ${page}:`, err);
-        // If API fails, stop gracefully
-        stopReason = `api_error_page_${page}`;
-        break;
-      }
-      
-      totalFetchedRaw += contacts.length;
-      console.log(`Fetched ${contacts.length} contacts, raw total: ${totalFetchedRaw}`);
-
-      // Check for empty page
-      if (contacts.length === 0) {
-        emptyPagesInRow++;
-        if (emptyPagesInRow >= 2) {
-          stopReason = 'empty_pages';
-          console.log('Stopping: received 2 consecutive empty pages');
-          break;
-        }
-        page++;
-        continue;
-      }
-      
-      emptyPagesInRow = 0;
-
-      // Check for duplicate page (same signature = paging is stuck)
-      const pageSignature = getPageSignature(contacts);
-      if (seenSignatures.has(pageSignature)) {
-        duplicatePagesDetected++;
-        console.warn(`Duplicate page detected! Signature: ${pageSignature}`);
-        if (duplicatePagesDetected >= 2) {
-          stopReason = 'repeating_page_guard';
-          console.log('Stopping: detected 2 duplicate pages - API paging is stuck');
-          break;
-        }
-      }
-      seenSignatures.add(pageSignature);
-
-      // Track how many new unique emails we get this page
-      const uniquesBefore = contactsMap.size;
-      
-      // Deduplicate: add to map, newer entries overwrite older
-      for (const contact of contacts) {
-        if (contact.email) {
-          contactsMap.set(contact.email.toLowerCase(), contact);
-        }
-      }
-      
-      const newUniques = contactsMap.size - uniquesBefore;
-      console.log(`Page ${page}: ${newUniques} new unique contacts (total unique: ${contactsMap.size})`);
-
-      // If we got 0 new uniques for this page, it's likely repeating data
-      if (newUniques === 0) {
-        duplicatePagesDetected++;
-        if (duplicatePagesDetected >= 3) {
-          stopReason = 'no_new_contacts_guard';
-          console.log('Stopping: 3 pages with 0 new contacts');
-          break;
-        }
-      }
-
-      // Check if this was a full page (might have more)
-      if (contacts.length < limit) {
-        stopReason = 'partial_page';
-        hasMore = false;
-      } else {
-        page++;
-        // Rate limit protection between pages
-        await new Promise(resolve => setTimeout(resolve, 300));
-      }
+    // Fall back to V1 if V3 failed
+    if (!v3Success || contacts.length === 0) {
+      const v1Result = await fetchContactsV1(
+        externalCampaignId,
+        apiKey,
+        replyTeamId || undefined
+      );
+      contacts = v1Result.contacts;
+      usedV3 = false;
     }
 
-    if (page > maxPages) {
-      stopReason = 'max_pages_reached';
-    }
+    console.log(`Total contacts to sync: ${contacts.length} (source: ${usedV3 ? 'V3 extended' : 'V1 fallback'})`);
 
-    const uniqueContacts = Array.from(contactsMap.values());
-    console.log(`Paging complete. Reason: ${stopReason}. Raw fetched: ${totalFetchedRaw}, Unique: ${uniqueContacts.length}`);
+    // Compute engagement stats from contacts
+    const engagementStats = computeEngagementStats(contacts);
+    console.log(`Engagement stats: delivered=${engagementStats.deliveredCount}, replies=${engagementStats.repliesCount}, opens=${engagementStats.opensCount}`);
 
-    // Batch upsert contacts to database
+    // Batch upsert contacts
     const BATCH_SIZE = 100;
     let contactsSynced = 0;
     let contactsFailed = 0;
 
-    // NOTE: Engagement stats (sent, replies, opens) are fetched at campaign level
-    // via sync-reply-campaigns using V1 /campaigns/{id} endpoint.
-    // The V1 /campaigns/{id}/people endpoint does NOT return engagement flags.
-
-    for (let i = 0; i < uniqueContacts.length; i += BATCH_SIZE) {
-      const batch = uniqueContacts.slice(i, i + BATCH_SIZE);
+    for (let i = 0; i < contacts.length; i += BATCH_SIZE) {
+      const batch = contacts.slice(i, i + BATCH_SIZE);
       const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
-      const totalBatches = Math.ceil(uniqueContacts.length / BATCH_SIZE);
+      const totalBatches = Math.ceil(contacts.length / BATCH_SIZE);
       
       console.log(`Processing batch ${batchNumber}/${totalBatches} (${batch.length} contacts)`);
 
       const records = batch.map(contact => {
-        // Store engagement_data structure for future webhook updates
-        // Currently all false since V1 people API doesn't return engagement
         const engagementData = {
-          replied: false,
-          bounced: false,
-          opened: false,
-          clicked: false,
-          optedOut: false,
-          finished: false,
-          delivered: false,
+          replied: contact.replied,
+          bounced: contact.bounced,
+          opened: contact.opened,
+          clicked: contact.clicked,
+          optedOut: contact.optedOut,
+          finished: contact.finished,
+          delivered: contact.delivered,
           addedAt: contact.addedAt,
         };
 
@@ -318,9 +549,8 @@ Deno.serve(async (req) => {
           status: mapContactStatus(contact),
           engagement_data: engagementData,
           custom_fields: {},
-          raw_data: contact,
+          raw_data: contact.rawData,
           updated_at: new Date().toISOString(),
-          // Additional fields
           industry: contact.industry || null,
           company_size: contact.companySize && contact.companySize !== 'Empty' ? contact.companySize : null,
           city: contact.city || null,
@@ -351,15 +581,15 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Verify actual count in database
+    // Verify count in database
     const { count: verifiedCount } = await serviceClient
       .from("synced_contacts")
       .select("*", { count: "exact", head: true })
       .eq("campaign_id", campaignId);
 
-    const peopleCount = verifiedCount || uniqueContacts.length;
+    const peopleCount = verifiedCount || contacts.length;
 
-    // Get existing campaign stats to preserve LinkedIn metrics AND email stats from campaign sync
+    // Get existing campaign stats to preserve LinkedIn metrics
     const { data: existingCampaign } = await serviceClient
       .from("synced_campaigns")
       .select("stats")
@@ -368,41 +598,51 @@ Deno.serve(async (req) => {
 
     const existingStats = (existingCampaign?.stats as Record<string, unknown>) || {};
 
-    // Update campaign with peopleCount only - preserve all other stats
-    // Email stats (sent, replies, etc.) come from sync-reply-campaigns via V1 API
+    // Update campaign stats with computed values from contacts
+    // Preserve LinkedIn CSV fields (liConnectionsSent, liMessagesReplied, etc.)
+    const updatedStats = {
+      ...existingStats,
+      peopleCount,
+      // Email stats computed from contacts
+      sent: engagementStats.deliveredCount,
+      delivered: engagementStats.deliveredCount,
+      replies: engagementStats.repliesCount,
+      opens: engagementStats.opensCount,
+      clicks: engagementStats.clicksCount,
+      bounces: engagementStats.bouncesCount,
+      optedOut: engagementStats.optedOutCount,
+    };
+
     await serviceClient
       .from("synced_campaigns")
       .update({
-        stats: {
-          ...existingStats,
-          peopleCount, // Only update the contact count
-        },
+        stats: updatedStats,
         updated_at: new Date().toISOString(),
       })
       .eq("id", campaignId);
 
-    console.log(`Contacts sync complete: ${contactsSynced} processed, ${contactsFailed} failed, ${peopleCount} verified`);
+    console.log(`Contacts sync complete: ${contactsSynced} synced, ${contactsFailed} failed`);
+    console.log(`Campaign stats updated: sent=${engagementStats.deliveredCount}, replies=${engagementStats.repliesCount}`);
 
     return new Response(
       JSON.stringify({
         success: true,
         contactsSynced,
         contactsFailed,
-        // Diagnostics for debugging
-        diagnostics: {
-          totalFetchedRaw,
-          uniquePrepared: uniqueContacts.length,
-          duplicatePagesDetected,
-          stopReason,
-          pagesProcessed: page,
-        },
         verifiedCount: peopleCount,
+        source: usedV3 ? 'v3_extended' : 'v1_fallback',
+        engagementStats: {
+          delivered: engagementStats.deliveredCount,
+          replies: engagementStats.repliesCount,
+          opens: engagementStats.opensCount,
+          clicks: engagementStats.clicksCount,
+          bounces: engagementStats.bouncesCount,
+        },
         campaignStats: {
           peopleCount,
-          sent: deliveredCount,
-          delivered: deliveredCount,
-          replies: repliesCount,
-          opens: opensCount,
+          sent: engagementStats.deliveredCount,
+          delivered: engagementStats.deliveredCount,
+          replies: engagementStats.repliesCount,
         },
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
