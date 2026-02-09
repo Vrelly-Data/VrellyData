@@ -1,133 +1,113 @@
 
-## Goal
-Make “Emails sent” and “Email replies” populate reliably during sync without breaking the existing integration flow.
+## What’s actually happening (root cause)
 
-Right now, campaign-level stats endpoints are consistently returning **404** (V3 Statistics, V3 Reports, and V1 single-campaign). That’s why campaign stats stay at 0. Separately, contact sync is currently **failing** with `deliveredCount is not defined`, which prevents contact engagement fallback from ever working.
+From the backend logs + database rows we can see:
 
-## What we now know (from your logs + code)
-1. `sync-reply-campaigns` can fetch sequences, but every stats endpoint attempt returns **404**, so it logs:
-   - `Could not fetch V3 stats... 404`
-   - `Could not fetch V3 report... 404`
-   - `Could not fetch V1 stats... 404`
-   and ends with `Final stats: sent=0, replies=0`.
+- `sync-reply-contacts` is successfully calling the Reply.io V3 endpoint and it reports **“source: V3 extended”**.
+- But **every contact’s engagement flags remain false** (`delivered: false`, `replied: false`, etc.).
+- And in the database, `synced_contacts.raw_data` currently looks like this (example):  
+  `{"email": "...", "firstName": "...", "addedAt": "...", "contactId": ...}`  
+  **No `status` object is present at all**, which is the part we need to compute delivered/replied.
 
-2. `sync-reply-contacts` currently throws at the end:
-   - `ReferenceError: deliveredCount is not defined`
-   This is why the client sees non-2xx responses when trying to sync contacts.
+This matches the Reply.io V3 docs: the “extended contacts” endpoint only returns engagement status if you request it via the query param:
 
-3. The UI (`usePlaygroundStats`) has a built-in fallback:
-   - If campaign stats show **0 deliveries**, it will compute deliveries/replies from `synced_contacts.engagement_data`.
-   - That fallback is currently useless because engagement flags are being stored as all `false`, and contact sync is erroring.
+- `additionalColumns=Status` (and optionally `CurrentStep,LastStepCompletedAt,Status`)
 
-4. The official Reply API docs indicate there is a V3 endpoint that returns **per-contact engagement flags**:
-   - `GET /v3/sequences/{id}/contacts/extended`
-   - The response includes `status.replied`, `status.delivered`, `status.opened`, etc.
-   This gives us a reliable path to compute email stats even when “aggregate stats endpoints” 404.
+Right now we are **not** passing `additionalColumns`, so the API returns “base fields only”, and our code defaults missing status fields to `false`. That’s why email stats stay 0.
 
-## Strategy (minimal risk)
-We will **stop depending on broken stats endpoints** for correctness and instead:
-- Sync contact engagement from **V3 “contacts extended”**
-- Compute aggregate stats (delivered/replied/opened/etc.) by **counting those contact statuses**
-- Update `synced_campaigns.stats` with the computed values (without overwriting LinkedIn CSV fields)
-- Keep the existing V1 contact sync as a fallback if V3 contacts extended fails (so we don’t break working contact imports for accounts where V3 access is restricted)
+## Solution overview
 
-This keeps your architecture intact:
-- `sync-reply-campaigns` still owns campaign metadata (name/status/workspace filtering)
-- `sync-reply-contacts` becomes the reliable source of actual delivered/replied metrics
+Update `sync-reply-contacts` to request engagement columns explicitly from Reply.io V3:
 
-## Implementation details
+- Change:
+  - `/sequences/{id}/contacts/extended?limit=100&offset=0`
+- To:
+  - `/sequences/{id}/contacts/extended?limit=100&offset=0&additionalColumns=Status`
+  - (optionally: `additionalColumns=CurrentStep,LastStepCompletedAt,Status`)
 
-### A) Fix the immediate crash in `sync-reply-contacts`
+Then:
+- Parse the returned `status` object and map it into `engagement_data`
+- Recompute `deliveredCount`, `repliesCount`, etc. from those flags
+- Update `synced_campaigns.stats` with the computed totals (preserving LinkedIn CSV fields)
+
+## Implementation plan (code changes)
+
+### 1) Fix the V3 request so engagement flags are returned
 **File:** `supabase/functions/sync-reply-contacts/index.ts`
 
-- Remove references to `deliveredCount`, `repliesCount`, `opensCount` in the response payload (or reintroduce properly defined counters).
-- Ensure the function always returns a 200 on success so the UI doesn’t show “failed to sync” even if data is written.
+- Update the V3 endpoint builder in `fetchContactsV3Extended()` to include:
+  - `additionalColumns=Status` (URL-encoded)
+- Add a temporary diagnostic log for 1 contact per run (safe + minimal):
+  - log the keys of the first returned contact
+  - log whether `status` exists and its keys (not the whole payload)
 
-This alone will restore stable contact syncing.
+Why: we want to confirm the API now returns:
+```json
+{
+  "status": {
+    "status": "Active",
+    "replied": true/false,
+    "delivered": true/false,
+    "opened": true/false,
+    "clicked": true/false,
+    "bounced": true/false
+  }
+}
+```
 
-### B) Add V3 “contacts extended” ingestion (primary path)
+### 2) Make the V3 type mapping match the real payload
 **File:** `supabase/functions/sync-reply-contacts/index.ts`
 
-Add:
-- `REPLY_API_V3 = "https://api.reply.io/v3"`
-- `fetchFromReplyioV3()` with strict header casing (`X-API-Key`, `Accept`, `Content-Type`, and optionally `X-Reply-Team-Id` if needed)
-- `fetchWithRetryV3()` similar to V1 retry logic
-- A robust parser to handle variations in response shape:
-  - `response.items` array + `response.info.hasMore` is expected, but we’ll defensively support `contacts`, `data`, etc.
+Update the V3 contact interface + mapper to handle what Reply actually returns:
 
-Pagination:
-- Use `limit=100` and `offset` style pagination (per docs), e.g.:
-  - `/sequences/${sequenceId}/contacts/extended?limit=100&offset=0`
-  - increment offset by 100 until `hasMore` false or returned length < limit.
+- `addedAt` (not `addedTime`)
+- `contactId` (often present instead of `id`)
+- `linkedInProfile` vs `linkedinProfile` (handle both defensively)
 
-Mapping to DB:
-- Keep current upsert strategy (`campaign_id,email`) and continue populating:
-  - `email`, `first_name`, `last_name`, `company`, `job_title`, `linkedin_url`, `added_at`
-- Update `engagement_data` from the V3 `status` object:
-  - `delivered`, `replied`, `opened`, `clicked`, `bounced`, `finished`, `optedOut`
-- Keep `raw_data` as the full contact payload for future debugging.
+Update `v3ToUnified()` to:
+- use `contact.addedAt ?? contact.addedTime`
+- set `id` from `contact.id ?? contact.contactId` so `external_contact_id` gets filled
 
-### C) Compute and store campaign-level email stats from contacts (authoritative)
-**File:** `supabase/functions/sync-reply-contacts/index.ts`
+### 3) Make “delivered” robust (optional but recommended)
+Even with Status included, there’s a chance Reply’s `delivered` flag behaves unexpectedly for certain step types.
 
-While iterating contacts, compute:
-- `deliveredCount = count(status.delivered === true)`
-- `repliesCount = count(status.replied === true)`
-- `opensCount = count(status.opened === true)`
-- `clicksCount = count(status.clicked === true)`
-- `bouncesCount = count(status.bounced === true)`
-- `sentCount`:
-  - We’ll define this conservatively to match your UI expectations:
-    - `sent = deliveredCount` (aligns with how your current campaign sync treats “sent” == “deliveredContacts”)
-    - optionally also store `bouncesCount` separately so you can later define `sent = delivered + bounces` if desired.
+So we’ll compute “delivered-like” conservatively if needed:
+- Prefer `status.delivered === true`
+- If Reply doesn’t set `delivered` but sets `opened/replied/clicked/bounced`, treat that as “has email activity” for delivery counting.
 
-Then update `synced_campaigns.stats` preserving existing values:
-- Keep LinkedIn CSV fields untouched (same preservation logic you already use elsewhere)
-- Update:
-  - `stats.sent`
-  - `stats.delivered`
-  - `stats.replies`
-  - `stats.opens` (optional)
-  - `stats.peopleCount` (from verifiedCount)
-- Do not clobber other stats keys (merge like you already do).
+This ensures you don’t end up with “114 sent, 2 replies” turning into “0 delivered, 2 replies”.
 
-Result:
-- `usePlaygroundStats` will start showing email deliveries/replies immediately from campaign stats, and even if it doesn’t, the fallback from contacts will work because engagement flags will be real.
-
-### D) Keep V1 contact sync as a fallback (don’t break logic)
-If V3 contacts extended fails (403/404/etc.):
-- Fall back to the current V1 `/campaigns/{id}/people` flow (your existing pagination/dedup remains useful)
-- In that fallback path, engagement flags may remain sparse, but at least contacts still sync.
-
-This ensures we don’t regress existing “contact import” reliability.
-
-### E) (Optional, low-risk) Reduce noisy 404 warnings in `sync-reply-campaigns`
+### 4) Confirm stats are persisted and not overwritten
 **File:** `supabase/functions/sync-reply-campaigns/index.ts`
 
-Right now stats endpoints always 404, so logs are noisy. We can:
-- Treat 404 from those endpoints as “expected” and log once per run (or downgrade to debug).
-- Keep the existing merge behavior so it will preserve any stats that contact sync computed.
+No big changes required, but we’ll verify one important thing:
+- `sync-reply-campaigns` should **not overwrite** the `sent/delivered/replies` that `sync-reply-contacts` computes.
+- Today it merges `existingStats` and only overwrites with API stats if they exist (they don’t), so this should already be fine.
+- If we see any overwrite happening, we’ll adjust the merge to always keep the higher-confidence contact-derived stats.
 
-Not required for correctness, but improves debugging clarity.
+### 5) End-to-end verification (what we’ll validate after implementing)
+After updating the function:
 
-## Verification checklist (end-to-end)
-1. In the UI, click Sync for the Reply integration.
-2. Confirm the background contact sync no longer errors (no more “deliveredCount is not defined”).
-3. Open People tab:
-   - Verify “Opened / Replied / Clicked / Opted out” columns start showing real values for at least some contacts.
-4. Check dashboard stats:
-   - Email deliveries should become non-zero.
-   - Email replies should reflect reality (your expected ~2 for that campaign).
-5. Confirm `synced_campaigns.stats` for a campaign contains non-zero `sent/delivered/replies` after contact sync completes.
+1. Trigger sync for a campaign you *know* has email activity (the one with ~114 sent / ~2 replies).
+2. Check backend logs for:
+   - `Total contacts to sync: N (source: V3 extended)`
+   - A debug line that confirms `status` keys exist
+   - `Engagement stats: delivered=..., replies=..., opens=...` should be non-zero
+3. Verify DB reality:
+   - At least some `synced_contacts.engagement_data.delivered` or `...replied` are true
+4. Confirm UI:
+   - `/playground` stats tiles show non-zero Email Deliveries + Email Replies
+   - Campaign list shows non-zero `sent` and `replies`
 
-## Why this should finally work
-- We are switching from “aggregate endpoints that your account/API access is returning 404 for” to an endpoint the official docs show as the canonical way to retrieve contact engagement.
-- Your frontend already supports computing stats from per-contact engagement; it just wasn’t getting real engagement data and contact sync was failing.
+## Why this should finally unlock the “114 / 2” numbers
+Because we’ll stop guessing from missing fields and instead request the exact columns Reply requires (`additionalColumns=Status`) that contain the engagement flags we’re counting.
 
-## Scope / files touched
-- `supabase/functions/sync-reply-contacts/index.ts` (main fix + V3 contacts ingestion + computed stats + remove crash)
-- (Optional) `supabase/functions/sync-reply-campaigns/index.ts` (log noise reduction only; no behavior change required)
+## Scope
+- Primary fix: `supabase/functions/sync-reply-contacts/index.ts`
+- Optional safeguard: minor merge protection in `supabase/functions/sync-reply-campaigns/index.ts`
 
-## Rollback plan (if needed)
-- Keep V1 contact sync intact behind the fallback path.
-- If V3 contacts extended causes issues, we can disable it by flipping the “try V3 first” logic and returning to V1-only without schema changes.
+## Rollback plan
+If Reply V3 still doesn’t return status in your account:
+- Keep the existing V1 fallback (contacts still sync)
+- Add a “Stats unavailable from API” indicator (instead of silently showing 0)
+- Consider re-enabling webhook-based stats as the long-term accurate source
