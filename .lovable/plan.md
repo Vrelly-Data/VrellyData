@@ -1,113 +1,121 @@
 
-## What’s actually happening (root cause)
 
-From the backend logs + database rows we can see:
+# Fix Email Stats and Contact Count Issues
 
-- `sync-reply-contacts` is successfully calling the Reply.io V3 endpoint and it reports **“source: V3 extended”**.
-- But **every contact’s engagement flags remain false** (`delivered: false`, `replied: false`, etc.).
-- And in the database, `synced_contacts.raw_data` currently looks like this (example):  
-  `{"email": "...", "firstName": "...", "addedAt": "...", "contactId": ...}`  
-  **No `status` object is present at all**, which is the part we need to compute delivered/replied.
+## Root Cause Analysis
 
-This matches the Reply.io V3 docs: the “extended contacts” endpoint only returns engagement status if you request it via the query param:
+### Issue 1: Email Stats at 0
+The V3 extended API now returns a `status` object (confirmed in `raw_data`), but all engagement flags are `false` from Reply.io itself. This is happening because:
 
-- `additionalColumns=Status` (and optionally `CurrentStep,LastStepCompletedAt,Status`)
+- The campaigns in your account appear to be **LinkedIn-only sequences** (no email steps)
+- For LinkedIn campaigns, Reply.io returns `delivered: false`, `replied: false`, etc. because those flags are email-specific
+- The ~114 sent / ~2 replies you expected likely came from **email campaigns** that either:
+  - Are not currently linked/synced, OR
+  - Are in a different workspace than the one configured
 
-Right now we are **not** passing `additionalColumns`, so the API returns “base fields only”, and our code defaults missing status fields to `false`. That’s why email stats stay 0.
+### Issue 2: Contact Count Dropping (593 vs expected 1,053)
+Looking at the database, there are duplicate campaign records for the same `external_campaign_id`:
 
-## Solution overview
+| Campaign Name | Contacts in DB | People Count Stat |
+|--------------|----------------|-------------------|
+| HVAC campaign (9f16bb51) | 100 | 100 |
+| HVAC campaign (56abc8b4) | 0 | 264 |
+| Plumbing Campaign (01346012) | 100 | 100 |
+| Plumbing Campaign (d46b41a2) | 0 | 98 |
 
-Update `sync-reply-contacts` to request engagement columns explicitly from Reply.io V3:
+The V3 pagination with `limit=100` per page capped contact syncing. Many campaigns also have duplicate rows causing sync to go to wrong campaign IDs.
 
-- Change:
-  - `/sequences/{id}/contacts/extended?limit=100&offset=0`
-- To:
-  - `/sequences/{id}/contacts/extended?limit=100&offset=0&additionalColumns=Status`
-  - (optionally: `additionalColumns=CurrentStep,LastStepCompletedAt,Status`)
+---
 
-Then:
-- Parse the returned `status` object and map it into `engagement_data`
-- Recompute `deliveredCount`, `repliesCount`, etc. from those flags
-- Update `synced_campaigns.stats` with the computed totals (preserving LinkedIn CSV fields)
+## Solution: Two-Part Fix
 
-## Implementation plan (code changes)
+### Part A: Fix Contact Pagination (Restore Full Sync)
+**File**: `supabase/functions/sync-reply-contacts/index.ts`
 
-### 1) Fix the V3 request so engagement flags are returned
-**File:** `supabase/functions/sync-reply-contacts/index.ts`
+The recent changes broke pagination. We need to:
+1. Remove the 100-page artificial limit (`offset < maxPages * limit`) which caps at 10,000 contacts
+2. The current code syncs correctly but the offset-based pagination with V3 may be returning fewer contacts than expected
 
-- Update the V3 endpoint builder in `fetchContactsV3Extended()` to include:
-  - `additionalColumns=Status` (URL-encoded)
-- Add a temporary diagnostic log for 1 contact per run (safe + minimal):
-  - log the keys of the first returned contact
-  - log whether `status` exists and its keys (not the whole payload)
+Actually, looking more carefully: the sync IS working but syncing to the wrong campaign UUIDs (the duplicate rows). We need to deduplicate campaigns.
 
-Why: we want to confirm the API now returns:
-```json
-{
-  "status": {
-    "status": "Active",
-    "replied": true/false,
-    "delivered": true/false,
-    "opened": true/false,
-    "clicked": true/false,
-    "bounced": true/false
-  }
-}
+### Part B: Prevent Duplicate Campaigns
+**File**: `supabase/functions/sync-reply-campaigns/index.ts`
+
+Add deduplication logic:
+1. Before upserting, check for existing campaigns with the same `external_campaign_id` AND `team_id`
+2. Only create one campaign record per external ID per team
+3. Use the existing record's UUID when syncing contacts
+
+---
+
+## Technical Implementation
+
+### 1. Campaign Deduplication in sync-reply-campaigns
+```typescript
+// Before upsert, find ANY existing campaign with this external_id for this team
+// (not scoped to integration_id to catch orphaned duplicates)
+const { data: existingAny } = await supabase
+  .from("synced_campaigns")
+  .select("id, stats, is_linked")
+  .eq("team_id", teamId)
+  .eq("external_campaign_id", String(sequence.id))
+  .order("created_at", { ascending: true })
+  .limit(1)
+  .maybeSingle();
+
+// Use existing campaign's ID to prevent duplicates
+const campaignUuid = existingAny?.id || crypto.randomUUID();
 ```
 
-### 2) Make the V3 type mapping match the real payload
-**File:** `supabase/functions/sync-reply-contacts/index.ts`
+### 2. Contact Sync Pagination Check
+The current V3 pagination should work but may need:
+- Remove the artificial 10,000 contact limit for large accounts
+- Add better logging to trace which campaign UUID contacts are syncing to
 
-Update the V3 contact interface + mapper to handle what Reply actually returns:
+### 3. Verify Campaign Type
+To confirm whether email stats should exist:
+- Check if `synced_sequences` has email steps for these campaigns
+- If all steps are LinkedIn, then `delivered=0` is correct behavior
 
-- `addedAt` (not `addedTime`)
-- `contactId` (often present instead of `id`)
-- `linkedInProfile` vs `linkedinProfile` (handle both defensively)
+---
 
-Update `v3ToUnified()` to:
-- use `contact.addedAt ?? contact.addedTime`
-- set `id` from `contact.id ?? contact.contactId` so `external_contact_id` gets filled
+## Files to Modify
 
-### 3) Make “delivered” robust (optional but recommended)
-Even with Status included, there’s a chance Reply’s `delivered` flag behaves unexpectedly for certain step types.
+| File | Change |
+|------|--------|
+| `supabase/functions/sync-reply-campaigns/index.ts` | Add team-level deduplication for campaigns |
+| `supabase/functions/sync-reply-contacts/index.ts` | Add diagnostic logging for campaign UUID being synced to |
 
-So we’ll compute “delivered-like” conservatively if needed:
-- Prefer `status.delivered === true`
-- If Reply doesn’t set `delivered` but sets `opened/replied/clicked/bounced`, treat that as “has email activity” for delivery counting.
+---
 
-This ensures you don’t end up with “114 sent, 2 replies” turning into “0 delivered, 2 replies”.
+## Database Cleanup (One-Time)
+Delete orphaned duplicate campaign rows that have 0 contacts:
+```sql
+DELETE FROM synced_campaigns sc
+WHERE NOT EXISTS (
+  SELECT 1 FROM synced_contacts c WHERE c.campaign_id = sc.id
+)
+AND EXISTS (
+  SELECT 1 FROM synced_campaigns other 
+  WHERE other.external_campaign_id = sc.external_campaign_id 
+  AND other.team_id = sc.team_id 
+  AND other.id != sc.id
+);
+```
 
-### 4) Confirm stats are persisted and not overwritten
-**File:** `supabase/functions/sync-reply-campaigns/index.ts`
+---
 
-No big changes required, but we’ll verify one important thing:
-- `sync-reply-campaigns` should **not overwrite** the `sent/delivered/replies` that `sync-reply-contacts` computes.
-- Today it merges `existingStats` and only overwrites with API stats if they exist (they don’t), so this should already be fine.
-- If we see any overwrite happening, we’ll adjust the merge to always keep the higher-confidence contact-derived stats.
+## Expected Outcome
+1. Contact count matches `peopleCount` from Reply.io (1,053 total across campaigns)
+2. If campaigns have email steps: Email Sent and Replies will show actual values
+3. If campaigns are LinkedIn-only: Email Sent stays 0 (correct behavior)
 
-### 5) End-to-end verification (what we’ll validate after implementing)
-After updating the function:
+---
 
-1. Trigger sync for a campaign you *know* has email activity (the one with ~114 sent / ~2 replies).
-2. Check backend logs for:
-   - `Total contacts to sync: N (source: V3 extended)`
-   - A debug line that confirms `status` keys exist
-   - `Engagement stats: delivered=..., replies=..., opens=...` should be non-zero
-3. Verify DB reality:
-   - At least some `synced_contacts.engagement_data.delivered` or `...replied` are true
-4. Confirm UI:
-   - `/playground` stats tiles show non-zero Email Deliveries + Email Replies
-   - Campaign list shows non-zero `sent` and `replies`
+## Verification Steps
+1. Run the SQL cleanup to remove duplicate campaigns
+2. Deploy updated edge functions
+3. Sync integration
+4. Check People tab shows correct total contact count
+5. Sync a sequence's steps (via Copy tab) to verify if email steps exist
 
-## Why this should finally unlock the “114 / 2” numbers
-Because we’ll stop guessing from missing fields and instead request the exact columns Reply requires (`additionalColumns=Status`) that contain the engagement flags we’re counting.
-
-## Scope
-- Primary fix: `supabase/functions/sync-reply-contacts/index.ts`
-- Optional safeguard: minor merge protection in `supabase/functions/sync-reply-campaigns/index.ts`
-
-## Rollback plan
-If Reply V3 still doesn’t return status in your account:
-- Keep the existing V1 fallback (contacts still sync)
-- Add a “Stats unavailable from API” indicator (instead of silently showing 0)
-- Consider re-enabling webhook-based stats as the long-term accurate source
