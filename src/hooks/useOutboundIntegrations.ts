@@ -378,7 +378,7 @@ export function useOutboundIntegrations() {
     deleteIntegration,
     toggleIntegration,
     syncIntegration,
-    setupWebhook,
+    // setupWebhook - kept internally but not exposed to UI
     resetSyncStatus,
     linkAllCampaigns,
     startContactsSync,
