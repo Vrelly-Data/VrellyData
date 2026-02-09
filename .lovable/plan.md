@@ -1,85 +1,116 @@
 
 
-# Fix Email Stats: Add V1 Campaign Stats Fallback
+# Fix Email Stats: Try V3 Reports Endpoint
 
 ## Problem Confirmed
 
-Your expected stats (114 sent, 2 replies) are not appearing because:
+After thorough investigation, email stats are not syncing because:
 
-1. **V3 Statistics API fails** - Returns 404 errors consistently
-2. **Contact-level engagement doesn't exist** - The V1 `/campaigns/{id}/people` endpoint only returns profile data (name, email, company), NOT engagement flags
+1. **V3 `/statistics/sequences/{id}`** → Returns 404 (may require higher subscription tier)
+2. **V1 `/campaigns/{id}` single endpoint** → Returns 404 (deprecated or permission issue)
+3. **V1 `/campaigns` list endpoint** → Works but only returns `peopleCount` (no detailed stats)
 
-The current `sync-reply-contacts` function tries to count `replied: true` from contacts, but those fields don't exist in the API response.
-
-## Solution: Fetch Campaign Stats from V1 Single Campaign Endpoint
-
-The V1 `GET /campaigns/{id}` endpoint returns the full campaign object with aggregate stats. We'll add this as a fallback when V3 fails.
+The logs show:
+```
+Could not fetch V3 stats for sequence 1419855: Reply.io V3 API error (404)
+Could not fetch V1 stats for campaign 1419855: Reply.io V1 API error (404)
+Stats: sent=0, replies=0
+```
 
 ---
 
-## Implementation Plan
+## Solution: Try V3 Reports Endpoint
 
-### 1. Update `sync-reply-campaigns/index.ts`
+Reply.io has a **Reports API** (`/v3/reports/sequences/{id}`) which is separate from the Statistics API. We'll add this as another fallback layer.
 
-Add a V1 stats fetching function that calls the single campaign endpoint:
+### Fallback Order:
+1. V3 Statistics API (`/v3/statistics/sequences/{id}`) - Current approach (404)
+2. **NEW: V3 Reports API** (`/v3/reports/sequences/{id}`) - May include stats
+3. V1 Single Campaign (`/v1/campaigns/{id}`) - Current fallback (404)
 
+If all APIs fail, we'll try one more thing: **remove the team header** from the V1 single campaign request, as the 404 might be caused by workspace-scoped API key restrictions.
+
+---
+
+## Implementation
+
+### File: `supabase/functions/sync-reply-campaigns/index.ts`
+
+1. **Add V3 Reports endpoint function:**
 ```typescript
-// Fetch stats from V1 single campaign endpoint
-async function fetchCampaignStatsV1(
-  campaignId: number,
+async function fetchSequenceReport(
+  sequenceId: number,
   apiKey: string,
   teamId?: string
 ): Promise<Record<string, number>> {
   try {
-    const data = await fetchWithRetryV1(`/campaigns/${campaignId}`, apiKey, teamId);
-    const campaign = data as Record<string, unknown>;
+    const data = await fetchWithRetryV3(
+      `/reports/sequences/${sequenceId}`, 
+      apiKey, 
+      teamId
+    ) as Record<string, unknown>;
     
-    // V1 campaign response includes these fields
+    // Reports API may use different field names
     return {
-      sent: (campaign.peopleSent as number) || (campaign.peopleDelivered as number) || 0,
-      delivered: (campaign.peopleDelivered as number) || (campaign.peopleSent as number) || 0,
-      replies: (campaign.peopleReplied as number) || 0,
-      opens: (campaign.peopleOpened as number) || 0,
-      clicks: (campaign.peopleClicked as number) || 0,
-      bounces: (campaign.peopleBounced as number) || 0,
-      peopleFinished: (campaign.peopleFinished as number) || 0,
+      sent: (data.delivered as number) || (data.sent as number) || 0,
+      delivered: (data.delivered as number) || 0,
+      replies: (data.replied as number) || (data.replies as number) || 0,
+      opens: (data.opened as number) || (data.opens as number) || 0,
+      clicks: (data.clicked as number) || (data.clicks as number) || 0,
     };
   } catch (err) {
-    console.warn(`Could not fetch V1 stats for campaign ${campaignId}:`, err);
+    console.warn(`Could not fetch V3 report for sequence ${sequenceId}:`, err);
     return {};
   }
 }
 ```
 
-Update the sync loop to try V3 first, then fall back to V1:
-
+2. **Try V1 single campaign without team header:**
 ```typescript
-// Try V3 Statistics API first
+async function fetchCampaignStatsV1NoTeam(
+  campaignId: number,
+  apiKey: string
+): Promise<Record<string, number>> {
+  try {
+    // Try without team header - might work for non-agency accounts
+    const data = await fetchWithRetryV1(`/campaigns/${campaignId}`, apiKey);
+    const campaign = data as Record<string, unknown>;
+    
+    return {
+      sent: (campaign.peopleSent as number) || (campaign.peopleDelivered as number) || 0,
+      delivered: (campaign.peopleDelivered as number) || (campaign.peopleSent as number) || 0,
+      replies: (campaign.peopleReplied as number) || 0,
+    };
+  } catch (err) {
+    console.warn(`Could not fetch V1 stats (no team) for campaign ${campaignId}:`, err);
+    return {};
+  }
+}
+```
+
+3. **Update sync loop with multi-fallback:**
+```typescript
+// Fetch stats - multiple fallback layers
+console.log(`  Fetching stats from V3 Statistics API...`);
 let apiStats = await fetchSequenceStats(sequence.id, apiKey, replyTeamId);
 
-// If V3 returned no data, try V1 single campaign endpoint
 if (!apiStats.sent && !apiStats.replies) {
-  console.log(`  V3 stats empty, trying V1 /campaigns/${sequence.id}...`);
+  console.log(`  V3 stats empty, trying V3 Reports API...`);
+  apiStats = await fetchSequenceReport(sequence.id, apiKey, replyTeamId);
+}
+
+if (!apiStats.sent && !apiStats.replies) {
+  console.log(`  V3 reports empty, trying V1 /campaigns/${sequence.id}...`);
   apiStats = await fetchCampaignStatsV1(sequence.id, apiKey, replyTeamId);
 }
 
-console.log(`  Stats: sent=${apiStats.sent || 0}, replies=${apiStats.replies || 0}`);
+if (!apiStats.sent && !apiStats.replies) {
+  console.log(`  V1 with team failed, trying V1 without team header...`);
+  apiStats = await fetchCampaignStatsV1NoTeam(sequence.id, apiKey);
+}
+
+console.log(`  Final stats: sent=${apiStats.sent || 0}, replies=${apiStats.replies || 0}`);
 ```
-
-### 2. Simplify `sync-reply-contacts/index.ts`
-
-Remove the broken engagement counting logic since contacts don't have that data:
-
-```typescript
-// REMOVE these lines (they never work because API doesn't return these fields)
-// if (contact.replied) repliesCount++;
-// if (hasEngagement) deliveredCount++;
-
-// KEEP: Save contacts for profile data (name, company, etc)
-// KEEP: engagement_data structure (for future webhook updates)
-```
-
-The campaign sync will now populate the stats, not the contact sync.
 
 ---
 
@@ -87,58 +118,37 @@ The campaign sync will now populate the stats, not the contact sync.
 
 | File | Change |
 |------|--------|
-| `supabase/functions/sync-reply-campaigns/index.ts` | Add `fetchCampaignStatsV1()` function, update sync loop to use V1 fallback |
-| `supabase/functions/sync-reply-contacts/index.ts` | Remove broken engagement counting, keep contact profile sync |
+| `supabase/functions/sync-reply-campaigns/index.ts` | Add V3 Reports fallback, add V1 no-team fallback |
 
 ---
 
-## Why This Will Work
+## Why This Might Work
 
-The V1 `/campaigns/{id}` endpoint typically returns:
+- **V3 Reports API** is a different endpoint than Statistics - it may have different permission requirements
+- **V1 without team header** - The 404 could be caused by the `X-Reply-Team-Id` header restricting access to a specific workspace that doesn't have stats permissions
 
-```json
-{
-  "id": 1419855,
-  "name": "Business owners...",
-  "status": 4,
-  "peopleCount": 378,
-  "peopleSent": 114,      // ← Your "emails sent"
-  "peopleReplied": 2,     // ← Your "replies"
-  "peopleOpened": 45,
-  "peopleBounced": 3
-}
+---
+
+## Expected Outcome
+
+After deployment, the logs will show which fallback succeeds:
 ```
-
-This matches your expected 114 sent / 2 replies!
-
----
-
-## Data Flow After Fix
-
-```text
-1. Sync button clicked
-2. sync-reply-campaigns runs:
-   a. Fetch sequence list from V3 (for names/status)
-   b. For each campaign:
-      - Try V3 /statistics/sequences/{id} → 404 error
-      - Fall back to V1 /campaigns/{id} → Gets stats!
-      - Save to synced_campaigns.stats: { sent: 114, replies: 2 }
-3. sync-reply-contacts runs:
-   - Saves contact profiles (name, email, company)
-   - Updates peopleCount
-   - Does NOT try to count engagement (removed)
-4. Dashboard reads synced_campaigns.stats
-   - Shows: 114 Emails Sent, 2 Replies
+Fetching stats from V3 Statistics API... (404)
+V3 stats empty, trying V3 Reports API... (succeeds or 404)
+V3 reports empty, trying V1 /campaigns/1419855... (succeeds or 404)
+V1 with team failed, trying V1 without team header... (succeeds or 404)
+Final stats: sent=114, replies=2
 ```
 
 ---
 
-## What's Preserved
+## If All Fallbacks Fail
 
-- LinkedIn stats from CSV uploads (never overwritten)
-- Contact profile data (name, email, company, etc.)
-- Individual contact response tracking (for future webhook re-enablement)
-- Existing campaign link preferences
+If all API endpoints return 404, the Reply.io account may not have API access to statistics (possibly a tier limitation). In that case, we would need to:
+
+1. Contact Reply.io support about API access to statistics
+2. Use webhooks (which we've disabled) to track stats in real-time
+3. Allow manual entry of stats via CSV upload
 
 ---
 
@@ -146,8 +156,8 @@ This matches your expected 114 sent / 2 replies!
 
 | Risk | Mitigation |
 |------|------------|
-| V1 endpoint also fails | Graceful fallback to 0 stats (no crash) |
-| Rate limiting | Uses existing retry logic with exponential backoff |
-| Field names different | Check multiple possible field names (`peopleSent`, `sent`, etc.) |
-| Breaking existing logic | Only adds new function, minimal changes to existing flow |
+| All fallbacks fail | Graceful fallback to 0 (no crash), preserves existing stats |
+| Rate limiting | Uses existing retry logic |
+| Different field names | Checks multiple possible field names |
+| Breaking existing logic | Only adds new fallback functions |
 
