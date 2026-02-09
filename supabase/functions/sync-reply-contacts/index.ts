@@ -281,14 +281,9 @@ Deno.serve(async (req) => {
     let contactsSynced = 0;
     let contactsFailed = 0;
 
-    // Track engagement stats from contacts
-    let deliveredCount = 0;
-    let repliesCount = 0;
-    let opensCount = 0;
-    let clicksCount = 0;
-    let bouncesCount = 0;
-    let optOutsCount = 0;
-    let finishedCount = 0;
+    // NOTE: Engagement stats (sent, replies, opens) are fetched at campaign level
+    // via sync-reply-campaigns using V1 /campaigns/{id} endpoint.
+    // The V1 /campaigns/{id}/people endpoint does NOT return engagement flags.
 
     for (let i = 0; i < uniqueContacts.length; i += BATCH_SIZE) {
       const batch = uniqueContacts.slice(i, i + BATCH_SIZE);
@@ -298,28 +293,16 @@ Deno.serve(async (req) => {
       console.log(`Processing batch ${batchNumber}/${totalBatches} (${batch.length} contacts)`);
 
       const records = batch.map(contact => {
-        // Count engagement stats
-        // In V1 API, if a contact has been engaged (opened, replied, etc), they've received email
-        const hasEngagement = contact.opened || contact.replied || contact.clicked || 
-                              contact.bounced || contact.finished;
-        
-        if (hasEngagement) deliveredCount++;
-        if (contact.replied) repliesCount++;
-        if (contact.opened) opensCount++;
-        if (contact.clicked) clicksCount++;
-        if (contact.bounced) bouncesCount++;
-        if (contact.optedOut) optOutsCount++;
-        if (contact.finished) finishedCount++;
-        
+        // Store engagement_data structure for future webhook updates
+        // Currently all false since V1 people API doesn't return engagement
         const engagementData = {
-          replied: contact.replied || false,
-          bounced: contact.bounced || false,
-          opened: contact.opened || false,
-          clicked: contact.clicked || false,
-          optedOut: contact.optedOut || false,
-          finished: contact.finished || false,
-          // Infer delivered from any engagement activity
-          delivered: hasEngagement,
+          replied: false,
+          bounced: false,
+          opened: false,
+          clicked: false,
+          optedOut: false,
+          finished: false,
+          delivered: false,
           addedAt: contact.addedAt,
         };
 
@@ -376,7 +359,7 @@ Deno.serve(async (req) => {
 
     const peopleCount = verifiedCount || uniqueContacts.length;
 
-    // Get existing campaign stats to preserve LinkedIn metrics
+    // Get existing campaign stats to preserve LinkedIn metrics AND email stats from campaign sync
     const { data: existingCampaign } = await serviceClient
       .from("synced_campaigns")
       .select("stats")
@@ -385,40 +368,20 @@ Deno.serve(async (req) => {
 
     const existingStats = (existingCampaign?.stats as Record<string, unknown>) || {};
 
-    // Preserve LinkedIn stats that came from CSV upload
-    const linkedinMessagesSent = existingStats.linkedinMessagesSent || 0;
-    const linkedinConnectionsSent = existingStats.linkedinConnectionsSent || 0;
-    const linkedinConnectionsAccepted = existingStats.linkedinConnectionsAccepted || 0;
-    const linkedinReplies = existingStats.linkedinReplies || 0;
-
-    // Update campaign stats with actual counts from contact engagement data
+    // Update campaign with peopleCount only - preserve all other stats
+    // Email stats (sent, replies, etc.) come from sync-reply-campaigns via V1 API
     await serviceClient
       .from("synced_campaigns")
       .update({
         stats: {
           ...existingStats,
-          peopleCount,
-          // Use delivered count from contacts with engagement
-          sent: deliveredCount,
-          delivered: deliveredCount,
-          replies: repliesCount,
-          opens: opensCount,
-          clicked: clicksCount,
-          bounces: bouncesCount,
-          optOuts: optOutsCount,
-          peopleFinished: finishedCount,
-          // Preserve LinkedIn stats
-          linkedinMessagesSent,
-          linkedinConnectionsSent,
-          linkedinConnectionsAccepted,
-          linkedinReplies,
+          peopleCount, // Only update the contact count
         },
         updated_at: new Date().toISOString(),
       })
       .eq("id", campaignId);
 
     console.log(`Contacts sync complete: ${contactsSynced} processed, ${contactsFailed} failed, ${peopleCount} verified`);
-    console.log(`Engagement stats: ${deliveredCount} delivered, ${repliesCount} replies, ${opensCount} opens`);
 
     return new Response(
       JSON.stringify({
