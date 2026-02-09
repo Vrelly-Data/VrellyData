@@ -9,11 +9,12 @@ export interface PlaygroundStats {
   completionPercentage: number;
   outOfOfficeCount: number;
   campaignScore: number | null;
-  // Separated metrics for Email vs LinkedIn breakdown
   emailDeliveries: number;
   emailReplies: number;
+  emailOpens: number;
+  emailBounced: number;
+  emailClicked: number;
   linkedinCampaignCount: number;
-  // LinkedIn-specific metrics from webhooks
   linkedinMessagesSent: number;
   linkedinConnectionsSent: number;
   linkedinConnectionsAccepted: number;
@@ -68,6 +69,9 @@ export function usePlaygroundStats() {
       // Email-specific metrics
       let emailDeliveries = 0;
       let emailReplies = 0;
+      let emailOpens = 0;
+      let emailBounced = 0;
+      let emailClicked = 0;
       let linkedinCampaignCount = 0;
       
       // LinkedIn metrics from webhooks
@@ -92,6 +96,9 @@ export function usePlaygroundStats() {
           // Track email-specific metrics from campaign stats
           emailDeliveries += sent;
           emailReplies += replies;
+          emailOpens += stats.opens || 0;
+          emailBounced += stats.bounced || 0;
+          emailClicked += stats.clicked || 0;
           
           // LinkedIn metrics from webhooks/CSV
           linkedinMessagesSent += stats.linkedinMessagesSent || 0;
@@ -158,6 +165,9 @@ export function usePlaygroundStats() {
         campaignScore: null,
         emailDeliveries,
         emailReplies,
+        emailOpens,
+        emailBounced,
+        emailClicked,
         linkedinCampaignCount,
         linkedinMessagesSent,
         linkedinConnectionsSent,

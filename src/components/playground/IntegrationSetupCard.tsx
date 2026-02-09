@@ -9,6 +9,7 @@ import { useState, useEffect } from 'react';
 import { AddIntegrationDialog } from './AddIntegrationDialog';
 import { EditIntegrationDialog } from './EditIntegrationDialog';
 import { LinkedInStatsUploadDialog } from './LinkedInStatsUploadDialog';
+import { EmailStatsUploadDialog } from './EmailStatsUploadDialog';
 import { ManageCampaignsDialog } from './ManageCampaignsDialog';
 import { formatDistanceToNow } from 'date-fns';
 
@@ -184,6 +185,7 @@ export function IntegrationSetupCard() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [linkedInUploadOpen, setLinkedInUploadOpen] = useState(false);
+  const [emailUploadOpen, setEmailUploadOpen] = useState(false);
   const [manageCampaignsOpen, setManageCampaignsOpen] = useState(false);
   const [editingIntegration, setEditingIntegration] = useState<OutboundIntegration | null>(null);
   const [managingIntegration, setManagingIntegration] = useState<OutboundIntegration | null>(null);
@@ -273,6 +275,10 @@ export function IntegrationSetupCard() {
             </CardDescription>
           </div>
           <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={() => setEmailUploadOpen(true)}>
+              <Upload className="h-4 w-4 mr-2" />
+              Upload Email Stats
+            </Button>
             <Button variant="outline" size="sm" onClick={() => setLinkedInUploadOpen(true)}>
               <Upload className="h-4 w-4 mr-2" />
               Upload LinkedIn Stats
@@ -325,6 +331,10 @@ export function IntegrationSetupCard() {
       <LinkedInStatsUploadDialog 
         open={linkedInUploadOpen} 
         onOpenChange={setLinkedInUploadOpen}
+      />
+      <EmailStatsUploadDialog
+        open={emailUploadOpen}
+        onOpenChange={setEmailUploadOpen}
       />
       <ManageCampaignsDialog
         open={manageCampaignsOpen}

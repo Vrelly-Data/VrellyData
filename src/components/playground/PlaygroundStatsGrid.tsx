@@ -94,6 +94,8 @@ export function PlaygroundStatsGrid() {
   // Use actual email-specific data from Reply.io API
   const emailsDelivered = stats?.emailDeliveries ?? 0;
   const emailReplies = stats?.emailReplies ?? 0;
+  const emailOpens = stats?.emailOpens ?? 0;
+  const emailBounced = stats?.emailBounced ?? 0;
   const linkedinCampaignCount = stats?.linkedinCampaignCount ?? 0;
   
   // LinkedIn metrics from webhooks
@@ -130,6 +132,13 @@ export function PlaygroundStatsGrid() {
               Emails Sent:
             </span>
             <span className="font-medium">{emailsDelivered.toLocaleString()}</span>
+          </div>
+          <div className="flex items-center justify-between gap-4">
+            <span className="flex items-center gap-1.5 text-muted-foreground">
+              <Mail className="h-3.5 w-3.5" />
+              Opens:
+            </span>
+            <span className="font-medium">{emailOpens.toLocaleString()}</span>
           </div>
           <div className="flex items-center justify-between gap-4">
             <span className="flex items-center gap-1.5 text-muted-foreground">
@@ -218,6 +227,15 @@ export function PlaygroundStatsGrid() {
               <span className="font-medium">{emailReplies.toLocaleString()}</span>
             )}
           </div>
+          {emailBounced > 0 && (
+            <div className="flex items-center justify-between gap-4">
+              <span className="flex items-center gap-1.5 text-muted-foreground">
+                <Mail className="h-3.5 w-3.5" />
+                Bounced:
+              </span>
+              <span className="font-medium">{emailBounced.toLocaleString()}</span>
+            </div>
+          )}
           <div className="flex items-center justify-between gap-4">
             <span className="flex items-center gap-1.5 text-muted-foreground">
               <Linkedin className="h-3.5 w-3.5" />
