@@ -171,6 +171,58 @@ async function fetchSequenceStats(
   }
 }
 
+// Fetch sequence report from V3 Reports API (different endpoint, may have different permissions)
+async function fetchSequenceReport(
+  sequenceId: number,
+  apiKey: string,
+  teamId?: string
+): Promise<Record<string, number>> {
+  try {
+    const data = await fetchWithRetryV3(
+      `/reports/sequences/${sequenceId}`, 
+      apiKey, 
+      teamId
+    ) as Record<string, unknown>;
+    
+    // Reports API may use different field names
+    return {
+      sent: (data.delivered as number) || (data.sent as number) || (data.deliveredContacts as number) || 0,
+      delivered: (data.delivered as number) || (data.deliveredContacts as number) || 0,
+      replies: (data.replied as number) || (data.replies as number) || (data.repliedContacts as number) || 0,
+      opens: (data.opened as number) || (data.opens as number) || (data.openedContacts as number) || 0,
+      clicks: (data.clicked as number) || (data.clicks as number) || (data.clickedContacts as number) || 0,
+    };
+  } catch (err) {
+    console.warn(`Could not fetch V3 report for sequence ${sequenceId}:`, err);
+    return {};
+  }
+}
+
+// Fetch campaign stats from V1 single campaign endpoint without team header
+// (Some accounts may not work with team-scoped requests)
+async function fetchCampaignStatsV1NoTeam(
+  campaignId: number,
+  apiKey: string
+): Promise<Record<string, number>> {
+  try {
+    // Try without team header - might work for non-agency accounts
+    const data = await fetchWithRetryV1(`/campaigns/${campaignId}`, apiKey);
+    const campaign = data as Record<string, unknown>;
+    
+    return {
+      sent: (campaign.peopleSent as number) || (campaign.peopleDelivered as number) || 0,
+      delivered: (campaign.peopleDelivered as number) || (campaign.peopleSent as number) || 0,
+      replies: (campaign.peopleReplied as number) || 0,
+      opens: (campaign.peopleOpened as number) || 0,
+      clicks: (campaign.peopleClicked as number) || 0,
+      bounces: (campaign.peopleBounced as number) || 0,
+    };
+  } catch (err) {
+    console.warn(`Could not fetch V1 stats (no team) for campaign ${campaignId}:`, err);
+    return {};
+  }
+}
+
 // Fetch campaign stats from V1 single campaign endpoint (fallback when V3 fails)
 async function fetchCampaignStatsV1(
   campaignId: number,
@@ -379,17 +431,29 @@ Deno.serve(async (req) => {
           }
         }
 
-        // Fetch stats - try V3 first, fall back to V1
+        // Fetch stats - multiple fallback layers
         console.log(`  Fetching stats from V3 Statistics API...`);
         let apiStats = await fetchSequenceStats(sequence.id, apiKey, replyTeamId || undefined);
         
-        // If V3 returned no data, try V1 single campaign endpoint
+        // Fallback 1: Try V3 Reports API
         if (!apiStats.sent && !apiStats.replies) {
-          console.log(`  V3 stats empty, trying V1 /campaigns/${sequence.id}...`);
+          console.log(`  V3 stats empty, trying V3 Reports API...`);
+          apiStats = await fetchSequenceReport(sequence.id, apiKey, replyTeamId || undefined);
+        }
+        
+        // Fallback 2: Try V1 single campaign with team header
+        if (!apiStats.sent && !apiStats.replies) {
+          console.log(`  V3 reports empty, trying V1 /campaigns/${sequence.id}...`);
           apiStats = await fetchCampaignStatsV1(sequence.id, apiKey, replyTeamId || undefined);
         }
         
-        console.log(`  Stats: sent=${apiStats.sent || 0}, replies=${apiStats.replies || 0}`);
+        // Fallback 3: Try V1 single campaign WITHOUT team header
+        if (!apiStats.sent && !apiStats.replies) {
+          console.log(`  V1 with team failed, trying V1 without team header...`);
+          apiStats = await fetchCampaignStatsV1NoTeam(sequence.id, apiKey);
+        }
+        
+        console.log(`  Final stats: sent=${apiStats.sent || 0}, replies=${apiStats.replies || 0}`);
 
         // Extract existing values for fallback logic
         const existingPeopleCount = existingStats.peopleCount as number | undefined;
