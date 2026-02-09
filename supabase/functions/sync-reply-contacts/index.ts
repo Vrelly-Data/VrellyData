@@ -11,15 +11,19 @@ const REPLY_API_V3 = "https://api.reply.io/v3";
 const REPLY_API_V1 = "https://api.reply.io/v1";
 
 // V3 Extended Contact response structure
+// Reply.io returns different field names depending on the endpoint version
 interface V3ExtendedContact {
   id?: number;
+  contactId?: number; // Sometimes returned instead of id
   email: string;
   firstName?: string;
   lastName?: string;
   title?: string;
   company?: string;
   addedTime?: string;
+  addedAt?: string; // Sometimes returned instead of addedTime
   status?: {
+    status?: string; // "Active", "Finished", etc.
     replied?: boolean;
     delivered?: boolean;
     opened?: boolean;
@@ -36,6 +40,7 @@ interface V3ExtendedContact {
   country?: string;
   phone?: string;
   linkedInProfile?: string;
+  linkedinProfile?: string; // Handle both casings
 }
 
 // V1 Contact response structure (fallback)
@@ -226,28 +231,49 @@ function parseV1ContactsResponse(response: unknown): V1Contact[] {
 // Convert V3 contact to unified format
 function v3ToUnified(contact: V3ExtendedContact): UnifiedContact {
   const status = contact.status || {};
+  
+  // Handle Reply.io's various boolean representations
+  const toBool = (val: unknown): boolean => {
+    if (typeof val === 'boolean') return val;
+    if (typeof val === 'string') return val.toLowerCase() === 'true';
+    return false;
+  };
+  
+  // Extract engagement flags
+  const replied = toBool(status.replied);
+  const opened = toBool(status.opened);
+  const clicked = toBool(status.clicked);
+  const bounced = toBool(status.bounced);
+  const finished = toBool(status.finished);
+  const optedOut = toBool(status.optedOut);
+  
+  // Delivered: use explicit flag, or infer from activity (opened/replied/clicked implies delivered)
+  const deliveredExplicit = toBool(status.delivered);
+  const hasEmailActivity = opened || replied || clicked;
+  const delivered = deliveredExplicit || hasEmailActivity;
+  
   return {
-    id: contact.id,
+    id: contact.id ?? contact.contactId,
     email: contact.email,
     firstName: contact.firstName,
     lastName: contact.lastName,
     title: contact.title,
     company: contact.company,
-    addedAt: contact.addedTime,
+    addedAt: contact.addedAt ?? contact.addedTime,
     industry: contact.industry,
     companySize: contact.companySize,
     city: contact.city,
     state: contact.state,
     country: contact.country,
     phone: contact.phone,
-    linkedInProfile: contact.linkedInProfile,
-    delivered: status.delivered === true,
-    replied: status.replied === true,
-    opened: status.opened === true,
-    clicked: status.clicked === true,
-    bounced: status.bounced === true,
-    finished: status.finished === true,
-    optedOut: status.optedOut === true,
+    linkedInProfile: contact.linkedInProfile ?? contact.linkedinProfile,
+    delivered,
+    replied,
+    opened,
+    clicked,
+    bounced,
+    finished,
+    optedOut,
     rawData: contact,
   };
 }
@@ -306,14 +332,31 @@ async function fetchContactsV3Extended(
   console.log(`Attempting V3 extended contacts for sequence ${sequenceId}`);
   
   try {
+    let isFirstBatch = true;
+    
     while (hasMore && offset < maxPages * limit) {
-      const endpoint = `/sequences/${sequenceId}/contacts/extended?limit=${limit}&offset=${offset}`;
-      console.log(`V3 fetch: offset=${offset}, limit=${limit}`);
+      // CRITICAL: Include additionalColumns=Status to get engagement flags
+      const endpoint = `/sequences/${sequenceId}/contacts/extended?limit=${limit}&offset=${offset}&additionalColumns=Status`;
+      console.log(`V3 fetch: offset=${offset}, limit=${limit}, with Status column`);
       
       const response = await fetchWithRetryV3(endpoint, apiKey, teamId);
       const contacts = parseV3ContactsResponse(response);
       
       console.log(`V3 returned ${contacts.length} contacts`);
+      
+      // Diagnostic: log first contact's keys to verify status is present
+      if (isFirstBatch && contacts.length > 0) {
+        const firstContact = contacts[0];
+        const keys = Object.keys(firstContact);
+        console.log(`First contact keys: ${keys.join(', ')}`);
+        if (firstContact.status) {
+          console.log(`Status object keys: ${Object.keys(firstContact.status).join(', ')}`);
+          console.log(`Status sample: replied=${firstContact.status.replied}, opened=${firstContact.status.opened}, delivered=${firstContact.status.delivered}`);
+        } else {
+          console.warn(`WARNING: First contact has no 'status' object - engagement flags will be empty`);
+        }
+        isFirstBatch = false;
+      }
       
       if (contacts.length === 0) {
         hasMore = false;
