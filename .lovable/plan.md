@@ -1,27 +1,85 @@
 
 
-# Remove Webhook UI to Protect Stable Sync
+# Fix Email Stats: Add V1 Campaign Stats Fallback
 
-## Summary
+## Problem Confirmed
 
-Remove the "Enable Live" button and all webhook-related UI elements from the Data Playground to prevent webhook errors from appearing. The backend code will remain in place for future use but will never be triggered.
+Your expected stats (114 sent, 2 replies) are not appearing because:
+
+1. **V3 Statistics API fails** - Returns 404 errors consistently
+2. **Contact-level engagement doesn't exist** - The V1 `/campaigns/{id}/people` endpoint only returns profile data (name, email, company), NOT engagement flags
+
+The current `sync-reply-contacts` function tries to count `replied: true` from contacts, but those fields don't exist in the API response.
+
+## Solution: Fetch Campaign Stats from V1 Single Campaign Endpoint
+
+The V1 `GET /campaigns/{id}` endpoint returns the full campaign object with aggregate stats. We'll add this as a fallback when V3 fails.
 
 ---
 
-## What Will Change
+## Implementation Plan
 
-### 1. IntegrationSetupCard.tsx (UI Cleanup)
+### 1. Update `sync-reply-campaigns/index.ts`
 
-Remove these UI elements:
-- "Enable Live" button (lines 155-181)
-- "Live" badge with refresh button (lines 90-111)
-- "Webhook Error" badge (lines 112-117)
-- Props: `onSetupWebhook`, `isSettingUpWebhook` from IntegrationRow
-- State: `webhookSetupId` and `handleSetupWebhook` function
+Add a V1 stats fetching function that calls the single campaign endpoint:
 
-### 2. useOutboundIntegrations.ts (Keep but don't expose)
+```typescript
+// Fetch stats from V1 single campaign endpoint
+async function fetchCampaignStatsV1(
+  campaignId: number,
+  apiKey: string,
+  teamId?: string
+): Promise<Record<string, number>> {
+  try {
+    const data = await fetchWithRetryV1(`/campaigns/${campaignId}`, apiKey, teamId);
+    const campaign = data as Record<string, unknown>;
+    
+    // V1 campaign response includes these fields
+    return {
+      sent: (campaign.peopleSent as number) || (campaign.peopleDelivered as number) || 0,
+      delivered: (campaign.peopleDelivered as number) || (campaign.peopleSent as number) || 0,
+      replies: (campaign.peopleReplied as number) || 0,
+      opens: (campaign.peopleOpened as number) || 0,
+      clicks: (campaign.peopleClicked as number) || 0,
+      bounces: (campaign.peopleBounced as number) || 0,
+      peopleFinished: (campaign.peopleFinished as number) || 0,
+    };
+  } catch (err) {
+    console.warn(`Could not fetch V1 stats for campaign ${campaignId}:`, err);
+    return {};
+  }
+}
+```
 
-The `setupWebhook` mutation will remain in the file but will NOT be exported. This allows us to easily re-enable it later without rewriting the logic.
+Update the sync loop to try V3 first, then fall back to V1:
+
+```typescript
+// Try V3 Statistics API first
+let apiStats = await fetchSequenceStats(sequence.id, apiKey, replyTeamId);
+
+// If V3 returned no data, try V1 single campaign endpoint
+if (!apiStats.sent && !apiStats.replies) {
+  console.log(`  V3 stats empty, trying V1 /campaigns/${sequence.id}...`);
+  apiStats = await fetchCampaignStatsV1(sequence.id, apiKey, replyTeamId);
+}
+
+console.log(`  Stats: sent=${apiStats.sent || 0}, replies=${apiStats.replies || 0}`);
+```
+
+### 2. Simplify `sync-reply-contacts/index.ts`
+
+Remove the broken engagement counting logic since contacts don't have that data:
+
+```typescript
+// REMOVE these lines (they never work because API doesn't return these fields)
+// if (contact.replied) repliesCount++;
+// if (hasEngagement) deliveredCount++;
+
+// KEEP: Save contacts for profile data (name, company, etc)
+// KEEP: engagement_data structure (for future webhook updates)
+```
+
+The campaign sync will now populate the stats, not the contact sync.
 
 ---
 
@@ -29,92 +87,67 @@ The `setupWebhook` mutation will remain in the file but will NOT be exported. Th
 
 | File | Change |
 |------|--------|
-| `src/components/playground/IntegrationSetupCard.tsx` | Remove webhook UI elements |
-| `src/hooks/useOutboundIntegrations.ts` | Remove `setupWebhook` from exports |
+| `supabase/functions/sync-reply-campaigns/index.ts` | Add `fetchCampaignStatsV1()` function, update sync loop to use V1 fallback |
+| `supabase/functions/sync-reply-contacts/index.ts` | Remove broken engagement counting, keep contact profile sync |
 
 ---
 
-## What Stays Unchanged
+## Why This Will Work
 
-- Edge function `setup-reply-webhook` (stays deployed, just unused)
-- Edge function `reply-webhook` (stays deployed, just unused)
-- Database columns `webhook_status`, `webhook_subscription_id`, `webhook_secret` (stay in schema)
-- Webhook events table (stays for future use)
+The V1 `/campaigns/{id}` endpoint typically returns:
+
+```json
+{
+  "id": 1419855,
+  "name": "Business owners...",
+  "status": 4,
+  "peopleCount": 378,
+  "peopleSent": 114,      // ← Your "emails sent"
+  "peopleReplied": 2,     // ← Your "replies"
+  "peopleOpened": 45,
+  "peopleBounced": 3
+}
+```
+
+This matches your expected 114 sent / 2 replies!
 
 ---
 
-## Why This Approach
+## Data Flow After Fix
 
-1. **Minimal code changes** - Only removing UI, not backend logic
-2. **Easily reversible** - Can re-add the button later
-3. **No database migrations** - Schema stays intact
-4. **Protects working sync** - Webhook errors won't interfere with manual sync
-
----
-
-## Code Changes
-
-### IntegrationSetupCard.tsx
-
-Remove from IntegrationRowProps:
-```typescript
-// Remove these props
-onSetupWebhook: (id: string) => void;
-isSettingUpWebhook: boolean;
-```
-
-Remove from IntegrationRow component:
-```typescript
-// Remove these lines (90-117) - webhook badges and buttons
-{isReplyIo && webhookStatus === 'active' && (...)}
-{isReplyIo && webhookStatus === 'error' && (...)}
-
-// Remove these lines (155-181) - Enable Live button
-{isReplyIo && webhookStatus !== 'active' && (...)}
-```
-
-Remove from IntegrationSetupCard component:
-```typescript
-// Remove state
-const [webhookSetupId, setWebhookSetupId] = useState<string | null>(null);
-
-// Remove from hook destructuring
-setupWebhook  // Remove this
-
-// Remove handler
-const handleSetupWebhook = ...  // Remove entire function
-
-// Remove from IntegrationRow props
-onSetupWebhook={handleSetupWebhook}
-isSettingUpWebhook={webhookSetupId === integration.id}
-```
-
-### useOutboundIntegrations.ts
-
-Keep the `setupWebhook` mutation code but remove from return statement:
-```typescript
-// Before
-return {
-  ...
-  setupWebhook,
-  ...
-};
-
-// After
-return {
-  ...
-  // setupWebhook removed - not exposed to UI
-  ...
-};
+```text
+1. Sync button clicked
+2. sync-reply-campaigns runs:
+   a. Fetch sequence list from V3 (for names/status)
+   b. For each campaign:
+      - Try V3 /statistics/sequences/{id} → 404 error
+      - Fall back to V1 /campaigns/{id} → Gets stats!
+      - Save to synced_campaigns.stats: { sent: 114, replies: 2 }
+3. sync-reply-contacts runs:
+   - Saves contact profiles (name, email, company)
+   - Updates peopleCount
+   - Does NOT try to count engagement (removed)
+4. Dashboard reads synced_campaigns.stats
+   - Shows: 114 Emails Sent, 2 Replies
 ```
 
 ---
 
-## Result
+## What's Preserved
 
-- No "Enable Live" button visible
-- No "Webhook Error" badge visible
-- No "Live" badge visible
-- Sync continues to work exactly as it does now
-- Webhook code preserved for future re-enablement
+- LinkedIn stats from CSV uploads (never overwritten)
+- Contact profile data (name, email, company, etc.)
+- Individual contact response tracking (for future webhook re-enablement)
+- Existing campaign link preferences
+
+---
+
+## Risk Assessment
+
+| Risk | Mitigation |
+|------|------------|
+| V1 endpoint also fails | Graceful fallback to 0 stats (no crash) |
+| Rate limiting | Uses existing retry logic with exponential backoff |
+| Field names different | Check multiple possible field names (`peopleSent`, `sent`, etc.) |
+| Breaking existing logic | Only adds new function, minimal changes to existing flow |
 
