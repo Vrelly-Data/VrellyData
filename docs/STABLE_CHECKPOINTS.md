@@ -1,8 +1,8 @@
 # Stable Checkpoints
 
 **Purpose**: Document stable states for easy recovery. Say "Revert to v3.4 stable state" to restore.  
-**Last Updated**: February 8, 2026  
-**Current Stable Version**: v3.4
+**Last Updated**: February 10, 2026  
+**Current Stable Version**: v3.5
 
 ---
 
@@ -21,7 +21,7 @@ If in doubt, **ASK FIRST**.
 
 Say this to revert to the last known good state:
 
-> **"Revert to v3.3 stable state"**
+> **"Revert to v3.5 stable state"**
 
 The AI will:
 1. Copy functions from the stable migration
@@ -138,6 +138,7 @@ This ensures the UI uses human-readable labels while the database uses short cod
 
 | Version | Date | Changes |
 |---------|------|---------|
+| v3.5 | 2026-02-10 | Email stats aggregation fix, webhook messaging removal from popovers |
 | v3.4 | 2026-02-08 | Data Playground: auto-link on first sync, links_initialized column, Link All recovery button |
 | v3.3 | 2026-01-21 | Updated baseline counts, documented Gender M/F format, verified 137 Male / 55 Female |
 | v3.2 | 2026-01-17 | Established stable state with 724 records, 18 filters, updated baselines |
@@ -211,3 +212,30 @@ If the quick command doesn't work:
 - **"Link all campaigns for integration"** - Uses `linkAllCampaigns` mutation
 - **"Sync contacts for all linked campaigns"** - Uses `startContactsSync`
 - **"Reset integration and re-sync"** - Delete integration, recreate, auto-links fresh
+
+---
+
+## 🎮 Data Playground Stable State (v3.5)
+
+**Date**: February 10, 2026  
+**Status**: Email stats aggregation fixed, webhook messaging removed
+
+### Changes from v3.4
+
+| Change | Description |
+|--------|-------------|
+| Email stats aggregation | Contact-level CSV rows summed by campaign before DB write |
+| Webhook messaging removed | "Real-time via webhooks" footer text removed from popovers |
+
+### Key Files
+
+| File | Role |
+|------|------|
+| `src/hooks/useEmailStatsUpload.ts` | Aggregation Map groups rows by campaignId before update |
+| `src/components/playground/EmailStatsUploadDialog.tsx` | Preview groups by campaign, shows "Result(s)" count |
+| `src/components/playground/PlaygroundStatsGrid.tsx` | Webhook footer blocks removed from popovers |
+
+### Recovery Commands
+
+- **"Re-upload email stats CSV"** - Required after aggregation fix to overwrite zeroed data
+- All v3.4 recovery commands still apply
