@@ -168,7 +168,7 @@ export function useEmailStatsUpload() {
       queryClient.invalidateQueries({ queryKey: ['playground-stats'] });
 
       const skipped = total - updatedCount;
-      const parts = [`Updated ${updatedCount} campaign(s)`];
+      const parts = [`Updated ${updatedCount} result(s)`];
       if (skipped > 0) parts.push(`${skipped} skipped (no match)`);
 
       toast({
