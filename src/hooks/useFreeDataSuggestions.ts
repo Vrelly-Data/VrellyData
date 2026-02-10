@@ -29,18 +29,19 @@ export function useFreeDataSuggestions() {
 
         if (data) {
           const parsed = data as { interests?: string[]; skills?: string[]; industries?: string[]; technologies?: string[] };
+          const titleCase = (s: string) =>
+            s.trim().split(' ')
+              .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+              .join(' ');
+
+          const dedup = (arr: string[]) =>
+            [...new Set(arr.filter(Boolean).map(s => titleCase(s)))];
+
           setSuggestions({
-            interests: (parsed.interests || []).filter(Boolean),
-            skills: (parsed.skills || []).filter(Boolean),
-            industries: [...new Set(
-              (parsed.industries || [])
-                .filter(Boolean)
-                .map(i => i.split(' ')
-                  .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
-                  .join(' ')
-                )
-            )],
-            technologies: (parsed.technologies || []).filter(Boolean),
+            interests: dedup(parsed.interests || []),
+            skills: dedup(parsed.skills || []),
+            industries: dedup(parsed.industries || []),
+            technologies: dedup(parsed.technologies || []),
           });
         }
       } catch (err) {
