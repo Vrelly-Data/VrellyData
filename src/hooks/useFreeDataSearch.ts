@@ -118,6 +118,21 @@ export function useFreeDataSearch() {
         p_has_company_twitter: prospectFlags.hasCompanyTwitter || null,
         p_limit: perPage,
         p_offset: offset,
+        // DNC exclusion parameters
+        p_exclude_keywords: arrayOrNull(filterState.excludeKeywords),
+        p_exclude_job_titles: arrayOrNull(filterState.excludeJobTitles),
+        p_exclude_industries: arrayOrNull(filterState.excludeIndustries),
+        p_exclude_cities: arrayOrNull([
+          ...(filterState.excludePersonCity || []),
+          ...(filterState.excludeCompanyCity || []),
+        ].filter(Boolean)),
+        p_exclude_countries: arrayOrNull([
+          ...(filterState.excludePersonCountry || []),
+          ...(filterState.excludeCompanyCountry || []),
+        ].filter(Boolean)),
+        p_exclude_technologies: arrayOrNull(filterState.excludeTechnologies),
+        p_exclude_person_skills: arrayOrNull(filterState.excludePersonSkills),
+        p_exclude_person_interests: arrayOrNull(filterState.excludePersonInterests),
       };
 
       console.log('[FreeDataSearch] Calling search_free_data_builder with:', searchParams);

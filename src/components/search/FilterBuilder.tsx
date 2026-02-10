@@ -3,52 +3,77 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 
-import { Filter, Search, HelpCircle } from 'lucide-react';
+import { Filter, Search, HelpCircle, ChevronDown } from 'lucide-react';
 import { useAudienceAttributes } from '@/hooks/useAudienceAttributes';
 import { useFreeDataSuggestions } from '@/hooks/useFreeDataSuggestions';
-import { FilterBuilderState } from '@/lib/filterConversion';
+import { FilterBuilderState, getDefaultFilterBuilderState } from '@/lib/filterConversion';
 import { EntityType } from '@/types/audience';
 import { TagInput } from '@/components/ui/tag-input';
 import { MultiSelectDropdown } from '@/components/search/MultiSelectDropdown';
 import { FilterPresetsDropdown } from '@/components/search/FilterPresetsDropdown';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
+import { cn } from '@/lib/utils';
 
 interface FilterBuilderProps {
   entityType: EntityType;
   onSearch: (filters: FilterBuilderState) => void;
 }
 
+/** Reusable DNC (Do Not Include) collapsible section */
+function DncSection({
+  excludeKey,
+  value,
+  onChange,
+  placeholder,
+  suggestions,
+}: {
+  excludeKey: string;
+  value: string[];
+  onChange: (values: string[]) => void;
+  placeholder?: string;
+  suggestions?: string[];
+}) {
+  const [open, setOpen] = useState(false);
+  const hasExclusions = value.length > 0;
+
+  return (
+    <Collapsible open={open || hasExclusions} onOpenChange={setOpen}>
+      <CollapsibleTrigger asChild>
+        <button
+          type="button"
+          className={cn(
+            'flex items-center gap-1 text-xs transition-colors mt-1',
+            hasExclusions ? 'text-destructive font-medium' : 'text-muted-foreground hover:text-foreground'
+          )}
+        >
+          <ChevronDown className={cn('h-3 w-3 transition-transform', (open || hasExclusions) && 'rotate-180')} />
+          {hasExclusions ? `Excluding ${value.length} term${value.length > 1 ? 's' : ''}` : 'Do Not Include'}
+        </button>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="mt-2">
+        <TagInput
+          value={value}
+          onChange={onChange}
+          placeholder={placeholder || 'Type exclusions and press Enter...'}
+          suggestions={suggestions}
+          className="border-destructive/30"
+        />
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
 export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
   const { attributes, loading } = useAudienceAttributes();
   const { suggestions } = useFreeDataSuggestions();
   
-  const getInitialFilterState = (): FilterBuilderState => ({
-    industries: [],
-    cities: [],
-    gender: null,
-    jobTitles: [],
-    seniority: [],
-    department: [],
-    companySize: [],
-    companyRevenue: [],
-    netWorth: [],
-    income: [],
-    keywords: [],
-    prospectData: [],
-    personCity: [],
-    personCountry: [],
-    companyCity: [],
-    companyCountry: [],
-    personInterests: [],
-    personSkills: [],
-    technologies: [],
-    contactFilter: null,
-  });
+  const getInitialFilterState = (): FilterBuilderState => getDefaultFilterBuilderState();
 
   const [filterState, setFilterState] = useState<FilterBuilderState>(getInitialFilterState());
 
@@ -60,32 +85,45 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
   };
 
   const hasActiveFilters = (): boolean => {
+    const s = filterState;
     return (
-      filterState.industries.length > 0 ||
-      filterState.cities.length > 0 ||
-      filterState.gender !== null ||
-      filterState.jobTitles.length > 0 ||
-      filterState.seniority.length > 0 ||
-      filterState.department.length > 0 ||
-      filterState.companySize.length > 0 ||
-      filterState.companyRevenue.length > 0 ||
-      filterState.netWorth.length > 0 ||
-      filterState.income.length > 0 ||
-      filterState.keywords.length > 0 ||
-      (filterState.prospectData?.length || 0) > 0 ||
-      filterState.personCity.length > 0 ||
-      filterState.personCountry.length > 0 ||
-      filterState.companyCity.length > 0 ||
-      filterState.companyCountry.length > 0 ||
-      filterState.personInterests.length > 0 ||
-      filterState.personSkills.length > 0 ||
-      filterState.technologies.length > 0 ||
-      filterState.contactFilter !== null
+      s.industries.length > 0 ||
+      s.cities.length > 0 ||
+      s.gender !== null ||
+      s.jobTitles.length > 0 ||
+      s.seniority.length > 0 ||
+      s.department.length > 0 ||
+      s.companySize.length > 0 ||
+      s.companyRevenue.length > 0 ||
+      s.netWorth.length > 0 ||
+      s.income.length > 0 ||
+      s.keywords.length > 0 ||
+      (s.prospectData?.length || 0) > 0 ||
+      s.personCity.length > 0 ||
+      s.personCountry.length > 0 ||
+      s.companyCity.length > 0 ||
+      s.companyCountry.length > 0 ||
+      s.personInterests.length > 0 ||
+      s.personSkills.length > 0 ||
+      s.technologies.length > 0 ||
+      s.contactFilter !== null ||
+      // DNC fields
+      s.excludeKeywords.length > 0 ||
+      s.excludeJobTitles.length > 0 ||
+      s.excludePersonCity.length > 0 ||
+      s.excludePersonCountry.length > 0 ||
+      s.excludePersonInterests.length > 0 ||
+      s.excludePersonSkills.length > 0 ||
+      s.excludeIndustries.length > 0 ||
+      s.excludeTechnologies.length > 0 ||
+      s.excludeCompanyCity.length > 0 ||
+      s.excludeCompanyCountry.length > 0
     );
   };
 
   const handleLoadPreset = (filters: FilterBuilderState) => {
-    setFilterState(filters);
+    // Ensure loaded presets have exclude fields (backward compat)
+    setFilterState({ ...getDefaultFilterBuilderState(), ...filters });
   };
 
   const handleClearFilters = () => {
@@ -129,6 +167,12 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
             <p className="text-xs text-muted-foreground">
               Add keywords to search in company descriptions, job titles, and other text fields
             </p>
+            <DncSection
+              excludeKey="excludeKeywords"
+              value={filterState.excludeKeywords}
+              onChange={(values) => updateFilter('excludeKeywords', values)}
+              placeholder="Exclude keywords..."
+            />
           </div>
 
           {/* People-only filters */}
@@ -141,6 +185,13 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
                   value={filterState.jobTitles}
                   onChange={(values) => updateFilter('jobTitles', values)}
                   placeholder="Type job titles and press Enter..."
+                  suggestions={attributes.jobTitles}
+                />
+                <DncSection
+                  excludeKey="excludeJobTitles"
+                  value={filterState.excludeJobTitles}
+                  onChange={(values) => updateFilter('excludeJobTitles', values)}
+                  placeholder="Exclude job titles..."
                   suggestions={attributes.jobTitles}
                 />
               </div>
@@ -176,6 +227,13 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
                   placeholder="Type cities and press Enter..."
                   suggestions={attributes.cities}
                 />
+                <DncSection
+                  excludeKey="excludePersonCity"
+                  value={filterState.excludePersonCity}
+                  onChange={(values) => updateFilter('excludePersonCity', values)}
+                  placeholder="Exclude cities..."
+                  suggestions={attributes.cities}
+                />
               </div>
 
               {/* Person Country */}
@@ -187,8 +245,13 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
                   placeholder="Type countries and press Enter..."
                   suggestions={[]}
                 />
+                <DncSection
+                  excludeKey="excludePersonCountry"
+                  value={filterState.excludePersonCountry}
+                  onChange={(values) => updateFilter('excludePersonCountry', values)}
+                  placeholder="Exclude countries..."
+                />
               </div>
-
 
               {/* Person Net Worth */}
               <div className="space-y-2">
@@ -221,6 +284,13 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
                   placeholder="Type interests and press Enter..."
                   suggestions={suggestions.interests}
                 />
+                <DncSection
+                  excludeKey="excludePersonInterests"
+                  value={filterState.excludePersonInterests}
+                  onChange={(values) => updateFilter('excludePersonInterests', values)}
+                  placeholder="Exclude interests..."
+                  suggestions={suggestions.interests}
+                />
               </div>
 
               {/* Person Skill */}
@@ -230,6 +300,13 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
                   value={filterState.personSkills}
                   onChange={(values) => updateFilter('personSkills', values)}
                   placeholder="Type skills and press Enter..."
+                  suggestions={suggestions.skills}
+                />
+                <DncSection
+                  excludeKey="excludePersonSkills"
+                  value={filterState.excludePersonSkills}
+                  onChange={(values) => updateFilter('excludePersonSkills', values)}
+                  placeholder="Exclude skills..."
                   suggestions={suggestions.skills}
                 />
               </div>
@@ -268,6 +345,13 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
               placeholder="Type industries and press Enter..."
               suggestions={[...new Set([...attributes.industries, ...suggestions.industries])]}
             />
+            <DncSection
+              excludeKey="excludeIndustries"
+              value={filterState.excludeIndustries}
+              onChange={(values) => updateFilter('excludeIndustries', values)}
+              placeholder="Exclude industries..."
+              suggestions={[...new Set([...attributes.industries, ...suggestions.industries])]}
+            />
           </div>
 
           {/* Technologies */}
@@ -277,6 +361,13 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
               value={filterState.technologies}
               onChange={(values) => updateFilter('technologies', values)}
               placeholder="Type technologies and press Enter..."
+              suggestions={suggestions.technologies}
+            />
+            <DncSection
+              excludeKey="excludeTechnologies"
+              value={filterState.excludeTechnologies}
+              onChange={(values) => updateFilter('excludeTechnologies', values)}
+              placeholder="Exclude technologies..."
               suggestions={suggestions.technologies}
             />
           </div>
@@ -320,6 +411,13 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
               placeholder="Type cities and press Enter..."
               suggestions={attributes.cities}
             />
+            <DncSection
+              excludeKey="excludeCompanyCity"
+              value={filterState.excludeCompanyCity}
+              onChange={(values) => updateFilter('excludeCompanyCity', values)}
+              placeholder="Exclude cities..."
+              suggestions={attributes.cities}
+            />
           </div>
 
           {/* Company Country */}
@@ -330,6 +428,12 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
               onChange={(values) => updateFilter('companyCountry', values)}
               placeholder="Type countries and press Enter..."
               suggestions={[]}
+            />
+            <DncSection
+              excludeKey="excludeCompanyCountry"
+              value={filterState.excludeCompanyCountry}
+              onChange={(values) => updateFilter('excludeCompanyCountry', values)}
+              placeholder="Exclude countries..."
             />
           </div>
 

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { FilterDSL, PersonEntity, CompanyEntity, EntityType } from '@/types/audience';
-import { FilterBuilderState } from '@/lib/filterConversion';
+import { FilterBuilderState, getDefaultFilterBuilderState } from '@/lib/filterConversion';
 import { MockAttributeOptions, MOCK_ATTRIBUTES } from '@/lib/mockData';
 
 interface AudienceState {
@@ -50,28 +50,7 @@ export const useAudienceStore = create<AudienceState>((set) => ({
   loading: false,
   selectedEntity: null,
   
-  filterBuilderState: {
-    industries: [],
-    cities: [],
-    gender: null,
-    jobTitles: [],
-    seniority: [],
-    department: [],
-    companySize: [],
-    companyRevenue: [],
-    netWorth: [],
-    income: [],
-    keywords: [],
-    prospectData: [],
-    personCity: [],
-    personCountry: [],
-    companyCity: [],
-    companyCountry: [],
-    personInterests: [],
-    personSkills: [],
-    technologies: [],
-    contactFilter: null,
-  },
+  filterBuilderState: getDefaultFilterBuilderState(),
   filterState: null,
   availableAttributes: MOCK_ATTRIBUTES,
   

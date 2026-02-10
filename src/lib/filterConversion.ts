@@ -21,6 +21,52 @@ export interface FilterBuilderState {
   personSkills: string[];
   technologies: string[];
   contactFilter: 'all' | 'net_new' | null;
+  // DNC (Do Not Include) exclusion fields
+  excludeKeywords: string[];
+  excludeJobTitles: string[];
+  excludePersonCity: string[];
+  excludePersonCountry: string[];
+  excludePersonInterests: string[];
+  excludePersonSkills: string[];
+  excludeIndustries: string[];
+  excludeTechnologies: string[];
+  excludeCompanyCity: string[];
+  excludeCompanyCountry: string[];
+}
+
+export function getDefaultFilterBuilderState(): FilterBuilderState {
+  return {
+    industries: [],
+    cities: [],
+    gender: null,
+    jobTitles: [],
+    seniority: [],
+    department: [],
+    companySize: [],
+    companyRevenue: [],
+    netWorth: [],
+    income: [],
+    keywords: [],
+    prospectData: [],
+    personCity: [],
+    personCountry: [],
+    companyCity: [],
+    companyCountry: [],
+    personInterests: [],
+    personSkills: [],
+    technologies: [],
+    contactFilter: null,
+    excludeKeywords: [],
+    excludeJobTitles: [],
+    excludePersonCity: [],
+    excludePersonCountry: [],
+    excludePersonInterests: [],
+    excludePersonSkills: [],
+    excludeIndustries: [],
+    excludeTechnologies: [],
+    excludeCompanyCity: [],
+    excludeCompanyCountry: [],
+  };
 }
 
 export function convertFilterStateToAudienceLabFormat(state: FilterBuilderState): AudienceLabFilters {
