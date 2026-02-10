@@ -84,9 +84,31 @@ export function useEmailStatsUpload() {
         }
       }
 
-      let updatedCount = 0;
-
+      // Aggregate rows by campaignId to handle contact-level CSVs
+      const aggregated = new Map<string, EmailStatsRow>();
       for (const stat of stats) {
+        const key = stat.campaignId || `unmatched:${stat.campaignName}`;
+        const existing = aggregated.get(key);
+        if (existing) {
+          existing.delivered += stat.delivered;
+          existing.replies += stat.replies;
+          existing.opens += stat.opens;
+          existing.clicked += stat.clicked;
+          existing.bounced += stat.bounced;
+          existing.outOfOffice += stat.outOfOffice;
+          existing.optedOut += stat.optedOut;
+          existing.interested += stat.interested;
+          existing.notInterested += stat.notInterested;
+          existing.autoReplied += stat.autoReplied;
+        } else {
+          aggregated.set(key, { ...stat });
+        }
+      }
+
+      let updatedCount = 0;
+      const aggregatedStats = Array.from(aggregated.values());
+
+      for (const stat of aggregatedStats) {
         const emailStats: Record<string, unknown> = {
           sent: stat.delivered,
           delivered: stat.delivered,
@@ -132,7 +154,6 @@ export function useEmailStatsUpload() {
           if (!error) updatedCount++;
           else console.error(`Error updating campaign ${matchedCampaign.name}:`, error);
         } else if (stat.matched && stat.campaignId) {
-          // Fallback: pre-matched from dialog
           const { data: campaign } = await supabase
             .from('synced_campaigns')
             .select('stats')
@@ -161,7 +182,7 @@ export function useEmailStatsUpload() {
         }
       }
 
-      return { updatedCount, total: stats.length };
+      return { updatedCount, total: aggregatedStats.length };
     },
     onSuccess: ({ updatedCount, total }) => {
       queryClient.invalidateQueries({ queryKey: ['synced-campaigns'] });

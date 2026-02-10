@@ -109,14 +109,14 @@ export function EmailStatsUploadDialog({ open, onOpenChange }: EmailStatsUploadD
         const notInterestedCol = findCol(headers, NOT_INTERESTED_ALIASES);
         const autoRepliedCol = findCol(headers, AUTO_REPLIED_ALIASES);
 
-        const stats: EmailStatsRow[] = (results.data as Record<string, unknown>[])
+        // Parse individual rows
+        const rawRows: EmailStatsRow[] = (results.data as Record<string, unknown>[])
           .map((row) => {
             const campaignName = String(row[campaignCol] || '').trim();
             if (!campaignName) return null;
 
             const sequenceId = seqIdCol ? String(row[seqIdCol] || '').trim() || null : null;
 
-            // Match by sequence ID first, then name
             let matchedCampaign = sequenceId
               ? campaigns.find(c => c.external_campaign_id === sequenceId)
               : null;
@@ -143,12 +143,33 @@ export function EmailStatsUploadDialog({ open, onOpenChange }: EmailStatsUploadD
           })
           .filter(Boolean) as EmailStatsRow[];
 
-        if (stats.length === 0) {
+        if (rawRows.length === 0) {
           setError('No valid data rows found in CSV');
           return;
         }
 
-        setParsedStats(stats);
+        // Aggregate by campaign name so contact-level rows are summed
+        const aggregatedMap = new Map<string, EmailStatsRow>();
+        for (const row of rawRows) {
+          const key = row.campaignName;
+          const existing = aggregatedMap.get(key);
+          if (existing) {
+            existing.delivered += row.delivered;
+            existing.replies += row.replies;
+            existing.opens += row.opens;
+            existing.clicked += row.clicked;
+            existing.bounced += row.bounced;
+            existing.outOfOffice += row.outOfOffice;
+            existing.optedOut += row.optedOut;
+            existing.interested += row.interested;
+            existing.notInterested += row.notInterested;
+            existing.autoReplied += row.autoReplied;
+          } else {
+            aggregatedMap.set(key, { ...row });
+          }
+        }
+
+        setParsedStats(Array.from(aggregatedMap.values()));
         setStep('preview');
       },
       error: (parseError) => {
