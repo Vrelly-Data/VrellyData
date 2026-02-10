@@ -20,6 +20,12 @@ import {
 } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 
+/** Case-insensitive dedup: Title Case + trim + unique */
+const dedup = (arr: string[]) =>
+  [...new Set(arr.map(s =>
+    s.trim().split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ')
+  ))].filter(Boolean);
+
 interface FilterBuilderProps {
   entityType: EntityType;
   onSearch: (filters: FilterBuilderState) => void;
@@ -343,14 +349,14 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
               value={filterState.industries}
               onChange={(values) => updateFilter('industries', values)}
               placeholder="Type industries and press Enter..."
-              suggestions={[...new Set([...attributes.industries, ...suggestions.industries])]}
+              suggestions={dedup([...attributes.industries, ...suggestions.industries])}
             />
             <DncSection
               excludeKey="excludeIndustries"
               value={filterState.excludeIndustries}
               onChange={(values) => updateFilter('excludeIndustries', values)}
               placeholder="Exclude industries..."
-              suggestions={[...new Set([...attributes.industries, ...suggestions.industries])]}
+              suggestions={dedup([...attributes.industries, ...suggestions.industries])}
             />
           </div>
 
