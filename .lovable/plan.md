@@ -1,52 +1,45 @@
 
 
-# Fix Duplicate Industry Suggestions
+# Fix: Case-insensitive deduplication of industry suggestions
 
 ## Problem
 
-The industry suggestions dropdown shows duplicate entries (e.g., "Insurance" appearing twice). This happens because the suggestion list is built by merging two sources:
+The Industry filter shows both "Insurance" and "insurance" (displayed as two separate suggestions) because two separate data sources are merged with a case-sensitive `new Set()`:
 
-1. **Mock/hardcoded industries** from `MOCK_ATTRIBUTES` (e.g., "Retail", "Software")
-2. **Database-sourced industries** from `get_filter_suggestions()` (e.g., "insurance", "retail")
+1. `attributes.industries` -- from the AudienceLab API edge function (may contain "Insurance", "insurance", etc.)
+2. `suggestions.industries` -- from the database `get_filter_suggestions()` function (returns lowercase, then Title Cased by the frontend)
 
-The frontend applies Title Case normalization and `new Set()` deduplication, but there are edge cases where case-sensitive `DISTINCT` in PostgreSQL produces near-duplicates that slip through.
+The `new Set()` in FilterBuilder treats "Insurance" and "insurance" as different strings.
 
-## Root Cause
+## Fix (1 file change)
 
-The database function `get_filter_suggestions` uses `DISTINCT` on raw values, which is **case-sensitive** in PostgreSQL. If the data contains both `insurance` and `Insurance` across different records (one in `industry`, another in `companyIndustry`), both survive `DISTINCT` and get returned. The frontend Title Case + `new Set` should catch these, but only if the normalization is perfectly consistent. Values with special characters like `&`, `-`, or `,` can produce inconsistent Title Case results.
+Update **FilterBuilder.tsx** lines 346 and 353 where the two arrays are merged. Instead of:
 
-## Fix (2 changes)
-
-### 1. Database function: case-insensitive deduplication
-
-Update `get_filter_suggestions` so the industries subquery uses `LOWER(TRIM(...))` for deduplication, then returns the lowercased values. This guarantees no case-based duplicates leave the database.
-
-```sql
--- Current: DISTINCT val (case-sensitive)
--- Fixed:   DISTINCT LOWER(TRIM(val)) (case-insensitive)
+```ts
+[...new Set([...attributes.industries, ...suggestions.industries])]
 ```
 
-This is a single `CREATE OR REPLACE FUNCTION` migration -- no signature change, no parameter changes.
+Use a case-insensitive dedup helper that Title Cases all values before deduplication:
 
-### 2. Frontend hook: add `.trim()` before Title Case
-
-In `useFreeDataSuggestions.ts`, add `.trim()` to the industry normalization pipeline to catch any whitespace edge cases:
-
-```
-.map(i => i.trim().split(' ')...)
+```ts
+const dedup = (arr: string[]) => [...new Set(arr.map(s =>
+  s.trim().split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ')
+))].filter(Boolean);
 ```
 
-Also apply the same deduplication to the `skills`, `interests`, and `technologies` arrays for consistency (they currently don't normalize at all).
+Then apply it to both the include and exclude suggestion props:
 
-## What Does NOT Change
+```ts
+suggestions={dedup([...attributes.industries, ...suggestions.industries])}
+```
 
-- `search_free_data_builder` function -- untouched
-- All 37 parameters -- untouched
-- FilterBuilder UI -- untouched
-- DNC exclusion logic -- untouched
-- Filter result counts -- untouched
-- No changes to any other hooks or components
+This ensures "insurance", "Insurance", and "INSURANCE" all collapse into a single "Insurance" entry.
 
-## Revert Safety
+## What does NOT change
 
-"Revert to v3.5 stable state" still applies. These changes are purely cosmetic (suggestion display only) and have zero impact on search logic.
+- Database function `get_filter_suggestions` -- already fixed, no further changes
+- `useFreeDataSuggestions.ts` -- already fixed, no further changes
+- `search_free_data_builder` -- untouched
+- All filter parameters and DNC logic -- untouched
+- No other suggestion fields affected (skills, interests, technologies only come from one source)
+
