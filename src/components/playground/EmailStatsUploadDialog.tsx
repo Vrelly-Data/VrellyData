@@ -305,7 +305,7 @@ export function EmailStatsUploadDialog({ open, onOpenChange }: EmailStatsUploadD
                 Cancel
               </Button>
               <Button onClick={handleImport} disabled={matchedCount === 0}>
-                Import {matchedCount} Campaign(s)
+                Import {matchedCount} Result(s)
               </Button>
             </DialogFooter>
           </>
