@@ -189,15 +189,6 @@ export function PlaygroundStatsGrid() {
             </div>
           )}
         </div>
-        {hasWebhookData ? (
-          <p className="text-xs text-green-600 pt-1 border-t flex items-center gap-1">
-            <Zap className="h-3 w-3" /> Real-time via webhooks
-          </p>
-        ) : (
-          <p className="text-xs text-muted-foreground pt-1 border-t">
-            Enable webhooks for LinkedIn tracking
-          </p>
-        )}
       </div>
     </TooltipProvider>
   );
@@ -259,15 +250,6 @@ export function PlaygroundStatsGrid() {
             )}
           </div>
         </div>
-        {hasWebhookData ? (
-          <p className="text-xs text-green-600 pt-1 border-t flex items-center gap-1">
-            <Zap className="h-3 w-3" /> Real-time via webhooks
-          </p>
-        ) : (
-          <p className="text-xs text-muted-foreground pt-1 border-t">
-            Enable webhooks for LinkedIn tracking
-          </p>
-        )}
       </div>
     </TooltipProvider>
   );
