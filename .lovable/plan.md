@@ -1,147 +1,52 @@
 
 
-# DNC (Do Not Include) Filters for the Audience Builder
+# Fix: Restore LinkedIn Field Names in search_free_data_builder
 
-## Revert Safety
+## What Broke
 
-**Your revert command: "Revert to v3.5 stable state"**
+Exactly **2 prospect data checks** use the wrong JSONB field name:
 
-All changes below are purely additive. No existing parameters, logic, or filter behavior will be modified.
+| Parameter | Currently checks | Should check | Records affected |
+|---|---|---|---|
+| `p_has_linkedin` | `linkedinUrl` (0 matches) | `linkedin` (400 matches) |
+| `p_has_company_linkedin` | `companyLinkedinUrl` (0 matches) | `companyLinkedin` (203 matches) |
 
-## Overview
-
-Add an expandable "Do Not Include" (DNC) section beneath each tag-input filter in the Builder. Users click a small arrow/chevron to reveal a second input that accepts exclusion terms. These exclusion terms get passed as new, separate parameters to the database function.
-
-## Approach: Additive Only
-
-The strategy is straightforward:
-
-1. **FilterBuilderState** gets new `exclude_*` fields (all default to empty arrays -- existing fields untouched)
-2. **FilterBuilder UI** gets a collapsible DNC section under each tag-input filter
-3. **useFreeDataSearch** passes the new exclude fields as new parameters (existing parameter mapping untouched)
-4. **search_free_data_builder** DB function gets new exclusion parameters added to the end of its signature (existing 29 parameters untouched, new ones appended with defaults of NULL)
-
-Because every new parameter defaults to NULL, **passing nothing changes nothing** -- all existing queries return identical results.
-
-## Tag-Input Fields That Get DNC
-
-These are the fields using TagInput (free-text entry):
-
-- Keywords
-- Job Titles
-- Person City
-- Person Country
-- Person Interest
-- Person Skill
-- Industry
-- Technologies
-- Company City
-- Company Country
-
-MultiSelectDropdown fields (Seniority, Department, Company Size, etc.) do NOT get DNC since they use predefined options where exclusion is less meaningful.
-
-## Step-by-Step Changes
-
-### Step 1: Update `FilterBuilderState` type
-
-**File**: `src/lib/filterConversion.ts`
-
-Add new optional exclusion fields (appended, nothing removed):
-
-```
-excludeKeywords: string[];
-excludeJobTitles: string[];
-excludePersonCity: string[];
-excludePersonCountry: string[];
-excludePersonInterests: string[];
-excludePersonSkills: string[];
-excludeIndustries: string[];
-excludeTechnologies: string[];
-excludeCompanyCity: string[];
-excludeCompanyCountry: string[];
-```
-
-### Step 2: Update FilterBuilder UI
-
-**File**: `src/components/search/FilterBuilder.tsx`
-
-For each tag-input filter, add a collapsible "Do Not Include" section below it:
-
-```text
-[Keywords]
-[tag1] [tag2] [input field...]
-  v Do Not Include
-    [exclude-tag1] [exclude-tag2] [input field...]
-```
-
-The chevron (v) toggles visibility using the existing Collapsible component from Radix UI (already installed). Each DNC section is independent -- users can expand only the ones they need.
-
-### Step 3: Update `useFreeDataSearch.ts`
-
-**File**: `src/hooks/useFreeDataSearch.ts`
-
-Map the new exclude fields to new DB parameters, using the same `arrayOrNull` helper. Appended to the existing `searchParams` object -- no existing lines changed.
-
-### Step 4: Update database function
-
-**Migration**: New migration file
-
-Use `CREATE OR REPLACE FUNCTION` to add new exclusion parameters to the END of the signature:
-
-```
-p_exclude_keywords text[] DEFAULT NULL,
-p_exclude_job_titles text[] DEFAULT NULL,
-p_exclude_industries text[] DEFAULT NULL,
-p_exclude_cities text[] DEFAULT NULL,
-p_exclude_countries text[] DEFAULT NULL,
-p_exclude_technologies text[] DEFAULT NULL,
-p_exclude_person_skills text[] DEFAULT NULL,
-p_exclude_person_interests text[] DEFAULT NULL
-```
-
-Each exclusion adds a simple `AND NOT` clause:
-
-```sql
-AND (p_exclude_keywords IS NULL OR NOT (
-  -- same keyword search fields, but negated
-))
-```
-
-All existing logic stays identical. The guarded pattern (drop + recreate + assert) will be used per the project convention.
-
-### Step 5: Update initial state and clear logic
-
-**File**: `src/components/search/FilterBuilder.tsx`
-
-- `getInitialFilterState()` includes all `exclude*` fields as empty arrays
-- `hasActiveFilters()` checks exclude fields too
-- `handleClearFilters` resets them
-
-### Step 6: Update filter presets
-
-**File**: `src/hooks/useFilterPresets.ts` (if applicable)
-
-Ensure saved/loaded presets gracefully handle the new fields (default to empty arrays if missing from stored data).
+All other 35 parameters are working correctly -- verified by direct database queries.
 
 ## What Does NOT Change
 
-- The existing 29 parameters keep their positions and defaults
-- All 18 verified filters continue returning identical results
-- No existing UI components are modified (only new sub-sections added)
-- `filterMockPeople` and `filterMockCompanies` in filterConversion.ts are untouched
-- Gender, Prospect Data, Seniority, Department, Company Size, Company Revenue, Net Worth, Income filters are unchanged
-- Baseline counts (724 records, 400 person, 324 company) remain identical
+Everything else stays identical:
+- All 37 parameters keep their positions and defaults
+- All non-LinkedIn filters return correct counts (verified above)
+- DNC exclusion parameters remain functional
+- No frontend code changes needed
+- No changes to filterConversion.ts, useFreeDataSearch.ts, or FilterBuilder.tsx
 
-## Verification After Implementation
+## The Fix
 
-1. Run all baseline queries from `docs/BUILDER_SEARCH_TEST.sql`
-2. Confirm counts match v3.3 baselines
-3. Test a DNC filter returns fewer results than the same include filter
-4. Confirm empty DNC fields produce identical results to current behavior
+**1 database migration** that uses `CREATE OR REPLACE FUNCTION` to update only 4 lines in the function body (2 checks x 2 occurrences in COUNT and RETURN QUERY):
 
-## New Parameter Count
+```sql
+-- Line change 1 (p_has_linkedin in COUNT):
+-- FROM: AND (p_has_linkedin IS NULL OR p_has_linkedin = false OR (fd.entity_data->>'linkedinUrl' IS NOT NULL AND fd.entity_data->>'linkedinUrl' != ''))
+-- TO:   AND (p_has_linkedin IS NULL OR p_has_linkedin = false OR (fd.entity_data->>'linkedin' IS NOT NULL AND fd.entity_data->>'linkedin' != ''))
 
-29 existing + 8 exclusion = **37 parameters**
+-- Line change 2 (p_has_company_linkedin in COUNT):
+-- FROM: AND (p_has_company_linkedin IS NULL OR p_has_company_linkedin = false OR (fd.entity_data->>'companyLinkedinUrl' IS NOT NULL AND fd.entity_data->>'companyLinkedinUrl' != ''))
+-- TO:   AND (p_has_company_linkedin IS NULL OR p_has_company_linkedin = false OR (fd.entity_data->>'companyLinkedin' IS NOT NULL AND fd.entity_data->>'companyLinkedin' != ''))
 
-Documentation will be updated to reflect this, but the revert command still restores the 29-parameter v3.5 state.
+-- Same 2 changes repeated in the RETURN QUERY section
+```
+
+The migration will include the full function body (required by `CREATE OR REPLACE`) but only these 4 lines differ from the current deployed version.
+
+## Verification After Fix
+
+- `p_has_linkedin = true` should return **400** (was 0)
+- `p_has_company_linkedin = true` should return **203** (was 0)
+- All other filters remain unchanged (already verified working)
+
+## Revert Safety
+
+If anything goes wrong: **"Revert to v3.5 stable state"**
 
