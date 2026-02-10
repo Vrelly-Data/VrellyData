@@ -20,6 +20,20 @@ const LINKEDIN_FIELDS = [
   'linkedinDataUploadedAt',
 ];
 
+// Email CSV upload fields - preserved from CSV uploads, never overwritten by sync
+const EMAIL_UPLOAD_FIELDS = [
+  'emailDataSource',
+  'emailDataUploadedAt',
+  'opens',
+  'clicked',
+  'bounced',
+  'outOfOffice',
+  'optedOut',
+  'interested',
+  'notInterested',
+  'autoReplied',
+];
+
 // V3 Sequence structure (replaces V1 Campaign)
 interface ReplyioSequence {
   id: number;
@@ -442,6 +456,15 @@ Deno.serve(async (req) => {
           }
         }
 
+        // Preserve email CSV upload fields from existing stats
+        const emailUploadStats: Record<string, unknown> = {};
+        const hasEmailUpload = existingStats.emailDataSource === 'csv_upload';
+        for (const field of EMAIL_UPLOAD_FIELDS) {
+          if (existingStats[field] !== undefined) {
+            emailUploadStats[field] = existingStats[field];
+          }
+        }
+
         // Fetch stats - multiple fallback layers
         console.log(`  Fetching stats from V3 Statistics API...`);
         let apiStats = await fetchSequenceStats(sequence.id, apiKey, replyTeamId || undefined);
@@ -472,16 +495,29 @@ Deno.serve(async (req) => {
         const existingDelivered = existingStats.delivered as number | undefined;
         const existingReplies = existingStats.replies as number | undefined;
 
-        // Merge: preserve existing stats, overlay API data, preserve LinkedIn stats
-        // DO NOT use peopleCount as fallback - it's "contacts added", not "emails sent"
+        // For sent/delivered/replies: if we have email upload data and the API returns 0,
+        // prefer the uploaded values (the API often can't retrieve these stats)
+        let finalSent = apiStats.sent || existingSent || 0;
+        let finalDelivered = apiStats.delivered || existingDelivered || 0;
+        let finalReplies = apiStats.replies || existingReplies || 0;
+
+        if (hasEmailUpload) {
+          // If API returns 0 but we have existing uploaded values, keep the uploaded values
+          if (!apiStats.sent && existingSent) finalSent = existingSent;
+          if (!apiStats.delivered && existingDelivered) finalDelivered = existingDelivered;
+          if (!apiStats.replies && existingReplies) finalReplies = existingReplies;
+          console.log(`  Email upload detected - preserving uploaded stats: sent=${finalSent}, delivered=${finalDelivered}, replies=${finalReplies}`);
+        }
+
+        // Merge: preserve existing stats, overlay API data, preserve LinkedIn + email upload stats
         const mergedStats = {
-          ...existingStats,      // Preserve ALL existing stats (including peopleCount, replies, etc.)
+          ...existingStats,      // Preserve ALL existing stats
           ...apiStats,           // Overlay with fresh API data (if available)
           ...linkedinStats,      // Preserve LinkedIn fields from CSV uploads
-          // Only use actual API data or existing values - NOT peopleCount
-          sent: apiStats.sent || existingSent || 0,
-          delivered: apiStats.delivered || existingDelivered || 0,
-          replies: apiStats.replies || existingReplies || 0,
+          ...emailUploadStats,   // Preserve email upload fields from CSV uploads
+          sent: finalSent,
+          delivered: finalDelivered,
+          replies: finalReplies,
           // Keep peopleCount separate - it represents contacts enrolled, not emails sent
           peopleCount: existingPeopleCount || 0,
         };
