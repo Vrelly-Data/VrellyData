@@ -1,52 +1,52 @@
 
 
-# Fix: Restore LinkedIn Field Names in search_free_data_builder
+# Fix Duplicate Industry Suggestions
 
-## What Broke
+## Problem
 
-Exactly **2 prospect data checks** use the wrong JSONB field name:
+The industry suggestions dropdown shows duplicate entries (e.g., "Insurance" appearing twice). This happens because the suggestion list is built by merging two sources:
 
-| Parameter | Currently checks | Should check | Records affected |
-|---|---|---|---|
-| `p_has_linkedin` | `linkedinUrl` (0 matches) | `linkedin` (400 matches) |
-| `p_has_company_linkedin` | `companyLinkedinUrl` (0 matches) | `companyLinkedin` (203 matches) |
+1. **Mock/hardcoded industries** from `MOCK_ATTRIBUTES` (e.g., "Retail", "Software")
+2. **Database-sourced industries** from `get_filter_suggestions()` (e.g., "insurance", "retail")
 
-All other 35 parameters are working correctly -- verified by direct database queries.
+The frontend applies Title Case normalization and `new Set()` deduplication, but there are edge cases where case-sensitive `DISTINCT` in PostgreSQL produces near-duplicates that slip through.
+
+## Root Cause
+
+The database function `get_filter_suggestions` uses `DISTINCT` on raw values, which is **case-sensitive** in PostgreSQL. If the data contains both `insurance` and `Insurance` across different records (one in `industry`, another in `companyIndustry`), both survive `DISTINCT` and get returned. The frontend Title Case + `new Set` should catch these, but only if the normalization is perfectly consistent. Values with special characters like `&`, `-`, or `,` can produce inconsistent Title Case results.
+
+## Fix (2 changes)
+
+### 1. Database function: case-insensitive deduplication
+
+Update `get_filter_suggestions` so the industries subquery uses `LOWER(TRIM(...))` for deduplication, then returns the lowercased values. This guarantees no case-based duplicates leave the database.
+
+```sql
+-- Current: DISTINCT val (case-sensitive)
+-- Fixed:   DISTINCT LOWER(TRIM(val)) (case-insensitive)
+```
+
+This is a single `CREATE OR REPLACE FUNCTION` migration -- no signature change, no parameter changes.
+
+### 2. Frontend hook: add `.trim()` before Title Case
+
+In `useFreeDataSuggestions.ts`, add `.trim()` to the industry normalization pipeline to catch any whitespace edge cases:
+
+```
+.map(i => i.trim().split(' ')...)
+```
+
+Also apply the same deduplication to the `skills`, `interests`, and `technologies` arrays for consistency (they currently don't normalize at all).
 
 ## What Does NOT Change
 
-Everything else stays identical:
-- All 37 parameters keep their positions and defaults
-- All non-LinkedIn filters return correct counts (verified above)
-- DNC exclusion parameters remain functional
-- No frontend code changes needed
-- No changes to filterConversion.ts, useFreeDataSearch.ts, or FilterBuilder.tsx
-
-## The Fix
-
-**1 database migration** that uses `CREATE OR REPLACE FUNCTION` to update only 4 lines in the function body (2 checks x 2 occurrences in COUNT and RETURN QUERY):
-
-```sql
--- Line change 1 (p_has_linkedin in COUNT):
--- FROM: AND (p_has_linkedin IS NULL OR p_has_linkedin = false OR (fd.entity_data->>'linkedinUrl' IS NOT NULL AND fd.entity_data->>'linkedinUrl' != ''))
--- TO:   AND (p_has_linkedin IS NULL OR p_has_linkedin = false OR (fd.entity_data->>'linkedin' IS NOT NULL AND fd.entity_data->>'linkedin' != ''))
-
--- Line change 2 (p_has_company_linkedin in COUNT):
--- FROM: AND (p_has_company_linkedin IS NULL OR p_has_company_linkedin = false OR (fd.entity_data->>'companyLinkedinUrl' IS NOT NULL AND fd.entity_data->>'companyLinkedinUrl' != ''))
--- TO:   AND (p_has_company_linkedin IS NULL OR p_has_company_linkedin = false OR (fd.entity_data->>'companyLinkedin' IS NOT NULL AND fd.entity_data->>'companyLinkedin' != ''))
-
--- Same 2 changes repeated in the RETURN QUERY section
-```
-
-The migration will include the full function body (required by `CREATE OR REPLACE`) but only these 4 lines differ from the current deployed version.
-
-## Verification After Fix
-
-- `p_has_linkedin = true` should return **400** (was 0)
-- `p_has_company_linkedin = true` should return **203** (was 0)
-- All other filters remain unchanged (already verified working)
+- `search_free_data_builder` function -- untouched
+- All 37 parameters -- untouched
+- FilterBuilder UI -- untouched
+- DNC exclusion logic -- untouched
+- Filter result counts -- untouched
+- No changes to any other hooks or components
 
 ## Revert Safety
 
-If anything goes wrong: **"Revert to v3.5 stable state"**
-
+"Revert to v3.5 stable state" still applies. These changes are purely cosmetic (suggestion display only) and have zero impact on search logic.
