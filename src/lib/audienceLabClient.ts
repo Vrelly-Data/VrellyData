@@ -1,6 +1,6 @@
 import { FilterDSL, PersonEntity, CompanyEntity, EntityType, AudienceLabFilters, CreateAudienceRequest } from '@/types/audience';
 import { supabase } from '@/integrations/supabase/client';
-import { FilterBuilderState, filterMockPeople, filterMockCompanies, convertFilterStateToAudienceLabFormat } from '@/lib/filterConversion';
+import { FilterBuilderState, filterMockPeople, filterMockCompanies, convertFilterStateToAudienceLabFormat, getDefaultFilterBuilderState } from '@/lib/filterConversion';
 import { generateMockPeople, generateMockCompanies, MOCK_ATTRIBUTES } from '@/lib/mockData';
 
 // Set to false to use real AudienceLab API (requires credits)
@@ -138,12 +138,7 @@ class AudienceLabClient {
         // Real API mode - use /enrich endpoint
         console.log('[AudienceLab API] Searching people with filters:', params.filterState);
         
-        const filters = convertFilterStateToAudienceLabFormat(params.filterState || {
-          industries: [], cities: [], gender: null, jobTitles: [], seniority: [],
-          department: [], companySize: [], companyRevenue: [], netWorth: [], income: [], keywords: [],
-          prospectData: [], personCity: [], personCountry: [], companyCity: [], companyCountry: [],
-          personInterests: [], personSkills: [], technologies: [], contactFilter: null,
-        });
+        const filters = convertFilterStateToAudienceLabFormat(params.filterState || getDefaultFilterBuilderState());
         console.log('[AudienceLab API] Converted filters:', filters);
         
         const response = await supabase.functions.invoke('audiencelab-api', {
@@ -245,12 +240,7 @@ class AudienceLabClient {
         // Real API mode - use /enrich endpoint
         console.log('[AudienceLab API] Searching companies with filters:', params.filterState);
         
-        const filters = convertFilterStateToAudienceLabFormat(params.filterState || {
-          industries: [], cities: [], gender: null, jobTitles: [], seniority: [],
-          department: [], companySize: [], companyRevenue: [], netWorth: [], income: [], keywords: [],
-          prospectData: [], personCity: [], personCountry: [], companyCity: [], companyCountry: [],
-          personInterests: [], personSkills: [], technologies: [], contactFilter: null,
-        });
+        const filters = convertFilterStateToAudienceLabFormat(params.filterState || getDefaultFilterBuilderState());
         console.log('[AudienceLab API] Converted filters:', filters);
         
         const response = await supabase.functions.invoke('audiencelab-api', {

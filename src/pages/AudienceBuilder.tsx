@@ -24,7 +24,7 @@ import { PersonEntity, CompanyEntity } from '@/types/audience';
 import { FilterBuilder } from '@/components/search/FilterBuilder';
 import { CreditDisplay } from '@/components/search/CreditDisplay';
 import { PaginationControls } from '@/components/search/PaginationControls';
-import { FilterBuilderState } from '@/lib/filterConversion';
+import { FilterBuilderState, getDefaultFilterBuilderState } from '@/lib/filterConversion';
 import { UnlockConfirmDialog } from '@/components/search/UnlockConfirmDialog';
 import { ListManagementDialog } from '@/components/records/ListManagementDialog';
 import { SendContactsDialog } from '@/components/records/SendContactsDialog';
@@ -396,28 +396,7 @@ export default function AudienceBuilder() {
       const allResults: (PersonEntity | CompanyEntity)[] = [];
       const totalPagesToFetch = Math.ceil(totalEstimate / perPage);
       
-      const currentFilterState = filterState || {
-        industries: [],
-        cities: [],
-        gender: null,
-        jobTitles: [],
-        seniority: [],
-        department: [],
-        companySize: [],
-        companyRevenue: [],
-        netWorth: [],
-        income: [],
-        keywords: [],
-        prospectData: [],
-        personCity: [],
-        personCountry: [],
-        companyCity: [],
-        companyCountry: [],
-        personInterests: [],
-        personSkills: [],
-        technologies: [],
-        contactFilter: null,
-      };
+      const currentFilterState = filterState || getDefaultFilterBuilderState();
       
       for (let page = 1; page <= totalPagesToFetch; page++) {
         const response = currentType === 'person'
@@ -457,28 +436,7 @@ export default function AudienceBuilder() {
       let fetched = 0;
       let currentPageNum = 1;
       
-      const currentFilterState = filterState || {
-        industries: [],
-        cities: [],
-        gender: null,
-        jobTitles: [],
-        seniority: [],
-        department: [],
-        companySize: [],
-        companyRevenue: [],
-        netWorth: [],
-        income: [],
-        keywords: [],
-        prospectData: [],
-        personCity: [],
-        personCountry: [],
-        companyCity: [],
-        companyCountry: [],
-        personInterests: [],
-        personSkills: [],
-        technologies: [],
-        contactFilter: null,
-      };
+      const currentFilterState = filterState || getDefaultFilterBuilderState();
       
       // Fetch pages until we have enough records
       while (fetched < count) {

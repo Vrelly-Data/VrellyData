@@ -1363,6 +1363,14 @@ export type Database = {
           p_countries?: string[]
           p_departments?: string[]
           p_entity_type?: Database["public"]["Enums"]["entity_type"]
+          p_exclude_cities?: string[]
+          p_exclude_countries?: string[]
+          p_exclude_industries?: string[]
+          p_exclude_job_titles?: string[]
+          p_exclude_keywords?: string[]
+          p_exclude_person_interests?: string[]
+          p_exclude_person_skills?: string[]
+          p_exclude_technologies?: string[]
           p_gender?: string[]
           p_has_business_email?: boolean
           p_has_company_facebook?: boolean
