@@ -1,173 +1,70 @@
 
 
-# Add "Upload Email Stats" Feature
+# Fix Email Stats Being Overwritten by Campaign Sync
 
-## Overview
-Add an "Upload Email Stats" button next to the existing "Upload LinkedIn Stats" button. This allows manual upload of email engagement metrics from Reply.io CSV exports to fill in the dashboard accurately when the API sync doesn't capture all data.
+## Root Cause
 
-## Data We Can Capture from Email CSV
+The email stats you uploaded yesterday (72 delivered for Plumbing, 42 delivered for HVAC) were correctly saved to the database. However, when the campaign sync ran ~5 minutes later, it **overwrote those values with zeros** from the Reply.io API.
 
-### Primary Metrics (from Sequence-based CSV)
-| Metric | CSV Column | Dashboard Display |
-|--------|------------|-------------------|
-| Emails Delivered | `Delivered count` | "Emails Sent" in breakdown |
-| Email Replies | `Replied count` | "Email Replies" in breakdown |
-| Email Opens | `Opened count` | New stat (optional) |
-| Reply Rate | `Reply rate %` | Percentage in tooltip |
-| Open Rate | `Open rate %` | Percentage in tooltip |
-| Bounced | `Bounced count` | Health indicator |
-| Clicked | `Clicked count` | Engagement metric |
-| Out of Office | `OutOfOffice count` | Already tracked |
-| Opted Out | `OptedOut count` | Suppression tracking |
-| Interested | `Interested count` | Sentiment tracking |
-| Active/Paused | `Active count` / `Paused count` | Contact status |
+Two compounding issues:
 
-### Nice-to-Have (from Contact-specific CSV)
-- Per-contact engagement update for People tab
-- Delivery timestamps for activity timeline
-- Could update individual `synced_contacts.engagement_data`
+1. **Duplicate campaign rows** still exist (the earlier cleanup didn't remove them because both rows have contacts). The sync picks one row, the upload writes to another, causing data to get lost.
 
-## Implementation Plan
+2. **The sync function doesn't preserve email upload data.** It preserves LinkedIn upload fields but has no equivalent protection for email upload fields like `sent`, `delivered`, `replies`, `emailDataSource`, `emailDataUploadedAt`.
 
-### 1. Create Email Stats Upload Hook
-**File:** `src/hooks/useEmailStatsUpload.ts`
+## Fix
 
-Similar to `useLinkedInStatsUpload.ts`:
-- Parse CSV with email-specific columns
-- Match campaigns by name or Sequence Id
-- Merge email stats into `synced_campaigns.stats` JSONB
-- Support "Replace" mode (clear existing email stats first) and "Add" mode
+### 1. Preserve Email Upload Fields in Campaign Sync
+**File:** `supabase/functions/sync-reply-campaigns/index.ts`
 
-Stats to merge:
-```typescript
-interface EmailStats {
-  sent: number;           // Delivered count
-  delivered: number;      // Same as sent for consistency
-  replies: number;        // Replied count
-  opens: number;          // Opened count
-  clicked: number;        // Clicked count
-  bounced: number;        // Bounced count
-  outOfOffice: number;    // OutOfOffice count
-  optedOut: number;       // OptedOut count
-  interested: number;     // Interested count
-  notInterested: number;  // NotInterested count
-  autoReplied: number;    // AutoReplied count
-  // Metadata
-  emailDataSource: 'csv_upload';
-  emailDataUploadedAt: string;
-}
+Add email CSV upload fields to the preservation list (same pattern as LinkedIn):
+
+```text
+EMAIL_UPLOAD_FIELDS = [
+  'emailDataSource',
+  'emailDataUploadedAt',
+  'opens',        // only from CSV upload
+  'clicked',      // only from CSV upload  
+  'outOfOffice',
+  'optedOut',
+  'interested',
+  'notInterested',
+  'autoReplied',
+]
 ```
 
-### 2. Create Email Stats Upload Dialog
-**File:** `src/components/playground/EmailStatsUploadDialog.tsx`
+When the API returns 0 for `sent`/`delivered`/`replies` but the existing stats have email upload data (`emailDataSource === 'csv_upload'`), prefer the existing uploaded values. This ensures manually uploaded data is never silently wiped by a sync that returns empty API results.
 
-Similar to `LinkedInStatsUploadDialog.tsx`:
-- File upload with CSV parsing
-- Preview table showing:
-  - Campaign name
-  - Delivered
-  - Opened
-  - Replied
-  - Bounced
-  - Match status
-- Mode selector (Replace / Add)
-- Import button
+### 2. Merge Duplicate Campaign Rows
+**Database cleanup (one-time):**
 
-Column detection aliases:
-```typescript
-const CAMPAIGN_NAME_ALIASES = ['sequence name', 'sequence', 'campaign', 'name'];
-const SEQUENCE_ID_ALIASES = ['sequence id', 'sequence_id', 'campaign id'];
-const DELIVERED_ALIASES = ['delivered count', 'delivered', 'emails delivered'];
-const REPLIED_ALIASES = ['replied count', 'replied', 'replies', 'email replies'];
-const OPENED_ALIASES = ['opened count', 'opened', 'opens'];
-const BOUNCED_ALIASES = ['bounced count', 'bounced'];
-const CLICKED_ALIASES = ['clicked count', 'clicked', 'clicks'];
-```
+For each set of duplicates (same `external_campaign_id` + `team_id`):
+- Pick the row that has the email upload data (or the oldest if neither has it)
+- Move all contacts from the other row to the chosen one
+- Delete the empty duplicate
 
-### 3. Update IntegrationSetupCard UI
-**File:** `src/components/playground/IntegrationSetupCard.tsx`
+This affects:
+- Plumbing Campaign: merge `d1121832` into `d46b41a2` (which has email data)
+- HVAC campaign: merge `d7ddcc9d` into `56abc8b4` (which has email data)
 
-Add the new button next to LinkedIn upload:
-```tsx
-<div className="flex items-center gap-2">
-  <Button variant="outline" size="sm" onClick={() => setEmailUploadOpen(true)}>
-    <Upload className="h-4 w-4 mr-2" />
-    Upload Email Stats
-  </Button>
-  <Button variant="outline" size="sm" onClick={() => setLinkedInUploadOpen(true)}>
-    <Upload className="h-4 w-4 mr-2" />
-    Upload LinkedIn Stats
-  </Button>
-  <Button onClick={() => setDialogOpen(true)} size="sm">
-    <Plus className="h-4 w-4 mr-2" />
-    Connect Platform
-  </Button>
-</div>
-```
+### 3. Add Unique Constraint
+**Database migration:**
 
-### 4. Update usePlaygroundStats Hook
-**File:** `src/hooks/usePlaygroundStats.ts`
+Add a unique constraint on `(team_id, external_campaign_id)` to prevent future duplicates at the database level.
 
-Already reads from campaign stats - no changes needed! The email stats will flow through once uploaded since:
-- `emailDeliveries` reads from `stats.sent || stats.delivered`
-- `emailReplies` reads from `stats.replies`
+## Files to Change
 
-### 5. Update PlaygroundStatsGrid (Optional Enhancement)
-**File:** `src/components/playground/PlaygroundStatsGrid.tsx`
-
-Add opens/bounced to the popover breakdown:
-```tsx
-<div className="flex items-center justify-between gap-4">
-  <span>Opens:</span>
-  <span>{stats.opens?.toLocaleString() ?? 0}</span>
-</div>
-<div className="flex items-center justify-between gap-4">
-  <span>Bounced:</span>
-  <span>{stats.bounced?.toLocaleString() ?? 0}</span>
-</div>
-```
-
----
-
-## File Changes Summary
-
-| File | Action |
+| File | Change |
 |------|--------|
-| `src/hooks/useEmailStatsUpload.ts` | **CREATE** - New hook for email CSV upload |
-| `src/components/playground/EmailStatsUploadDialog.tsx` | **CREATE** - New dialog component |
-| `src/components/playground/IntegrationSetupCard.tsx` | **MODIFY** - Add upload button |
-| `src/hooks/usePlaygroundStats.ts` | **MODIFY** - Add opens/clicked/bounced fields |
-| `src/components/playground/PlaygroundStatsGrid.tsx` | **MODIFY** - Show additional email metrics |
+| `supabase/functions/sync-reply-campaigns/index.ts` | Add email upload field preservation, prefer uploaded values over API zeros |
+| Database (one-time SQL) | Merge duplicate contacts and delete extra rows |
+| Database (migration) | Add unique constraint on `(team_id, external_campaign_id)` |
 
----
+## Expected Result
 
-## User Flow
-
-1. User exports "Sequence-based" report from Reply.io
-2. Clicks "Upload Email Stats" button
-3. Selects CSV file
-4. Preview shows matched campaigns with email metrics
-5. Chooses Replace or Add mode
-6. Clicks Import
-7. Dashboard immediately reflects accurate email stats
-
----
-
-## Technical Considerations
-
-### Merge Strategy
-When uploading email stats in "Replace" mode:
-1. First clear email-specific stats (`sent`, `delivered`, `replies`, `opens`, etc.) for ALL team campaigns
-2. Preserve LinkedIn stats (`linkedinMessagesSent`, etc.)
-3. Apply new email stats from CSV
-
-This mirrors the LinkedIn upload behavior.
-
-### Campaign Matching
-Use both approaches for reliable matching:
-1. **By Sequence Id** if present (exact match to `external_campaign_id`)
-2. **By Name** using existing `findMatchingCampaign` fuzzy logic
-
-### Data Preservation
-LinkedIn stats should NEVER be touched by email upload, and vice versa.
+After these changes:
+- Re-uploading the email CSV will persist correctly
+- Running a sync afterward will NOT overwrite the uploaded stats
+- No more duplicate campaign rows will be created
+- Dashboard will show: 114 emails delivered, 2 replies (matching your CSV totals)
 
