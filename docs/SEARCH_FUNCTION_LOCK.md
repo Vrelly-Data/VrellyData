@@ -161,7 +161,7 @@ When user says "Revert to v3.2 stable state":
 
 | What | Value |
 |------|-------|
-| Current Version | v3.2 |
+| Current Version | v3.5 |
 | Total Records | 724 (400 person, 324 company) |
 | Parameter Count | 29 |
 | Revert Command | "Revert to v3.2 stable state" |
