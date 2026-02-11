@@ -1,0 +1,111 @@
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { supabase } from '@/integrations/supabase/client';
+import { toast } from '@/hooks/use-toast';
+
+export type KnowledgeCategory =
+  | 'email_template'
+  | 'sequence_playbook'
+  | 'campaign_result'
+  | 'sales_guideline'
+  | 'audience_insight';
+
+export interface SalesKnowledgeEntry {
+  id: string;
+  category: KnowledgeCategory;
+  title: string;
+  content: string;
+  tags: string[];
+  metrics: Record<string, number> | null;
+  source_campaign: string | null;
+  is_active: boolean;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SalesKnowledgeInsert {
+  category: KnowledgeCategory;
+  title: string;
+  content: string;
+  tags?: string[];
+  metrics?: Record<string, number>;
+  source_campaign?: string;
+  is_active?: boolean;
+}
+
+const QUERY_KEY = ['admin-sales-knowledge'];
+
+export function useAdminSalesKnowledge() {
+  const queryClient = useQueryClient();
+
+  const { data: entries = [], isLoading } = useQuery({
+    queryKey: QUERY_KEY,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('sales_knowledge' as any)
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      return (data ?? []) as unknown as SalesKnowledgeEntry[];
+    },
+  });
+
+  const createEntry = useMutation({
+    mutationFn: async (entry: SalesKnowledgeInsert) => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('Not authenticated');
+
+      const { error } = await supabase
+        .from('sales_knowledge' as any)
+        .insert({ ...entry, created_by: user.id } as any);
+
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: QUERY_KEY });
+      toast({ title: 'Entry created', description: 'Knowledge entry saved successfully.' });
+    },
+    onError: (err: Error) => {
+      toast({ title: 'Error', description: err.message, variant: 'destructive' });
+    },
+  });
+
+  const updateEntry = useMutation({
+    mutationFn: async ({ id, ...updates }: Partial<SalesKnowledgeEntry> & { id: string }) => {
+      const { error } = await supabase
+        .from('sales_knowledge' as any)
+        .update({ ...updates, updated_at: new Date().toISOString() } as any)
+        .eq('id', id);
+
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: QUERY_KEY });
+      toast({ title: 'Entry updated' });
+    },
+    onError: (err: Error) => {
+      toast({ title: 'Error', description: err.message, variant: 'destructive' });
+    },
+  });
+
+  const deleteEntry = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase
+        .from('sales_knowledge' as any)
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: QUERY_KEY });
+      toast({ title: 'Entry deleted' });
+    },
+    onError: (err: Error) => {
+      toast({ title: 'Error', description: err.message, variant: 'destructive' });
+    },
+  });
+
+  return { entries, isLoading, createEntry, updateEntry, deleteEntry };
+}
