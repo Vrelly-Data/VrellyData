@@ -1,92 +1,69 @@
 
 
-# Smart Import for Sales Knowledge Base
+# Fix: CSV Import Crashing on Empty Column Values
 
-## Overview
+## Problem
 
-Upgrade the CSV import to handle **any CSV structure** by adding an AI-powered analysis step. The system will send the CSV headers and sample rows to an AI model, which will intelligently map the data to knowledge entries. Admins can review and override the AI's mapping before importing.
+When uploading a CSV, the import dialog crashes with the error:
+> "A Select.Item must have a value prop that is not an empty string"
 
-The Doc Import already works with any file -- no changes needed there.
+This happens because:
+1. CSV files can have empty/blank column headers (e.g., trailing commas creating unnamed columns)
+2. The AI mapping response may return empty strings for optional fields like `tags`, `sourceCampaign`, or metric column names
+3. Radix UI's `Select.Item` component strictly requires a non-empty `value` prop
 
-## How It Works
+## Fix
 
-### CSV Import (Upgraded Flow)
+### File: `src/components/admin/SalesKnowledgeImportDialog.tsx`
 
-1. Admin uploads any CSV file (no required column format)
-2. PapaParse extracts headers + first 5 sample rows
-3. These are sent to a new edge function (`analyze-csv-knowledge`) that calls the AI
-4. The AI returns a mapping: which columns map to `title`, `content`, `category`, `tags`, `metrics`, and `source_campaign`
-5. The admin sees the AI-suggested mapping in a **mapping review step** with dropdowns to override
-6. Once confirmed, all rows are transformed using the mapping and bulk-inserted
+**1. Filter out empty headers** (line ~129)
 
-### Example: Non-Standard CSV
-
-```text
-CSV columns: Subject, Body, Campaign, Open Rate, Reply Rate, Industry
-
-AI mapping result:
-  title        -> "Subject"
-  content      -> "Body"
-  category     -> "email_template" (inferred from Subject/Body pattern)
-  source_campaign -> "Campaign"
-  tags         -> "Industry" (values become tags)
-  metrics      -> { open_rate: "Open Rate", reply_rate: "Reply Rate" }
+Change `headerOptions` to filter out any blank CSV headers before building the dropdown options:
+```typescript
+const headerOptions = useMemo(
+  () => [
+    { value: NONE, label: '-- None --' },
+    ...headers.filter((h) => h.trim() !== '').map((h) => ({ value: h, label: h })),
+  ],
+  [headers]
+);
 ```
 
-### Fallback: Manual Mapping
+**2. Sanitize AI mapping response** (line ~169)
 
-If AI analysis fails or the admin prefers manual control, they can skip the AI step and manually assign columns via dropdowns (same mapping UI, just without pre-filled suggestions).
-
-## Technical Details
-
-### New Edge Function: `supabase/functions/analyze-csv-knowledge/index.ts`
-
-- Receives: `{ headers: string[], sampleRows: Record<string, string>[], rowCount: number }`
-- Calls Lovable AI (Gemini Flash) with a structured prompt asking it to map CSV columns to the knowledge schema
-- Returns: `{ mapping: { title: string, content: string, category: string | null, tags: string | null, metrics: Record<string, string> | null, source_campaign: string | null }, suggestedCategory: KnowledgeCategory }`
-- Protected: requires authenticated admin user
-
-### Modified: `src/components/admin/SalesKnowledgeImportDialog.tsx`
-
-Complete rework with a multi-step flow:
-
-```text
-Step 1: Upload CSV
-  [Drop or select any CSV file]
-
-Step 2: AI Analysis + Mapping Review
-  AI suggested mapping:
-  Title column:           [Subject        v]
-  Content column:         [Body           v]
-  Category:               [Email Template v]  (or per-row from column)
-  Tags column:            [Industry       v]  (optional)
-  Source Campaign column: [Campaign       v]  (optional)
-  Metrics columns:        [Open Rate] [Reply Rate]  (optional)
-
-  [Skip AI / Map Manually]    [Apply Mapping]
-
-Step 3: Preview + Confirm
-  Preview: 24 valid entries, 2 invalid
-  [table preview]
-  [Cancel]  [Import 24 Entries]
+After receiving the AI mapping, ensure no field contains an empty string -- convert empties to `null` (for optional fields) or fall back to the first valid header (for required fields):
+```typescript
+const sanitized = {
+  ...result.mapping,
+  title: result.mapping.title || validHeaders[0] || '',
+  content: result.mapping.content || validHeaders[1] || validHeaders[0] || '',
+  categoryColumn: result.mapping.categoryColumn || null,
+  tags: result.mapping.tags || null,
+  sourceCampaign: result.mapping.sourceCampaign || null,
+  metrics: Object.fromEntries(
+    Object.entries(result.mapping.metrics || {}).filter(([, v]) => v && v.trim() !== '')
+  ),
+};
 ```
 
-### Modified: `src/hooks/useAdminSalesKnowledge.ts`
+**3. Guard the MappingRow component** (line ~523)
 
-- Add `analyzeCSV` async function that calls the edge function
-- No mutation needed -- it's a read-only analysis call
+Ensure the `Select` value is never an empty string -- fall back to `NONE`:
+```typescript
+<Select value={value || NONE} onValueChange={onChange}>
+```
 
-## What Does NOT Change
+**4. Guard metric Select values** (line ~394)
 
-- Doc Import -- already handles any file format
-- Manual "Add Entry" -- untouched
-- Database schema -- no changes
-- Other Admin tabs -- untouched
+Same fix for metric column dropdowns:
+```typescript
+<Select value={col || NONE} onValueChange={(v) => updateMetric(name, v)}>
+```
 
-## Sequencing
+## No Other Changes
 
-1. Create the `analyze-csv-knowledge` edge function (AI analysis)
-2. Rework `SalesKnowledgeImportDialog.tsx` into a multi-step flow with mapping review
-3. Add the `analyzeCSV` helper to the hook
-4. Test with various CSV formats
+- Edge function -- unchanged
+- Hook -- unchanged
+- Database -- unchanged
+- Doc import -- unchanged (already working)
 
