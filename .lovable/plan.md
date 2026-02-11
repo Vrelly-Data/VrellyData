@@ -1,102 +1,92 @@
 
 
-# Import Document Feature for Sales Knowledge Base
+# Smart Import for Sales Knowledge Base
 
 ## Overview
 
-Add an "Import Doc" button alongside the existing "Import CSV" button in the Sales Knowledge toolbar. This lets admins upload PDF or text files (e.g., campaign playbooks, email sequences, sales decks) that get converted into knowledge entries. Each document becomes a single knowledge entry where the admin provides a title (campaign name), selects a category, and the file content is extracted and stored.
+Upgrade the CSV import to handle **any CSV structure** by adding an AI-powered analysis step. The system will send the CSV headers and sample rows to an AI model, which will intelligently map the data to knowledge entries. Admins can review and override the AI's mapping before importing.
+
+The Doc Import already works with any file -- no changes needed there.
 
 ## How It Works
 
-1. Admin clicks "Import Doc" in the toolbar
-2. A dialog opens where they can:
-   - Upload a `.txt`, `.md`, or `.pdf` file
-   - Enter a **title** (campaign name for correlation)
-   - Select a **category** (email template, campaign result, etc.)
-   - Add optional **tags** and **source campaign**
-3. For text/markdown files: content is read directly via the browser's FileReader API
-4. For PDFs: content is extracted client-side using the `pdf.js` library (lightweight, no backend needed)
-5. A preview of the extracted text is shown
-6. Admin confirms and the entry is saved to `sales_knowledge`
+### CSV Import (Upgraded Flow)
 
-## Why Campaign-Named Titles Matter
+1. Admin uploads any CSV file (no required column format)
+2. PapaParse extracts headers + first 5 sample rows
+3. These are sent to a new edge function (`analyze-csv-knowledge`) that calls the AI
+4. The AI returns a mapping: which columns map to `title`, `content`, `category`, `tags`, `metrics`, and `source_campaign`
+5. The admin sees the AI-suggested mapping in a **mapping review step** with dropdowns to override
+6. Once confirmed, all rows are transformed using the mapping and bulk-inserted
 
-By titling documents with campaign names, the AI can later cross-reference:
-- Campaign stats from `synced_campaigns` (reply rates, open rates)
-- Email copy from `synced_sequences`
-- The knowledge entry content (playbooks, learnings, guidelines)
+### Example: Non-Standard CSV
 
-This creates a connected dataset the LLM can draw from when revamping copy or suggesting audiences.
+```text
+CSV columns: Subject, Body, Campaign, Open Rate, Reply Rate, Industry
+
+AI mapping result:
+  title        -> "Subject"
+  content      -> "Body"
+  category     -> "email_template" (inferred from Subject/Body pattern)
+  source_campaign -> "Campaign"
+  tags         -> "Industry" (values become tags)
+  metrics      -> { open_rate: "Open Rate", reply_rate: "Reply Rate" }
+```
+
+### Fallback: Manual Mapping
+
+If AI analysis fails or the admin prefers manual control, they can skip the AI step and manually assign columns via dropdowns (same mapping UI, just without pre-filled suggestions).
 
 ## Technical Details
 
-### New Dependency
+### New Edge Function: `supabase/functions/analyze-csv-knowledge/index.ts`
 
-- `pdfjs-dist` -- Mozilla's PDF.js library for client-side PDF text extraction. Lightweight, no server needed.
+- Receives: `{ headers: string[], sampleRows: Record<string, string>[], rowCount: number }`
+- Calls Lovable AI (Gemini Flash) with a structured prompt asking it to map CSV columns to the knowledge schema
+- Returns: `{ mapping: { title: string, content: string, category: string | null, tags: string | null, metrics: Record<string, string> | null, source_campaign: string | null }, suggestedCategory: KnowledgeCategory }`
+- Protected: requires authenticated admin user
 
-### New File: `src/components/admin/SalesKnowledgeDocImportDialog.tsx`
+### Modified: `src/components/admin/SalesKnowledgeImportDialog.tsx`
 
-A dialog component that:
-1. Accepts `.txt`, `.md`, or `.pdf` files via file picker
-2. Extracts text content:
-   - **TXT/MD**: Uses `FileReader.readAsText()`
-   - **PDF**: Uses `pdfjs-dist` to extract text from each page
-3. Shows a preview of extracted content (first ~500 chars)
-4. Requires admin to fill in: title (campaign name), category, optional tags
-5. On confirm, creates a single `sales_knowledge` entry with the full document content
-
-### Modified File: `src/components/admin/SalesKnowledgeTab.tsx`
-
-- Add an "Import Doc" button in the toolbar (between "Import CSV" and the category filter)
-- Add state + dialog wiring for the doc import dialog
-
-### No Database Changes
-
-Reuses the existing `sales_knowledge` table. Document content goes into the `content` text column (which already supports markdown/long text).
-
-### UI Layout
+Complete rework with a multi-step flow:
 
 ```text
-Toolbar:
-[+ Add Entry] [Import CSV] [Import Doc]  Filter: [All Categories v] [Search...]
+Step 1: Upload CSV
+  [Drop or select any CSV file]
 
-Import Doc Dialog:
-+------------------------------------------------+
-| Import Document                                 |
-|                                                |
-| File: [Choose .txt, .md, or .pdf]              |
-| Selected: campaign_playbook.pdf (3 pages)      |
-|                                                |
-| Title (Campaign Name):                         |
-| [Healthcare Outreach Q1_________________]      |
-|                                                |
-| Category: [Campaign Result          v]         |
-|                                                |
-| Tags: [healthcare] [outreach] [+ add]          |
-|                                                |
-| Source Campaign: [optional______________]       |
-|                                                |
-| Content Preview:                                |
-| +--------------------------------------------+ |
-| | "This campaign targeted 2,400 healthcare   | |
-| | decision-makers across Series B+ companies | |
-| | with a 5-step email sequence..."           | |
-| +--------------------------------------------+ |
-|                                                |
-| [Cancel]              [Save as Entry]          |
-+------------------------------------------------+
+Step 2: AI Analysis + Mapping Review
+  AI suggested mapping:
+  Title column:           [Subject        v]
+  Content column:         [Body           v]
+  Category:               [Email Template v]  (or per-row from column)
+  Tags column:            [Industry       v]  (optional)
+  Source Campaign column: [Campaign       v]  (optional)
+  Metrics columns:        [Open Rate] [Reply Rate]  (optional)
+
+  [Skip AI / Map Manually]    [Apply Mapping]
+
+Step 3: Preview + Confirm
+  Preview: 24 valid entries, 2 invalid
+  [table preview]
+  [Cancel]  [Import 24 Entries]
 ```
+
+### Modified: `src/hooks/useAdminSalesKnowledge.ts`
+
+- Add `analyzeCSV` async function that calls the edge function
+- No mutation needed -- it's a read-only analysis call
 
 ## What Does NOT Change
 
-- Existing CSV import -- untouched
-- Manual "Add Entry" flow -- untouched
-- Database schema -- no changes needed
+- Doc Import -- already handles any file format
+- Manual "Add Entry" -- untouched
+- Database schema -- no changes
 - Other Admin tabs -- untouched
 
 ## Sequencing
 
-1. Install `pdfjs-dist` dependency
-2. Create `SalesKnowledgeDocImportDialog.tsx` with file reading, PDF parsing, and preview
-3. Add "Import Doc" button to `SalesKnowledgeTab.tsx` toolbar and wire the dialog
+1. Create the `analyze-csv-knowledge` edge function (AI analysis)
+2. Rework `SalesKnowledgeImportDialog.tsx` into a multi-step flow with mapping review
+3. Add the `analyzeCSV` helper to the hook
+4. Test with various CSV formats
 
