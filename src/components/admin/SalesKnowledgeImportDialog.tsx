@@ -64,6 +64,22 @@ interface Props {
   isPending: boolean;
 }
 
+/** Case-insensitive header resolution for AI-returned column names */
+function resolveHeader(aiValue: string | null | undefined, csvHeaders: string[]): string | null {
+  if (!aiValue) return null;
+  if (csvHeaders.includes(aiValue)) return aiValue;
+  const lower = aiValue.toLowerCase().trim();
+  const match = csvHeaders.find(h => h.toLowerCase().trim() === lower);
+  return match || null;
+}
+
+/** Get sample value from the first data row for a given column */
+function getSampleValue(column: string | null, rows: Record<string, string>[]): string {
+  if (!column || rows.length === 0) return '';
+  const val = rows[0]?.[column] ?? '';
+  return val.length > 60 ? val.slice(0, 60) + '…' : val;
+}
+
 function transformRow(
   raw: Record<string, string>,
   mapping: ColumnMapping
@@ -148,7 +164,6 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
         setHeaders(parsedHeaders);
         setAllRows(results.data);
         setStep('mapping');
-        // Auto-analyze
         triggerAIAnalysis(parsedHeaders, results.data);
       },
     });
@@ -167,16 +182,25 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
         rowCount: data.length,
       });
       const validHeaders = csvHeaders.filter((h) => h.trim() !== '');
-      const sanitized = {
+
+      // Resolve AI-returned column names against actual headers (case-insensitive)
+      const resolvedMetrics: Record<string, string> = {};
+      for (const [metricName, colName] of Object.entries(result.mapping.metrics || {})) {
+        if (typeof colName === 'string' && colName.trim() !== '') {
+          const resolved = resolveHeader(colName, csvHeaders);
+          if (resolved) resolvedMetrics[metricName] = resolved;
+        }
+      }
+
+      const sanitized: ColumnMapping = {
         ...result.mapping,
-        title: result.mapping.title || validHeaders[0] || '',
-        content: result.mapping.content || validHeaders[1] || validHeaders[0] || '',
-        categoryColumn: result.mapping.categoryColumn || null,
-        tags: result.mapping.tags || null,
-        sourceCampaign: result.mapping.sourceCampaign || null,
-        metrics: Object.fromEntries(
-          Object.entries(result.mapping.metrics || {}).filter(([, v]) => typeof v === 'string' && v.trim() !== '')
-        ),
+        title: resolveHeader(result.mapping.title, csvHeaders) || validHeaders[0] || '',
+        content: resolveHeader(result.mapping.content, csvHeaders) || validHeaders[1] || validHeaders[0] || '',
+        suggestedCategory: result.mapping.suggestedCategory || 'campaign_result',
+        categoryColumn: resolveHeader(result.mapping.categoryColumn, csvHeaders),
+        tags: resolveHeader(result.mapping.tags, csvHeaders),
+        sourceCampaign: resolveHeader(result.mapping.sourceCampaign, csvHeaders),
+        metrics: resolvedMetrics,
       };
       setMapping(sanitized);
       toast({ title: 'AI analysis complete', description: 'Review the suggested mapping below.' });
@@ -187,11 +211,10 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
         description: 'Map columns manually using the dropdowns below.',
         variant: 'destructive',
       });
-      // Set empty mapping for manual
       setMapping({
         title: csvHeaders[0] ?? '',
         content: csvHeaders[1] ?? '',
-        suggestedCategory: 'email_template',
+        suggestedCategory: 'campaign_result',
         categoryColumn: null,
         tags: null,
         sourceCampaign: null,
@@ -206,7 +229,7 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
     if (!mapping) return;
     setMapping((prev) => {
       if (!prev) return prev;
-      if (field === 'metrics') return prev; // handled separately
+      if (field === 'metrics') return prev;
       if (field === 'categoryColumn' || field === 'tags' || field === 'sourceCampaign') {
         return { ...prev, [field]: value === NONE ? null : value };
       }
@@ -311,6 +334,34 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
               </Button>
             </div>
 
+            {/* CSV Data Preview */}
+            {headers.length > 0 && allRows.length > 0 && (
+              <div className="rounded border overflow-auto max-h-[180px]">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      {headers.filter(h => h.trim()).map((h) => (
+                        <TableHead key={h} className="text-xs whitespace-nowrap">{h}</TableHead>
+                      ))}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {allRows.slice(0, 3).map((row, i) => (
+                      <TableRow key={i}>
+                        {headers.filter(h => h.trim()).map((h) => (
+                          <TableCell key={h} className="text-xs py-1.5 max-w-[200px] truncate">
+                            {(row[h] ?? '').length > 50
+                              ? (row[h] ?? '').slice(0, 50) + '…'
+                              : row[h] ?? ''}
+                          </TableCell>
+                        ))}
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+
             {mapping && !isAnalyzing && (
               <div className="space-y-3 border rounded-lg p-4">
                 <div className="flex items-center gap-2 mb-2">
@@ -325,6 +376,7 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
                   value={mapping.title}
                   options={headerOptions}
                   onChange={(v) => updateMapping('title', v)}
+                  sampleValue={getSampleValue(mapping.title, allRows)}
                 />
 
                 {/* Content */}
@@ -334,6 +386,7 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
                   value={mapping.content}
                   options={headerOptions}
                   onChange={(v) => updateMapping('content', v)}
+                  sampleValue={getSampleValue(mapping.content, allRows)}
                 />
 
                 {/* Category */}
@@ -380,6 +433,7 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
                   value={mapping.tags ?? NONE}
                   options={headerOptions}
                   onChange={(v) => updateMapping('tags', v)}
+                  sampleValue={getSampleValue(mapping.tags, allRows)}
                 />
 
                 {/* Source Campaign */}
@@ -388,6 +442,7 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
                   value={mapping.sourceCampaign ?? NONE}
                   options={headerOptions}
                   onChange={(v) => updateMapping('sourceCampaign', v)}
+                  sampleValue={getSampleValue(mapping.sourceCampaign, allRows)}
                 />
 
                 {/* Metrics */}
@@ -403,18 +458,25 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
                       <span className="text-sm text-muted-foreground pl-2">
                         {name.replace(/_/g, ' ')}
                       </span>
-                      <Select value={col || NONE} onValueChange={(v) => updateMetric(name, v)}>
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {headerOptions.map((o) => (
-                            <SelectItem key={o.value} value={o.value}>
-                              {o.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <div className="space-y-0.5">
+                        <Select value={col || NONE} onValueChange={(v) => updateMetric(name, v)}>
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {headerOptions.map((o) => (
+                              <SelectItem key={o.value} value={o.value}>
+                                {o.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        {col && col !== NONE && getSampleValue(col, allRows) && (
+                          <p className="text-xs text-muted-foreground truncate pl-1">
+                            Preview: "{getSampleValue(col, allRows)}"
+                          </p>
+                        )}
+                      </div>
                       <Button
                         variant="ghost"
                         size="sm"
@@ -519,12 +581,14 @@ function MappingRow({
   options,
   onChange,
   required,
+  sampleValue,
 }: {
   label: string;
   value: string;
   options: { value: string; label: string }[];
   onChange: (v: string) => void;
   required?: boolean;
+  sampleValue?: string;
 }) {
   return (
     <div className="grid grid-cols-[160px_1fr] items-center gap-2">
@@ -532,18 +596,25 @@ function MappingRow({
         {label}
         {required && <span className="text-destructive ml-1">*</span>}
       </span>
-      <Select value={value || NONE} onValueChange={onChange}>
-        <SelectTrigger>
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {options.map((o) => (
-            <SelectItem key={o.value} value={o.value}>
-              {o.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      <div className="space-y-0.5">
+        <Select value={value || NONE} onValueChange={onChange}>
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {options.map((o) => (
+              <SelectItem key={o.value} value={o.value}>
+                {o.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {sampleValue && value && value !== NONE && (
+          <p className="text-xs text-muted-foreground truncate pl-1">
+            Preview: "{sampleValue}"
+          </p>
+        )}
+      </div>
     </div>
   );
 }
