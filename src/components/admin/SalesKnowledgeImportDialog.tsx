@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import Papa from 'papaparse';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -17,22 +17,45 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { Upload, CheckCircle, XCircle } from 'lucide-react';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Upload, CheckCircle, XCircle, Wand2, Loader2 } from 'lucide-react';
+import { toast } from '@/hooks/use-toast';
 import type { SalesKnowledgeInsert, KnowledgeCategory } from '@/hooks/useAdminSalesKnowledge';
+import { useAdminSalesKnowledge } from '@/hooks/useAdminSalesKnowledge';
 
-const VALID_CATEGORIES: KnowledgeCategory[] = [
-  'email_template',
-  'sequence_playbook',
-  'campaign_result',
-  'sales_guideline',
-  'audience_insight',
+const VALID_CATEGORIES: { value: KnowledgeCategory; label: string }[] = [
+  { value: 'email_template', label: 'Email Template' },
+  { value: 'sequence_playbook', label: 'Sequence Playbook' },
+  { value: 'campaign_result', label: 'Campaign Result' },
+  { value: 'sales_guideline', label: 'Sales Guideline' },
+  { value: 'audience_insight', label: 'Audience Insight' },
 ];
 
-interface ParsedRow {
+const NONE = '__none__';
+
+interface ColumnMapping {
+  title: string;
+  content: string;
+  suggestedCategory: KnowledgeCategory;
+  categoryColumn: string | null;
+  tags: string | null;
+  sourceCampaign: string | null;
+  metrics: Record<string, string>;
+}
+
+interface TransformedRow {
   entry: SalesKnowledgeInsert;
   valid: boolean;
   error?: string;
 }
+
+type Step = 'upload' | 'mapping' | 'preview';
 
 interface Props {
   open: boolean;
@@ -41,27 +64,43 @@ interface Props {
   isPending: boolean;
 }
 
-function parseRow(raw: Record<string, string>): ParsedRow {
-  const category = (raw.category ?? '').trim().toLowerCase() as KnowledgeCategory;
-  const title = (raw.title ?? '').trim();
-  const content = (raw.content ?? '').trim();
+function transformRow(
+  raw: Record<string, string>,
+  mapping: ColumnMapping
+): TransformedRow {
+  const title = (raw[mapping.title] ?? '').trim();
+  const content = (raw[mapping.content] ?? '').trim();
 
-  if (!VALID_CATEGORIES.includes(category)) {
-    return { entry: {} as any, valid: false, error: `Invalid category "${raw.category}"` };
-  }
   if (!title) return { entry: {} as any, valid: false, error: 'Missing title' };
   if (!content) return { entry: {} as any, valid: false, error: 'Missing content' };
 
-  const tags = (raw.tags ?? '')
-    .split(';')
-    .map((t) => t.trim())
-    .filter(Boolean);
+  let category = mapping.suggestedCategory;
+  if (mapping.categoryColumn) {
+    const rawCat = (raw[mapping.categoryColumn] ?? '').trim().toLowerCase().replace(/\s+/g, '_');
+    const validCats: string[] = VALID_CATEGORIES.map((c) => c.value);
+    if (validCats.includes(rawCat)) {
+      category = rawCat as KnowledgeCategory;
+    }
+  }
+
+  const tags = mapping.tags
+    ? (raw[mapping.tags] ?? '')
+        .split(/[;,]/)
+        .map((t) => t.trim())
+        .filter(Boolean)
+    : undefined;
 
   const metrics: Record<string, number> = {};
-  const replyRate = parseFloat(raw.reply_rate ?? '');
-  const sent = parseFloat(raw.sent ?? '');
-  if (!isNaN(replyRate)) metrics.reply_rate = replyRate;
-  if (!isNaN(sent)) metrics.sent = sent;
+  if (mapping.metrics) {
+    for (const [metricName, colName] of Object.entries(mapping.metrics)) {
+      const val = parseFloat(raw[colName] ?? '');
+      if (!isNaN(val)) metrics[metricName] = val;
+    }
+  }
+
+  const sourceCampaign = mapping.sourceCampaign
+    ? (raw[mapping.sourceCampaign] ?? '').trim() || undefined
+    : undefined;
 
   return {
     valid: true,
@@ -69,16 +108,35 @@ function parseRow(raw: Record<string, string>): ParsedRow {
       category,
       title,
       content,
-      tags: tags.length ? tags : undefined,
+      tags: tags?.length ? tags : undefined,
       metrics: Object.keys(metrics).length ? metrics : undefined,
-      source_campaign: (raw.source_campaign ?? '').trim() || undefined,
+      source_campaign: sourceCampaign,
     },
   };
 }
 
 export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPending }: Props) {
-  const [rows, setRows] = useState<ParsedRow[]>([]);
+  const { analyzeCSV } = useAdminSalesKnowledge();
+
+  const [step, setStep] = useState<Step>('upload');
   const [fileName, setFileName] = useState('');
+  const [headers, setHeaders] = useState<string[]>([]);
+  const [allRows, setAllRows] = useState<Record<string, string>[]>([]);
+  const [mapping, setMapping] = useState<ColumnMapping | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+
+  const headerOptions = useMemo(
+    () => [{ value: NONE, label: '— None —' }, ...headers.map((h) => ({ value: h, label: h }))],
+    [headers]
+  );
+
+  const transformedRows = useMemo(() => {
+    if (!mapping) return [];
+    return allRows.map((row) => transformRow(row, mapping));
+  }, [allRows, mapping]);
+
+  const validRows = transformedRows.filter((r) => r.valid);
+  const invalidRows = transformedRows.filter((r) => !r.valid);
 
   const handleFile = useCallback((file: File) => {
     setFileName(file.name);
@@ -86,21 +144,106 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
       header: true,
       skipEmptyLines: true,
       complete: (results) => {
-        setRows(results.data.map(parseRow));
+        const parsedHeaders = results.meta.fields ?? [];
+        setHeaders(parsedHeaders);
+        setAllRows(results.data);
+        setStep('mapping');
+        // Auto-analyze
+        triggerAIAnalysis(parsedHeaders, results.data);
       },
     });
   }, []);
 
-  const validRows = rows.filter((r) => r.valid);
-  const invalidRows = rows.filter((r) => !r.valid);
+  const triggerAIAnalysis = async (
+    csvHeaders: string[],
+    data: Record<string, string>[]
+  ) => {
+    setIsAnalyzing(true);
+    try {
+      const sampleRows = data.slice(0, 5);
+      const result = await analyzeCSV({
+        headers: csvHeaders,
+        sampleRows,
+        rowCount: data.length,
+      });
+      setMapping(result.mapping);
+      toast({ title: 'AI analysis complete', description: 'Review the suggested mapping below.' });
+    } catch (err) {
+      console.error('AI analysis failed:', err);
+      toast({
+        title: 'AI analysis failed',
+        description: 'Map columns manually using the dropdowns below.',
+        variant: 'destructive',
+      });
+      // Set empty mapping for manual
+      setMapping({
+        title: csvHeaders[0] ?? '',
+        content: csvHeaders[1] ?? '',
+        suggestedCategory: 'email_template',
+        categoryColumn: null,
+        tags: null,
+        sourceCampaign: null,
+        metrics: {},
+      });
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
 
-  const handleImport = () => {
-    onImport(validRows.map((r) => r.entry));
+  const updateMapping = (field: keyof ColumnMapping, value: string) => {
+    if (!mapping) return;
+    setMapping((prev) => {
+      if (!prev) return prev;
+      if (field === 'metrics') return prev; // handled separately
+      if (field === 'categoryColumn' || field === 'tags' || field === 'sourceCampaign') {
+        return { ...prev, [field]: value === NONE ? null : value };
+      }
+      return { ...prev, [field]: value };
+    });
+  };
+
+  const updateMetric = (metricName: string, colName: string) => {
+    setMapping((prev) => {
+      if (!prev) return prev;
+      const metrics = { ...prev.metrics };
+      if (colName === NONE) {
+        delete metrics[metricName];
+      } else {
+        metrics[metricName] = colName;
+      }
+      return { ...prev, metrics };
+    });
+  };
+
+  const addMetric = () => {
+    const name = prompt('Metric name (e.g. open_rate, clicks):');
+    if (!name?.trim()) return;
+    setMapping((prev) => {
+      if (!prev) return prev;
+      return { ...prev, metrics: { ...prev.metrics, [name.trim()]: headers[0] ?? '' } };
+    });
+  };
+
+  const removeMetric = (name: string) => {
+    setMapping((prev) => {
+      if (!prev) return prev;
+      const metrics = { ...prev.metrics };
+      delete metrics[name];
+      return { ...prev, metrics };
+    });
   };
 
   const reset = () => {
-    setRows([]);
+    setStep('upload');
     setFileName('');
+    setHeaders([]);
+    setAllRows([]);
+    setMapping(null);
+    setIsAnalyzing(false);
+  };
+
+  const handleImport = () => {
+    onImport(validRows.map((r) => r.entry));
   };
 
   return (
@@ -113,17 +256,19 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
     >
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Import Sales Knowledge from CSV</DialogTitle>
+          <DialogTitle>
+            {step === 'upload' && 'Import Sales Knowledge from CSV'}
+            {step === 'mapping' && 'Map CSV Columns'}
+            {step === 'preview' && 'Preview & Confirm Import'}
+          </DialogTitle>
         </DialogHeader>
 
-        {rows.length === 0 ? (
+        {/* Step 1: Upload */}
+        {step === 'upload' && (
           <label className="flex flex-col items-center justify-center gap-3 border-2 border-dashed border-muted-foreground/30 rounded-lg p-10 cursor-pointer hover:border-primary/50 transition-colors">
             <Upload className="h-8 w-8 text-muted-foreground" />
             <span className="text-sm text-muted-foreground">
-              Drag & drop a CSV file here, or click to browse
-            </span>
-            <span className="text-xs text-muted-foreground">
-              Expected columns: category, title, content, tags, reply_rate, sent, source_campaign
+              Drop or select any CSV file — we'll auto-detect the columns
             </span>
             <input
               type="file"
@@ -135,7 +280,162 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
               }}
             />
           </label>
-        ) : (
+        )}
+
+        {/* Step 2: Mapping */}
+        {step === 'mapping' && (
+          <div className="space-y-4">
+            <div className="flex items-center gap-3 text-sm">
+              <span className="font-medium">{fileName}</span>
+              <Badge variant="secondary">{allRows.length} rows</Badge>
+              {isAnalyzing && (
+                <span className="flex items-center gap-1 text-muted-foreground">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Analyzing...
+                </span>
+              )}
+              <Button variant="ghost" size="sm" onClick={reset} className="ml-auto">
+                Choose different file
+              </Button>
+            </div>
+
+            {mapping && !isAnalyzing && (
+              <div className="space-y-3 border rounded-lg p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <Wand2 className="h-4 w-4 text-primary" />
+                  <span className="text-sm font-medium">Column Mapping</span>
+                </div>
+
+                {/* Title */}
+                <MappingRow
+                  label="Title column"
+                  required
+                  value={mapping.title}
+                  options={headerOptions}
+                  onChange={(v) => updateMapping('title', v)}
+                />
+
+                {/* Content */}
+                <MappingRow
+                  label="Content column"
+                  required
+                  value={mapping.content}
+                  options={headerOptions}
+                  onChange={(v) => updateMapping('content', v)}
+                />
+
+                {/* Category */}
+                <div className="grid grid-cols-[160px_1fr] items-center gap-2">
+                  <span className="text-sm">Category</span>
+                  <div className="flex gap-2">
+                    <Select
+                      value={mapping.suggestedCategory}
+                      onValueChange={(v) => updateMapping('suggestedCategory', v)}
+                    >
+                      <SelectTrigger className="flex-1">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {VALID_CATEGORIES.map((c) => (
+                          <SelectItem key={c.value} value={c.value}>
+                            {c.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <span className="text-xs text-muted-foreground self-center">or from column:</span>
+                    <Select
+                      value={mapping.categoryColumn ?? NONE}
+                      onValueChange={(v) => updateMapping('categoryColumn', v)}
+                    >
+                      <SelectTrigger className="flex-1">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {headerOptions.map((o) => (
+                          <SelectItem key={o.value} value={o.value}>
+                            {o.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                {/* Tags */}
+                <MappingRow
+                  label="Tags column"
+                  value={mapping.tags ?? NONE}
+                  options={headerOptions}
+                  onChange={(v) => updateMapping('tags', v)}
+                />
+
+                {/* Source Campaign */}
+                <MappingRow
+                  label="Source Campaign"
+                  value={mapping.sourceCampaign ?? NONE}
+                  options={headerOptions}
+                  onChange={(v) => updateMapping('sourceCampaign', v)}
+                />
+
+                {/* Metrics */}
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm w-[160px]">Metrics</span>
+                    <Button variant="ghost" size="sm" onClick={addMetric}>
+                      + Add metric
+                    </Button>
+                  </div>
+                  {Object.entries(mapping.metrics).map(([name, col]) => (
+                    <div key={name} className="grid grid-cols-[160px_1fr_auto] items-center gap-2">
+                      <span className="text-sm text-muted-foreground pl-2">
+                        {name.replace(/_/g, ' ')}
+                      </span>
+                      <Select value={col} onValueChange={(v) => updateMetric(name, v)}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {headerOptions.map((o) => (
+                            <SelectItem key={o.value} value={o.value}>
+                              {o.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => removeMetric(name)}
+                        className="text-destructive"
+                      >
+                        ✕
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {mapping && !isAnalyzing && (
+              <div className="flex justify-end gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    triggerAIAnalysis(headers, allRows);
+                  }}
+                >
+                  <Wand2 className="h-4 w-4 mr-2" />
+                  Re-analyze with AI
+                </Button>
+                <Button onClick={() => setStep('preview')}>Apply Mapping & Preview</Button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Step 3: Preview */}
+        {step === 'preview' && (
           <div className="space-y-3">
             <div className="flex items-center gap-3 text-sm">
               <span className="font-medium">{fileName}</span>
@@ -143,8 +443,8 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
               {invalidRows.length > 0 && (
                 <Badge variant="destructive">{invalidRows.length} invalid</Badge>
               )}
-              <Button variant="ghost" size="sm" onClick={reset} className="ml-auto">
-                Choose different file
+              <Button variant="ghost" size="sm" onClick={() => setStep('mapping')} className="ml-auto">
+                Back to mapping
               </Button>
             </div>
 
@@ -159,7 +459,7 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {rows.map((row, i) => (
+                  {transformedRows.map((row, i) => (
                     <TableRow key={i} className={row.valid ? '' : 'bg-destructive/5'}>
                       <TableCell className="text-muted-foreground">{i + 1}</TableCell>
                       <TableCell className="text-sm">
@@ -187,14 +487,51 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button
-            onClick={handleImport}
-            disabled={validRows.length === 0 || isPending}
-          >
-            {isPending ? 'Importing...' : `Import ${validRows.length} Entries`}
-          </Button>
+          {step === 'preview' && (
+            <Button
+              onClick={handleImport}
+              disabled={validRows.length === 0 || isPending}
+            >
+              {isPending ? 'Importing...' : `Import ${validRows.length} Entries`}
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function MappingRow({
+  label,
+  value,
+  options,
+  onChange,
+  required,
+}: {
+  label: string;
+  value: string;
+  options: { value: string; label: string }[];
+  onChange: (v: string) => void;
+  required?: boolean;
+}) {
+  return (
+    <div className="grid grid-cols-[160px_1fr] items-center gap-2">
+      <span className="text-sm">
+        {label}
+        {required && <span className="text-destructive ml-1">*</span>}
+      </span>
+      <Select value={value} onValueChange={onChange}>
+        <SelectTrigger>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((o) => (
+            <SelectItem key={o.value} value={o.value}>
+              {o.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
   );
 }

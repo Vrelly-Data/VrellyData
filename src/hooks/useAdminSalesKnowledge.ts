@@ -128,5 +128,33 @@ export function useAdminSalesKnowledge() {
     },
   });
 
-  return { entries, isLoading, createEntry, updateEntry, deleteEntry, bulkCreateEntries };
+  const analyzeCSV = async (payload: {
+    headers: string[];
+    sampleRows: Record<string, string>[];
+    rowCount: number;
+  }) => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) throw new Error('Not authenticated');
+
+    const response = await fetch(
+      `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/analyze-csv-knowledge`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify(payload),
+      }
+    );
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ error: 'Analysis failed' }));
+      throw new Error(err.error || 'Analysis failed');
+    }
+
+    return response.json();
+  };
+
+  return { entries, isLoading, createEntry, updateEntry, deleteEntry, bulkCreateEntries, analyzeCSV };
 }

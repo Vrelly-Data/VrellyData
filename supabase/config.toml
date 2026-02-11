@@ -47,3 +47,6 @@ verify_jwt = true
 
 [functions.sync-reply-sequences]
 verify_jwt = true
+
+[functions.analyze-csv-knowledge]
+verify_jwt = false
