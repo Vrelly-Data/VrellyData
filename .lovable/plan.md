@@ -1,93 +1,102 @@
 
 
-# CSV Bulk Import for Sales Knowledge Base
+# Import Document Feature for Sales Knowledge Base
 
 ## Overview
 
-Add a CSV import capability to the Sales Knowledge tab so admins can mass-upload training data from a spreadsheet. This reuses the existing CSV parsing library (PapaParse) already in the project.
+Add an "Import Doc" button alongside the existing "Import CSV" button in the Sales Knowledge toolbar. This lets admins upload PDF or text files (e.g., campaign playbooks, email sequences, sales decks) that get converted into knowledge entries. Each document becomes a single knowledge entry where the admin provides a title (campaign name), selects a category, and the file content is extracted and stored.
 
 ## How It Works
 
-1. Admin clicks "Import CSV" button (next to "Add Entry")
-2. Selects a CSV file with columns matching knowledge entry fields
-3. Preview shows parsed entries with validation
-4. Admin confirms and all entries are bulk-inserted into `sales_knowledge`
+1. Admin clicks "Import Doc" in the toolbar
+2. A dialog opens where they can:
+   - Upload a `.txt`, `.md`, or `.pdf` file
+   - Enter a **title** (campaign name for correlation)
+   - Select a **category** (email template, campaign result, etc.)
+   - Add optional **tags** and **source campaign**
+3. For text/markdown files: content is read directly via the browser's FileReader API
+4. For PDFs: content is extracted client-side using the `pdf.js` library (lightweight, no backend needed)
+5. A preview of the extracted text is shown
+6. Admin confirms and the entry is saved to `sales_knowledge`
 
-## Expected CSV Format
+## Why Campaign-Named Titles Matter
 
-```text
-category,title,content,tags,reply_rate,sent,source_campaign
-email_template,"Cold Intro for SaaS CTOs","Hey {{firstName}}, noticed your company...",saas;cto;cold-outreach,12,2400,Healthcare Q1
-sales_guideline,"Subject Line Best Practices","Never use 'hope this finds you well'...",email;subject-lines,,,
-campaign_result,"Healthcare Outreach Results","2400 sent, 9.2% reply rate...",healthcare;outreach,9.2,2400,Healthcare Outreach Q1
-audience_insight,"Fintech Director Converts 3x","Director-level in fintech 51-200...",fintech;director,,,
-```
+By titling documents with campaign names, the AI can later cross-reference:
+- Campaign stats from `synced_campaigns` (reply rates, open rates)
+- Email copy from `synced_sequences`
+- The knowledge entry content (playbooks, learnings, guidelines)
 
-- **category** (required): must be one of `email_template`, `sequence_playbook`, `campaign_result`, `sales_guideline`, `audience_insight`
-- **title** (required): entry title
-- **content** (required): the actual copy, playbook, or learning (markdown supported)
-- **tags** (optional): semicolon-separated list (`;`) since commas conflict with CSV
-- **reply_rate** (optional): numeric, stored in metrics JSON
-- **sent** (optional): numeric, stored in metrics JSON
-- **source_campaign** (optional): campaign name
+This creates a connected dataset the LLM can draw from when revamping copy or suggesting audiences.
 
 ## Technical Details
 
-### New File: `src/components/admin/SalesKnowledgeImportDialog.tsx`
+### New Dependency
+
+- `pdfjs-dist` -- Mozilla's PDF.js library for client-side PDF text extraction. Lightweight, no server needed.
+
+### New File: `src/components/admin/SalesKnowledgeDocImportDialog.tsx`
 
 A dialog component that:
-1. Accepts a CSV file via drag-and-drop or file picker
-2. Parses it with PapaParse (already installed)
-3. Validates each row:
-   - `category` must be one of the 5 valid values
-   - `title` and `content` must be non-empty
-   - Tags are split by `;` into an array
-   - `reply_rate` and `sent` are parsed into a `metrics` JSON object
-4. Shows a preview table with valid/invalid row counts
-5. On confirm, bulk-inserts all valid rows into `sales_knowledge`
+1. Accepts `.txt`, `.md`, or `.pdf` files via file picker
+2. Extracts text content:
+   - **TXT/MD**: Uses `FileReader.readAsText()`
+   - **PDF**: Uses `pdfjs-dist` to extract text from each page
+3. Shows a preview of extracted content (first ~500 chars)
+4. Requires admin to fill in: title (campaign name), category, optional tags
+5. On confirm, creates a single `sales_knowledge` entry with the full document content
 
 ### Modified File: `src/components/admin/SalesKnowledgeTab.tsx`
 
-- Add an "Import CSV" button in the toolbar (next to "Add Entry")
-- Wire it to open the import dialog
+- Add an "Import Doc" button in the toolbar (between "Import CSV" and the category filter)
+- Add state + dialog wiring for the doc import dialog
 
-### Modified File: `src/hooks/useAdminSalesKnowledge.ts`
+### No Database Changes
 
-- Add a `bulkCreateEntries` mutation that inserts multiple rows in a single Supabase call
+Reuses the existing `sales_knowledge` table. Document content goes into the `content` text column (which already supports markdown/long text).
 
 ### UI Layout
 
 ```text
 Toolbar:
-[+ Add Entry] [Import CSV]  Filter: [All Categories v] [Search...]
+[+ Add Entry] [Import CSV] [Import Doc]  Filter: [All Categories v] [Search...]
 
-Import Dialog:
+Import Doc Dialog:
 +------------------------------------------------+
-| Import Sales Knowledge from CSV                 |
+| Import Document                                 |
 |                                                |
-| [Drag & drop CSV here or click to browse]      |
+| File: [Choose .txt, .md, or .pdf]              |
+| Selected: campaign_playbook.pdf (3 pages)      |
 |                                                |
-| Preview: 24 valid entries, 2 invalid            |
+| Title (Campaign Name):                         |
+| [Healthcare Outreach Q1_________________]      |
+|                                                |
+| Category: [Campaign Result          v]         |
+|                                                |
+| Tags: [healthcare] [outreach] [+ add]          |
+|                                                |
+| Source Campaign: [optional______________]       |
+|                                                |
+| Content Preview:                                |
 | +--------------------------------------------+ |
-| | # | Category       | Title          | OK?  | |
-| | 1 | email_template | Cold Intro...  | Yes  | |
-| | 2 | (invalid)      | Missing title  | No   | |
-| | 3 | sales_guide... | Subject Lines  | Yes  | |
+| | "This campaign targeted 2,400 healthcare   | |
+| | decision-makers across Series B+ companies | |
+| | with a 5-step email sequence..."           | |
 | +--------------------------------------------+ |
 |                                                |
-| [Cancel]              [Import 24 Entries]      |
+| [Cancel]              [Save as Entry]          |
 +------------------------------------------------+
 ```
 
 ## What Does NOT Change
 
-- Existing "Add Entry" manual flow -- untouched
-- Database schema -- no changes needed, reuses existing `sales_knowledge` table
+- Existing CSV import -- untouched
+- Manual "Add Entry" flow -- untouched
+- Database schema -- no changes needed
 - Other Admin tabs -- untouched
 
 ## Sequencing
 
-1. Add `bulkCreateEntries` mutation to `useAdminSalesKnowledge.ts`
-2. Create `SalesKnowledgeImportDialog.tsx` with parse, validate, preview, and import
-3. Add "Import CSV" button to `SalesKnowledgeTab.tsx` toolbar
+1. Install `pdfjs-dist` dependency
+2. Create `SalesKnowledgeDocImportDialog.tsx` with file reading, PDF parsing, and preview
+3. Add "Import Doc" button to `SalesKnowledgeTab.tsx` toolbar and wire the dialog
 
