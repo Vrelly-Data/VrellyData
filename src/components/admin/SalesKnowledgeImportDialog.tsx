@@ -2,6 +2,7 @@ import { useState, useCallback, useMemo } from 'react';
 import Papa from 'papaparse';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
 import {
   Dialog,
   DialogContent,
@@ -24,8 +25,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Upload, CheckCircle, XCircle, Wand2, Loader2 } from 'lucide-react';
+import { Upload, CheckCircle, XCircle, Wand2, Loader2, Check, Circle, X } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
+import { cn } from '@/lib/utils';
 import type { SalesKnowledgeInsert, KnowledgeCategory } from '@/hooks/useAdminSalesKnowledge';
 import { useAdminSalesKnowledge } from '@/hooks/useAdminSalesKnowledge';
 
@@ -37,7 +39,26 @@ const VALID_CATEGORIES: { value: KnowledgeCategory; label: string }[] = [
   { value: 'audience_insight', label: 'Audience Insight' },
 ];
 
-const NONE = '__none__';
+/** Target fields a CSV column can be mapped to */
+type TargetField = 'skip' | 'title' | 'content' | 'category' | 'tags' | 'source_campaign' | 'metric';
+
+const TARGET_OPTIONS: { value: TargetField; label: string }[] = [
+  { value: 'skip', label: 'Skip this column' },
+  { value: 'title', label: 'Title' },
+  { value: 'content', label: 'Content' },
+  { value: 'category', label: 'Category' },
+  { value: 'tags', label: 'Tags' },
+  { value: 'source_campaign', label: 'Source Campaign' },
+  { value: 'metric', label: 'Metric' },
+];
+
+/** Per-column mapping state */
+interface ColumnTargetMapping {
+  csvHeader: string;
+  target: TargetField;
+  metricName?: string; // only when target === 'metric'
+  preview: string[];
+}
 
 interface ColumnMapping {
   title: string;
@@ -71,13 +92,6 @@ function resolveHeader(aiValue: string | null | undefined, csvHeaders: string[])
   const lower = aiValue.toLowerCase().trim();
   const match = csvHeaders.find(h => h.toLowerCase().trim() === lower);
   return match || null;
-}
-
-/** Get sample value from the first data row for a given column */
-function getSampleValue(column: string | null, rows: Record<string, string>[]): string {
-  if (!column || rows.length === 0) return '';
-  const val = rows[0]?.[column] ?? '';
-  return val.length > 60 ? val.slice(0, 60) + '…' : val;
 }
 
 function transformRow(
@@ -131,6 +145,36 @@ function transformRow(
   };
 }
 
+/** Convert column-first mappings back to the ColumnMapping shape used by transformRow */
+function columnMappingsToLegacy(
+  colMappings: ColumnTargetMapping[],
+  globalCategory: KnowledgeCategory
+): ColumnMapping | null {
+  const titleCol = colMappings.find(m => m.target === 'title');
+  const contentCol = colMappings.find(m => m.target === 'content');
+  if (!titleCol || !contentCol) return null;
+
+  const categoryCol = colMappings.find(m => m.target === 'category');
+  const tagsCol = colMappings.find(m => m.target === 'tags');
+  const sourceCol = colMappings.find(m => m.target === 'source_campaign');
+  const metricCols = colMappings.filter(m => m.target === 'metric' && m.metricName);
+
+  const metrics: Record<string, string> = {};
+  for (const mc of metricCols) {
+    metrics[mc.metricName!] = mc.csvHeader;
+  }
+
+  return {
+    title: titleCol.csvHeader,
+    content: contentCol.csvHeader,
+    suggestedCategory: globalCategory,
+    categoryColumn: categoryCol?.csvHeader ?? null,
+    tags: tagsCol?.csvHeader ?? null,
+    sourceCampaign: sourceCol?.csvHeader ?? null,
+    metrics,
+  };
+}
+
 export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPending }: Props) {
   const { analyzeCSV } = useAdminSalesKnowledge();
 
@@ -138,21 +182,39 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
   const [fileName, setFileName] = useState('');
   const [headers, setHeaders] = useState<string[]>([]);
   const [allRows, setAllRows] = useState<Record<string, string>[]>([]);
-  const [mapping, setMapping] = useState<ColumnMapping | null>(null);
+  const [colMappings, setColMappings] = useState<ColumnTargetMapping[]>([]);
+  const [globalCategory, setGlobalCategory] = useState<KnowledgeCategory>('campaign_result');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
-  const headerOptions = useMemo(
-    () => [{ value: NONE, label: '— None —' }, ...headers.filter((h) => h.trim() !== '').map((h) => ({ value: h, label: h }))],
-    [headers]
+  const legacyMapping = useMemo(
+    () => columnMappingsToLegacy(colMappings, globalCategory),
+    [colMappings, globalCategory]
   );
 
   const transformedRows = useMemo(() => {
-    if (!mapping) return [];
-    return allRows.map((row) => transformRow(row, mapping));
-  }, [allRows, mapping]);
+    if (!legacyMapping) return [];
+    return allRows.map((row) => transformRow(row, legacyMapping));
+  }, [allRows, legacyMapping]);
 
   const validRows = transformedRows.filter((r) => r.valid);
   const invalidRows = transformedRows.filter((r) => !r.valid);
+
+  const mappedCount = colMappings.filter(m => m.target !== 'skip').length;
+  const hasTitleMapped = colMappings.some(m => m.target === 'title');
+  const hasContentMapped = colMappings.some(m => m.target === 'content');
+  const canPreview = hasTitleMapped && hasContentMapped;
+
+  /** Build initial column mappings from parsed headers */
+  const buildInitialColMappings = (csvHeaders: string[], data: Record<string, string>[]): ColumnTargetMapping[] => {
+    return csvHeaders.filter(h => h.trim()).map(header => ({
+      csvHeader: header,
+      target: 'skip' as TargetField,
+      preview: data.slice(0, 2).map(row => {
+        const v = String(row[header] ?? '').slice(0, 60);
+        return v;
+      }).filter(Boolean),
+    }));
+  };
 
   const handleFile = useCallback((file: File) => {
     setFileName(file.name);
@@ -163,11 +225,45 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
         const parsedHeaders = results.meta.fields ?? [];
         setHeaders(parsedHeaders);
         setAllRows(results.data);
+        setColMappings(buildInitialColMappings(parsedHeaders, results.data));
         setStep('mapping');
         triggerAIAnalysis(parsedHeaders, results.data);
       },
     });
   }, []);
+
+  /** Apply AI analysis result to column-first mappings */
+  const applyAIResult = (aiMapping: any, csvHeaders: string[], data: Record<string, string>[]) => {
+    const resolvedTitle = resolveHeader(aiMapping.title, csvHeaders);
+    const resolvedContent = resolveHeader(aiMapping.content, csvHeaders);
+    const resolvedTags = resolveHeader(aiMapping.tags, csvHeaders);
+    const resolvedSource = resolveHeader(aiMapping.sourceCampaign, csvHeaders);
+    const resolvedCategory = resolveHeader(aiMapping.categoryColumn, csvHeaders);
+
+    const resolvedMetrics: Record<string, string> = {};
+    for (const [metricName, colName] of Object.entries(aiMapping.metrics || {})) {
+      if (typeof colName === 'string' && colName.trim()) {
+        const resolved = resolveHeader(colName, csvHeaders);
+        if (resolved) resolvedMetrics[resolved] = metricName;
+      }
+    }
+
+    if (aiMapping.suggestedCategory) {
+      setGlobalCategory(aiMapping.suggestedCategory);
+    }
+
+    const newMappings = buildInitialColMappings(csvHeaders, data).map(cm => {
+      if (cm.csvHeader === resolvedTitle) return { ...cm, target: 'title' as TargetField };
+      if (cm.csvHeader === resolvedContent) return { ...cm, target: 'content' as TargetField };
+      if (cm.csvHeader === resolvedTags) return { ...cm, target: 'tags' as TargetField };
+      if (cm.csvHeader === resolvedSource) return { ...cm, target: 'source_campaign' as TargetField };
+      if (cm.csvHeader === resolvedCategory) return { ...cm, target: 'category' as TargetField };
+      if (resolvedMetrics[cm.csvHeader]) return { ...cm, target: 'metric' as TargetField, metricName: resolvedMetrics[cm.csvHeader] };
+      return cm;
+    });
+
+    setColMappings(newMappings);
+  };
 
   const triggerAIAnalysis = async (
     csvHeaders: string[],
@@ -181,28 +277,7 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
         sampleRows,
         rowCount: data.length,
       });
-      const validHeaders = csvHeaders.filter((h) => h.trim() !== '');
-
-      // Resolve AI-returned column names against actual headers (case-insensitive)
-      const resolvedMetrics: Record<string, string> = {};
-      for (const [metricName, colName] of Object.entries(result.mapping.metrics || {})) {
-        if (typeof colName === 'string' && colName.trim() !== '') {
-          const resolved = resolveHeader(colName, csvHeaders);
-          if (resolved) resolvedMetrics[metricName] = resolved;
-        }
-      }
-
-      const sanitized: ColumnMapping = {
-        ...result.mapping,
-        title: resolveHeader(result.mapping.title, csvHeaders) || validHeaders[0] || '',
-        content: resolveHeader(result.mapping.content, csvHeaders) || validHeaders[1] || validHeaders[0] || '',
-        suggestedCategory: result.mapping.suggestedCategory || 'campaign_result',
-        categoryColumn: resolveHeader(result.mapping.categoryColumn, csvHeaders),
-        tags: resolveHeader(result.mapping.tags, csvHeaders),
-        sourceCampaign: resolveHeader(result.mapping.sourceCampaign, csvHeaders),
-        metrics: resolvedMetrics,
-      };
-      setMapping(sanitized);
+      applyAIResult(result.mapping, csvHeaders, data);
       toast({ title: 'AI analysis complete', description: 'Review the suggested mapping below.' });
     } catch (err) {
       console.error('AI analysis failed:', err);
@@ -211,61 +286,46 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
         description: 'Map columns manually using the dropdowns below.',
         variant: 'destructive',
       });
-      setMapping({
-        title: csvHeaders[0] ?? '',
-        content: csvHeaders[1] ?? '',
-        suggestedCategory: 'campaign_result',
-        categoryColumn: null,
-        tags: null,
-        sourceCampaign: null,
-        metrics: {},
-      });
     } finally {
       setIsAnalyzing(false);
     }
   };
 
-  const updateMapping = (field: keyof ColumnMapping, value: string) => {
-    if (!mapping) return;
-    setMapping((prev) => {
-      if (!prev) return prev;
-      if (field === 'metrics') return prev;
-      if (field === 'categoryColumn' || field === 'tags' || field === 'sourceCampaign') {
-        return { ...prev, [field]: value === NONE ? null : value };
-      }
-      return { ...prev, [field]: value };
+  const handleTargetChange = (csvHeader: string, newTarget: TargetField) => {
+    setColMappings(prev => {
+      // For unique targets (title, content, category, tags, source_campaign),
+      // clear any other column that had this target
+      const uniqueTargets: TargetField[] = ['title', 'content', 'category', 'tags', 'source_campaign'];
+      let updated = prev.map(cm => {
+        if (uniqueTargets.includes(newTarget) && cm.target === newTarget && cm.csvHeader !== csvHeader) {
+          return { ...cm, target: 'skip' as TargetField, metricName: undefined };
+        }
+        return cm;
+      });
+      // Apply the new target
+      updated = updated.map(cm =>
+        cm.csvHeader === csvHeader
+          ? {
+              ...cm,
+              target: newTarget,
+              metricName: newTarget === 'metric' ? (cm.metricName || snakeCase(csvHeader)) : undefined,
+            }
+          : cm
+      );
+      return updated;
     });
   };
 
-  const updateMetric = (metricName: string, colName: string) => {
-    setMapping((prev) => {
-      if (!prev) return prev;
-      const metrics = { ...prev.metrics };
-      if (colName === NONE) {
-        delete metrics[metricName];
-      } else {
-        metrics[metricName] = colName;
-      }
-      return { ...prev, metrics };
-    });
+  const handleMetricNameChange = (csvHeader: string, name: string) => {
+    setColMappings(prev =>
+      prev.map(cm =>
+        cm.csvHeader === csvHeader ? { ...cm, metricName: name } : cm
+      )
+    );
   };
 
-  const addMetric = () => {
-    const name = prompt('Metric name (e.g. open_rate, clicks):');
-    if (!name?.trim()) return;
-    setMapping((prev) => {
-      if (!prev) return prev;
-      return { ...prev, metrics: { ...prev.metrics, [name.trim()]: headers[0] ?? '' } };
-    });
-  };
-
-  const removeMetric = (name: string) => {
-    setMapping((prev) => {
-      if (!prev) return prev;
-      const metrics = { ...prev.metrics };
-      delete metrics[name];
-      return { ...prev, metrics };
-    });
+  const clearMapping = (csvHeader: string) => {
+    handleTargetChange(csvHeader, 'skip');
   };
 
   const reset = () => {
@@ -273,7 +333,8 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
     setFileName('');
     setHeaders([]);
     setAllRows([]);
-    setMapping(null);
+    setColMappings([]);
+    setGlobalCategory('campaign_result');
     setIsAnalyzing(false);
   };
 
@@ -317,12 +378,18 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
           </label>
         )}
 
-        {/* Step 2: Mapping */}
+        {/* Step 2: Mapping — CSV columns first */}
         {step === 'mapping' && (
           <div className="space-y-4">
             <div className="flex items-center gap-3 text-sm">
               <span className="font-medium">{fileName}</span>
               <Badge variant="secondary">{allRows.length} rows</Badge>
+              <Badge
+                variant={canPreview ? 'default' : 'secondary'}
+                className={cn(canPreview && 'bg-green-600 hover:bg-green-600')}
+              >
+                {mappedCount} of {colMappings.length} mapped
+              </Badge>
               {isAnalyzing && (
                 <span className="flex items-center gap-1 text-muted-foreground">
                   <Loader2 className="h-3 w-3 animate-spin" />
@@ -334,184 +401,144 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
               </Button>
             </div>
 
-            {/* CSV Data Preview */}
-            {headers.length > 0 && allRows.length > 0 && (
-              <div className="rounded border overflow-auto max-h-[180px]">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      {headers.filter(h => h.trim()).map((h) => (
-                        <TableHead key={h} className="text-xs whitespace-nowrap">{h}</TableHead>
-                      ))}
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {allRows.slice(0, 3).map((row, i) => (
-                      <TableRow key={i}>
-                        {headers.filter(h => h.trim()).map((h) => (
-                          <TableCell key={h} className="text-xs py-1.5 max-w-[200px] truncate">
-                            {(row[h] ?? '').length > 50
-                              ? (row[h] ?? '').slice(0, 50) + '…'
-                              : row[h] ?? ''}
-                          </TableCell>
-                        ))}
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            )}
+            {/* Global category selector */}
+            <div className="flex items-center gap-3">
+              <span className="text-sm font-medium whitespace-nowrap">Default Category:</span>
+              <Select value={globalCategory} onValueChange={(v) => setGlobalCategory(v as KnowledgeCategory)}>
+                <SelectTrigger className="w-[200px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {VALID_CATEGORIES.map((c) => (
+                    <SelectItem key={c.value} value={c.value}>
+                      {c.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <span className="text-xs text-muted-foreground">
+                Used unless a column is mapped to Category
+              </span>
+            </div>
 
-            {mapping && !isAnalyzing && (
-              <div className="space-y-3 border rounded-lg p-4">
-                <div className="mb-2">
-                  <div className="flex items-center gap-2">
-                    <Wand2 className="h-4 w-4 text-primary" />
-                    <span className="text-sm font-medium">Column Mapping</span>
-                  </div>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    For each field below, choose which column from your CSV ("{fileName}") should fill it. The dropdown lists your CSV column headers.
-                  </p>
-                </div>
-                <div className="grid grid-cols-[160px_1fr] items-center gap-1 text-xs text-muted-foreground font-medium border-b pb-1 mb-1">
-                  <span>Save as →</span>
-                  <span>← Your CSV column</span>
-                </div>
-
-                {/* Title */}
-                <MappingRow
-                  label="Title column"
-                  required
-                  value={mapping.title}
-                  options={headerOptions}
-                  onChange={(v) => updateMapping('title', v)}
-                  sampleValue={getSampleValue(mapping.title, allRows)}
-                />
-
-                {/* Content */}
-                <MappingRow
-                  label="Content column"
-                  required
-                  value={mapping.content}
-                  options={headerOptions}
-                  onChange={(v) => updateMapping('content', v)}
-                  sampleValue={getSampleValue(mapping.content, allRows)}
-                />
-
-                {/* Category */}
-                <div className="grid grid-cols-[160px_1fr] items-center gap-2">
-                  <span className="text-sm">Category</span>
-                  <div className="flex gap-2">
-                    <Select
-                      value={mapping.suggestedCategory}
-                      onValueChange={(v) => updateMapping('suggestedCategory', v)}
+            {/* Column mapping rows */}
+            {!isAnalyzing && (
+              <div className="max-h-[400px] overflow-y-auto pr-2 space-y-2">
+                {colMappings.map((cm) => {
+                  const isMapped = cm.target !== 'skip';
+                  return (
+                    <div
+                      key={cm.csvHeader}
+                      className={cn(
+                        'flex items-start gap-3 p-3 rounded-lg border transition-colors',
+                        isMapped
+                          ? 'border-l-4 border-l-green-500 border-green-200 bg-green-50/50 dark:border-green-800 dark:bg-green-950/20'
+                          : 'border-dashed border-muted-foreground/30 bg-muted/30'
+                      )}
                     >
-                      <SelectTrigger className="flex-1">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {VALID_CATEGORIES.map((c) => (
-                          <SelectItem key={c.value} value={c.value}>
-                            {c.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <span className="text-xs text-muted-foreground self-center">or from column:</span>
-                    <Select
-                      value={mapping.categoryColumn ?? NONE}
-                      onValueChange={(v) => updateMapping('categoryColumn', v)}
-                    >
-                      <SelectTrigger className="flex-1">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {headerOptions.map((o) => (
-                          <SelectItem key={o.value} value={o.value}>
-                            {o.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-
-                {/* Tags */}
-                <MappingRow
-                  label="Tags column"
-                  value={mapping.tags ?? NONE}
-                  options={headerOptions}
-                  onChange={(v) => updateMapping('tags', v)}
-                  sampleValue={getSampleValue(mapping.tags, allRows)}
-                />
-
-                {/* Source Campaign */}
-                <MappingRow
-                  label="Source Campaign"
-                  value={mapping.sourceCampaign ?? NONE}
-                  options={headerOptions}
-                  onChange={(v) => updateMapping('sourceCampaign', v)}
-                  sampleValue={getSampleValue(mapping.sourceCampaign, allRows)}
-                />
-
-                {/* Metrics */}
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm w-[160px]">Metrics</span>
-                    <Button variant="ghost" size="sm" onClick={addMetric}>
-                      + Add metric
-                    </Button>
-                  </div>
-                  {Object.entries(mapping.metrics).map(([name, col]) => (
-                    <div key={name} className="grid grid-cols-[160px_1fr_auto] items-center gap-2">
-                      <span className="text-sm text-muted-foreground pl-2">
-                        {name.replace(/_/g, ' ')}
-                      </span>
-                      <div className="space-y-0.5">
-                        <Select value={col || NONE} onValueChange={(v) => updateMetric(name, v)}>
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {headerOptions.map((o) => (
-                              <SelectItem key={o.value} value={o.value}>
-                                {o.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        {col && col !== NONE && getSampleValue(col, allRows) && (
-                          <p className="text-xs text-muted-foreground truncate pl-1">
-                            Preview: "{getSampleValue(col, allRows)}"
+                      {/* CSV column info */}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          {isMapped ? (
+                            <Check className="h-4 w-4 text-green-500 flex-shrink-0" />
+                          ) : (
+                            <Circle className="h-4 w-4 text-muted-foreground/40 flex-shrink-0" />
+                          )}
+                          <p className={cn(
+                            'font-medium text-sm truncate',
+                            isMapped && 'text-green-700 dark:text-green-400'
+                          )}>
+                            {cm.csvHeader}
+                          </p>
+                        </div>
+                        {cm.preview.length > 0 && (
+                          <p className="text-xs text-muted-foreground mt-1 truncate ml-6">
+                            e.g. {cm.preview.slice(0, 2).map(v => `"${v}"`).join(', ')}
                           </p>
                         )}
                       </div>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => removeMetric(name)}
-                        className="text-destructive"
-                      >
-                        ✕
-                      </Button>
+
+                      {/* Target dropdown */}
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <Select
+                          value={cm.target}
+                          onValueChange={(v) => handleTargetChange(cm.csvHeader, v as TargetField)}
+                        >
+                          <SelectTrigger className={cn(
+                            'w-[180px]',
+                            isMapped
+                              ? 'border-green-500 bg-green-50 dark:bg-green-950/30'
+                              : 'border-dashed border-muted-foreground/40'
+                          )}>
+                            <SelectValue placeholder="Skip this column" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {TARGET_OPTIONS.map((opt) => {
+                              // Disable unique targets already used by another column
+                              const uniqueTargets: TargetField[] = ['title', 'content', 'category', 'tags', 'source_campaign'];
+                              const isUsedElsewhere =
+                                uniqueTargets.includes(opt.value) &&
+                                colMappings.some(m => m.target === opt.value && m.csvHeader !== cm.csvHeader);
+                              return (
+                                <SelectItem
+                                  key={opt.value}
+                                  value={opt.value}
+                                  disabled={isUsedElsewhere}
+                                >
+                                  {isUsedElsewhere ? `${opt.label} (mapped)` : opt.label}
+                                </SelectItem>
+                              );
+                            })}
+                          </SelectContent>
+                        </Select>
+
+                        {/* Metric name input */}
+                        {cm.target === 'metric' && (
+                          <Input
+                            value={cm.metricName ?? ''}
+                            onChange={(e) => handleMetricNameChange(cm.csvHeader, e.target.value)}
+                            placeholder="metric_name"
+                            className="w-[120px] h-9 text-xs"
+                          />
+                        )}
+
+                        {isMapped && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                            onClick={() => clearMapping(cm.csvHeader)}
+                            title="Clear mapping"
+                          >
+                            <X className="h-4 w-4" />
+                          </Button>
+                        )}
+                      </div>
                     </div>
-                  ))}
-                </div>
+                  );
+                })}
               </div>
             )}
 
-            {mapping && !isAnalyzing && (
+            {/* Validation hints */}
+            {!isAnalyzing && !canPreview && (
+              <p className="text-xs text-destructive">
+                Map at least one column to <strong>Title</strong> and one to <strong>Content</strong> to continue.
+              </p>
+            )}
+
+            {!isAnalyzing && (
               <div className="flex justify-end gap-2">
                 <Button
                   variant="outline"
-                  onClick={() => {
-                    triggerAIAnalysis(headers, allRows);
-                  }}
+                  onClick={() => triggerAIAnalysis(headers, allRows)}
                 >
                   <Wand2 className="h-4 w-4 mr-2" />
                   Re-analyze with AI
                 </Button>
-                <Button onClick={() => setStep('preview')}>Apply Mapping & Preview</Button>
+                <Button onClick={() => setStep('preview')} disabled={!canPreview}>
+                  Apply Mapping & Preview
+                </Button>
               </div>
             )}
           </div>
@@ -584,46 +611,7 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
   );
 }
 
-function MappingRow({
-  label,
-  value,
-  options,
-  onChange,
-  required,
-  sampleValue,
-}: {
-  label: string;
-  value: string;
-  options: { value: string; label: string }[];
-  onChange: (v: string) => void;
-  required?: boolean;
-  sampleValue?: string;
-}) {
-  return (
-    <div className="grid grid-cols-[160px_1fr] items-center gap-2">
-      <span className="text-sm">
-        {label}
-        {required && <span className="text-destructive ml-1">*</span>}
-      </span>
-      <div className="space-y-0.5">
-        <Select value={value || NONE} onValueChange={onChange}>
-          <SelectTrigger>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {options.map((o) => (
-              <SelectItem key={o.value} value={o.value}>
-                {o.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        {sampleValue && value && value !== NONE && (
-          <p className="text-xs text-muted-foreground truncate pl-1">
-            Preview: "{sampleValue}"
-          </p>
-        )}
-      </div>
-    </div>
-  );
+/** Simple snake_case helper for auto-generating metric names */
+function snakeCase(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
 }
