@@ -1,8 +1,8 @@
 # 🔒 Search Function Lock Document
 
 **Purpose**: Protect the `search_free_data_builder` function from unintended modifications.  
-**Version**: 3.2  
-**Last Updated**: January 17, 2026
+**Version**: 3.6  
+**Last Updated**: February 11, 2026
 
 ---
 
@@ -24,13 +24,13 @@ If you're unsure, **ASK THE USER FIRST**.
 
 If anything breaks, the user can say:
 
-> **"Revert to v3.2 stable state"**
+> **"Revert to v3.6 stable state"**
 
 ---
 
-## ✅ 18 Verified Working Filters
+## ✅ 18 Verified Working Filters + 8 DNC Exclusions
 
-All of these filters have been tested and confirmed working as of v3.2:
+All of these filters have been tested and confirmed working as of v3.6:
 
 | # | Filter | Status |
 |---|--------|--------|
@@ -53,6 +53,19 @@ All of these filters have been tested and confirmed working as of v3.2:
 | 17 | Person Net Worth | ✅ |
 | 18 | Industry Suggestions (Frontend Normalized) | ✅ |
 
+### DNC (Do Not Include) Exclusion Parameters (v3.6)
+
+| # | Exclusion Parameter | Status |
+|---|---------------------|--------|
+| 1 | p_exclude_keywords | ✅ |
+| 2 | p_exclude_job_titles | ✅ |
+| 3 | p_exclude_industries | ✅ |
+| 4 | p_exclude_cities | ✅ |
+| 5 | p_exclude_countries | ✅ |
+| 6 | p_exclude_technologies | ✅ |
+| 7 | p_exclude_person_skills | ✅ |
+| 8 | p_exclude_person_interests | ✅ |
+
 ---
 
 ## 📁 Stable Migration Reference
@@ -61,11 +74,13 @@ All of these filters have been tested and confirmed working as of v3.2:
 
 This migration contains:
 1. `parse_revenue_to_numeric()` - Helper for revenue parsing
-2. `search_free_data_builder()` - Main search function (29 parameters)
+2. `search_free_data_builder()` - Main search function (37 parameters)
 
 ---
 
-## 🎨 Frontend Normalization (v3.1.1)
+## 🎨 Frontend Normalization (v3.6)
+
+### Industry Suggestions
 
 **File**: `src/hooks/useFreeDataSuggestions.ts`
 
@@ -73,6 +88,18 @@ Industry suggestions are normalized to Title Case and deduplicated in the fronte
 - "retail" → "Retail"
 - "HEALTHCARE" → "Healthcare"
 - Duplicates removed via Set
+
+### Industry Deduplication in FilterBuilder
+
+**File**: `src/components/search/FilterBuilder.tsx`
+
+The `dedup()` helper applies `trim()` + Title Case normalization before `new Set()` dedup, ensuring casing variations like "insurance" and "Insurance" collapse into a single entry.
+
+### Display Cap
+
+**File**: `src/hooks/useFreeDataSearch.ts`
+
+`TOTAL_DISPLAY_CAP = 100_000` — When results exceed 100,000, the UI displays "100,000+" in toasts, headers, and badges. `totalEstimate` and `totalPages` are clamped to this limit.
 
 ---
 
@@ -83,13 +110,13 @@ Industry suggestions are normalized to Title Case and deduplicated in the fronte
 1. ⚠️ **User must explicitly request the change**
 2. ⚠️ **Verify current baseline counts first**
 3. ⚠️ **Use CREATE OR REPLACE FUNCTION**
-4. ⚠️ **Never change the 29-parameter signature**
+4. ⚠️ **Never change the 37-parameter signature**
 5. ⚠️ **Run BUILDER_SEARCH_TEST.sql after changes**
 6. ⚠️ **Verify no duplicate functions created**
 
 ### If You Break Something:
 
-1. Tell the user to say: "Revert to v3.2 stable state"
+1. Tell the user to say: "Revert to v3.6 stable state"
 2. Copy functions from the stable migration file
 3. Create new migration with CREATE OR REPLACE
 4. Verify counts match baseline
@@ -135,13 +162,13 @@ SELECT total_count FROM public.search_free_data_builder(
 
 ## 🔧 What the AI Should Do on Revert
 
-When user says "Revert to v3.2 stable state":
+When user says "Revert to v3.6 stable state":
 
 1. Read migration file: `20260117175524_38595ba8-3317-4946-8c7a-25ee0c6d6037.sql`
 2. Extract `parse_revenue_to_numeric` function
 3. Extract `search_free_data_builder` function
 4. Create new migration with both functions using `CREATE OR REPLACE`
-5. Add assertion block to verify single function with 29 parameters
+5. Add assertion block to verify single function with 37 parameters
 6. Run verification queries to confirm baseline counts
 7. Verify frontend normalization in `useFreeDataSuggestions.ts`
 
@@ -161,9 +188,11 @@ When user says "Revert to v3.2 stable state":
 
 | What | Value |
 |------|-------|
-| Current Version | v3.5 |
+| Current Version | v3.6 |
 | Total Records | 724 (400 person, 324 company) |
-| Parameter Count | 29 |
-| Revert Command | "Revert to v3.2 stable state" |
+| Parameter Count | 37 |
+| Revert Command | "Revert to v3.6 stable state" |
 | Test File | `docs/BUILDER_SEARCH_TEST.sql` |
 | Frontend Fix | `src/hooks/useFreeDataSuggestions.ts` (industry normalization) |
+| Display Cap | 100,000+ (`useFreeDataSearch.ts`) |
+| Industry Dedup | `dedup()` in `FilterBuilder.tsx` |

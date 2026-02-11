@@ -1,8 +1,8 @@
 # Stable Checkpoints
 
-**Purpose**: Document stable states for easy recovery. Say "Revert to v3.4 stable state" to restore.  
-**Last Updated**: February 10, 2026  
-**Current Stable Version**: v3.5
+**Purpose**: Document stable states for easy recovery. Say "Revert to v3.6 stable state" to restore.  
+**Last Updated**: February 11, 2026  
+**Current Stable Version**: v3.6
 
 ---
 
@@ -21,21 +21,21 @@ If in doubt, **ASK FIRST**.
 
 Say this to revert to the last known good state:
 
-> **"Revert to v3.5 stable state"**
+> **"Revert to v3.6 stable state"**
 
 The AI will:
 1. Copy functions from the stable migration
 2. Create a new migration with `CREATE OR REPLACE FUNCTION`
 3. Verify no duplicate functions exist
-4. Verify baseline counts match v3.3 expectations
+4. Verify baseline counts match expectations
 5. Restore frontend gender conversion in `useFreeDataSearch.ts`
 
 ---
 
-## ✅ Current Stable: v3.3
+## ✅ Current Stable: v3.6
 
-**Date**: January 21, 2026  
-**Status**: All 18 filters verified working
+**Date**: February 11, 2026  
+**Status**: All 18 filters + 8 DNC exclusions verified working
 
 ### Confirmed Working Filters (18 total)
 
@@ -62,7 +62,7 @@ The AI will:
 
 ---
 
-## 📊 Verified Baseline Counts (v3.3)
+## 📊 Verified Baseline Counts (v3.3+)
 
 Use these for regression testing. If counts change unexpectedly, something is broken.
 
@@ -122,11 +122,11 @@ This ensures the UI uses human-readable labels while the database uses short cod
 
 ---
 
-## 🔧 Database Functions (v3.3)
+## 🔧 Database Functions (v3.6)
 
 | Function | Parameters | Status |
 |----------|------------|--------|
-| `search_free_data_builder` | 29 | ✅ Single version |
+| `search_free_data_builder` | 37 | ✅ Single version |
 | `parse_employee_count_upper` | 1 | ✅ Helper |
 | `parse_revenue_to_numeric` | 1 | ✅ Helper (added v2.10) |
 | `title_matches_seniority` | 3 | ✅ Helper (2 versions) |
@@ -138,6 +138,7 @@ This ensures the UI uses human-readable labels while the database uses short cod
 
 | Version | Date | Changes |
 |---------|------|---------|
+| v3.6 | 2026-02-11 | DNC exclusion filters (37 params), 100,000+ display cap, case-insensitive industry dedup in FilterBuilder |
 | v3.5 | 2026-02-10 | Email stats aggregation fix, webhook messaging removal from popovers |
 | v3.4 | 2026-02-08 | Data Playground: auto-link on first sync, links_initialized column, Link All recovery button |
 | v3.3 | 2026-01-21 | Updated baseline counts, documented Gender M/F format, verified 137 Male / 55 Female |
@@ -159,7 +160,7 @@ Before modifying any filter logic:
 - [ ] User explicitly requested the change
 - [ ] Current counts verified against baseline
 - [ ] Migration uses `CREATE OR REPLACE FUNCTION`
-- [ ] Signature stays identical (29 parameters)
+- [ ] Signature stays identical (37 parameters)
 - [ ] Run `docs/BUILDER_SEARCH_TEST.sql` after changes
 - [ ] No duplicate functions created
 - [ ] Post-change counts verified
@@ -175,7 +176,7 @@ If the quick command doesn't work:
    - `parse_revenue_to_numeric`
    - `search_free_data_builder`
 3. Create new migration with `CREATE OR REPLACE FUNCTION`
-4. Verify single function exists with 29 parameters
+4. Verify single function exists with 37 parameters
 5. Restore frontend gender conversion in `src/hooks/useFreeDataSearch.ts`
 
 ---
@@ -239,3 +240,53 @@ If the quick command doesn't work:
 
 - **"Re-upload email stats CSV"** - Required after aggregation fix to overwrite zeroed data
 - All v3.4 recovery commands still apply
+
+---
+
+## 🔍 Audience Builder Stable State (v3.6)
+
+**Date**: February 11, 2026  
+**Status**: DNC exclusion filters, display cap, industry dedup all working
+
+### DNC Exclusion Filters
+
+8 new `p_exclude_*` parameters added to `search_free_data_builder` (29 → 37 params):
+
+| Parameter | Excludes |
+|-----------|----------|
+| `p_exclude_keywords` | Keyword matches |
+| `p_exclude_job_titles` | Job title matches |
+| `p_exclude_industries` | Industry matches |
+| `p_exclude_cities` | City matches |
+| `p_exclude_countries` | Country matches |
+| `p_exclude_technologies` | Technology matches |
+| `p_exclude_person_skills` | Person skill matches |
+| `p_exclude_person_interests` | Person interest matches |
+
+UI pattern: collapsible section beneath each tag-input field with a chevron toggle (turns red when active).
+
+### Display Cap
+
+`TOTAL_DISPLAY_CAP = 100_000` in `useFreeDataSearch.ts`. When results exceed 100,000:
+- Toasts show "100,000+"
+- "Found X" headers show "100,000+"
+- Selection badges show "100,000+"
+- `totalEstimate` and `totalPages` are clamped
+
+### Industry Deduplication
+
+`dedup()` helper in `FilterBuilder.tsx` applies `trim()` + Title Case normalization before `new Set()` dedup, collapsing casing variations (e.g., "insurance" and "Insurance" → "Insurance").
+
+### Key Files
+
+| File | Role |
+|------|------|
+| `src/hooks/useFreeDataSearch.ts` | Search hook with exclusion params and display cap |
+| `src/pages/AudienceBuilder.tsx` | Main builder page |
+| `src/components/search/PreviewTable.tsx` | Results display with 100,000+ formatting |
+| `src/components/search/FilterBuilder.tsx` | Filter UI with DNC sections and dedup helper |
+
+### Recovery Commands
+
+- **"Revert to v3.6 stable state"** - Restores search function and frontend
+- All v3.4 and v3.5 recovery commands still apply
