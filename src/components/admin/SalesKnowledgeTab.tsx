@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react';
 import { SalesKnowledgeImportDialog } from './SalesKnowledgeImportDialog';
+import { SalesKnowledgeDocImportDialog } from './SalesKnowledgeDocImportDialog';
 import {
   useAdminSalesKnowledge,
   type SalesKnowledgeEntry,
@@ -36,7 +37,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Plus, Pencil, Trash2, Search, Upload } from 'lucide-react';
+import { Plus, Pencil, Trash2, Search, Upload, FileText } from 'lucide-react';
 import { format } from 'date-fns';
 
 const CATEGORIES: { value: KnowledgeCategory; label: string }[] = [
@@ -63,6 +64,7 @@ export function SalesKnowledgeTab() {
   const { entries, isLoading, createEntry, updateEntry, deleteEntry, bulkCreateEntries } =
     useAdminSalesKnowledge();
   const [importOpen, setImportOpen] = useState(false);
+  const [docImportOpen, setDocImportOpen] = useState(false);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -156,6 +158,10 @@ export function SalesKnowledgeTab() {
         <Button variant="outline" onClick={() => setImportOpen(true)}>
           <Upload className="h-4 w-4 mr-2" />
           Import CSV
+        </Button>
+        <Button variant="outline" onClick={() => setDocImportOpen(true)}>
+          <FileText className="h-4 w-4 mr-2" />
+          Import Doc
         </Button>
         <Select value={filterCategory} onValueChange={setFilterCategory}>
           <SelectTrigger className="w-[200px]">
@@ -365,7 +371,7 @@ export function SalesKnowledgeTab() {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Import Dialog */}
+      {/* Import CSV Dialog */}
       <SalesKnowledgeImportDialog
         open={importOpen}
         onOpenChange={setImportOpen}
@@ -373,6 +379,16 @@ export function SalesKnowledgeTab() {
           bulkCreateEntries.mutate(entries, { onSuccess: () => setImportOpen(false) });
         }}
         isPending={bulkCreateEntries.isPending}
+      />
+
+      {/* Import Doc Dialog */}
+      <SalesKnowledgeDocImportDialog
+        open={docImportOpen}
+        onOpenChange={setDocImportOpen}
+        onImport={(entry) => {
+          createEntry.mutate(entry, { onSuccess: () => setDocImportOpen(false) });
+        }}
+        isPending={createEntry.isPending}
       />
     </div>
   );
