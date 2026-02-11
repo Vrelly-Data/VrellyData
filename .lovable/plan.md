@@ -1,57 +1,87 @@
 
+# Auto-Record Campaign Performance to Sales Knowledge
 
-# Copy Revamp with Claude API
+## The Idea
 
-## Overview
+Instead of building a new complex mapping UI, we piggyback on the existing Email and LinkedIn CSV upload flows. After stats are imported to campaigns, the system automatically generates `sales_knowledge` entries (category: `campaign_result`) that capture the performance metrics connected to the campaign's audience data (industries, job titles, company sizes) pulled from `synced_contacts`.
 
-Build the "Revamp" button functionality in the Copy tab. When clicked, an edge function calls Claude with the current email/message copy plus relevant entries from the `sales_knowledge` table, and returns an improved version.
+This means:
+- You upload a CSV like you already do
+- Stats get applied to campaigns (existing behavior)
+- **NEW**: A performance snapshot is automatically saved to the Sales Knowledge tab
+- The AI Copy Revamp already reads from Sales Knowledge, so it immediately gets access to real performance baselines
+
+## What Gets Recorded
+
+For each campaign that receives stats, a knowledge entry is created like:
+
+```
+Title: "HVAC campaign - Performance Baseline (Feb 2026)"
+Category: campaign_result
+Content:
+  Channel: Email + LinkedIn
+  Delivered: 54 | Opens: 12 | Replies: 3 | Reply Rate: 5.6%
+  LI Connections Sent: 120 | Accepted: 5 | LI Replies: 0
+  
+  Top Industries: Building Construction (60%), Consumer Services (15%)
+  Top Job Titles: Owner (40%), VP Operations (12%)
+  Company Sizes: 11-50 (35%), 51-200 (28%)
+  
+Metrics (structured JSONB):
+  { delivered: 54, replies: 3, replyRate: 5.6, ... }
+Tags: ["hvac", "building-construction", "linkedin", "email"]
+Source Campaign: "HVAC campaign"
+```
 
 ## How It Works
 
-1. User clicks "Revamp" on a sequence step
-2. Edge function receives the step's subject + body + step type
-3. Edge function queries `sales_knowledge` for relevant entries (email templates, guidelines, high-performing examples)
-4. Claude rewrites the copy using both the original and the knowledge context
-5. Result is shown in a dialog where the user can copy or discard
+### 1. New helper: `generatePerformanceSnapshot(campaignId)`
 
-## Steps
+A shared function that:
+- Reads the campaign's current stats from `synced_campaigns`
+- Queries `synced_contacts` for that campaign to extract top industries, job titles, company sizes, and locations
+- Builds a structured knowledge entry with both human-readable content and machine-readable metrics JSONB
+- Upserts into `sales_knowledge` (using source_campaign to avoid duplicates -- updates the existing entry if one exists for this campaign)
 
-### 1. Store the Claude API Key
+### 2. Hook into Email Stats Upload
 
-You'll be prompted to enter your Anthropic API key (from console.anthropic.com). It will be stored securely as a backend secret called `ANTHROPIC_API_KEY`.
+In `useEmailStatsUpload.ts`, after the stats are successfully imported:
+- Call `generatePerformanceSnapshot` for each updated campaign
+- This happens automatically -- no extra UI needed
 
-### 2. Create Edge Function: `revamp-copy`
+### 3. Hook into LinkedIn Stats Upload  
 
-New file: `supabase/functions/revamp-copy/index.ts`
+Same approach in `useLinkedInStatsUpload.ts` -- after LinkedIn stats are applied, generate/update the performance snapshot.
 
-- Accepts: `{ subject, body, stepType, campaignName }`
-- Queries `sales_knowledge` table for active entries (prioritizing `email_template`, `sales_guideline`, `sequence_playbook` categories) -- up to 10 entries to keep context manageable
-- Calls Claude API (`claude-sonnet-4-20250514`) with a system prompt that includes the knowledge context and instructs it to rewrite the copy
-- Returns: `{ subject, body }` (the revamped versions)
+### 4. Update `revamp-copy` edge function
 
-### 3. Update CopyTab.tsx
+Enhance the system prompt to specifically reference `campaign_result` entries when available, telling Claude things like "In the HVAC/Building Construction vertical, email reply rates are ~5.6% and LinkedIn acceptance is ~4.2%."
 
-- Replace the placeholder `handleRevamp` with a real function that calls the edge function
-- Add a "Revamp Result" dialog showing the AI-generated copy side-by-side with the original
-- Include "Copy Subject" / "Copy Body" buttons on the revamped version
-- Show a loading state (spinner on the Revamp button) while Claude is working
+## Technical Changes
 
-### 4. "Revamp All" Button
+### New file: `src/lib/performanceSnapshot.ts`
+- `generatePerformanceSnapshot(campaignId: string)`: Queries campaign stats + contacts, builds and upserts a `sales_knowledge` entry
+- Calculates rates (reply rate, open rate, acceptance rate)
+- Aggregates contact demographics (top 5 industries, titles, etc.)
 
-- Wire up the "Revamp All" button in the campaign header to sequentially revamp all steps
-- Show progress (e.g., "Revamping step 3 of 7...")
-- Results shown in a summary dialog
+### Modified: `src/hooks/useEmailStatsUpload.ts`
+- In `onSuccess`, call `generatePerformanceSnapshot` for each updated campaign ID
 
-## Sales Knowledge Integration
+### Modified: `src/hooks/useLinkedInStatsUpload.ts`  
+- Same -- call snapshot generation after successful upload
 
-The edge function will pull from your existing `sales_knowledge` table automatically. Any entries you've added manually (via the "Add Entry" button) will be included as context for Claude. You don't need the CSV import working to use this -- even a few manually added guidelines or high-performing templates will improve the output.
+### Modified: `supabase/functions/revamp-copy/index.ts`
+- Update the system prompt to better utilize `campaign_result` entries with structured metrics
+- When campaign results exist for similar industries, include them as performance benchmarks
 
-## Technical Details
+### No new tables or migrations needed
+- Uses existing `sales_knowledge` table with existing columns (title, content, category, tags, metrics JSONB, source_campaign)
+- Uses existing `synced_contacts` for demographic enrichment
+- Uses existing `synced_campaigns` for metrics
 
-- **Model**: `claude-sonnet-4-20250514` for quality rewrites
-- **Context window**: System prompt includes up to 10 knowledge entries (sorted by relevance to the step type)
-- **No database changes needed** -- reads from existing `sales_knowledge` table
-- **New secret**: `ANTHROPIC_API_KEY`
-- **New edge function**: `revamp-copy`
-- **Modified file**: `src/components/playground/CopyTab.tsx`
+## What This Enables
 
+- **Compare by industry**: "Healthcare gets 15% reply rate vs 8% for Finance" -- stored as separate knowledge entries, queryable by tags
+- **Compare by copy/sequence**: Each campaign's snapshot references the campaign name, so Claude can correlate with the sequence copy it already has
+- **Track over time**: Each upload updates the snapshot with a timestamp, building a history
+- **Feed AI**: The revamp-copy function already pulls from sales_knowledge, so performance data automatically influences AI-generated copy
