@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useSyncedSequences, useSyncSequences } from '@/hooks/useSyncedSequences';
 import { useSyncedCampaigns } from '@/hooks/useSyncedCampaigns';
 import { useOutboundIntegrations } from '@/hooks/useOutboundIntegrations';
+import { supabase } from '@/integrations/supabase/client';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -9,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Loader2, Mail, Linkedin, MessageSquare, Phone, RefreshCw, Copy, FileText, Sparkles, ChevronDown, ChevronRight } from 'lucide-react';
 import { toast } from 'sonner';
+import { RevampResultDialog } from './RevampResultDialog';
 
 const stepTypeIcons: Record<string, React.ReactNode> = {
   email: <Mail className="h-4 w-4" />,
@@ -29,9 +31,20 @@ const stepTypeLabels: Record<string, string> = {
   whatsapp: 'WhatsApp',
 };
 
+interface RevampResult {
+  subject: string | null;
+  body: string | null;
+}
+
 export function CopyTab() {
   const [selectedCampaignId, setSelectedCampaignId] = useState<string>('');
   const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
+  const [revampingStepId, setRevampingStepId] = useState<string | null>(null);
+  const [revampResult, setRevampResult] = useState<RevampResult | null>(null);
+  const [revampOriginal, setRevampOriginal] = useState<{ subject: string | null; body: string | null } | null>(null);
+  const [revampStepInfo, setRevampStepInfo] = useState<{ stepNumber: number; stepType: string } | null>(null);
+  const [revampDialogOpen, setRevampDialogOpen] = useState(false);
+  const [revampAllProgress, setRevampAllProgress] = useState<{ current: number; total: number } | null>(null);
   
   const { data: sequences, isLoading: sequencesLoading } = useSyncedSequences(
     selectedCampaignId || undefined
@@ -43,13 +56,10 @@ export function CopyTab() {
   const activeIntegration = integrations?.find(i => i.platform === 'reply.io' && i.is_active);
   const selectedCampaign = campaigns?.find(c => c.id === selectedCampaignId);
 
-  // Calculate cumulative day for each step
-  // delay_days represents wait time BEFORE this step executes
   const sequencesWithDays = (() => {
     if (!sequences) return [];
     let cumulativeDay = 1;
     return sequences.map((step) => {
-      // Add delay from THIS step (wait before this step runs)
       if (step.delay_days) {
         cumulativeDay += step.delay_days;
       }
@@ -86,8 +96,72 @@ export function CopyTab() {
     });
   };
 
-  const handleRevamp = (stepId: string) => {
-    toast.info('Revamp feature coming soon!');
+  const callRevamp = async (subject: string | null, body: string | null, stepType: string | null) => {
+    const { data, error } = await supabase.functions.invoke('revamp-copy', {
+      body: {
+        subject: subject || '',
+        body: body || '',
+        stepType: stepType || 'email',
+        campaignName: selectedCampaign?.name || '',
+      },
+    });
+    if (error) throw error;
+    return data as RevampResult;
+  };
+
+  const handleRevamp = async (stepId: string) => {
+    const step = sequences?.find(s => s.id === stepId);
+    if (!step) return;
+
+    setRevampingStepId(stepId);
+    try {
+      const result = await callRevamp(step.subject, step.body_text || step.body_html, step.step_type);
+      setRevampResult(result);
+      setRevampOriginal({ subject: step.subject, body: step.body_text || step.body_html });
+      setRevampStepInfo({ stepNumber: step.step_number, stepType: step.step_type || 'email' });
+      setRevampDialogOpen(true);
+    } catch (err: any) {
+      toast.error(`Revamp failed: ${err.message || 'Unknown error'}`);
+    } finally {
+      setRevampingStepId(null);
+    }
+  };
+
+  const handleRevampAll = async () => {
+    if (!sequencesWithDays.length) return;
+
+    const total = sequencesWithDays.length;
+    setRevampAllProgress({ current: 0, total });
+
+    const results: { stepNumber: number; stepType: string; original: { subject: string | null; body: string | null }; revamped: RevampResult }[] = [];
+
+    for (let i = 0; i < total; i++) {
+      const step = sequencesWithDays[i];
+      setRevampAllProgress({ current: i + 1, total });
+      try {
+        const result = await callRevamp(step.subject, step.body_text || step.body_html, step.step_type);
+        results.push({
+          stepNumber: step.step_number,
+          stepType: step.step_type || 'email',
+          original: { subject: step.subject, body: step.body_text || step.body_html },
+          revamped: result,
+        });
+      } catch {
+        toast.error(`Failed to revamp step ${step.step_number}`);
+      }
+    }
+
+    setRevampAllProgress(null);
+
+    if (results.length > 0) {
+      // Show the first result in the dialog; user can close and see others were processed
+      const first = results[0];
+      setRevampResult(first.revamped);
+      setRevampOriginal(first.original);
+      setRevampStepInfo({ stepNumber: first.stepNumber, stepType: first.stepType });
+      setRevampDialogOpen(true);
+      toast.success(`Revamped ${results.length} of ${total} steps`);
+    }
   };
 
   // Loading state
@@ -114,7 +188,7 @@ export function CopyTab() {
 
   return (
     <div className="space-y-6">
-      {/* Campaign Selector - Always Visible */}
+      {/* Campaign Selector */}
       <div className="flex items-center gap-4">
         <Select value={selectedCampaignId} onValueChange={setSelectedCampaignId}>
           <SelectTrigger className="w-80">
@@ -139,7 +213,7 @@ export function CopyTab() {
         </div>
       )}
 
-      {/* Campaign selected - show header and sequences */}
+      {/* Campaign selected */}
       {selectedCampaignId && selectedCampaign && (
         <div className="space-y-4">
           {/* Campaign Header */}
@@ -155,22 +229,27 @@ export function CopyTab() {
                   )}
                 </div>
                 <div className="flex items-center gap-2">
-                  <Button 
-                    variant="outline" 
-                    size="sm"
-                    onClick={handleSyncCampaign}
-                    disabled={isSyncing}
-                  >
+                  <Button variant="outline" size="sm" onClick={handleSyncCampaign} disabled={isSyncing}>
                     {isSyncing ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <RefreshCw className="h-4 w-4 mr-2" />}
                     Sync Copy
                   </Button>
-                  <Button 
-                    variant="outline" 
+                  <Button
+                    variant="outline"
                     size="sm"
-                    onClick={() => toast.info('Revamp All feature coming soon!')}
+                    onClick={handleRevampAll}
+                    disabled={!!revampAllProgress || !sequencesWithDays.length}
                   >
-                    <Sparkles className="h-4 w-4 mr-2" />
-                    Revamp All
+                    {revampAllProgress ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                        Revamping {revampAllProgress.current}/{revampAllProgress.total}
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="h-4 w-4 mr-2" />
+                        Revamp All
+                      </>
+                    )}
                   </Button>
                 </div>
               </div>
@@ -189,7 +268,7 @@ export function CopyTab() {
             </div>
           )}
 
-          {/* No sequences for this campaign */}
+          {/* No sequences */}
           {!sequencesLoading && (!sequences || sequences.length === 0) && (
             <div className="flex flex-col items-center justify-center h-48 text-center border-2 border-dashed rounded-lg">
               <Mail className="h-10 w-10 text-muted-foreground mb-3" />
@@ -209,7 +288,8 @@ export function CopyTab() {
             <div className="space-y-3">
               {sequencesWithDays.map((step) => {
                 const isExpanded = expandedSteps.has(step.id);
-                
+                const isRevamping = revampingStepId === step.id;
+
                 return (
                   <Card key={step.id} className="overflow-hidden">
                     <Collapsible open={isExpanded} onOpenChange={() => toggleStep(step.id)}>
@@ -218,11 +298,7 @@ export function CopyTab() {
                           <div className="flex items-center justify-between">
                             <div className="flex items-center gap-3">
                               <div className="flex items-center gap-2">
-                                {isExpanded ? (
-                                  <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                                ) : (
-                                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                                )}
+                                {isExpanded ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
                                 <Badge variant="outline" className="flex items-center gap-1.5">
                                   {stepTypeIcons[step.step_type || 'email'] || <Mail className="h-4 w-4" />}
                                   Step {step.step_number}
@@ -231,9 +307,7 @@ export function CopyTab() {
                               <span className="text-sm text-muted-foreground">
                                 {stepTypeLabels[step.step_type || 'email'] || step.step_type}
                               </span>
-                              <Badge variant="secondary" className="text-xs">
-                                Day {step.cumulativeDay}
-                              </Badge>
+                              <Badge variant="secondary" className="text-xs">Day {step.cumulativeDay}</Badge>
                             </div>
                           </div>
                           {step.subject && (
@@ -243,51 +317,31 @@ export function CopyTab() {
                           )}
                         </CardHeader>
                       </CollapsibleTrigger>
-                      
+
                       <CollapsibleContent>
                         <CardContent className="pt-0 pb-4 space-y-4">
-                          {/* Action Buttons */}
                           <div className="flex items-center gap-2 flex-wrap">
                             {step.subject && (
-                              <Button 
-                                variant="outline" 
-                                size="sm"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleCopyToClipboard(step.subject!, 'subject');
-                                }}
-                              >
-                                <Copy className="h-4 w-4 mr-2" />
-                                Copy Subject
+                              <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); handleCopyToClipboard(step.subject!, 'subject'); }}>
+                                <Copy className="h-4 w-4 mr-2" /> Copy Subject
                               </Button>
                             )}
-                            <Button 
-                              variant="outline" 
-                              size="sm"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleCopyToClipboard(step.body_text || step.body_html || '', 'body');
-                              }}
-                            >
-                              <Copy className="h-4 w-4 mr-2" />
-                              Copy Body
+                            <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); handleCopyToClipboard(step.body_text || step.body_html || '', 'body'); }}>
+                              <Copy className="h-4 w-4 mr-2" /> Copy Body
                             </Button>
-                            <Button 
-                              variant="secondary" 
+                            <Button
+                              variant="secondary"
                               size="sm"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleRevamp(step.id);
-                              }}
+                              disabled={isRevamping || !!revampAllProgress}
+                              onClick={(e) => { e.stopPropagation(); handleRevamp(step.id); }}
                             >
-                              <Sparkles className="h-4 w-4 mr-2" />
-                              Revamp
+                              {isRevamping ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Sparkles className="h-4 w-4 mr-2" />}
+                              {isRevamping ? 'Revamping...' : 'Revamp'}
                             </Button>
                           </div>
 
-                          {/* Email Body Preview */}
                           {step.body_html && (
-                            <div 
+                            <div
                               className="prose prose-sm max-w-none p-4 bg-muted/30 rounded-md overflow-auto max-h-96 border"
                               dangerouslySetInnerHTML={{ __html: step.body_html }}
                             />
@@ -307,6 +361,16 @@ export function CopyTab() {
           )}
         </div>
       )}
+
+      {/* Revamp Result Dialog */}
+      <RevampResultDialog
+        open={revampDialogOpen}
+        onClose={() => setRevampDialogOpen(false)}
+        original={revampOriginal || { subject: null, body: null }}
+        revamped={revampResult}
+        stepNumber={revampStepInfo?.stepNumber || 0}
+        stepType={revampStepInfo?.stepType || 'email'}
+      />
     </div>
   );
 }
