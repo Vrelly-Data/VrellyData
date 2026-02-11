@@ -126,7 +126,7 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   const headerOptions = useMemo(
-    () => [{ value: NONE, label: '— None —' }, ...headers.map((h) => ({ value: h, label: h }))],
+    () => [{ value: NONE, label: '— None —' }, ...headers.filter((h) => h.trim() !== '').map((h) => ({ value: h, label: h }))],
     [headers]
   );
 
@@ -166,7 +166,19 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
         sampleRows,
         rowCount: data.length,
       });
-      setMapping(result.mapping);
+      const validHeaders = csvHeaders.filter((h) => h.trim() !== '');
+      const sanitized = {
+        ...result.mapping,
+        title: result.mapping.title || validHeaders[0] || '',
+        content: result.mapping.content || validHeaders[1] || validHeaders[0] || '',
+        categoryColumn: result.mapping.categoryColumn || null,
+        tags: result.mapping.tags || null,
+        sourceCampaign: result.mapping.sourceCampaign || null,
+        metrics: Object.fromEntries(
+          Object.entries(result.mapping.metrics || {}).filter(([, v]) => typeof v === 'string' && v.trim() !== '')
+        ),
+      };
+      setMapping(sanitized);
       toast({ title: 'AI analysis complete', description: 'Review the suggested mapping below.' });
     } catch (err) {
       console.error('AI analysis failed:', err);
@@ -391,7 +403,7 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
                       <span className="text-sm text-muted-foreground pl-2">
                         {name.replace(/_/g, ' ')}
                       </span>
-                      <Select value={col} onValueChange={(v) => updateMetric(name, v)}>
+                      <Select value={col || NONE} onValueChange={(v) => updateMetric(name, v)}>
                         <SelectTrigger>
                           <SelectValue />
                         </SelectTrigger>
@@ -520,7 +532,7 @@ function MappingRow({
         {label}
         {required && <span className="text-destructive ml-1">*</span>}
       </span>
-      <Select value={value} onValueChange={onChange}>
+      <Select value={value || NONE} onValueChange={onChange}>
         <SelectTrigger>
           <SelectValue />
         </SelectTrigger>
