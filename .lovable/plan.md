@@ -1,73 +1,57 @@
 
 
-# Flip the Mapping: CSV Columns First
+# Copy Revamp with Claude API
 
-## Problem
+## Overview
 
-The current mapping UI shows abstract target fields ("Title column", "Content column", "Tags column") and asks you to pick CSV columns for each. This is confusing because you don't know what those target fields mean or why they matter. You just uploaded a CSV and want to map YOUR columns.
+Build the "Revamp" button functionality in the Copy tab. When clicked, an edge function calls Claude with the current email/message copy plus relevant entries from the `sales_knowledge` table, and returns an improved version.
 
-## Solution
+## How It Works
 
-Replace the current mapping UI with the same pattern used in the Platform Data field mapper (`PlatformDataFieldMapper.tsx`): list every CSV column from your upload, show sample data, and give each one a dropdown of target fields to map to.
+1. User clicks "Revamp" on a sequence step
+2. Edge function receives the step's subject + body + step type
+3. Edge function queries `sales_knowledge` for relevant entries (email templates, guidelines, high-performing examples)
+4. Claude rewrites the copy using both the original and the knowledge context
+5. Result is shown in a dialog where the user can copy or discard
 
-### What You'll See
+## Steps
 
-```text
-Map CSV Columns                                    [12 of 15 mapped]
+### 1. Store the Claude API Key
 
-Your CSV Column              Sample Data                    Map To
----------------------------------------------------------------------------
-Sequence                     "LI Only Sequence V1..."       [Title          v]
-Action Type                  "Sent auto connection"         [Content        v]
-Sender LinkedIn Account      "Acacia Parks PhD..."          [Tags           v]
-Connection Status            "Accepted"                     [Skip           v]
-Open Rate                    "42.5"                         [Metric: open_rate v]
-Reply Rate                   "12.3"                         [Metric: reply_rate v]
-...
-```
+You'll be prompted to enter your Anthropic API key (from console.anthropic.com). It will be stored securely as a backend secret called `ANTHROPIC_API_KEY`.
 
-Each row is one of YOUR CSV columns. The dropdown options are the sales knowledge target fields:
+### 2. Create Edge Function: `revamp-copy`
 
-- Skip this column
-- Title
-- Content
-- Tags
-- Source Campaign
-- Category
-- Metric (prompts for metric name like "open_rate")
+New file: `supabase/functions/revamp-copy/index.ts`
 
-### Technical Changes
+- Accepts: `{ subject, body, stepType, campaignName }`
+- Queries `sales_knowledge` table for active entries (prioritizing `email_template`, `sales_guideline`, `sequence_playbook` categories) -- up to 10 entries to keep context manageable
+- Calls Claude API (`claude-sonnet-4-20250514`) with a system prompt that includes the knowledge context and instructs it to rewrite the copy
+- Returns: `{ subject, body }` (the revamped versions)
 
-**File: `src/components/admin/SalesKnowledgeImportDialog.tsx`**
+### 3. Update CopyTab.tsx
 
-1. **Replace the current mapping section** (the MappingRow-based UI) with a CSV-columns-first layout modeled on `PlatformDataFieldMapper`:
-   - List every CSV column header as a row
-   - Show sample values from the first 2 data rows
-   - Each row gets a dropdown with the sales knowledge target fields
-   - Mapped rows get green styling; unmapped rows are dimmed
-   - An X button to clear a mapping
+- Replace the placeholder `handleRevamp` with a real function that calls the edge function
+- Add a "Revamp Result" dialog showing the AI-generated copy side-by-side with the original
+- Include "Copy Subject" / "Copy Body" buttons on the revamped version
+- Show a loading state (spinner on the Revamp button) while Claude is working
 
-2. **Define the target fields list** for the dropdown:
-   - `skip` -- Skip this column (default)
-   - `title` -- Title (required, only one column can map here)
-   - `content` -- Content (required, only one column can map here)  
-   - `category` -- Category
-   - `tags` -- Tags
-   - `source_campaign` -- Source Campaign
-   - `metric` -- Metric (when selected, prompt for metric name like "open_rate", "reply_rate")
+### 4. "Revamp All" Button
 
-3. **Add a global category selector** above or below the column list (since category often applies to all rows, not a specific column). Keep the option to also map a column to category if the CSV has one.
+- Wire up the "Revamp All" button in the campaign header to sequentially revamp all steps
+- Show progress (e.g., "Revamping step 3 of 7...")
+- Results shown in a summary dialog
 
-4. **Update the AI analysis result handler** to translate the AI's response into this new column-first format. The AI still returns which CSV columns map to which fields -- we just display it differently.
+## Sales Knowledge Integration
 
-5. **Keep the existing `transformRow` logic** -- the underlying ColumnMapping interface stays the same, only the UI changes. The new column-first UI writes to the same `mapping` state object.
+The edge function will pull from your existing `sales_knowledge` table automatically. Any entries you've added manually (via the "Add Entry" button) will be included as context for Claude. You don't need the CSV import working to use this -- even a few manually added guidelines or high-performing templates will improve the output.
 
-6. **Remove the old `MappingRow` component** since it's no longer needed.
+## Technical Details
 
-7. **Validation**: Show a badge like "2 of 15 mapped" and require at least Title and Content to be mapped before allowing preview.
-
-### No other files change
-
-- Edge function, hook, database, and doc import all stay the same
-- The `PlatformDataFieldMapper` is not modified -- we just follow its pattern
+- **Model**: `claude-sonnet-4-20250514` for quality rewrites
+- **Context window**: System prompt includes up to 10 knowledge entries (sorted by relevance to the step type)
+- **No database changes needed** -- reads from existing `sales_knowledge` table
+- **New secret**: `ANTHROPIC_API_KEY`
+- **New edge function**: `revamp-copy`
+- **Modified file**: `src/components/playground/CopyTab.tsx`
 
