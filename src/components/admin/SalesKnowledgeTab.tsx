@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import { SalesKnowledgeImportDialog } from './SalesKnowledgeImportDialog';
 import {
   useAdminSalesKnowledge,
   type SalesKnowledgeEntry,
@@ -35,7 +36,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Plus, Pencil, Trash2, Search } from 'lucide-react';
+import { Plus, Pencil, Trash2, Search, Upload } from 'lucide-react';
 import { format } from 'date-fns';
 
 const CATEGORIES: { value: KnowledgeCategory; label: string }[] = [
@@ -59,8 +60,9 @@ const EMPTY_FORM: SalesKnowledgeInsert = {
 };
 
 export function SalesKnowledgeTab() {
-  const { entries, isLoading, createEntry, updateEntry, deleteEntry } =
+  const { entries, isLoading, createEntry, updateEntry, deleteEntry, bulkCreateEntries } =
     useAdminSalesKnowledge();
+  const [importOpen, setImportOpen] = useState(false);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -150,6 +152,10 @@ export function SalesKnowledgeTab() {
         <Button onClick={openCreate}>
           <Plus className="h-4 w-4 mr-2" />
           Add Entry
+        </Button>
+        <Button variant="outline" onClick={() => setImportOpen(true)}>
+          <Upload className="h-4 w-4 mr-2" />
+          Import CSV
         </Button>
         <Select value={filterCategory} onValueChange={setFilterCategory}>
           <SelectTrigger className="w-[200px]">
@@ -358,6 +364,16 @@ export function SalesKnowledgeTab() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Import Dialog */}
+      <SalesKnowledgeImportDialog
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        onImport={(entries) => {
+          bulkCreateEntries.mutate(entries, { onSuccess: () => setImportOpen(false) });
+        }}
+        isPending={bulkCreateEntries.isPending}
+      />
     </div>
   );
 }
