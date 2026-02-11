@@ -1,45 +1,62 @@
 
 
-# Fix: Case-insensitive deduplication of industry suggestions
+# Cap Displayed Total at 100,000+
 
-## Problem
+## What Changes
 
-The Industry filter shows both "Insurance" and "insurance" (displayed as two separate suggestions) because two separate data sources are merged with a case-sensitive `new Set()`:
+When a search returns more than 100,000 results, instead of showing the exact number, the UI will display **"100,000+"** everywhere the total count appears. This applies to:
 
-1. `attributes.industries` -- from the AudienceLab API edge function (may contain "Insurance", "insurance", etc.)
-2. `suggestions.industries` -- from the database `get_filter_suggestions()` function (returns lowercase, then Title Cased by the frontend)
+- The toast notification after search ("Found 100,000+ people")
+- The "Found X people/companies" text above the preview table (appears in both People and Companies tabs)
+- The selection badge ("X selected of 100,000+")
 
-The `new Set()` in FilterBuilder treats "Insurance" and "insurance" as different strings.
+No pagination cap, no preview limit, no behavioral changes. Just a display cap.
 
-## Fix (1 file change)
+## Technical Details (3 files)
 
-Update **FilterBuilder.tsx** lines 346 and 353 where the two arrays are merged. Instead of:
+### 1. `useFreeDataSearch.ts` -- Export the cap constant
 
-```ts
-[...new Set([...attributes.industries, ...suggestions.industries])]
+Add and export a constant:
+```
+export const TOTAL_DISPLAY_CAP = 100_000;
 ```
 
-Use a case-insensitive dedup helper that Title Cases all values before deduplication:
-
-```ts
-const dedup = (arr: string[]) => [...new Set(arr.map(s =>
-  s.trim().split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ')
-))].filter(Boolean);
+In the search response, cap `totalEstimate` so it never exceeds 100,000:
+```
+totalEstimate: Math.min(totalCount, TOTAL_DISPLAY_CAP)
 ```
 
-Then apply it to both the include and exclude suggestion props:
+This means downstream code automatically receives the capped number without any extra logic.
 
-```ts
-suggestions={dedup([...attributes.industries, ...suggestions.industries])}
+### 2. `AudienceBuilder.tsx` -- Format display with "+" suffix
+
+Import `TOTAL_DISPLAY_CAP` from the hook. Create a small helper:
+```
+const formatTotal = (n: number) =>
+  n >= TOTAL_DISPLAY_CAP
+    ? `${TOTAL_DISPLAY_CAP.toLocaleString()}+`
+    : n.toLocaleString();
 ```
 
-This ensures "insurance", "Insurance", and "INSURANCE" all collapse into a single "Insurance" entry.
+Apply it to these locations (both People and Companies tabs):
+- Toast message in `handleSearch`: `Found ${formatTotal(displayTotal)} people/companies`
+- "Found X people/companies" text (lines 714-716 and 863-866)
+- Selection badge "of X" text (lines 706-710 and 855-860)
+- "Select All X Results" in `PreviewTable` (passed via `totalResults` prop -- already capped from the hook)
+- `handleSelectAllResults` confirmation prompt (line 388) -- already uses `totalEstimate` which is now capped
 
-## What does NOT change
+### 3. `PreviewTable.tsx` -- Format the "Select All" label
 
-- Database function `get_filter_suggestions` -- already fixed, no further changes
-- `useFreeDataSuggestions.ts` -- already fixed, no further changes
-- `search_free_data_builder` -- untouched
-- All filter parameters and DNC logic -- untouched
-- No other suggestion fields affected (skills, interests, technologies only come from one source)
+Import `TOTAL_DISPLAY_CAP` and use the same `formatTotal` helper for:
+- "Select All {totalResults} Results" dropdown label (lines 148 and 299)
+- The placeholder text for "Select first" input (lines 171 and 323)
+
+## What Does NOT Change
+
+- Database function `search_free_data_builder` -- untouched
+- Pagination logic -- untouched (pages still calculated from capped total)
+- Selection logic -- untouched (users can still select up to 100,000)
+- Filter logic, DNC exclusions -- untouched
+- Unlock/credit flow -- untouched
+- Net new filter -- untouched
 
