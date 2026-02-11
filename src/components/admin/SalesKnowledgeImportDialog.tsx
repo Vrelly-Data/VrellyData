@@ -364,9 +364,18 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
 
             {mapping && !isAnalyzing && (
               <div className="space-y-3 border rounded-lg p-4">
-                <div className="flex items-center gap-2 mb-2">
-                  <Wand2 className="h-4 w-4 text-primary" />
-                  <span className="text-sm font-medium">Column Mapping</span>
+                <div className="mb-2">
+                  <div className="flex items-center gap-2">
+                    <Wand2 className="h-4 w-4 text-primary" />
+                    <span className="text-sm font-medium">Column Mapping</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    For each field below, choose which column from your CSV ("{fileName}") should fill it. The dropdown lists your CSV column headers.
+                  </p>
+                </div>
+                <div className="grid grid-cols-[160px_1fr] items-center gap-1 text-xs text-muted-foreground font-medium border-b pb-1 mb-1">
+                  <span>Save as →</span>
+                  <span>← Your CSV column</span>
                 </div>
 
                 {/* Title */}
