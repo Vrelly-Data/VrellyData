@@ -6,7 +6,8 @@ import { DataSourceTemplatesTab } from '@/components/admin/DataSourceTemplatesTa
 import { FreeDataTab } from '@/components/admin/FreeDataTab';
 import { UsersTab } from '@/components/admin/UsersTab';
 import { Button } from '@/components/ui/button';
-import { Database, Upload, Plus, Users } from 'lucide-react';
+import { Database, Upload, Plus, Users, BookOpen } from 'lucide-react';
+import { SalesKnowledgeTab } from '@/components/admin/SalesKnowledgeTab';
 import { useNavigate } from 'react-router-dom';
 import vrellyLogo from '@/assets/vrelly-logo.png';
 import { UserMenu } from '@/components/UserMenu';
@@ -67,6 +68,10 @@ export default function Admin() {
                     <Users className="h-4 w-4" />
                     Users
                   </TabsTrigger>
+                  <TabsTrigger value="knowledge" className="flex items-center gap-2">
+                    <BookOpen className="h-4 w-4" />
+                    Sales Knowledge
+                  </TabsTrigger>
                 </TabsList>
 
                 <TabsContent value="templates">
@@ -85,6 +90,10 @@ export default function Admin() {
 
                 <TabsContent value="users">
                   <UsersTab />
+                </TabsContent>
+
+                <TabsContent value="knowledge">
+                  <SalesKnowledgeTab />
                 </TabsContent>
               </Tabs>
             </div>
