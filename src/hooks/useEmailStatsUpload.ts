@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/hooks/use-toast';
 import { findMatchingCampaign } from '@/hooks/useSyncedCampaigns';
+import { generatePerformanceSnapshot } from '@/lib/performanceSnapshot';
 import type { Json } from '@/integrations/supabase/types';
 
 export interface EmailStatsRow {
@@ -106,6 +107,7 @@ export function useEmailStatsUpload() {
       }
 
       let updatedCount = 0;
+      const updatedCampaignIds: string[] = [];
       const aggregatedStats = Array.from(aggregated.values());
 
       for (const stat of aggregatedStats) {
@@ -151,8 +153,10 @@ export function useEmailStatsUpload() {
             .update({ stats: mergedStats as unknown as Json, updated_at: new Date().toISOString() })
             .eq('id', matchedCampaign.id);
 
-          if (!error) updatedCount++;
-          else console.error(`Error updating campaign ${matchedCampaign.name}:`, error);
+          if (!error) {
+            updatedCount++;
+            updatedCampaignIds.push(matchedCampaign.id);
+          } else console.error(`Error updating campaign ${matchedCampaign.name}:`, error);
         } else if (stat.matched && stat.campaignId) {
           const { data: campaign } = await supabase
             .from('synced_campaigns')
@@ -176,17 +180,25 @@ export function useEmailStatsUpload() {
             .update({ stats: mergedStats as unknown as Json, updated_at: new Date().toISOString() })
             .eq('id', stat.campaignId);
 
-          if (!error) updatedCount++;
+          if (!error) {
+            updatedCount++;
+            if (stat.campaignId) updatedCampaignIds.push(stat.campaignId);
+          }
         } else {
           console.log(`No matching linked campaign found for: ${stat.campaignName} - skipping`);
         }
       }
 
-      return { updatedCount, total: aggregatedStats.length };
+      return { updatedCount, total: aggregatedStats.length, updatedCampaignIds };
     },
-    onSuccess: ({ updatedCount, total }) => {
+    onSuccess: ({ updatedCount, total, updatedCampaignIds }) => {
       queryClient.invalidateQueries({ queryKey: ['synced-campaigns'] });
       queryClient.invalidateQueries({ queryKey: ['playground-stats'] });
+
+      // Generate performance snapshots for updated campaigns
+      for (const id of updatedCampaignIds) {
+        generatePerformanceSnapshot(id).catch(console.error);
+      }
 
       const skipped = total - updatedCount;
       const parts = [`Updated ${updatedCount} result(s)`];
