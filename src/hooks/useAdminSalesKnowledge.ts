@@ -107,5 +107,26 @@ export function useAdminSalesKnowledge() {
     },
   });
 
-  return { entries, isLoading, createEntry, updateEntry, deleteEntry };
+  const bulkCreateEntries = useMutation({
+    mutationFn: async (rows: SalesKnowledgeInsert[]) => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('Not authenticated');
+
+      const toInsert = rows.map((r) => ({ ...r, created_by: user.id }));
+      const { error } = await supabase
+        .from('sales_knowledge' as any)
+        .insert(toInsert as any);
+
+      if (error) throw error;
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: QUERY_KEY });
+      toast({ title: 'Import complete', description: `${variables.length} entries imported.` });
+    },
+    onError: (err: Error) => {
+      toast({ title: 'Import failed', description: err.message, variant: 'destructive' });
+    },
+  });
+
+  return { entries, isLoading, createEntry, updateEntry, deleteEntry, bulkCreateEntries };
 }
