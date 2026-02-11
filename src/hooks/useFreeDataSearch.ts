@@ -62,6 +62,8 @@ function arrayOrNull(arr: string[] | undefined | null): string[] | null {
   return arr;
 }
 
+export const TOTAL_DISPLAY_CAP = 100_000;
+
 export function useFreeDataSearch() {
   const [loading, setLoading] = useState(false);
 
@@ -165,7 +167,8 @@ export function useFreeDataSearch() {
         });
       }
 
-      const totalPages = Math.ceil(totalCount / perPage);
+      const cappedTotal = Math.min(totalCount, TOTAL_DISPLAY_CAP);
+      const totalPages = Math.ceil(cappedTotal / perPage);
 
       console.log('[FreeDataSearch] Results:', {
         entityType,
@@ -177,7 +180,7 @@ export function useFreeDataSearch() {
 
       return {
         items,
-        totalEstimate: totalCount,
+        totalEstimate: cappedTotal,
         pagination: {
           page,
           per_page: perPage,

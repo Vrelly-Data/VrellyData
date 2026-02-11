@@ -17,7 +17,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { useAudienceStore } from '@/stores/audienceStore';
-import { useFreeDataSearch } from '@/hooks/useFreeDataSearch';
+import { useFreeDataSearch, TOTAL_DISPLAY_CAP } from '@/hooks/useFreeDataSearch';
 import { useToast } from '@/hooks/use-toast';
 import { exportPeopleToCSV, exportCompaniesToCSV } from '@/lib/csvExport';
 import { PersonEntity, CompanyEntity } from '@/types/audience';
@@ -125,9 +125,12 @@ export default function AudienceBuilder() {
         ? filteredItems.length 
         : response.totalEstimate;
 
+      const formatTotal = (n: number) =>
+        n >= TOTAL_DISPLAY_CAP ? `${TOTAL_DISPLAY_CAP.toLocaleString()}+` : n.toLocaleString();
+
       toast({
         title: 'Search complete',
-        description: `Found ${displayTotal.toLocaleString()} ${currentType === 'person' ? 'people' : 'companies'}${filterState.contactFilter === 'net_new' ? ' (net new only)' : ''}`,
+        description: `Found ${formatTotal(displayTotal)} ${currentType === 'person' ? 'people' : 'companies'}${filterState.contactFilter === 'net_new' ? ' (net new only)' : ''}`,
       });
     } catch (error: any) {
       toast({
@@ -705,14 +708,14 @@ export default function AudienceBuilder() {
                           {selectedRecords.size.toLocaleString()} selected
                           {selectedRecords.size < totalEstimate && (
                             <span className="text-xs ml-1">
-                              of {totalEstimate.toLocaleString()}
+                              of {totalEstimate >= TOTAL_DISPLAY_CAP ? `${TOTAL_DISPLAY_CAP.toLocaleString()}+` : totalEstimate.toLocaleString()}
                             </span>
                           )}
                         </Badge>
                       )}
                       {totalEstimate > 0 && (
                         <div className="text-sm text-muted-foreground">
-                          Found {totalEstimate.toLocaleString()} {currentType === 'person' ? 'people' : 'companies'}
+                          Found {totalEstimate >= TOTAL_DISPLAY_CAP ? `${TOTAL_DISPLAY_CAP.toLocaleString()}+` : totalEstimate.toLocaleString()} {currentType === 'person' ? 'people' : 'companies'}
                         </div>
                       )}
                     </div>
@@ -855,14 +858,14 @@ export default function AudienceBuilder() {
                           {selectedRecords.size.toLocaleString()} selected
                           {selectedRecords.size < totalEstimate && (
                             <span className="text-xs ml-1">
-                              of {totalEstimate.toLocaleString()}
+                              of {totalEstimate >= TOTAL_DISPLAY_CAP ? `${TOTAL_DISPLAY_CAP.toLocaleString()}+` : totalEstimate.toLocaleString()}
                             </span>
                           )}
                         </Badge>
                       )}
                       {totalEstimate > 0 && (
                         <div className="text-sm text-muted-foreground">
-                          Found {totalEstimate.toLocaleString()} {currentType === 'person' ? 'people' : 'companies'}
+                          Found {totalEstimate >= TOTAL_DISPLAY_CAP ? `${TOTAL_DISPLAY_CAP.toLocaleString()}+` : totalEstimate.toLocaleString()} {currentType === 'person' ? 'people' : 'companies'}
                         </div>
                       )}
                     </div>
