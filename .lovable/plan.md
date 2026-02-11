@@ -1,62 +1,73 @@
 
 
-# Fix: CSV Column Mapping Display and Validation
+# Flip the Mapping: CSV Columns First
 
 ## Problem
 
-The mapping step doesn't clearly show the actual CSV column titles and their data. Users can't verify whether the AI mapped correctly because:
-
-1. There's no preview of the CSV data alongside the mapping dropdowns
-2. If the AI returns a column name that doesn't exactly match a CSV header (e.g., "open rate" vs "Open Rate"), the Select silently falls back to `NONE`
-3. The mapping labels ("Title column", "Content column") describe the target fields but don't show what CSV data will fill them
+The current mapping UI shows abstract target fields ("Title column", "Content column", "Tags column") and asks you to pick CSV columns for each. This is confusing because you don't know what those target fields mean or why they matter. You just uploaded a CSV and want to map YOUR columns.
 
 ## Solution
 
-### File: `src/components/admin/SalesKnowledgeImportDialog.tsx`
+Replace the current mapping UI with the same pattern used in the Platform Data field mapper (`PlatformDataFieldMapper.tsx`): list every CSV column from your upload, show sample data, and give each one a dropdown of target fields to map to.
 
-**1. Add a CSV data preview table above the mapping section**
-
-Show the first 3 rows of raw CSV data so users can see their column titles and sample values before mapping. This goes between the file info bar and the mapping controls in the `mapping` step.
+### What You'll See
 
 ```text
-| Subject Line         | Body Text          | Campaign      | Open Rate | Reply Rate |
-| "Hey {{first_name}}" | "I noticed your…"  | Healthcare Q1 | 42.5      | 12.3       |
-| "Quick question"     | "We help teams…"   | SaaS Outreach | 38.1      | 9.7        |
+Map CSV Columns                                    [12 of 15 mapped]
+
+Your CSV Column              Sample Data                    Map To
+---------------------------------------------------------------------------
+Sequence                     "LI Only Sequence V1..."       [Title          v]
+Action Type                  "Sent auto connection"         [Content        v]
+Sender LinkedIn Account      "Acacia Parks PhD..."          [Tags           v]
+Connection Status            "Accepted"                     [Skip           v]
+Open Rate                    "42.5"                         [Metric: open_rate v]
+Reply Rate                   "12.3"                         [Metric: reply_rate v]
+...
 ```
 
-**2. Validate AI-returned column names against actual headers (case-insensitive)**
+Each row is one of YOUR CSV columns. The dropdown options are the sales knowledge target fields:
 
-After receiving the AI mapping, validate each returned column name against the actual CSV headers using case-insensitive matching. If "open rate" is returned but the CSV has "Open Rate", resolve it to "Open Rate".
+- Skip this column
+- Title
+- Content
+- Tags
+- Source Campaign
+- Category
+- Metric (prompts for metric name like "open_rate")
 
-```typescript
-function resolveHeader(aiValue: string | null, csvHeaders: string[]): string | null {
-  if (!aiValue) return null;
-  // Exact match first
-  if (csvHeaders.includes(aiValue)) return aiValue;
-  // Case-insensitive match
-  const lower = aiValue.toLowerCase().trim();
-  const match = csvHeaders.find(h => h.toLowerCase().trim() === lower);
-  return match || null;
-}
-```
+### Technical Changes
 
-Apply this to every field in the sanitized mapping (title, content, tags, sourceCampaign, categoryColumn, and each metric column).
+**File: `src/components/admin/SalesKnowledgeImportDialog.tsx`**
 
-**3. Show sample values next to each mapping dropdown**
+1. **Replace the current mapping section** (the MappingRow-based UI) with a CSV-columns-first layout modeled on `PlatformDataFieldMapper`:
+   - List every CSV column header as a row
+   - Show sample values from the first 2 data rows
+   - Each row gets a dropdown with the sales knowledge target fields
+   - Mapped rows get green styling; unmapped rows are dimmed
+   - An X button to clear a mapping
 
-Update `MappingRow` to accept and display a sample value from the first row of data, so users can see what data will be imported for each field:
+2. **Define the target fields list** for the dropdown:
+   - `skip` -- Skip this column (default)
+   - `title` -- Title (required, only one column can map here)
+   - `content` -- Content (required, only one column can map here)  
+   - `category` -- Category
+   - `tags` -- Tags
+   - `source_campaign` -- Source Campaign
+   - `metric` -- Metric (when selected, prompt for metric name like "open_rate", "reply_rate")
 
-```text
-Title column *    [Subject Line  v]    Preview: "Hey {{first_name}}"
-Content column *  [Body Text     v]    Preview: "I noticed your company…"
-Tags column       [— None —     v]
-```
+3. **Add a global category selector** above or below the column list (since category often applies to all rows, not a specific column). Keep the option to also map a column to category if the CSV has one.
 
-**4. Fix the fallback default category**
+4. **Update the AI analysis result handler** to translate the AI's response into this new column-first format. The AI still returns which CSV columns map to which fields -- we just display it differently.
 
-Change the fallback default category from `email_template` to `campaign_result` (line 194), since campaign stats is the primary use case.
+5. **Keep the existing `transformRow` logic** -- the underlying ColumnMapping interface stays the same, only the UI changes. The new column-first UI writes to the same `mapping` state object.
 
-## No Other Files Change
+6. **Remove the old `MappingRow` component** since it's no longer needed.
 
-- Edge function, hook, database, and doc import remain unchanged.
+7. **Validation**: Show a badge like "2 of 15 mapped" and require at least Title and Content to be mapped before allowing preview.
+
+### No other files change
+
+- Edge function, hook, database, and doc import all stay the same
+- The `PlatformDataFieldMapper` is not modified -- we just follow its pattern
 
