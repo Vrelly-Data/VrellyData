@@ -1,62 +1,43 @@
 
 
-# Cap Displayed Total at 100,000+
+# Update Documentation to v3.6 Stable State
 
 ## What Changes
 
-When a search returns more than 100,000 results, instead of showing the exact number, the UI will display **"100,000+"** everywhere the total count appears. This applies to:
+Update both documentation files to reflect the current stable state after the v3.6 changes:
+- DNC (Do Not Include) exclusion filters added to `search_free_data_builder` (37 parameters)
+- 100,000+ display cap on search results
+- Case-insensitive industry suggestion deduplication in FilterBuilder
 
-- The toast notification after search ("Found 100,000+ people")
-- The "Found X people/companies" text above the preview table (appears in both People and Companies tabs)
-- The selection badge ("X selected of 100,000+")
+## Files to Update
 
-No pagination cap, no preview limit, no behavioral changes. Just a display cap.
+### 1. `docs/STABLE_CHECKPOINTS.md`
 
-## Technical Details (3 files)
+- Update header: Last Updated to February 11, 2026, Current Stable Version to v3.6
+- Update Quick Revert Command to "Revert to v3.6 stable state"
+- Update Database Functions table: `search_free_data_builder` now has 37 parameters
+- Update Pre-Change Checklist: signature reference from 29 to 37 parameters
+- Update Manual Revert Procedure: reference 37 parameters
+- Add v3.6 entry to the Change Log:
+  - v3.6 | 2026-02-11 | DNC exclusion filters (37 params), 100,000+ display cap, case-insensitive industry dedup in FilterBuilder
+- Add new **Audience Builder Stable State (v3.6)** section documenting:
+  - DNC exclusion filters: 8 new exclude parameters added to search function
+  - Display cap: `TOTAL_DISPLAY_CAP = 100,000` in `useFreeDataSearch.ts`, formatted as "100,000+" in UI
+  - Industry dedup: `dedup()` helper in `FilterBuilder.tsx` normalizes Title Case before Set dedup
+  - Key files: `useFreeDataSearch.ts`, `AudienceBuilder.tsx`, `PreviewTable.tsx`, `FilterBuilder.tsx`
 
-### 1. `useFreeDataSearch.ts` -- Export the cap constant
+### 2. `docs/SEARCH_FUNCTION_LOCK.md`
 
-Add and export a constant:
-```
-export const TOTAL_DISPLAY_CAP = 100_000;
-```
-
-In the search response, cap `totalEstimate` so it never exceeds 100,000:
-```
-totalEstimate: Math.min(totalCount, TOTAL_DISPLAY_CAP)
-```
-
-This means downstream code automatically receives the capped number without any extra logic.
-
-### 2. `AudienceBuilder.tsx` -- Format display with "+" suffix
-
-Import `TOTAL_DISPLAY_CAP` from the hook. Create a small helper:
-```
-const formatTotal = (n: number) =>
-  n >= TOTAL_DISPLAY_CAP
-    ? `${TOTAL_DISPLAY_CAP.toLocaleString()}+`
-    : n.toLocaleString();
-```
-
-Apply it to these locations (both People and Companies tabs):
-- Toast message in `handleSearch`: `Found ${formatTotal(displayTotal)} people/companies`
-- "Found X people/companies" text (lines 714-716 and 863-866)
-- Selection badge "of X" text (lines 706-710 and 855-860)
-- "Select All X Results" in `PreviewTable` (passed via `totalResults` prop -- already capped from the hook)
-- `handleSelectAllResults` confirmation prompt (line 388) -- already uses `totalEstimate` which is now capped
-
-### 3. `PreviewTable.tsx` -- Format the "Select All" label
-
-Import `TOTAL_DISPLAY_CAP` and use the same `formatTotal` helper for:
-- "Select All {totalResults} Results" dropdown label (lines 148 and 299)
-- The placeholder text for "Select first" input (lines 171 and 323)
+- Update Version to 3.6, Last Updated to February 11, 2026
+- Update Quick Revert Command to "Revert to v3.6 stable state"
+- Update Guardrails: parameter signature reference from 29 to 37
+- Update Quick Reference table: Current Version to v3.6, Parameter Count to 37, Revert Command to v3.6
+- Add note about DNC exclusion parameters (8 new p_exclude_* params)
+- Add note about frontend display cap and industry dedup under Frontend Normalization section
 
 ## What Does NOT Change
 
-- Database function `search_free_data_builder` -- untouched
-- Pagination logic -- untouched (pages still calculated from capped total)
-- Selection logic -- untouched (users can still select up to 100,000)
-- Filter logic, DNC exclusions -- untouched
-- Unlock/credit flow -- untouched
-- Net new filter -- untouched
+- Database function `search_free_data_builder` -- untouched (already at 37 params from DNC migration)
+- Baseline counts -- still 724 records, same filter counts (exclusions don't affect baselines when empty)
+- All existing recovery commands and procedures remain valid
 
