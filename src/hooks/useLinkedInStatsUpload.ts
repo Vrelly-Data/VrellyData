@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/hooks/use-toast';
 import { normalizeForMatch, findMatchingCampaign } from '@/hooks/useSyncedCampaigns';
+import { generatePerformanceSnapshot } from '@/lib/performanceSnapshot';
 
 export interface LinkedInStatsRow {
   campaignName: string;
@@ -76,6 +77,7 @@ export function useLinkedInStatsUpload() {
 
       let updatedCount = 0;
       let createdCount = 0;
+      const updatedCampaignIds: string[] = [];
 
       for (const stat of stats) {
         const linkedinStats = {
@@ -128,6 +130,7 @@ export function useLinkedInStatsUpload() {
             console.error(`Error updating campaign ${matchedLinkedCampaign.name}:`, updateError);
           } else {
             updatedCount++;
+            updatedCampaignIds.push(matchedLinkedCampaign.id);
           }
         } else if (stat.matched && stat.campaignId) {
           // Fallback: use the campaignId from the dialog if it was pre-matched
@@ -173,6 +176,7 @@ export function useLinkedInStatsUpload() {
             console.error(`Error updating campaign ${stat.campaignId}:`, updateError);
           } else {
             updatedCount++;
+            if (stat.campaignId) updatedCampaignIds.push(stat.campaignId);
           }
         } else {
           // No matching linked campaign found - skip creating orphan rows
@@ -181,11 +185,16 @@ export function useLinkedInStatsUpload() {
         }
       }
 
-      return { updatedCount, createdCount, total: stats.length };
+      return { updatedCount, createdCount, total: stats.length, updatedCampaignIds };
     },
-    onSuccess: ({ updatedCount, createdCount, total }) => {
+    onSuccess: ({ updatedCount, createdCount, total, updatedCampaignIds }) => {
       queryClient.invalidateQueries({ queryKey: ['synced-campaigns'] });
       queryClient.invalidateQueries({ queryKey: ['playground-stats'] });
+
+      // Generate performance snapshots for updated campaigns
+      for (const id of updatedCampaignIds) {
+        generatePerformanceSnapshot(id).catch(console.error);
+      }
       
       const parts = [];
       if (updatedCount > 0) parts.push(`Updated ${updatedCount}`);

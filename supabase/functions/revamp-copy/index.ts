@@ -50,7 +50,7 @@ Deno.serve(async (req) => {
 
     const { data: knowledge } = await supabase
       .from("sales_knowledge")
-      .select("title, content, category, tags")
+      .select("title, content, category, tags, metrics, source_campaign")
       .eq("is_active", true)
       .in("category", [
         "email_template",
@@ -59,19 +59,40 @@ Deno.serve(async (req) => {
         "campaign_result",
         "audience_insight",
       ])
-      .limit(10);
+      .limit(15);
 
-    // Build knowledge context
+    // Build knowledge context — separate campaign results for special treatment
     let knowledgeContext = "";
+    let benchmarkContext = "";
+
     if (knowledge && knowledge.length > 0) {
-      knowledgeContext =
-        "\n\n## Sales Knowledge Base (use these as reference for tone, style, and best practices):\n\n" +
-        knowledge
-          .map(
-            (k: any, i: number) =>
-              `### ${i + 1}. ${k.title} [${k.category}]\n${k.content}`
-          )
-          .join("\n\n");
+      const campaignResults = knowledge.filter((k: any) => k.category === "campaign_result");
+      const otherKnowledge = knowledge.filter((k: any) => k.category !== "campaign_result");
+
+      if (otherKnowledge.length > 0) {
+        knowledgeContext =
+          "\n\n## Sales Knowledge Base (use these as reference for tone, style, and best practices):\n\n" +
+          otherKnowledge
+            .map(
+              (k: any, i: number) =>
+                `### ${i + 1}. ${k.title} [${k.category}]\n${k.content}`
+            )
+            .join("\n\n");
+      }
+
+      if (campaignResults.length > 0) {
+        benchmarkContext =
+          "\n\n## Performance Benchmarks (real campaign data — use to calibrate expectations and reference what works):\n\n" +
+          campaignResults
+            .map((k: any, i: number) => {
+              const metrics = k.metrics as Record<string, any> || {};
+              const topIndustries = (metrics.topIndustries || [])
+                .map((ind: any) => `${ind.value} (${ind.percentage}%)`)
+                .join(", ");
+              return `### Benchmark ${i + 1}: ${k.title}\n${k.content}${topIndustries ? `\nKey verticals: ${topIndustries}` : ""}`;
+            })
+            .join("\n\n");
+      }
     }
 
     const systemPrompt = `You are an expert sales copywriter specializing in outbound email and LinkedIn sequences. Your job is to rewrite the provided ${stepType || "email"} copy to be more compelling, personalized, and likely to get a response.
@@ -85,6 +106,7 @@ Guidelines:
 - Match the channel: ${stepType === "linkedin_message" || stepType === "linkedin_connect" || stepType === "linkedin_inmail" ? "LinkedIn messages should be shorter and more casual" : "emails can be slightly longer but still concise"}
 ${campaignName ? `- This is for the campaign: "${campaignName}"` : ""}
 ${knowledgeContext}
+${benchmarkContext}
 
 Return your response as JSON with exactly these fields:
 {
