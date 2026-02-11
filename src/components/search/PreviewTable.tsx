@@ -21,6 +21,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { ChevronDown } from 'lucide-react';
 import { useState } from 'react';
+import { TOTAL_DISPLAY_CAP } from '@/hooks/useFreeDataSearch';
 
 interface PreviewTableProps {
   data: (PersonEntity | CompanyEntity)[];
@@ -36,6 +37,9 @@ interface PreviewTableProps {
 export function PreviewTable({ data, entityType, isUnlocked, selectedRecords, onSelectionChange, totalResults, onSelectAllResults, onSelectFirstN }: PreviewTableProps) {
   const [selectCount, setSelectCount] = useState<string>('');
   const [selectPerCompanyCount, setSelectPerCompanyCount] = useState<string>('');
+
+  const formatTotal = (n: number) =>
+    n >= TOTAL_DISPLAY_CAP ? `${TOTAL_DISPLAY_CAP.toLocaleString()}+` : n.toLocaleString();
 
   const handleSelectAll = () => {
     const newSelected = new Set(data.map(r => r.id));
@@ -145,7 +149,7 @@ export function PreviewTable({ data, entityType, isUnlocked, selectedRecords, on
                           <DropdownMenuSeparator />
                           <DropdownMenuItem onClick={onSelectAllResults}>
                             <div className="flex flex-col gap-1">
-                              <span>Select All {totalResults.toLocaleString()} Results</span>
+                             <span>Select All {formatTotal(totalResults)} Results</span>
                               <span className="text-xs text-muted-foreground">
                                 May take a moment for large datasets
                               </span>
@@ -168,7 +172,7 @@ export function PreviewTable({ data, entityType, isUnlocked, selectedRecords, on
                                 handleCustomSelect(selectCount);
                               }
                             }}
-                            placeholder={`1-${totalResults.toLocaleString()}`}
+                            placeholder={`1-${formatTotal(totalResults)}`}
                             className="h-8 w-24"
                           />
                           <Button 
@@ -296,7 +300,7 @@ export function PreviewTable({ data, entityType, isUnlocked, selectedRecords, on
                         <DropdownMenuSeparator />
                         <DropdownMenuItem onClick={onSelectAllResults}>
                           <div className="flex flex-col gap-1">
-                            <span>Select All {totalResults.toLocaleString()} Results</span>
+                            <span>Select All {formatTotal(totalResults)} Results</span>
                             <span className="text-xs text-muted-foreground">
                               May take a moment for large datasets
                             </span>
@@ -319,7 +323,7 @@ export function PreviewTable({ data, entityType, isUnlocked, selectedRecords, on
                               handleCustomSelect(selectCount);
                             }
                           }}
-                          placeholder={`1-${totalResults.toLocaleString()}`}
+                          placeholder={`1-${formatTotal(totalResults)}`}
                           className="h-8 w-24"
                         />
                         <Button 
