@@ -22,6 +22,13 @@ import { Upload, CheckCircle, XCircle } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
 import type { SalesKnowledgeInsert } from '@/hooks/useAdminSalesKnowledge';
 import { detectStatsCSV, transformStatsRows } from '@/lib/statsCSVDetector';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 
 interface Props {
   open: boolean;
@@ -30,12 +37,15 @@ interface Props {
   isPending: boolean;
 }
 
-type Step = 'upload' | 'preview';
+type Step = 'upload' | 'select-sheet' | 'preview';
 
 export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPending }: Props) {
   const [step, setStep] = useState<Step>('upload');
   const [fileName, setFileName] = useState('');
   const [transformedRows, setTransformedRows] = useState<{ entry: SalesKnowledgeInsert; valid: boolean; error?: string }[]>([]);
+  const [workbook, setWorkbook] = useState<XLSX.WorkBook | null>(null);
+  const [sheetNames, setSheetNames] = useState<string[]>([]);
+  const [selectedSheet, setSelectedSheet] = useState('');
 
   const validRows = useMemo(() => transformedRows.filter(r => r.valid), [transformedRows]);
   const invalidRows = useMemo(() => transformedRows.filter(r => !r.valid), [transformedRows]);
@@ -51,17 +61,29 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
     });
   }, []);
 
+  const processSheet = useCallback((wb: XLSX.WorkBook, sheetName: string) => {
+    const sheet = wb.Sheets[sheetName];
+    const data = XLSX.utils.sheet_to_json<Record<string, string>>(sheet, { defval: '' });
+    const headers = Object.keys(data[0] || {});
+    processData(data, headers);
+  }, [processData]);
+
   const handleFile = useCallback(async (file: File) => {
     setFileName(file.name);
     const ext = file.name.split('.').pop()?.toLowerCase();
 
     if (ext === 'xlsx' || ext === 'xls') {
       const buffer = await file.arrayBuffer();
-      const workbook = XLSX.read(buffer, { type: 'array' });
-      const sheet = workbook.Sheets[workbook.SheetNames[0]];
-      const data = XLSX.utils.sheet_to_json<Record<string, string>>(sheet, { defval: '' });
-      const headers = Object.keys(data[0] || {});
-      processData(data, headers);
+      const wb = XLSX.read(buffer, { type: 'array' });
+      const names = wb.SheetNames;
+      if (names.length > 1) {
+        setWorkbook(wb);
+        setSheetNames(names);
+        setSelectedSheet(names[0]);
+        setStep('select-sheet');
+      } else {
+        processSheet(wb, names[0]);
+      }
     } else {
       Papa.parse<Record<string, string>>(file, {
         header: true,
@@ -72,12 +94,15 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
         },
       });
     }
-  }, [processData]);
+  }, [processData, processSheet]);
 
   const reset = () => {
     setStep('upload');
     setFileName('');
     setTransformedRows([]);
+    setWorkbook(null);
+    setSheetNames([]);
+    setSelectedSheet('');
   };
 
   const handleImport = () => {
@@ -95,7 +120,7 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
-            {step === 'upload' ? 'Import Campaign Stats from CSV' : 'Preview & Confirm Import'}
+            {step === 'upload' ? 'Import Campaign Stats' : step === 'select-sheet' ? 'Select Sheet' : 'Preview & Confirm Import'}
           </DialogTitle>
         </DialogHeader>
 
@@ -118,7 +143,29 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
           </label>
         )}
 
-        {/* Step 2: Preview */}
+        {/* Step 2: Select Sheet */}
+        {step === 'select-sheet' && workbook && (
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              This file contains {sheetNames.length} sheets. Select the one to import:
+            </p>
+            <Select value={selectedSheet} onValueChange={setSelectedSheet}>
+              <SelectTrigger>
+                <SelectValue placeholder="Choose a sheet" />
+              </SelectTrigger>
+              <SelectContent>
+                {sheetNames.map((name) => (
+                  <SelectItem key={name} value={name}>{name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button onClick={() => processSheet(workbook, selectedSheet)} className="w-full">
+              Continue with "{selectedSheet}"
+            </Button>
+          </div>
+        )}
+
+        {/* Step 3: Preview */}
         {step === 'preview' && (
           <div className="space-y-3">
             <div className="flex items-center gap-3 text-sm">
