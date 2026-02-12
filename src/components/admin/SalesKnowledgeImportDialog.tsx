@@ -68,6 +68,23 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
     processData(data, headers);
   }, [processData]);
 
+  const processAllSheets = useCallback((wb: XLSX.WorkBook) => {
+    const allRows = wb.SheetNames.flatMap(sheetName => {
+      const sheet = wb.Sheets[sheetName];
+      const data = XLSX.utils.sheet_to_json<Record<string, string>>(sheet, { defval: '' });
+      if (data.length === 0) return [];
+      const headers = Object.keys(data[0]);
+      const config = detectStatsCSV(headers, data);
+      return transformStatsRows(data, config);
+    });
+    setTransformedRows(allRows);
+    setStep('preview');
+    toast({
+      title: 'All sheets parsed',
+      description: `Found ${allRows.filter(r => r.valid).length} campaign results across ${wb.SheetNames.length} sheets.`,
+    });
+  }, []);
+
   const handleFile = useCallback(async (file: File) => {
     setFileName(file.name);
     const ext = file.name.split('.').pop()?.toLowerCase();
@@ -159,9 +176,14 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
                 ))}
               </SelectContent>
             </Select>
-            <Button onClick={() => processSheet(workbook, selectedSheet)} className="w-full">
-              Continue with "{selectedSheet}"
-            </Button>
+            <div className="flex gap-2">
+              <Button onClick={() => processSheet(workbook, selectedSheet)} className="flex-1">
+                Continue with "{selectedSheet}"
+              </Button>
+              <Button variant="secondary" onClick={() => processAllSheets(workbook)} className="flex-1">
+                Import All Sheets
+              </Button>
+            </div>
           </div>
         )}
 
