@@ -1,87 +1,90 @@
 
-# Auto-Record Campaign Performance to Sales Knowledge
 
-## The Idea
+# Fix Sales Knowledge CSV Import for Stats Data
 
-Instead of building a new complex mapping UI, we piggyback on the existing Email and LinkedIn CSV upload flows. After stats are imported to campaigns, the system automatically generates `sales_knowledge` entries (category: `campaign_result`) that capture the performance metrics connected to the campaign's audience data (industries, job titles, company sizes) pulled from `synced_contacts`.
+## Problem
 
-This means:
-- You upload a CSV like you already do
-- Stats get applied to campaigns (existing behavior)
-- **NEW**: A performance snapshot is automatically saved to the Sales Knowledge tab
-- The AI Copy Revamp already reads from Sales Knowledge, so it immediately gets access to real performance baselines
+The Sales Knowledge CSV import forces stats CSVs into a schema that doesn't fit. A stats CSV has columns like "Campaign Name", "Delivered count", "Replied count" — there's no "Content" column. The AI mapper tries to force-fit these and produces nonsensical mappings.
 
-## What Gets Recorded
+## Solution
 
-For each campaign that receives stats, a knowledge entry is created like:
+Add a **smart stats detection** layer to the import flow. When the system detects a stats-style CSV (lots of numeric columns, campaign name column), it should:
 
-```
-Title: "HVAC campaign - Performance Baseline (Feb 2026)"
-Category: campaign_result
-Content:
-  Channel: Email + LinkedIn
-  Delivered: 54 | Opens: 12 | Replies: 3 | Reply Rate: 5.6%
-  LI Connections Sent: 120 | Accepted: 5 | LI Replies: 0
-  
-  Top Industries: Building Construction (60%), Consumer Services (15%)
-  Top Job Titles: Owner (40%), VP Operations (12%)
-  Company Sizes: 11-50 (35%), 51-200 (28%)
-  
-Metrics (structured JSONB):
-  { delivered: 54, replies: 3, replyRate: 5.6, ... }
-Tags: ["hvac", "building-construction", "linkedin", "email"]
-Source Campaign: "HVAC campaign"
-```
+1. Skip the manual mapping step entirely
+2. Auto-detect the campaign name column as the "title"
+3. Auto-detect all numeric columns as metrics
+4. Auto-generate the "content" field as a human-readable summary of the metrics
+5. Jump straight to the preview step
+
+This means uploading a stats CSV becomes: **upload file -> see preview -> confirm import**. No mapping needed.
 
 ## How It Works
 
-### 1. New helper: `generatePerformanceSnapshot(campaignId)`
+After parsing the CSV, before triggering the AI analysis, run a local detection check:
 
-A shared function that:
-- Reads the campaign's current stats from `synced_campaigns`
-- Queries `synced_contacts` for that campaign to extract top industries, job titles, company sizes, and locations
-- Builds a structured knowledge entry with both human-readable content and machine-readable metrics JSONB
-- Upserts into `sales_knowledge` (using source_campaign to avoid duplicates -- updates the existing entry if one exists for this campaign)
+- Count how many columns have predominantly numeric values
+- Look for a column matching common campaign name patterns ("campaign", "sequence", "name")
+- If more than 50% of columns are numeric AND a campaign name column is found, treat it as a stats CSV
 
-### 2. Hook into Email Stats Upload
+For each row in a detected stats CSV, auto-generate:
+- **Title**: `"{Campaign Name} - Performance Baseline (Feb 2026)"`
+- **Content**: A readable summary like `"Channel: Email | Delivered: 54 | Opens: 12 | Replies: 3 | Reply Rate: 5.6%"`
+- **Category**: `campaign_result` (auto-set)
+- **Metrics**: All numeric columns stored as structured JSONB
+- **Tags**: Extracted from non-numeric, non-name columns (e.g., industry, channel)
 
-In `useEmailStatsUpload.ts`, after the stats are successfully imported:
-- Call `generatePerformanceSnapshot` for each updated campaign
-- This happens automatically -- no extra UI needed
+## Technical Details
 
-### 3. Hook into LinkedIn Stats Upload  
+### Modified: `src/components/admin/SalesKnowledgeImportDialog.tsx`
 
-Same approach in `useLinkedInStatsUpload.ts` -- after LinkedIn stats are applied, generate/update the performance snapshot.
+Add a `detectStatsCSV()` function that runs after parsing:
 
-### 4. Update `revamp-copy` edge function
+```text
+function detectStatsCSV(headers, data):
+  - Find campaign name column (fuzzy match: "campaign", "sequence name", "name")
+  - Count numeric columns (check first 5 rows for numeric values)
+  - If numericColumns > 50% AND nameColumn found:
+    return { isStats: true, nameColumn, numericColumns, textColumns }
+```
 
-Enhance the system prompt to specifically reference `campaign_result` entries when available, telling Claude things like "In the HVAC/Building Construction vertical, email reply rates are ~5.6% and LinkedIn acceptance is ~4.2%."
+When stats CSV is detected:
+- Skip the AI analysis call (no need for the edge function)
+- Auto-transform each row into a `SalesKnowledgeInsert`
+- Set step directly to `'preview'` instead of `'mapping'`
 
-## Technical Changes
+Add a `transformStatsRow()` function:
 
-### New file: `src/lib/performanceSnapshot.ts`
-- `generatePerformanceSnapshot(campaignId: string)`: Queries campaign stats + contacts, builds and upserts a `sales_knowledge` entry
-- Calculates rates (reply rate, open rate, acceptance rate)
-- Aggregates contact demographics (top 5 industries, titles, etc.)
+```text
+function transformStatsRow(row, config):
+  - title = row[nameColumn] + " - Performance Baseline"
+  - metrics = { col1: value1, col2: value2, ... } for all numeric columns
+  - Calculate derived rates (replyRate = replies/delivered * 100)
+  - content = generate readable summary from metrics
+  - category = 'campaign_result'
+  - tags = values from non-numeric text columns (industry, channel type, etc.)
+  return SalesKnowledgeInsert
+```
 
-### Modified: `src/hooks/useEmailStatsUpload.ts`
-- In `onSuccess`, call `generatePerformanceSnapshot` for each updated campaign ID
+The existing mapping flow remains available as a fallback. If auto-detection is wrong, the user can click "Edit Mapping" to go back to the manual mapping step (existing UI).
 
-### Modified: `src/hooks/useLinkedInStatsUpload.ts`  
-- Same -- call snapshot generation after successful upload
+### Modified: `supabase/functions/analyze-csv-knowledge/index.ts`
 
-### Modified: `supabase/functions/revamp-copy/index.ts`
-- Update the system prompt to better utilize `campaign_result` entries with structured metrics
-- When campaign results exist for similar industries, include them as performance benchmarks
+No changes needed — the edge function is simply bypassed for stats CSVs, saving an API call.
 
-### No new tables or migrations needed
-- Uses existing `sales_knowledge` table with existing columns (title, content, category, tags, metrics JSONB, source_campaign)
-- Uses existing `synced_contacts` for demographic enrichment
-- Uses existing `synced_campaigns` for metrics
+## User Experience
 
-## What This Enables
+```text
+Current flow (broken for stats):
+  Upload CSV -> AI Analysis -> Manual Mapping (confusing) -> Preview -> Import
 
-- **Compare by industry**: "Healthcare gets 15% reply rate vs 8% for Finance" -- stored as separate knowledge entries, queryable by tags
-- **Compare by copy/sequence**: Each campaign's snapshot references the campaign name, so Claude can correlate with the sequence copy it already has
-- **Track over time**: Each upload updates the snapshot with a timestamp, building a history
-- **Feed AI**: The revamp-copy function already pulls from sales_knowledge, so performance data automatically influences AI-generated copy
+New flow (stats detected):
+  Upload CSV -> Auto-detect stats -> Preview (ready to go) -> Import
+  
+  With an "Edit Mapping" escape hatch if detection is wrong.
+```
+
+## What stays the same
+
+- Non-stats CSVs (email templates, playbooks, guidelines) still go through the existing AI mapping flow
+- The manual mapping UI is unchanged and available via "Edit Mapping"
+- The preview and import steps work exactly as before
