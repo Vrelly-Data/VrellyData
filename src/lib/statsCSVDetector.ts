@@ -6,24 +6,24 @@ const NAME_PATTERNS = [
   /^sequence[\s_-]?name/i, /^subject/i,
 ];
 
-interface StatsCSVConfig {
-  isStats: true;
+export interface StatsCSVConfig {
   nameCol: string;
   numericCols: string[];
   textCols: string[];
 }
 
 /**
- * Detect whether a CSV is a stats/metrics file (lots of numeric columns + a name column).
- * Returns config if detected, null otherwise.
+ * Analyse CSV headers and classify columns. Always returns a config.
+ * Finds the best campaign-name column (pattern match or first text col),
+ * then classifies everything else as numeric or text.
  */
 export function detectStatsCSV(
   headers: string[],
   data: Record<string, string>[]
-): StatsCSVConfig | null {
-  if (headers.length < 3 || data.length === 0) return null;
+): StatsCSVConfig {
+  const sample = data.slice(0, 5);
 
-  // Find campaign name column
+  // Find campaign name column via pattern match
   let nameCol: string | null = null;
   for (const h of headers) {
     if (NAME_PATTERNS.some(p => p.test(h.trim()))) {
@@ -31,17 +31,15 @@ export function detectStatsCSV(
       break;
     }
   }
-  if (!nameCol) return null;
 
-  // Classify columns as numeric or text by sampling first 5 rows
-  const sample = data.slice(0, 5);
+  // Classify remaining columns
   const numericCols: string[] = [];
   const textCols: string[] = [];
 
   for (const h of headers) {
     if (h === nameCol) continue;
     const values = sample.map(r => (r[h] ?? '').trim()).filter(Boolean);
-    if (values.length === 0) continue;
+    if (values.length === 0) { textCols.push(h); continue; }
     const numericCount = values.filter(v => !isNaN(parseFloat(v.replace(/[,%$]/g, '')))).length;
     if (numericCount / values.length >= 0.6) {
       numericCols.push(h);
@@ -50,11 +48,12 @@ export function detectStatsCSV(
     }
   }
 
-  // Stats CSV: >50% of non-name columns are numeric
-  const totalNonName = numericCols.length + textCols.length;
-  if (totalNonName === 0 || numericCols.length / totalNonName < 0.5) return null;
+  // If no pattern-matched name col, use the first text column
+  if (!nameCol) {
+    nameCol = textCols.shift() ?? headers[0];
+  }
 
-  return { isStats: true, nameCol, numericCols, textCols };
+  return { nameCol, numericCols, textCols };
 }
 
 /** Convert a header into a snake_case metric key */
