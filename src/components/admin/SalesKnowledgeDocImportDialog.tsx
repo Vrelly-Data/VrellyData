@@ -109,10 +109,14 @@ export function SalesKnowledgeDocImportDialog({ open, onOpenChange, onImport, is
 
       setExtractedContent(content);
 
-      // Auto-fill title from filename (without extension)
+      // Auto-fill title and source_campaign from filename (without extension)
       if (!title) {
         const baseName = selected.name.replace(/\.[^/.]+$/, '').replace(/[_-]/g, ' ');
         setTitle(baseName);
+        // Auto-link to matching campaign stats
+        if (!sourceCampaign) {
+          setSourceCampaign(baseName);
+        }
       }
     } catch (err: any) {
       setExtractError(err.message || 'Failed to extract content');
