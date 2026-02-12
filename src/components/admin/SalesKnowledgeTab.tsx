@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import { SalesKnowledgeImportDialog } from './SalesKnowledgeImportDialog';
 import { SalesKnowledgeDocImportDialog } from './SalesKnowledgeDocImportDialog';
 import {
@@ -10,6 +10,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { TagInput } from '@/components/ui/tag-input';
@@ -61,7 +62,7 @@ const EMPTY_FORM: SalesKnowledgeInsert = {
 };
 
 export function SalesKnowledgeTab() {
-  const { entries, isLoading, createEntry, updateEntry, deleteEntry, bulkCreateEntries } =
+  const { entries, isLoading, createEntry, updateEntry, deleteEntry, bulkCreateEntries, bulkDeleteEntries } =
     useAdminSalesKnowledge();
   const [importOpen, setImportOpen] = useState(false);
   const [docImportOpen, setDocImportOpen] = useState(false);
@@ -70,6 +71,8 @@ export function SalesKnowledgeTab() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<SalesKnowledgeInsert>({ ...EMPTY_FORM });
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
 
   // Filters
   const [filterCategory, setFilterCategory] = useState<string>('all');
@@ -91,6 +94,35 @@ export function SalesKnowledgeTab() {
     }
     return result;
   }, [entries, filterCategory, searchQuery]);
+
+  const allVisibleSelected = filtered.length > 0 && filtered.every((e) => selectedIds.has(e.id));
+  const someVisibleSelected = filtered.some((e) => selectedIds.has(e.id));
+
+  const toggleSelectAll = useCallback(() => {
+    if (allVisibleSelected) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filtered.map((e) => e.id)));
+    }
+  }, [allVisibleSelected, filtered]);
+
+  const toggleSelect = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const handleBulkDelete = () => {
+    bulkDeleteEntries.mutate([...selectedIds], {
+      onSuccess: () => {
+        setSelectedIds(new Set());
+        setBulkDeleteOpen(false);
+      },
+    });
+  };
 
   const openCreate = () => {
     setEditingId(null);
@@ -151,6 +183,14 @@ export function SalesKnowledgeTab() {
     <div className="space-y-4">
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-2">
+          <Checkbox
+            checked={allVisibleSelected ? true : someVisibleSelected ? 'indeterminate' : false}
+            onCheckedChange={toggleSelectAll}
+            disabled={filtered.length === 0}
+          />
+          <span className="text-sm text-muted-foreground">Select All</span>
+        </div>
         <Button onClick={openCreate}>
           <Plus className="h-4 w-4 mr-2" />
           Add Entry
@@ -185,6 +225,12 @@ export function SalesKnowledgeTab() {
             className="pl-9"
           />
         </div>
+        {selectedIds.size > 0 && (
+          <Button variant="destructive" onClick={() => setBulkDeleteOpen(true)}>
+            <Trash2 className="h-4 w-4 mr-2" />
+            Delete Selected ({selectedIds.size})
+          </Button>
+        )}
       </div>
 
       {/* Entries */}
@@ -202,11 +248,18 @@ export function SalesKnowledgeTab() {
             <Card key={entry.id}>
               <CardHeader className="pb-2">
                 <div className="flex items-start justify-between gap-2">
-                  <div className="space-y-1">
-                    <Badge variant="outline" className="text-xs mb-1">
-                      {categoryLabel(entry.category)}
-                    </Badge>
-                    <CardTitle className="text-base">{entry.title}</CardTitle>
+                  <div className="flex items-start gap-3">
+                    <Checkbox
+                      checked={selectedIds.has(entry.id)}
+                      onCheckedChange={() => toggleSelect(entry.id)}
+                      className="mt-1"
+                    />
+                    <div className="space-y-1">
+                      <Badge variant="outline" className="text-xs mb-1">
+                        {categoryLabel(entry.category)}
+                      </Badge>
+                      <CardTitle className="text-base">{entry.title}</CardTitle>
+                    </div>
                   </div>
                   <div className="flex gap-1 shrink-0">
                     <Button size="icon" variant="ghost" onClick={() => openEdit(entry)}>
@@ -371,7 +424,24 @@ export function SalesKnowledgeTab() {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Import CSV Dialog */}
+      {/* Bulk Delete Confirmation */}
+      <AlertDialog open={bulkDeleteOpen} onOpenChange={setBulkDeleteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {selectedIds.size} entries?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This action cannot be undone. All selected entries will be permanently removed.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleBulkDelete} disabled={bulkDeleteEntries.isPending}>
+              {bulkDeleteEntries.isPending ? 'Deleting...' : 'Delete All'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <SalesKnowledgeImportDialog
         open={importOpen}
         onOpenChange={setImportOpen}

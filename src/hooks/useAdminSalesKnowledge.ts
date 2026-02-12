@@ -128,6 +128,25 @@ export function useAdminSalesKnowledge() {
     },
   });
 
+  const bulkDeleteEntries = useMutation({
+    mutationFn: async (ids: string[]) => {
+      if (ids.length === 0) return;
+      const { error } = await supabase
+        .from('sales_knowledge' as any)
+        .delete()
+        .in('id', ids);
+
+      if (error) throw error;
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: QUERY_KEY });
+      toast({ title: 'Entries deleted', description: `${variables.length} entries removed.` });
+    },
+    onError: (err: Error) => {
+      toast({ title: 'Delete failed', description: err.message, variant: 'destructive' });
+    },
+  });
+
   const analyzeCSV = async (payload: {
     headers: string[];
     sampleRows: Record<string, string>[];
@@ -156,5 +175,5 @@ export function useAdminSalesKnowledge() {
     return response.json();
   };
 
-  return { entries, isLoading, createEntry, updateEntry, deleteEntry, bulkCreateEntries, analyzeCSV };
+  return { entries, isLoading, createEntry, updateEntry, deleteEntry, bulkCreateEntries, bulkDeleteEntries, analyzeCSV };
 }
