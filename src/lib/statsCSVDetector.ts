@@ -2,8 +2,8 @@ import type { SalesKnowledgeInsert } from '@/hooks/useAdminSalesKnowledge';
 
 /** Pattern matches for campaign/sequence name columns */
 const NAME_PATTERNS = [
-  /^campaign/i, /^sequence/i, /^name$/i, /^campaign[\s_-]?name/i,
-  /^sequence[\s_-]?name/i,
+  /^campaign[\s_-]?name/i, /^sequence[\s_-]?name/i, /^name$/i,
+  /^campaign$/i, /^sequence$/i,
 ];
 
 /** Pattern matches for action type columns */
@@ -24,10 +24,11 @@ export interface StatsCSVConfig {
   textCols: string[];
 }
 
-/** Find the first header matching any of the given patterns */
+/** Find the first header matching any of the given patterns (pattern-first for priority) */
 function findCol(headers: string[], patterns: RegExp[]): string | null {
-  for (const h of headers) {
-    if (patterns.some(p => p.test(h.trim()))) return h;
+  for (const p of patterns) {
+    const match = headers.find(h => p.test(h.trim()));
+    if (match) return match;
   }
   return null;
 }
