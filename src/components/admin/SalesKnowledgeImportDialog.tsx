@@ -1,5 +1,6 @@
 import { useState, useCallback, useMemo } from 'react';
 import Papa from 'papaparse';
+import * as XLSX from 'xlsx';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -39,24 +40,39 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
   const validRows = useMemo(() => transformedRows.filter(r => r.valid), [transformedRows]);
   const invalidRows = useMemo(() => transformedRows.filter(r => !r.valid), [transformedRows]);
 
-  const handleFile = useCallback((file: File) => {
-    setFileName(file.name);
-    Papa.parse<Record<string, string>>(file, {
-      header: true,
-      skipEmptyLines: true,
-      complete: (results) => {
-        const parsedHeaders = results.meta.fields ?? [];
-        const config = detectStatsCSV(parsedHeaders, results.data);
-        const transformed = transformStatsRows(results.data, config);
-        setTransformedRows(transformed);
-        setStep('preview');
-        toast({
-          title: 'CSV parsed',
-          description: `Found ${transformed.filter(r => r.valid).length} campaign results.`,
-        });
-      },
+  const processData = useCallback((data: Record<string, string>[], headers: string[]) => {
+    const config = detectStatsCSV(headers, data);
+    const transformed = transformStatsRows(data, config);
+    setTransformedRows(transformed);
+    setStep('preview');
+    toast({
+      title: 'File parsed',
+      description: `Found ${transformed.filter(r => r.valid).length} campaign results.`,
     });
   }, []);
+
+  const handleFile = useCallback(async (file: File) => {
+    setFileName(file.name);
+    const ext = file.name.split('.').pop()?.toLowerCase();
+
+    if (ext === 'xlsx' || ext === 'xls') {
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: 'array' });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const data = XLSX.utils.sheet_to_json<Record<string, string>>(sheet, { defval: '' });
+      const headers = Object.keys(data[0] || {});
+      processData(data, headers);
+    } else {
+      Papa.parse<Record<string, string>>(file, {
+        header: true,
+        skipEmptyLines: true,
+        complete: (results) => {
+          const headers = results.meta.fields ?? [];
+          processData(results.data, headers);
+        },
+      });
+    }
+  }, [processData]);
 
   const reset = () => {
     setStep('upload');
@@ -88,11 +104,11 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
           <label className="flex flex-col items-center justify-center gap-3 border-2 border-dashed border-muted-foreground/30 rounded-lg p-10 cursor-pointer hover:border-primary/50 transition-colors">
             <Upload className="h-8 w-8 text-muted-foreground" />
             <span className="text-sm text-muted-foreground">
-              Drop or select a CSV with campaign stats — we'll extract the title and metrics
+              Drop or select a CSV or Excel file with campaign stats — we'll extract the title and metrics
             </span>
             <input
               type="file"
-              accept=".csv"
+              accept=".csv,.xlsx,.xls"
               className="hidden"
               onChange={(e) => {
                 const f = e.target.files?.[0];
