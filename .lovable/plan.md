@@ -1,59 +1,33 @@
 
 
-# Aggregate Contact Activity Logs into Single Campaign Result Entries
+# Add Select All / Delete All to Sales Knowledge Tab
 
-## Problem
+## Changes
 
-The CSV being uploaded is a contact-level activity log, not pre-aggregated stats. Each row represents one action for one contact:
+### 1. Add `bulkDeleteEntries` mutation to `src/hooks/useAdminSalesKnowledge.ts`
 
-| Sequence | Action Type | Contact Email | ... |
-|----------|-------------|---------------|-----|
-| My Outreach | Message Sent | john@co.com | ... |
-| My Outreach | Connection Request | jane@co.com | ... |
-| My Outreach | Reply | john@co.com | ... |
+Add a new mutation that accepts an array of IDs and deletes them all in one call using `.in('id', ids)`.
 
-The current code creates one database entry per row. Instead, it should **aggregate all rows by Sequence name**, count each Action Type, and save **one entry per sequence**.
+### 2. Add selection state and bulk actions to `src/components/admin/SalesKnowledgeTab.tsx`
 
-## Result
+- Add `selectedIds: Set<string>` state to track which entries are selected
+- Add a **checkbox** on each entry card for individual selection
+- Add a **"Select All"** checkbox in the toolbar that toggles all currently visible (filtered) entries
+- Show a **"Delete Selected (N)"** button in the toolbar when any entries are selected, styled as destructive
+- Wire the delete button to an `AlertDialog` confirmation, then call `bulkDeleteEntries`
+- Clear selection after successful deletion
 
-From a CSV with 1,000 rows across 2 sequences, the import would produce **2 entries**:
+### UI Layout
 
-- **Entry 1**: "Sales Outreach Q1 - Performance Baseline (Feb 2026)"
-  - Metrics: `{ message_sent: 1117, connection_request: 750, reply: 100, total_contacts: 500 }`
-  - Content: "Message Sent: 1117 | Connection Request: 750 | Reply: 100 | Total Contacts: 500"
+The toolbar gets a select-all checkbox on the left and a conditional "Delete Selected" button:
 
-- **Entry 2**: "Follow-Up Campaign - Performance Baseline (Feb 2026)"
-  - Metrics: `{ message_sent: 200, reply: 45, total_contacts: 180 }`
-  - Content: "Message Sent: 200 | Reply: 45 | Total Contacts: 180"
+```text
+[x] Select All  |  [Add Entry]  [Import CSV]  [Import Doc]  |  [Category Filter]  [Search]  |  [Delete Selected (12)]
+```
 
-## Technical Changes
+Each entry card gets a checkbox before the title area.
 
-### 1. Update detection in `src/lib/statsCSVDetector.ts`
+### No database or RLS changes needed
 
-Add a new config field `actionCol` to identify the "Action Type" column (pattern match on "action type", "action", "activity type"). Also add pattern for "Sequence" as the name column (already supported).
-
-### 2. Replace `transformStatsRows` with aggregation logic
-
-Instead of mapping each row to an entry, the new logic will:
-
-1. Group all rows by the value in the Sequence/campaign name column
-2. For each group, count occurrences of each unique Action Type value
-3. Count unique contacts (by email or Contact Id) as `total_contacts`
-4. Build one `SalesKnowledgeInsert` per group with:
-   - **title**: Sequence name + " - Performance Baseline (Month Year)"
-   - **metrics**: `{ action_type_1: count, action_type_2: count, total_contacts: count }`
-   - **content**: Human-readable summary of the counts
-   - **category**: `campaign_result`
-   - **source_campaign**: The sequence name
-
-### 3. Update `SalesKnowledgeImportDialog.tsx`
-
-The preview table will now show fewer rows (one per sequence instead of one per contact). No structural changes needed -- it already displays `transformedRows` which will now contain aggregated entries.
-
-### What stays the same
-
-- The upload step (file picker) is unchanged
-- The preview table UI is unchanged
-- The import button and `bulkCreateEntries` call are unchanged
-- The `useAdminSalesKnowledge` hook is unchanged
+The existing RLS policy `"Admins can delete sales knowledge"` already allows deletion, and the `.in()` operator works with the existing policy.
 
