@@ -30,6 +30,7 @@ import { toast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
 import type { SalesKnowledgeInsert, KnowledgeCategory } from '@/hooks/useAdminSalesKnowledge';
 import { useAdminSalesKnowledge } from '@/hooks/useAdminSalesKnowledge';
+import { detectStatsCSV, transformStatsRows } from '@/lib/statsCSVDetector';
 
 const VALID_CATEGORIES: { value: KnowledgeCategory; label: string }[] = [
   { value: 'email_template', label: 'Email Template' },
@@ -185,6 +186,8 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
   const [colMappings, setColMappings] = useState<ColumnTargetMapping[]>([]);
   const [globalCategory, setGlobalCategory] = useState<KnowledgeCategory>('campaign_result');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isStatsMode, setIsStatsMode] = useState(false);
+  const [statsTransformed, setStatsTransformed] = useState<{ entry: SalesKnowledgeInsert; valid: boolean; error?: string }[]>([]);
 
   const legacyMapping = useMemo(
     () => columnMappingsToLegacy(colMappings, globalCategory),
@@ -192,9 +195,10 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
   );
 
   const transformedRows = useMemo(() => {
+    if (isStatsMode) return statsTransformed;
     if (!legacyMapping) return [];
     return allRows.map((row) => transformRow(row, legacyMapping));
-  }, [allRows, legacyMapping]);
+  }, [allRows, legacyMapping, isStatsMode, statsTransformed]);
 
   const validRows = transformedRows.filter((r) => r.valid);
   const invalidRows = transformedRows.filter((r) => !r.valid);
@@ -225,6 +229,19 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
         const parsedHeaders = results.meta.fields ?? [];
         setHeaders(parsedHeaders);
         setAllRows(results.data);
+
+        // Try stats auto-detection first
+        const statsConfig = detectStatsCSV(parsedHeaders, results.data);
+        if (statsConfig) {
+          const transformed = transformStatsRows(results.data, statsConfig);
+          setIsStatsMode(true);
+          setStatsTransformed(transformed);
+          setStep('preview');
+          toast({ title: 'Stats CSV detected', description: `Auto-mapped ${transformed.filter(r => r.valid).length} campaign results.` });
+          return;
+        }
+
+        // Fallback: normal mapping flow
         setColMappings(buildInitialColMappings(parsedHeaders, results.data));
         setStep('mapping');
         triggerAIAnalysis(parsedHeaders, results.data);
@@ -336,6 +353,8 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
     setColMappings([]);
     setGlobalCategory('campaign_result');
     setIsAnalyzing(false);
+    setIsStatsMode(false);
+    setStatsTransformed([]);
   };
 
   const handleImport = () => {
@@ -553,8 +572,19 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
               {invalidRows.length > 0 && (
                 <Badge variant="destructive">{invalidRows.length} invalid</Badge>
               )}
-              <Button variant="ghost" size="sm" onClick={() => setStep('mapping')} className="ml-auto">
-                Back to mapping
+              <Button variant="ghost" size="sm" onClick={() => {
+                if (isStatsMode) {
+                  // Switch from stats mode to manual mapping
+                  setIsStatsMode(false);
+                  setStatsTransformed([]);
+                  setColMappings(buildInitialColMappings(headers, allRows));
+                  setStep('mapping');
+                  triggerAIAnalysis(headers, allRows);
+                } else {
+                  setStep('mapping');
+                }
+              }} className="ml-auto">
+                {isStatsMode ? 'Edit Mapping' : 'Back to mapping'}
               </Button>
             </div>
 
