@@ -1,55 +1,58 @@
 
 
-# Add XLSX Import Support to Sales Knowledge
+# Multi-Sheet XLSX Import Support
 
-## Overview
+## Problem
 
-Add support for `.xlsx` (Excel) file imports alongside the existing CSV import in the Admin Sales Knowledge section. This requires adding a lightweight XLSX parsing library and updating the import dialog to handle both file types.
+The current XLSX import only reads the first sheet (`workbook.SheetNames[0]`). When the file contains multiple tabs, data from other sheets is ignored.
+
+## Solution
+
+Add a **sheet selector step** between upload and preview. When an XLSX file with multiple sheets is detected, the user picks which sheet to import. Single-sheet files skip straight to preview (current behavior).
 
 ## Changes
 
-### 1. Install `xlsx` (SheetJS) library
+### `src/components/admin/SalesKnowledgeImportDialog.tsx`
 
-Add the `xlsx` package which provides browser-side Excel file parsing. It's lightweight and has no dependencies.
+1. **Add a new step** `'select-sheet'` to the `Step` type: `'upload' | 'select-sheet' | 'preview'`
 
-### 2. Update `SalesKnowledgeImportDialog.tsx`
+2. **Add state** for the parsed workbook and sheet names:
+   - `workbook: XLSX.WorkBook | null`
+   - `sheetNames: string[]`
+   - `selectedSheet: string`
 
-- Change the file `accept` attribute from `.csv` to `.csv,.xlsx,.xls`
-- Update the label text to mention Excel files
-- Add logic to detect the file extension:
-  - If `.csv` -- use the existing PapaParse flow
-  - If `.xlsx` or `.xls` -- use the `xlsx` library to read the first sheet, convert it to a JSON array of objects (same format PapaParse produces), then pass it through the same `detectStatsCSV` and `transformStatsRows` pipeline
+3. **Update `handleFile`** for XLSX:
+   - Parse the workbook and store it in state
+   - If only 1 sheet, process it immediately (current behavior)
+   - If multiple sheets, transition to `'select-sheet'` step
 
-### 3. No other files change
+4. **Add sheet selector UI** (new step between upload and preview):
+   - Show a list of sheet names as selectable buttons or a dropdown
+   - "Continue" button processes the selected sheet through `processData`
 
-The `statsCSVDetector.ts` aggregation logic works on plain `Record<string, string>[]` arrays, so it doesn't care whether the data came from CSV or Excel. The preview table, import button, and hook all remain the same.
+5. **Update `reset`** to clear workbook/sheet state
 
-## Technical Details
+6. **Update dialog title** to reflect the new step
 
-```text
-handleFile(file: File)
-  |
-  +--> if .csv  --> Papa.parse(file) --> results.data
-  |                                         |
-  +--> if .xlsx --> XLSX.read(buffer) ------+
-       sheet_to_json(firstSheet)            |
-                                            v
-                              detectStatsCSV(headers, data)
-                              transformStatsRows(data, config)
-                                            |
-                                            v
-                                    setTransformedRows(...)
-```
+### No other files change
 
-The xlsx parsing snippet:
+The `processData`, `detectStatsCSV`, and `transformStatsRows` pipeline stays the same -- only the source sheet selection is new.
+
+## UI Flow
 
 ```text
-import * as XLSX from 'xlsx';
-
-const buffer = await file.arrayBuffer();
-const workbook = XLSX.read(buffer, { type: 'array' });
-const sheet = workbook.Sheets[workbook.SheetNames[0]];
-const data = XLSX.utils.sheet_to_json<Record<string, string>>(sheet, { defval: '' });
-const headers = Object.keys(data[0] || {});
+Upload file
+    |
+    +--> CSV ---------------------> Preview & Confirm
+    |
+    +--> XLSX (1 sheet) ----------> Preview & Confirm
+    |
+    +--> XLSX (multiple sheets)
+              |
+              v
+         Select Sheet (dropdown + Continue button)
+              |
+              v
+         Preview & Confirm
 ```
 
