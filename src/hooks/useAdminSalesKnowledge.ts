@@ -131,12 +131,15 @@ export function useAdminSalesKnowledge() {
   const bulkDeleteEntries = useMutation({
     mutationFn: async (ids: string[]) => {
       if (ids.length === 0) return;
-      const { error } = await supabase
-        .from('sales_knowledge' as any)
-        .delete()
-        .in('id', ids);
-
-      if (error) throw error;
+      const CHUNK = 100;
+      for (let i = 0; i < ids.length; i += CHUNK) {
+        const batch = ids.slice(i, i + CHUNK);
+        const { error } = await supabase
+          .from('sales_knowledge' as any)
+          .delete()
+          .in('id', batch);
+        if (error) throw error;
+      }
     },
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEY });
