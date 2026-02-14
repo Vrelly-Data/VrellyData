@@ -58,6 +58,12 @@ export const HowItWorksSection = () => {
             </div>
           ))}
         </div>
+
+        <div className={`text-center mt-16 transition-all duration-700 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'}`} style={{ transitionDelay: '1s' }}>
+          <p className="text-lg text-muted-foreground max-w-2xl mx-auto leading-relaxed">
+            Even if this is your first time sending outbound messaging like email and LinkedIn, simply sign up and use our copy and audience builder to get started in <span className="text-primary font-semibold">5 minutes</span>!
+          </p>
+        </div>
       </div>
     </section>
   );
