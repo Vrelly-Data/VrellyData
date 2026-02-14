@@ -176,26 +176,95 @@ export function autoMapFields(
 }
 
 /**
- * Parse CSV file and return headers and data
+ * Parse CSV file and return headers and data.
+ * For large files, only loads the first `previewRows` rows for mapping preview.
  */
-export function parseCSVFile(file: File): Promise<{ headers: string[], data: any[] }> {
+export function parseCSVFile(file: File, previewRows?: number): Promise<{ headers: string[], data: any[], totalRows: number }> {
   return new Promise((resolve, reject) => {
+    if (previewRows && previewRows > 0) {
+      // Streaming mode: only collect first N rows for preview
+      const data: any[] = [];
+      let headers: string[] = [];
+      let rowCount = 0;
+
+      Papa.parse(file, {
+        header: true,
+        skipEmptyLines: true,
+        step: (result, parser) => {
+          if (headers.length === 0 && result.meta.fields) {
+            headers = result.meta.fields;
+          }
+          rowCount++;
+          if (data.length < previewRows) {
+            data.push(result.data);
+          }
+        },
+        complete: () => {
+          resolve({ headers, data, totalRows: rowCount });
+        },
+        error: (error) => {
+          reject(error);
+        }
+      });
+    } else {
+      // Full parse for small files
+      Papa.parse(file, {
+        header: true,
+        skipEmptyLines: true,
+        complete: (results) => {
+          if (results.errors.length > 0) {
+            reject(new Error(`CSV parsing errors: ${results.errors.map(e => e.message).join(', ')}`));
+            return;
+          }
+          
+          const headers = results.meta.fields || [];
+          const data = results.data;
+          
+          resolve({ headers, data, totalRows: data.length });
+        },
+        error: (error) => {
+          reject(error);
+        }
+      });
+    }
+  });
+}
+
+/**
+ * Stream-parse a CSV file in chunks, calling onChunk for each batch of rows.
+ */
+export function streamParseCSV(
+  file: File,
+  chunkSize: number,
+  onChunk: (rows: any[], chunkIndex: number) => Promise<void>
+): Promise<{ totalRows: number }> {
+  return new Promise((resolve, reject) => {
+    let buffer: any[] = [];
+    let chunkIndex = 0;
+    let totalRows = 0;
+    let processingPromise = Promise.resolve();
+
     Papa.parse(file, {
       header: true,
       skipEmptyLines: true,
-      complete: (results) => {
-        if (results.errors.length > 0) {
-          reject(new Error(`CSV parsing errors: ${results.errors.map(e => e.message).join(', ')}`));
-          return;
+      step: (result) => {
+        buffer.push(result.data);
+        totalRows++;
+        if (buffer.length >= chunkSize) {
+          const chunk = buffer;
+          buffer = [];
+          const idx = chunkIndex++;
+          processingPromise = processingPromise.then(() => onChunk(chunk, idx));
         }
-        
-        const headers = results.meta.fields || [];
-        const data = results.data;
-        
-        resolve({
-          headers,
-          data
-        });
+      },
+      complete: () => {
+        // Flush remaining
+        if (buffer.length > 0) {
+          const chunk = buffer;
+          const idx = chunkIndex;
+          processingPromise = processingPromise.then(() => onChunk(chunk, idx));
+        }
+        processingPromise.then(() => resolve({ totalRows })).catch(reject);
       },
       error: (error) => {
         reject(error);

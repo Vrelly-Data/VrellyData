@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react';
-import { useFreeData } from '@/hooks/useFreeData';
+import { useFreeData, UploadProgress } from '@/hooks/useFreeData';
 import { useDataSourceTemplates } from '@/hooks/useDataSourceTemplates';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -30,8 +30,9 @@ import {
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Progress } from '@/components/ui/progress';
 import { Trash2, Loader2, FileSpreadsheet, ArrowRight } from 'lucide-react';
-import { parseCSVFile, transformImportData } from '@/lib/csvImportMapper';
+import { parseCSVFile, transformImportData, streamParseCSV } from '@/lib/csvImportMapper';
 import { extractCompaniesFromPeople } from '@/lib/companyExtraction';
 import { PlatformDataFieldMapper, FieldMapping, initializeMappings } from './PlatformDataFieldMapper';
 import { toast } from 'sonner';
@@ -39,7 +40,9 @@ import { PersonEntity } from '@/types/audience';
 import { CSVFieldMapping } from '@/types/csvImport';
 import { generatePersonId, generateCompanyId } from '@/lib/entityIdGenerator';
 
-type UploadStep = 'select-file' | 'map-fields';
+type UploadStep = 'select-file' | 'map-fields' | 'uploading' | 'complete';
+
+const STREAM_THRESHOLD = 5000; // Use streaming for files with more than this many rows
 
 interface FreeDataTabProps {
   showUploadDialog: boolean;
@@ -58,7 +61,13 @@ export function FreeDataTab({ showUploadDialog, onCloseUploadDialog }: FreeDataT
   // CSV parsing state
   const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
   const [csvRawData, setCsvRawData] = useState<any[]>([]);
+  const [csvFile, setCsvFile] = useState<File | null>(null);
+  const [csvTotalRows, setCsvTotalRows] = useState(0);
   const [fieldMappings, setFieldMappings] = useState<FieldMapping[]>([]);
+  
+  // Upload progress state
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
+  const [uploadSummary, setUploadSummary] = useState<{ people: number; companies: number } | null>(null);
   
   // Template selection and saving
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
@@ -72,15 +81,18 @@ export function FreeDataTab({ showUploadDialog, onCloseUploadDialog }: FreeDataT
     if (!file) return;
 
     try {
-      const { headers, data } = await parseCSVFile(file);
+      // Always stream-count first, only load preview rows
+      const { headers, data, totalRows } = await parseCSVFile(file, 1000);
       
-      if (headers.length === 0 || data.length === 0) {
+      if (headers.length === 0 || totalRows === 0) {
         toast.error('CSV file appears to be empty');
         return;
       }
       
       setCsvHeaders(headers);
       setCsvRawData(data);
+      setCsvFile(file);
+      setCsvTotalRows(totalRows);
       
       // Initialize mappings - apply template if selected, otherwise auto-detect
       let initialMappings = initializeMappings(headers, data);
@@ -90,7 +102,6 @@ export function FreeDataTab({ showUploadDialog, onCloseUploadDialog }: FreeDataT
         if (selectedTemplate && selectedTemplate.column_mappings) {
           const templateMappings = selectedTemplate.column_mappings as Array<{ csvHeader: string; systemField: string }>;
           
-          // Apply template mappings to matching headers
           initialMappings = initialMappings.map(mapping => {
             const templateMapping = templateMappings.find(
               tm => tm.csvHeader.toLowerCase() === mapping.csvHeader.toLowerCase()
@@ -107,7 +118,7 @@ export function FreeDataTab({ showUploadDialog, onCloseUploadDialog }: FreeDataT
       
       setFieldMappings(initialMappings);
       setUploadStep('map-fields');
-      toast.success(`Loaded ${data.length} rows with ${headers.length} columns`);
+      toast.success(`Loaded ${totalRows.toLocaleString()} rows with ${headers.length} columns`);
     } catch (error: any) {
       toast.error('Failed to parse CSV file');
       console.error(error);
@@ -115,46 +126,95 @@ export function FreeDataTab({ showUploadDialog, onCloseUploadDialog }: FreeDataT
   };
 
   const handleUpload = async () => {
-    if (csvRawData.length === 0) {
+    if (!csvFile || csvTotalRows === 0) {
       toast.error('No data to upload');
       return;
     }
 
     setUploading(true);
+    setUploadStep('uploading');
+    setUploadProgress(null);
+    setUploadSummary(null);
+
     try {
-      // Convert FieldMapping[] to CSVFieldMapping[] for transformImportData
       const csvMappings: CSVFieldMapping[] = fieldMappings.map(m => ({
         csvHeader: m.csvHeader,
         systemField: m.systemField,
         preview: m.preview
       }));
-      
-      // Transform data to person entities
-      const personEntities = transformImportData(csvMappings, csvRawData, 'person') as PersonEntity[];
-      
-      // Extract companies from people
-      const companyEntities = extractCompaniesFromPeople(personEntities);
-      
-      // Prepare person records for upload with deterministic IDs
-      const personRecords = personEntities.map((person) => ({
-        entity_type: 'person' as const,
-        entity_data: person as Record<string, any>,
-        entity_external_id: generatePersonId(person)
-      }));
-      
-      // Prepare company records for upload with deterministic IDs
-      const companyRecords = companyEntities.map((company) => ({
-        entity_type: 'company' as const,
-        entity_data: company as Record<string, any>,
-        entity_external_id: generateCompanyId(company)
-      }));
-      
-      // Upload both
-      const allRecords = [...personRecords, ...companyRecords];
-      
-      await uploadFreeData(allRecords);
-      
-      // Optionally save as template
+
+      let totalPeople = 0;
+      let totalCompanies = 0;
+
+      const useStreaming = csvTotalRows > STREAM_THRESHOLD;
+
+      if (useStreaming) {
+        // Streaming mode: process file in chunks
+        await streamParseCSV(csvFile, 1000, async (rows, chunkIndex) => {
+          const personEntities = transformImportData(csvMappings, rows, 'person') as PersonEntity[];
+          const companyEntities = extractCompaniesFromPeople(personEntities);
+
+          const personRecords = personEntities.map((person) => ({
+            entity_type: 'person' as const,
+            entity_data: person as Record<string, any>,
+            entity_external_id: generatePersonId(person)
+          }));
+
+          const companyRecords = companyEntities.map((company) => ({
+            entity_type: 'company' as const,
+            entity_data: company as Record<string, any>,
+            entity_external_id: generateCompanyId(company)
+          }));
+
+          const allRecords = [...personRecords, ...companyRecords];
+          
+          await uploadFreeData(allRecords, (progress) => {
+            // Translate batch-level progress to overall progress
+            const overallUploaded = (chunkIndex * 1000) + progress.recordsUploaded;
+            setUploadProgress({
+              currentBatch: chunkIndex + 1,
+              totalBatches: Math.ceil(csvTotalRows / 1000),
+              recordsUploaded: Math.min(overallUploaded, csvTotalRows),
+              totalRecords: csvTotalRows,
+              phase: 'uploading'
+            });
+          });
+
+          totalPeople += personRecords.length;
+          totalCompanies += companyRecords.length;
+        });
+      } else {
+        // Small file: parse all at once (already have data from preview)
+        const fullParse = csvRawData.length === csvTotalRows 
+          ? csvRawData 
+          : (await parseCSVFile(csvFile)).data;
+
+        const personEntities = transformImportData(csvMappings, fullParse, 'person') as PersonEntity[];
+        const companyEntities = extractCompaniesFromPeople(personEntities);
+
+        const personRecords = personEntities.map((person) => ({
+          entity_type: 'person' as const,
+          entity_data: person as Record<string, any>,
+          entity_external_id: generatePersonId(person)
+        }));
+
+        const companyRecords = companyEntities.map((company) => ({
+          entity_type: 'company' as const,
+          entity_data: company as Record<string, any>,
+          entity_external_id: generateCompanyId(company)
+        }));
+
+        const allRecords = [...personRecords, ...companyRecords];
+
+        await uploadFreeData(allRecords, (progress) => {
+          setUploadProgress(progress);
+        });
+
+        totalPeople = personRecords.length;
+        totalCompanies = companyRecords.length;
+      }
+
+      // Save template if requested
       if (saveAsTemplate && templateName.trim()) {
         const columnMappings = fieldMappings
           .filter(m => m.systemField)
@@ -166,27 +226,38 @@ export function FreeDataTab({ showUploadDialog, onCloseUploadDialog }: FreeDataT
         await createTemplate(templateName.trim(), 'person', columnMappings as any);
         toast.success(`Template "${templateName}" saved`);
       }
-      
-      toast.success(`Created ${personRecords.length} people and ${companyRecords.length} companies`);
-      
-      // Reset dialog state
-      handleCloseDialog();
+
+      setUploadSummary({ people: totalPeople, companies: totalCompanies });
+      setUploadStep('complete');
+      setUploadProgress({
+        currentBatch: 0,
+        totalBatches: 0,
+        recordsUploaded: totalPeople + totalCompanies,
+        totalRecords: totalPeople + totalCompanies,
+        phase: 'done'
+      });
     } catch (error: any) {
       console.error('Upload error:', error);
       toast.error(error.message || 'Failed to upload data');
+      setUploadStep('map-fields');
     } finally {
       setUploading(false);
     }
   };
 
   const handleCloseDialog = () => {
+    if (uploading) return; // Prevent closing during upload
     setUploadStep('select-file');
     setCsvHeaders([]);
     setCsvRawData([]);
+    setCsvFile(null);
+    setCsvTotalRows(0);
     setFieldMappings([]);
     setSelectedTemplateId(null);
     setSaveAsTemplate(false);
     setTemplateName('');
+    setUploadProgress(null);
+    setUploadSummary(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -228,6 +299,10 @@ export function FreeDataTab({ showUploadDialog, onCloseUploadDialog }: FreeDataT
   };
 
   const mappedFieldsCount = fieldMappings.filter(m => m.systemField).length;
+
+  const progressPercent = uploadProgress 
+    ? Math.round((uploadProgress.recordsUploaded / Math.max(uploadProgress.totalRecords, 1)) * 100)
+    : 0;
 
   return (
     <div className="space-y-6">
@@ -322,13 +397,15 @@ export function FreeDataTab({ showUploadDialog, onCloseUploadDialog }: FreeDataT
       )}
 
       <Dialog open={showUploadDialog} onOpenChange={(open) => {
-        if (!open) handleCloseDialog();
+        if (!open && !uploading) handleCloseDialog();
       }}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
           <DialogHeader>
             <DialogTitle>
               {uploadStep === 'select-file' && 'Upload CSV'}
               {uploadStep === 'map-fields' && 'Map CSV Columns'}
+              {uploadStep === 'uploading' && 'Uploading Records...'}
+              {uploadStep === 'complete' && 'Upload Complete'}
             </DialogTitle>
           </DialogHeader>
 
@@ -379,7 +456,7 @@ export function FreeDataTab({ showUploadDialog, onCloseUploadDialog }: FreeDataT
             {uploadStep === 'map-fields' && (
               <div className="space-y-4 py-4">
                 <div className="flex items-center gap-2 text-sm text-muted-foreground mb-4">
-                  <Badge variant="outline">{csvRawData.length} rows</Badge>
+                  <Badge variant="outline">{csvTotalRows.toLocaleString()} rows</Badge>
                   <ArrowRight className="h-4 w-4" />
                   <span>People + Auto-extracted Companies</span>
                 </div>
@@ -413,25 +490,54 @@ export function FreeDataTab({ showUploadDialog, onCloseUploadDialog }: FreeDataT
                 </div>
               </div>
             )}
+
+            {uploadStep === 'uploading' && uploadProgress && (
+              <div className="space-y-6 py-8">
+                <div className="space-y-2">
+                  <Progress value={progressPercent} className="h-3" />
+                  <div className="flex justify-between text-sm text-muted-foreground">
+                    <span>
+                      Uploading batch {uploadProgress.currentBatch} of {uploadProgress.totalBatches}...
+                    </span>
+                    <span>{progressPercent}%</span>
+                  </div>
+                </div>
+                <p className="text-center text-sm text-muted-foreground">
+                  {uploadProgress.recordsUploaded.toLocaleString()} / {uploadProgress.totalRecords.toLocaleString()} records
+                </p>
+              </div>
+            )}
+
+            {uploadStep === 'uploading' && !uploadProgress && (
+              <div className="flex items-center justify-center py-12">
+                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              </div>
+            )}
+
+            {uploadStep === 'complete' && uploadSummary && (
+              <div className="space-y-4 py-8 text-center">
+                <div className="text-4xl">✅</div>
+                <h3 className="text-lg font-semibold">Upload Complete</h3>
+                <div className="space-y-1 text-sm text-muted-foreground">
+                  <p>{uploadSummary.people.toLocaleString()} people uploaded</p>
+                  <p>{uploadSummary.companies.toLocaleString()} companies extracted</p>
+                </div>
+              </div>
+            )}
           </div>
 
           <DialogFooter className="border-t pt-4">
-            <Button variant="outline" onClick={handleCloseDialog}>
-              Cancel
-            </Button>
+            {uploadStep !== 'uploading' && (
+              <Button variant="outline" onClick={handleCloseDialog}>
+                {uploadStep === 'complete' ? 'Close' : 'Cancel'}
+              </Button>
+            )}
             {uploadStep === 'map-fields' && (
               <Button 
                 onClick={handleUpload} 
                 disabled={mappedFieldsCount === 0 || uploading || (saveAsTemplate && !templateName.trim())}
               >
-                {uploading ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Uploading...
-                  </>
-                ) : (
-                  `Upload ${csvRawData.length} Records`
-                )}
+                Upload {csvTotalRows.toLocaleString()} Records
               </Button>
             )}
           </DialogFooter>

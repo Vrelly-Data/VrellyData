@@ -13,6 +13,16 @@ export interface FreeDataRecord {
   created_at: string;
 }
 
+export interface UploadProgress {
+  currentBatch: number;
+  totalBatches: number;
+  recordsUploaded: number;
+  totalRecords: number;
+  phase: 'uploading' | 'done' | 'error';
+}
+
+const BATCH_SIZE = 1000;
+
 export function useFreeData(entityType?: 'person' | 'company') {
   const [records, setRecords] = useState<FreeDataRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -52,7 +62,8 @@ export function useFreeData(entityType?: 'person' | 'company') {
       entity_data: Record<string, any>;
       entity_external_id: string;
       source_template_id?: string;
-    }>
+    }>,
+    onProgress?: (progress: UploadProgress) => void
   ) => {
     if (!user) return { success: false, count: 0 };
 
@@ -62,19 +73,45 @@ export function useFreeData(entityType?: 'person' | 'company') {
         uploaded_by: user.id
       }));
 
-      const { data, error } = await supabase
-        .from('free_data')
-        .upsert(recordsWithUser, {
-          onConflict: 'entity_type,entity_external_id',
-          ignoreDuplicates: false
-        })
-        .select();
+      const totalBatches = Math.ceil(recordsWithUser.length / BATCH_SIZE);
+      let totalUploaded = 0;
 
-      if (error) throw error;
+      for (let i = 0; i < totalBatches; i++) {
+        const batch = recordsWithUser.slice(i * BATCH_SIZE, (i + 1) * BATCH_SIZE);
+
+        const { data, error } = await supabase
+          .from('free_data')
+          .upsert(batch, {
+            onConflict: 'entity_type,entity_external_id',
+            ignoreDuplicates: false
+          })
+          .select('id');
+
+        if (error) {
+          console.error(`Batch ${i + 1}/${totalBatches} failed:`, error);
+          onProgress?.({
+            currentBatch: i + 1,
+            totalBatches,
+            recordsUploaded: totalUploaded,
+            totalRecords: recordsWithUser.length,
+            phase: 'error'
+          });
+          throw new Error(`Batch ${i + 1} failed: ${error.message}`);
+        }
+
+        totalUploaded += data?.length || batch.length;
+        onProgress?.({
+          currentBatch: i + 1,
+          totalBatches,
+          recordsUploaded: totalUploaded,
+          totalRecords: recordsWithUser.length,
+          phase: i + 1 === totalBatches ? 'done' : 'uploading'
+        });
+      }
 
       await fetchRecords();
-      toast.success(`Uploaded ${data?.length || 0} records`);
-      return { success: true, count: data?.length || 0 };
+      toast.success(`Uploaded ${totalUploaded} records`);
+      return { success: true, count: totalUploaded };
     } catch (error: any) {
       console.error('Error uploading free data:', error);
       toast.error(error.message || 'Failed to upload free data');
