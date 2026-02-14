@@ -1,30 +1,20 @@
 
 
-# Restore Hero Headline (Without "Your AI Agent")
-
-## What Changed
-It looks like the headline text under the Vrelly logo got removed. We'll restore it with two lines instead of three, dropping "Your AI Agent."
+# Add "Getting Started" Callout Below How It Works
 
 ## Change
 
-**File: `src/components/landing/HeroSection.tsx`** (lines 82-96)
+**File: `src/components/landing/HowItWorksSection.tsx`**
 
-Replace the current `<h1>` block with:
+Add a callout paragraph below the 3-step Connect/Analyze/Act cards, inside the same section container. It will use the same scroll animation and fade-up styling to match the existing design.
 
-```tsx
-<h1 className="text-4xl md:text-6xl lg:text-7xl font-bold tracking-tight mb-6">
-  <span className="inline-block opacity-0 animate-fade-up" style={{ animationDelay: '0.3s' }}>
-    <span className="text-foreground">Your Sales Data.</span>
-  </span>
-  <br />
-  <span className="inline-block opacity-0 animate-fade-up" style={{ animationDelay: '0.5s' }}>
-    <span className="bg-gradient-to-r from-primary to-primary/60 bg-clip-text text-transparent">
-      Your Competitive Edge.
-    </span>
-  </span>
-</h1>
+After the closing `</div>` of the steps row (around line 60), add a centered text block:
+
+```
+New to outbound? No problem — simply sign up and use our copy and audience
+builder to get started in 5 minutes.
 ```
 
-This removes the "Your AI Agent." line and adjusts the animation delay on "Your Competitive Edge." to keep the stagger smooth (0.3s then 0.5s).
+Styled as a muted-foreground paragraph with a subtle highlight on "5 minutes", using the same `animate-fade-up` class with a delayed entry so it appears after the 3 steps animate in.
 
 No other files affected.
