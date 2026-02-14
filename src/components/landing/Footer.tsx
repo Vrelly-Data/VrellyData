@@ -9,8 +9,9 @@ export const Footer = () => {
         <div className="flex flex-col md:flex-row items-center justify-between gap-6">
           <div className="flex items-center gap-3">
             <img src={vrellyLogo} alt="Vrelly" className="h-[3.75rem]" />
+            <span className="text-sm text-muted-foreground">Vrelly.com</span>
           </div>
-          
+
           <div className="flex items-center gap-6 text-sm text-muted-foreground">
             <a href="#" className="hover:text-foreground transition-colors">
               Terms of Service
@@ -22,7 +23,7 @@ export const Footer = () => {
               Contact
             </a>
           </div>
-          
+
           <p className="text-sm text-muted-foreground">
             © {currentYear} Vrelly. All rights reserved.
           </p>

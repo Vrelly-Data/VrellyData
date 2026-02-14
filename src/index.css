@@ -90,3 +90,20 @@ All colors MUST be HSL.
     @apply bg-background text-foreground;
   }
 }
+
+@layer utilities {
+  .scroll-hidden {
+    opacity: 0;
+    transform: translateY(24px);
+    transition: opacity 0.6s ease-out, transform 0.6s ease-out;
+  }
+  .scroll-visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  .gradient-border {
+    background: linear-gradient(135deg, hsl(var(--primary) / 0.5), hsl(var(--primary) / 0.1), hsl(var(--primary) / 0.5));
+    background-size: 200% 200%;
+    animation: gradient-shift 3s ease infinite;
+  }
+}
