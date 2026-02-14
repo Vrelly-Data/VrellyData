@@ -85,10 +85,6 @@ export const HeroSection = () => {
           </span>
           <br />
           <span className="inline-block opacity-0 animate-fade-up" style={{ animationDelay: '0.5s' }}>
-            <span className="text-foreground">Your AI Agent.</span>
-          </span>
-          <br />
-          <span className="inline-block opacity-0 animate-fade-up" style={{ animationDelay: '0.7s' }}>
             <span className="bg-gradient-to-r from-primary to-primary/60 bg-clip-text text-transparent">
               Your Competitive Edge.
             </span>
