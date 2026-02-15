@@ -14,12 +14,6 @@ import {
 
 const tiers = [
   {
-    key: 'free' as const,
-    popular: false,
-    features: ['25 credits per month', 'Basic search filters', 'CSV export', 'Email support'],
-    cta: 'Get Started Free',
-  },
-  {
     key: 'starter' as const,
     popular: false,
     features: ['10,000 credits per month', 'Advanced filters', 'Priority support', 'API access'],
