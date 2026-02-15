@@ -1,20 +1,18 @@
 
 
-# Add "Getting Started" Callout Below How It Works
+# Remove "Free" Mentions from Pricing Section
 
 ## Change
 
-**File: `src/components/landing/HowItWorksSection.tsx`**
+**File: `src/components/landing/PricingSection.tsx`**
 
-Add a callout paragraph below the 3-step Connect/Analyze/Act cards, inside the same section container. It will use the same scroll animation and fade-up styling to match the existing design.
+Remove the first tier entry (the `free` tier) from the `tiers` array (lines 15-19), so only Starter, Professional, and Enterprise cards are shown.
 
-After the closing `</div>` of the steps row (around line 60), add a centered text block:
+**File: `src/components/landing/HeroSection.tsx`**
 
-```
-New to outbound? No problem — simply sign up and use our copy and audience
-builder to get started in 5 minutes.
-```
-
-Styled as a muted-foreground paragraph with a subtle highlight on "5 minutes", using the same `animate-fade-up` class with a delayed entry so it appears after the 3 steps animate in.
+- Change the CTA button text from "Start Free" to "Get Started" (around line 100)
+- Remove the "25 free credits" stat item from the bottom stats row (around line 114-117)
+- Remove the "No credit card required" item as well if desired, or keep it — your call
 
 No other files affected.
+
