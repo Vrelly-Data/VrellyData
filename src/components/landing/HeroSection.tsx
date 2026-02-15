@@ -102,7 +102,7 @@ export const HeroSection = () => {
             onClick={() => navigate('/auth')}
             className="text-base px-8 py-6 bg-primary hover:bg-primary/90 shadow-lg shadow-primary/25"
           >
-            Start Free
+            Get Started
             <ArrowRight className="ml-2 w-5 h-5" />
           </Button>
           <Button
@@ -117,14 +117,6 @@ export const HeroSection = () => {
 
         <div className="mt-16 flex flex-wrap items-center justify-center gap-8 text-sm text-muted-foreground opacity-0 animate-fade-up" style={{ animationDelay: '1.3s' }}>
           <AnimatedCounter target={200000} label="campaigns analyzed" />
-          <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-primary" />
-            <span>No credit card required</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-primary" />
-            <span>25 free credits</span>
-          </div>
         </div>
       </div>
     </section>
