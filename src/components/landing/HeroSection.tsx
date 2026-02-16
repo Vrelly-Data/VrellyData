@@ -99,7 +99,7 @@ export const HeroSection = () => {
         <div className="flex flex-col sm:flex-row items-center justify-center gap-4 opacity-0 animate-fade-up" style={{ animationDelay: '1.1s' }}>
           <Button
             size="lg"
-            onClick={() => navigate('/auth')}
+            onClick={() => navigate('/auth?tab=signup')}
             className="text-base px-8 py-6 bg-primary hover:bg-primary/90 shadow-lg shadow-primary/25"
           >
             Get Started

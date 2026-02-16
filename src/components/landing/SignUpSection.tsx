@@ -23,7 +23,7 @@ export const SignUpSection = () => {
 
         <Button
           size="lg"
-          onClick={() => navigate('/auth')}
+          onClick={() => navigate('/auth?tab=signup')}
           className={`text-lg px-10 py-7 bg-primary hover:bg-primary/90 shadow-xl shadow-primary/25 transition-all duration-700 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'}`}
           style={{ transitionDelay: '0.4s' }}
         >
