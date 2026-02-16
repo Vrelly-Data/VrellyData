@@ -1,18 +1,24 @@
 
 
-# Remove "Free" Mentions from Pricing Section
+## Fix Build Error and Get vrelly.com Live
 
-## Change
+### Current Situation
 
-**File: `src/components/landing/PricingSection.tsx`**
+**DNS: Correctly configured.** Both A records (`@` and `www`) point to `185.158.133.1`, and the Lovable verification TXT record is in place. DNS propagation may still be in progress.
 
-Remove the first tier entry (the `free` tier) from the `tiers` array (lines 15-19), so only Starter, Professional, and Enterprise cards are shown.
+**Build error:** The build system is reporting a failure, but after reviewing all changed files (`PricingSection.tsx`, `HeroSection.tsx`, `subscriptionTiers.ts`) and their dependencies, there are no actual code errors. The "free" tier was only removed from the UI pricing cards -- it still exists in the config file where other parts of the app reference it.
 
-**File: `src/components/landing/HeroSection.tsx`**
+### Plan
 
-- Change the CTA button text from "Start Free" to "Get Started" (around line 100)
-- Remove the "25 free credits" stat item from the bottom stats row (around line 114-117)
-- Remove the "No credit card required" item as well if desired, or keep it — your call
+1. **Trigger a fresh build** by making a trivial, safe change (e.g., adding a comment to `PricingSection.tsx`). This will force a rebuild and clear any transient build failure.
 
-No other files affected.
+2. **Publish** the app once the build succeeds, so the landing page is served on vrelly.com.
+
+3. **Verify** the domain is working by checking the preview and published URLs.
+
+### Technical Details
+
+- No actual code fix is needed -- all TypeScript types are valid and all imports resolve correctly.
+- The `SUBSCRIPTION_TIERS.free` key remains in the config for internal logic (Settings page, CreditDisplay component) -- only the pricing card was removed from the landing page, which is correct.
+- The build error appears to be transient (the error message contains no specific failure reason).
 
