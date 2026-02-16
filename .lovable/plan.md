@@ -1,24 +1,41 @@
 
 
-## Fix Build Error and Get vrelly.com Live
+## Properly Set Up Email Authentication
 
-### Current Situation
+### What's Missing
 
-**DNS: Correctly configured.** Both A records (`@` and `www`) point to `185.158.133.1`, and the Lovable verification TXT record is in place. DNS propagation may still be in progress.
+After reviewing the current auth setup, there are three gaps:
 
-**Build error:** The build system is reporting a failure, but after reviewing all changed files (`PricingSection.tsx`, `HeroSection.tsx`, `subscriptionTiers.ts`) and their dependencies, there are no actual code errors. The "free" tier was only removed from the UI pricing cards -- it still exists in the config file where other parts of the app reference it.
+1. **Misleading signup message** -- The success toast says "Account created! You can now sign in." but email verification is required, so users need to check their email first.
+
+2. **No password reset flow** -- There is no "Forgot Password?" link, no reset request handler, and no `/reset-password` page. Users who forget their password have no way to recover their account.
+
+3. **No unverified email handling** -- When a user tries to sign in before verifying their email, the error message from the backend is generic. We should catch this and show a helpful message.
 
 ### Plan
 
-1. **Trigger a fresh build** by making a trivial, safe change (e.g., adding a comment to `PricingSection.tsx`). This will force a rebuild and clear any transient build failure.
+**1. Fix the signup success message**
+- Change the toast to: "Check your email! We sent you a verification link. Please confirm your email before signing in."
 
-2. **Publish** the app once the build succeeds, so the landing page is served on vrelly.com.
+**2. Add "Forgot Password?" to the sign-in form**
+- Add a link below the password field that triggers `supabase.auth.resetPasswordForEmail()` with `redirectTo` set to `window.location.origin + '/reset-password'`.
+- Show a toast confirming the reset email was sent.
 
-3. **Verify** the domain is working by checking the preview and published URLs.
+**3. Create a `/reset-password` page**
+- New page at `src/pages/ResetPassword.tsx`
+- Detects the `type=recovery` token in the URL hash (set automatically by the verification link)
+- Shows a form to enter and confirm a new password
+- Calls `supabase.auth.updateUser({ password })` to save the new password
+- Redirects to `/dashboard` on success
+
+**4. Add the `/reset-password` route**
+- Register it in `App.tsx` as a public route (not behind `ProtectedRoute`)
 
 ### Technical Details
 
-- No actual code fix is needed -- all TypeScript types are valid and all imports resolve correctly.
-- The `SUBSCRIPTION_TIERS.free` key remains in the config for internal logic (Settings page, CreditDisplay component) -- only the pricing card was removed from the landing page, which is correct.
-- The build error appears to be transient (the error message contains no specific failure reason).
+- `emailRedirectTo` on signup will stay as `window.location.origin + '/dashboard'` -- this is where verified users land after clicking the confirmation link.
+- The reset password redirect URL will be `window.location.origin + '/reset-password'`.
+- The `/reset-password` page will check for `access_token` and `type=recovery` in the URL hash to confirm it's a valid reset flow.
+- Password confirmation field will validate that both entries match before submission.
+- No database changes are needed -- this is purely frontend.
 
