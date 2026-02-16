@@ -104,7 +104,7 @@ export const PricingSection = () => {
                       </ul>
                       
                       <Button 
-                        onClick={() => navigate('/auth')}
+                        onClick={() => navigate('/auth?tab=signup')}
                         className={`w-full ${
                           tier.popular 
                             ? 'bg-primary hover:bg-primary/90' 

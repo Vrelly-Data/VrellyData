@@ -41,7 +41,7 @@ export const Navbar = () => {
               Log In
             </Button>
             <Button
-              onClick={() => navigate('/auth')}
+              onClick={() => navigate('/auth?tab=signup')}
               className="text-sm bg-primary hover:bg-primary/90"
             >
               Get Started
