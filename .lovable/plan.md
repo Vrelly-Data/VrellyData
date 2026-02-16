@@ -1,41 +1,21 @@
 
+## Default to Sign Up Tab from "Get Started" Buttons
 
-## Properly Set Up Email Authentication
+### What Changes
 
-### What's Missing
+1. **Auth page (`src/pages/Auth.tsx`)** -- Read a `?tab=signup` query parameter from the URL and use it as the default active tab instead of always defaulting to "signin".
 
-After reviewing the current auth setup, there are three gaps:
+2. **All "Get Started" buttons** -- Update navigation calls across landing page components to pass `?tab=signup`:
+   - `src/components/landing/HeroSection.tsx` -- "Get Started" button
+   - `src/components/landing/Navbar.tsx` -- "Get Started" button
+   - `src/components/landing/SignUpSection.tsx` -- "Sign Up Now" button
+   - `src/components/landing/AIAgentsSection.tsx` -- "Get Started Free" button
+   - `src/components/landing/PricingSection.tsx` -- "Subscribe" buttons
 
-1. **Misleading signup message** -- The success toast says "Account created! You can now sign in." but email verification is required, so users need to check their email first.
-
-2. **No password reset flow** -- There is no "Forgot Password?" link, no reset request handler, and no `/reset-password` page. Users who forget their password have no way to recover their account.
-
-3. **No unverified email handling** -- When a user tries to sign in before verifying their email, the error message from the backend is generic. We should catch this and show a helpful message.
-
-### Plan
-
-**1. Fix the signup success message**
-- Change the toast to: "Check your email! We sent you a verification link. Please confirm your email before signing in."
-
-**2. Add "Forgot Password?" to the sign-in form**
-- Add a link below the password field that triggers `supabase.auth.resetPasswordForEmail()` with `redirectTo` set to `window.location.origin + '/reset-password'`.
-- Show a toast confirming the reset email was sent.
-
-**3. Create a `/reset-password` page**
-- New page at `src/pages/ResetPassword.tsx`
-- Detects the `type=recovery` token in the URL hash (set automatically by the verification link)
-- Shows a form to enter and confirm a new password
-- Calls `supabase.auth.updateUser({ password })` to save the new password
-- Redirects to `/dashboard` on success
-
-**4. Add the `/reset-password` route**
-- Register it in `App.tsx` as a public route (not behind `ProtectedRoute`)
+3. **"Log In" button stays the same** -- The Navbar "Log In" button will continue navigating to `/auth` without the query param, landing on the sign-in tab as before.
 
 ### Technical Details
 
-- `emailRedirectTo` on signup will stay as `window.location.origin + '/dashboard'` -- this is where verified users land after clicking the confirmation link.
-- The reset password redirect URL will be `window.location.origin + '/reset-password'`.
-- The `/reset-password` page will check for `access_token` and `type=recovery` in the URL hash to confirm it's a valid reset flow.
-- Password confirmation field will validate that both entries match before submission.
-- No database changes are needed -- this is purely frontend.
-
+- In `Auth.tsx`, use `useSearchParams()` from `react-router-dom` to read the `tab` param and pass it as the `defaultValue` to the `Tabs` component.
+- Update `navigate('/auth')` to `navigate('/auth?tab=signup')` in the relevant landing page buttons.
+- No database or backend changes needed.
