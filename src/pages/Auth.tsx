@@ -19,6 +19,7 @@ export default function Auth() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
+  const [forgotPasswordLoading, setForgotPasswordLoading] = useState(false);
 
   useEffect(() => {
     if (user) {
@@ -49,8 +50,8 @@ export default function Auth() {
       });
     } else {
       toast({
-        title: 'Success',
-        description: 'Account created! You can now sign in.',
+        title: 'Check your email!',
+        description: 'We sent you a verification link. Please confirm your email before signing in.',
       });
       setEmail('');
       setPassword('');
@@ -70,10 +71,46 @@ export default function Auth() {
     setLoading(false);
 
     if (error) {
+      let description = error.message;
+      if (error.message === 'Email not confirmed') {
+        description = 'Please check your email and click the verification link before signing in.';
+      }
+      toast({
+        title: 'Error',
+        description,
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    if (!email) {
+      toast({
+        title: 'Enter your email',
+        description: 'Please enter your email address first, then click Forgot Password.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setForgotPasswordLoading(true);
+
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${window.location.origin}/reset-password`,
+    });
+
+    setForgotPasswordLoading(false);
+
+    if (error) {
       toast({
         title: 'Error',
         description: error.message,
         variant: 'destructive',
+      });
+    } else {
+      toast({
+        title: 'Reset email sent',
+        description: 'Check your inbox for a password reset link.',
       });
     }
   };
@@ -133,6 +170,22 @@ export default function Auth() {
                     </>
                   ) : (
                     'Sign In'
+                  )}
+                </Button>
+                <Button
+                  type="button"
+                  variant="link"
+                  className="w-full text-sm"
+                  onClick={handleForgotPassword}
+                  disabled={forgotPasswordLoading}
+                >
+                  {forgotPasswordLoading ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Sending...
+                    </>
+                  ) : (
+                    'Forgot Password?'
                   )}
                 </Button>
               </form>
