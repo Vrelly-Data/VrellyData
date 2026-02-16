@@ -18,6 +18,7 @@ import People from "./pages/People";
 import Companies from "./pages/Companies";
 import Admin from "./pages/Admin";
 import DataPlayground from "./pages/DataPlayground";
+import ResetPassword from "./pages/ResetPassword";
 
 const queryClient = new QueryClient();
 
@@ -33,6 +34,7 @@ const App = () => (
               <Routes>
                 <Route path="/" element={<Landing />} />
                 <Route path="/auth" element={<Auth />} />
+                <Route path="/reset-password" element={<ResetPassword />} />
                 <Route path="/dashboard" element={<ProtectedRoute><Index /></ProtectedRoute>} />
                 <Route path="/people" element={<ProtectedRoute><People /></ProtectedRoute>} />
                 <Route path="/companies" element={<ProtectedRoute><Companies /></ProtectedRoute>} />
