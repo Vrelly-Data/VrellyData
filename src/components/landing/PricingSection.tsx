@@ -33,6 +33,7 @@ const tiers = [
   },
 ];
 
+/** Pricing section – shows Starter, Professional, Enterprise tiers */
 export const PricingSection = () => {
   const navigate = useNavigate();
 
