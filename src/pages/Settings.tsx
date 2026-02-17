@@ -347,8 +347,8 @@ export default function Settings() {
                     </span>
                   </div>
                   {(() => {
-                    const tier = (profile?.subscription_tier || 'free') as SubscriptionTier;
-                    const tierConfig = SUBSCRIPTION_TIERS[tier] || SUBSCRIPTION_TIERS.free;
+                    const tier = (profile?.subscription_tier || 'starter') as SubscriptionTier;
+                    const tierConfig = SUBSCRIPTION_TIERS[tier] || SUBSCRIPTION_TIERS.starter;
                     const percentRemaining = tierConfig.credits > 0 
                       ? ((profile?.credits ?? 0) / tierConfig.credits) * 100 
                       : 0;
