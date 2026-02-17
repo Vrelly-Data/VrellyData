@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Check, Loader2, LogOut } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
@@ -25,7 +26,15 @@ const plans = [
 export default function ChoosePlan() {
   const { createCheckoutSession } = useSubscription();
   const { signOut, profile } = useAuthStore();
+  const navigate = useNavigate();
   const [loadingPlan, setLoadingPlan] = useState<string | null>(null);
+
+  // If subscription is already active, redirect to dashboard
+  useEffect(() => {
+    if (profile?.subscription_status === 'active') {
+      navigate('/dashboard');
+    }
+  }, [profile, navigate]);
 
   const handleSubscribe = async (tierKey: 'starter' | 'professional' | 'enterprise') => {
     setLoadingPlan(tierKey);

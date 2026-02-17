@@ -50,15 +50,9 @@ export default function Auth() {
         description: error.message,
         variant: 'destructive',
       });
-    } else {
-      toast({
-        title: 'Check your email!',
-        description: 'We sent you a verification link. Please confirm your email before signing in.',
-      });
-      setEmail('');
-      setPassword('');
-      setName('');
     }
+    // Auto-confirm is enabled, so the user is immediately signed in.
+    // The useEffect watching `user` will redirect them automatically.
   };
 
   const handleSignIn = async (e: React.FormEvent) => {
