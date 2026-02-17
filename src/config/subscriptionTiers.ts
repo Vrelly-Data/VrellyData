@@ -1,11 +1,5 @@
 export const SUBSCRIPTION_TIERS = {
-  free: { 
-    credits: 25, 
-    price: 0, 
-    label: 'Free',
-    description: 'Get started with basic access'
-  },
-  starter: { 
+  starter: {
     credits: 10000, 
     price: 75, 
     label: 'Starter',

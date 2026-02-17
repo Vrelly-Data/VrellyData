@@ -8,8 +8,8 @@ export function CreditDisplay() {
   const { profile, profileLoading } = useAuthStore();
   
   const credits = profile?.credits ?? 0;
-  const tier = (profile?.subscription_tier || 'free') as keyof typeof SUBSCRIPTION_TIERS;
-  const tierConfig = SUBSCRIPTION_TIERS[tier] || SUBSCRIPTION_TIERS.free;
+  const tier = (profile?.subscription_tier || 'starter') as keyof typeof SUBSCRIPTION_TIERS;
+  const tierConfig = SUBSCRIPTION_TIERS[tier] || SUBSCRIPTION_TIERS.starter;
   const maxCredits = tierConfig.credits;
   const percentRemaining = maxCredits > 0 ? (credits / maxCredits) * 100 : 0;
 
