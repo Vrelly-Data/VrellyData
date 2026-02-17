@@ -6,7 +6,7 @@ import { Loader2 } from 'lucide-react';
 const SUBSCRIPTION_EXEMPT_PATHS = ['/choose-plan', '/settings', '/billing'];
 
 export function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { user, loading, profile, profileLoading } = useAuthStore();
+  const { user, loading, profile, profileLoading, isAdmin } = useAuthStore();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -18,6 +18,8 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
     // Wait for profile to load before checking subscription
     if (!loading && user && !profileLoading && profile) {
+      // Admins bypass subscription check entirely
+      if (isAdmin()) return;
       const isExempt = SUBSCRIPTION_EXEMPT_PATHS.some(p => location.pathname.startsWith(p));
       if (!isExempt && profile.subscription_status !== 'active') {
         navigate('/choose-plan');
