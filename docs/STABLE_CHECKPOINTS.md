@@ -138,6 +138,7 @@ This ensures the UI uses human-readable labels while the database uses short cod
 
 | Version | Date | Changes |
 |---------|------|---------|
+| v3.7 | 2026-02-18 | Stripe checkout flow fixed: white screen, infinite spinner, and transient logout resolved |
 | v3.6 | 2026-02-11 | DNC exclusion filters (37 params), 100,000+ display cap, case-insensitive industry dedup in FilterBuilder |
 | v3.5 | 2026-02-10 | Email stats aggregation fix, webhook messaging removal from popovers |
 | v3.4 | 2026-02-08 | Data Playground: auto-link on first sync, links_initialized column, Link All recovery button |
@@ -290,3 +291,50 @@ UI pattern: collapsible section beneath each tag-input field with a chevron togg
 
 - **"Revert to v3.6 stable state"** - Restores search function and frontend
 - All v3.4 and v3.5 recovery commands still apply
+
+---
+
+## 💳 Stripe Checkout Stable State (v3.7)
+
+**Date:** February 18, 2026  
+**Status:** End-to-end checkout working; occasional post-checkout logout is a known lower-priority issue
+
+### Architecture
+
+The checkout flow uses a dedicated, unprotected `/checkout-success` route to avoid race conditions with auth loading and subscription guards:
+
+```
+Stripe payment complete
+  → redirect to /checkout-success (unprotected)
+  → invoke check-subscription edge function
+  → fetchProfile() refreshes auth store
+  → toast: "Payment confirmed! Welcome to Vrelly..."
+  → navigate('/dashboard', { replace: true })
+```
+
+### Three Root Causes Fixed
+
+| # | Bug | Root Cause | Fix |
+|---|-----|------------|-----|
+| 1 | White screen | `if (!user) return null` in `ProtectedRoute` | Removed guard; spinner covers transient null |
+| 2 | Infinite spinner | Checkout logic in `ProtectedRoute` conflicted with `profileLoading` cycles | Moved to dedicated `/checkout-success` page |
+| 3 | Immediate logout | `onAuthStateChange('SIGNED_OUT')` cleared user during Supabase's cross-origin session recovery | Ignore `SIGNED_OUT` in listener; handle `INITIAL_SESSION` |
+
+### Key Files
+
+| File | Role |
+|------|------|
+| `src/pages/CheckoutSuccess.tsx` | Unprotected post-payment verification page |
+| `src/components/ProtectedRoute.tsx` | Simplified to pure auth + subscription guard |
+| `src/components/AuthProvider.tsx` | Guards `SIGNED_OUT`; handles `INITIAL_SESSION`; `setTimeout` around `fetchProfile` |
+| `src/App.tsx` | `/checkout-success` registered as unprotected route |
+| `supabase/functions/create-checkout/index.ts` | `success_url` points to `/checkout-success` |
+
+### Known Remaining Issue
+
+User may occasionally be logged out after the checkout success flow. Suspected cause: a second wave of `SIGNED_OUT` events after `INITIAL_SESSION` recovery. Low priority — subscription is correctly activated. See `docs/V3.7_RELEASE_NOTES.md` for full details.
+
+### Recovery Commands
+
+- **"Revert to v3.7 stable state"** - Restore the 5 files listed above to the state documented here
+- All v3.4, v3.5, and v3.6 recovery commands still apply
