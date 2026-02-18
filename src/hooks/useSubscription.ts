@@ -78,16 +78,10 @@ export const useSubscription = () => {
       }
 
       if (data?.url) {
-        // In the Lovable editor the app runs inside an iframe which blocks
-        // cross-origin top-level navigation. Open Stripe in a new tab there.
-        // In a real browser (published site) navigate in the same tab so the
-        // auth session stays hydrated and avoids a re-hydration race.
-        const inIframe = window.self !== window.top;
-        if (inIframe) {
-          window.open(data.url, '_blank');
-        } else {
-          window.location.href = data.url;
-        }
+        // _top navigates the top-level browsing context — escapes the Lovable
+        // preview iframe without opening a new tab, keeping the auth session
+        // intact in localStorage on both preview and the published site.
+        window.open(data.url, '_top');
       }
     } catch (error) {
       console.error('Error in createCheckoutSession:', error);
