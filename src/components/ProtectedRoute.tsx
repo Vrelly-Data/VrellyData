@@ -74,7 +74,6 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
           setPaymentSuccess(true);
           setTimeout(() => {
             setPaymentSuccess(false);
-            navigate('/dashboard', { replace: true });
           }, 2000);
         } else {
           toast({
