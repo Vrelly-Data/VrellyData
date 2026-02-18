@@ -108,6 +108,7 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
     if (!loading && user && !profileLoading && profile) {
       if (isAdmin()) return;
       if (paymentVerifiedRef.current) return;
+      if (isCheckoutSuccess) return; // Never redirect to /choose-plan during checkout flow
       const isExempt = SUBSCRIPTION_EXEMPT_PATHS.some(p => location.pathname.startsWith(p));
       if (!isExempt && profile.subscription_status !== 'active') {
         navigate('/choose-plan');
