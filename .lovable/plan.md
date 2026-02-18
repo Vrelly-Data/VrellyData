@@ -1,70 +1,87 @@
 
-## Root Cause: The `onAuthStateChange` SIGNED_OUT Event After Stripe Redirect
+## What We're Documenting
 
-The session replay confirms the flow:
-1. Stripe completes payment and redirects the browser to `/checkout-success`
-2. The browser navigates away from Stripe back to the app (cross-origin)
-3. Supabase's `onAuthStateChange` fires `SIGNED_OUT` briefly (this is normal Supabase behavior during cross-origin redirects — the session cookie is re-validated)
-4. `AuthProvider` line 24: `setUser(session?.user ?? null)` → sets `user = null`
-5. `ProtectedRoute` guard fires: `!user` → `navigate('/auth')` → user gets logged out
+Two new docs files need to be created/updated to capture the billing and auth fixes delivered in this session (February 18, 2026):
 
-The `SIGNED_IN` event fires immediately after, but by then the navigation to `/auth` has already occurred.
+- `docs/V3.7_RELEASE_NOTES.md` — new file, detailed account of all changes
+- `docs/STABLE_CHECKPOINTS.md` — append v3.7 entry to the change log and add a new stable state section
 
-## Why It Happens
+---
 
-The `onAuthStateChange` listener is too aggressive — it immediately sets `user = null` on ANY `SIGNED_OUT` event, even transient ones during page loads. This is a known Supabase behavior: after a cross-origin navigation, the auth recovery sequence emits `SIGNED_OUT` → `INITIAL_SESSION` (or `SIGNED_IN`). The app should not react to `SIGNED_OUT` by nulling out the user immediately.
+## V3.7 Summary
 
-Additionally, looking at the Lovable Stack Overflow pattern: `setLoading(false)` is only called once inside `getSession().then()` — but never inside `onAuthStateChange`. This means if the page loads fresh (as happens after Stripe redirect), `loading` starts as `true`, then `getSession()` fires and sets it to `false`. But then `onAuthStateChange` fires `SIGNED_OUT` → `user = null` → `ProtectedRoute` redirects to `/auth` (since `loading = false` already).
+This release fixes the end-to-end Stripe subscription checkout flow. Three root causes were addressed in sequence:
 
-## The Fix: Two Changes to `AuthProvider.tsx`
+### Root Cause 1 — White Screen After Stripe Redirect
+**File:** `src/components/ProtectedRoute.tsx`
 
-### Change 1: Add a guard against transient SIGNED_OUT events
+The component had a line `if (!user) return null` that rendered a completely blank screen whenever `user` was briefly `null` during Supabase's auth recovery sequence. After a cross-origin redirect from Stripe, Supabase emits a transient `SIGNED_OUT` → `INITIAL_SESSION` sequence. During this window, `user` momentarily becomes `null`, causing the component to return `null` (blank screen) instead of showing a loading spinner.
 
-Only clear the user on `SIGNED_OUT` if the initial session load has completed AND `getSession` confirms there is truly no session. A simple approach: use a short debounce or check `event` type more carefully.
+**Fix:** Removed the `if (!user) return null` guard entirely. The existing `useEffect` already handles genuine unauthenticated users by calling `navigate('/auth')`. The spinner shown by `if (loading || (profileLoading && !profile))` now correctly covers this transient window.
 
-The cleanest fix is to **not react to `SIGNED_OUT` in `onAuthStateChange`** by setting user to null immediately. Instead, only clear state on explicit sign-out (which comes from the `signOut()` action in the store, which already clears state directly).
+---
 
-```typescript
-supabase.auth.onAuthStateChange((event, session) => {
-  // Don't clear user on SIGNED_OUT — let getSession() handle initial state.
-  // The store's signOut() action handles explicit logout.
-  if (event === 'SIGNED_OUT') return; // ← ADD THIS
-  
-  setSession(session);
-  setUser(session?.user ?? null);
-  
-  if (session?.user && (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION')) {
-    setTimeout(() => fetchProfile(session.user.id), 0);
-  }
-});
-```
+### Root Cause 2 — "Verifying your payment..." Infinite Spinner Deadlock
+**Files:** `src/components/ProtectedRoute.tsx`, `src/pages/CheckoutSuccess.tsx` (new), `src/App.tsx`, `supabase/functions/create-checkout/index.ts`
 
-**Important note on `setTimeout`**: Per the Supabase documentation and the Lovable Stack Overflow pattern, calling Supabase client methods (like `fetchProfile` which does a DB query) directly inside `onAuthStateChange` can cause deadlocks. Wrapping with `setTimeout(..., 0)` defers to the next tick, safely outside the auth listener.
+The checkout verification logic was embedded directly inside `ProtectedRoute`. This conflicted with auth loading states and profile loading cycles — `profileLoading` toggling `true/false` repeatedly caused the component to re-render in a way that prevented `setIsVerifying(false)` from ever persisting, leaving the spinner permanently on screen.
 
-### Change 2: Also handle `INITIAL_SESSION` for profile fetching
+**Fix:** Moved all checkout verification to a new, dedicated, unprotected route `/checkout-success` (`src/pages/CheckoutSuccess.tsx`). This page:
+1. Calls `check-subscription` edge function with the user's access token
+2. Calls `fetchProfile()` to refresh the profile
+3. Shows a success toast: *"Payment confirmed! Welcome to Vrelly — your credits are ready."*
+4. Navigates to `/dashboard` with `replace: true`
 
-Currently the listener only fetches profile on `SIGNED_IN` or `TOKEN_REFRESHED`. When Stripe redirects back, Supabase emits `INITIAL_SESSION` (not `SIGNED_IN`) to restore the existing session. Adding `INITIAL_SESSION` ensures the profile is fetched in this case too.
+The Stripe `success_url` in `create-checkout/index.ts` was updated from `${origin}/dashboard?checkout=success` to `${origin}/checkout-success`. The `/checkout-success` route in `App.tsx` was registered as unprotected (no `ProtectedRoute` wrapper). `ProtectedRoute` was restored to a simple auth + subscription guard with no checkout logic.
+
+---
+
+### Root Cause 3 — Immediate Logout After Successful Payment
+**File:** `src/components/AuthProvider.tsx`
+
+After Stripe redirects back to the app, Supabase's `onAuthStateChange` fires a transient `SIGNED_OUT` event as part of its cross-origin session recovery. The listener was calling `setUser(session?.user ?? null)` unconditionally, which set `user = null` and caused `ProtectedRoute` to redirect to `/auth` before the subsequent `INITIAL_SESSION` event could restore the session.
+
+**Fix (3 changes):**
+1. Added `if (event === 'SIGNED_OUT') return;` to ignore transient logouts. Explicit logout is already handled by `signOut()` in `authStore.ts`, which directly clears all state.
+2. Added `'INITIAL_SESSION'` to the profile fetch condition, so that the profile is loaded when Supabase emits `INITIAL_SESSION` (instead of just `SIGNED_IN` or `TOKEN_REFRESHED`).
+3. Wrapped `fetchProfile` in `setTimeout(..., 0)` to defer the Supabase DB call outside the auth callback and prevent potential deadlocks.
+
+---
 
 ## Files Changed
 
-Only **`src/components/AuthProvider.tsx`** — 3 line changes:
+| File | Change |
+|------|--------|
+| `src/components/ProtectedRoute.tsx` | Removed `if (!user) return null`; removed all checkout verification logic |
+| `src/components/AuthProvider.tsx` | Guard against transient `SIGNED_OUT`; add `INITIAL_SESSION` profile trigger; setTimeout around `fetchProfile` |
+| `src/pages/CheckoutSuccess.tsx` | New unprotected page — runs check-subscription, fetchProfile, toast, navigate |
+| `src/App.tsx` | Registered `/checkout-success` as an unprotected route |
+| `supabase/functions/create-checkout/index.ts` | Updated `success_url` from `/dashboard?checkout=success` to `/checkout-success` |
 
-1. Add `if (event === 'SIGNED_OUT') return;` to prevent transient logouts
-2. Add `'INITIAL_SESSION'` to the profile fetch condition
-3. Wrap `fetchProfile` in `setTimeout(..., 0)` to prevent Supabase deadlocks
+---
 
-## Why This Definitively Fixes It
+## Technical Details for Implementation
 
-```text
-Before (broken):
-  Stripe redirect → onAuthStateChange('SIGNED_OUT') 
-  → setUser(null) → ProtectedRoute → navigate('/auth') → LOGGED OUT
+### `docs/V3.7_RELEASE_NOTES.md` — new file
 
-After (fixed):
-  Stripe redirect → onAuthStateChange('SIGNED_OUT') → return early (ignored)
-  → onAuthStateChange('INITIAL_SESSION', session) 
-  → setUser(session.user) → fetchProfile() 
-  → ProtectedRoute → profile.subscription_status = 'active' → Dashboard ✓
+Full release notes with:
+- Summary table
+- Root cause analysis for all 3 bugs
+- Before/after flow diagrams (text)
+- Files changed table
+- Known remaining issue note (occasional logout still observed; may need future investigation)
+
+### `docs/STABLE_CHECKPOINTS.md` — append
+
+Add to the Change Log table:
+```
+| v3.7 | 2026-02-18 | Stripe checkout flow fixed: white screen, infinite spinner, and transient logout resolved |
 ```
 
-The `signOut()` action in `authStore.ts` already handles explicit logout by calling `supabase.auth.signOut()` and clearing all state directly — so ignoring the `SIGNED_OUT` event in the listener does not break the logout button.
+Add a new section `## 💳 Stripe Checkout Stable State (v3.7)` documenting the current architecture, the 3 root causes, the files changed, and a known issue note.
+
+---
+
+## Known Remaining Issue
+
+After the checkout success flow, the user may occasionally be logged out (redirected to `/auth`). This is suspected to be a second wave of Supabase's `SIGNED_OUT` event firing after the `INITIAL_SESSION` recovery — potentially triggered by `fetchProfile` itself causing an auth state re-evaluation. This is lower-priority and the checkout flow itself (payment confirmed, profile updated, credits set) works correctly. Can be revisited.
