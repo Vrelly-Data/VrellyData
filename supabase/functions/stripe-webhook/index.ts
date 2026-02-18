@@ -109,6 +109,7 @@ Deno.serve(async (req) => {
           // Reset credits for new subscription
           if (event.type === 'customer.subscription.created') {
             updates.credits_used_this_month = 0;
+            updates.credits = credits;
           }
 
           const { error } = await supabase
@@ -143,7 +144,9 @@ Deno.serve(async (req) => {
             logStep('Resetting credits for new billing period');
           }
         } else {
+          // New subscription created — grant credits
           updates.credits_used_this_month = 0;
+          updates.credits = credits;
         }
 
         const { error } = await supabase
