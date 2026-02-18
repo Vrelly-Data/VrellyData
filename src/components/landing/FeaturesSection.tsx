@@ -1,4 +1,4 @@
-import { Database, Filter, BarChart3, Sparkles, RefreshCw, Bot } from 'lucide-react';
+import { Database, Filter, BarChart3, Sparkles, RefreshCw, TrendingUp } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { useScrollAnimation } from '@/hooks/useScrollAnimation';
 
@@ -29,9 +29,9 @@ const features = [
     description: 'AI builds prospect audiences based on your wins, our repo intelligence, and predictive targeting.',
   },
   {
-    icon: Bot,
-    title: 'AI Sales Agent',
-    description: '1-click setup for an AI agent trained on your live data, current sales trends, and our proprietary repository.',
+    icon: TrendingUp,
+    title: 'Benchmark Your Sales Trends',
+    description: 'Get insight into top performing campaigns across anonymous users of the platform.',
   },
 ];
 
