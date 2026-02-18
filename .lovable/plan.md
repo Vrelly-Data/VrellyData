@@ -1,69 +1,59 @@
 
-## Fix: Silent Error Handling in Subscription Check
+## What Went Wrong During Signup
 
-### What's Happening
+The new user "Incrementums" was created successfully (their profile shows `credits: 25,000`, `subscription_status: active` — so the previous fixes worked). But the initial signup flow still broke at the checkout step before Stripe was even reached.
 
-The "Failed to check subscription status" error toast is triggered by `useSubscription.ts` whenever the `check-subscription` backend function returns any error — including harmless auth errors like a stale cached token. This is not a real failure for the user, but it looks alarming.
+### Root Cause: Wrong Key in create-checkout
 
-The actual subscription data DID get set correctly (25,000 credits). The error was cosmetic noise from a stale session during testing.
+In `supabase/functions/create-checkout/index.ts`, line 22:
 
-### The Root Issue
-
-In `src/hooks/useSubscription.ts`, line 36-43:
 ```typescript
-if (error) {
-  console.error('Error checking subscription:', error);
-  toast({
-    title: 'Error',
-    description: 'Failed to check subscription status',
-    variant: 'destructive',
-  });
-}
+// CURRENT (broken):
+const supabaseClient = createClient(
+  Deno.env.get("SUPABASE_URL") ?? "",
+  Deno.env.get("SUPABASE_ANON_KEY") ?? ""  // ← WRONG KEY
+);
 ```
 
-This fires on any error — including:
-- Stale/invalid JWT (user was deleted and re-signed up)
-- Brief network errors
-- The function cold-starting
+The `SUPABASE_ANON_KEY` is the public key used by browsers. When an edge function uses it to call `supabaseClient.auth.getUser(token)`, it validates the JWT through the public auth API — which can fail or behave unexpectedly for brand-new sessions immediately after signup. The session logs confirm: `[CREATE-CHECKOUT] ERROR - {"message":"User not authenticated or email not available"}` at the exact moment the new Incrementums user tried to subscribe.
 
-None of these warrant a red error toast visible to the user.
+Compare this with `check-subscription` which correctly uses `SUPABASE_SERVICE_ROLE_KEY` — that's why check-subscription works fine while create-checkout fails.
 
-### The Fix
+### Why the Rest of the Flow Eventually Worked
 
-**Change 1 — Remove the error toast from the background subscription poll.**
+Despite the checkout failure, the Incrementums test account shows `subscription_status: active` and `credits: 25,000` — because from the session replay, it appears a previous test payment from the same email address already existed in Stripe, and `check-subscription` picked it up on the next background poll.
 
-The periodic check (`useEffect` interval) should silently fail. Only show an error if the user explicitly triggered an action (like clicking "Subscribe") and it failed.
+### What Needs to Change
 
-The subscription check is a passive background poll. If it fails once, it will retry in 60 seconds. Showing a toast every time it fails is noisy and misleading — especially since the subscription status is also synced via the profile (which comes from `check-subscription` writing to the database directly).
+**File: `supabase/functions/create-checkout/index.ts`**
 
-**Change 2 — Also suppress the toast for authentication errors from `check-subscription`.**
+One-line fix — change `SUPABASE_ANON_KEY` to `SUPABASE_SERVICE_ROLE_KEY`:
 
-When `check-subscription` returns a 500 with "Authentication error: User from sub claim in JWT does not exist", that means the JWT is stale. The correct response is to silently skip that check and wait for the auth state to refresh — not to show an error.
+```typescript
+// FIXED:
+const supabaseClient = createClient(
+  Deno.env.get("SUPABASE_URL") ?? "",
+  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
+  { auth: { persistSession: false } }
+);
+```
 
-### Technical Changes
+This makes the function consistent with `check-subscription` and ensures JWT validation works reliably for all users including brand-new signups.
 
-**File: `src/hooks/useSubscription.ts`**
+### What This Fixes
 
-- Remove the `toast` import and error toast from `checkSubscription`
-- Keep the `console.error` for debugging
-- Only show user-visible errors from `createCheckoutSession` and `openCustomerPortal` (which are user-initiated actions)
+| Symptom | Cause | After Fix |
+|---|---|---|
+| "User not authenticated or email not available" | Anon key can't reliably validate fresh JWTs | Service role key validates all JWTs reliably |
+| Checkout silently fails after signup | Same as above | Checkout opens Stripe correctly |
+| User redirected nowhere after clicking Subscribe | Checkout URL never returned | Stripe checkout page opens |
 
-This is a small change — removing about 6 lines from the `checkSubscription` function.
+### What This Does NOT Change
 
-### Email Verification
-
-Regarding your original question: email verification is **moderately important** for a paid B2B product like Vrelly, for these reasons:
-
-- It prevents fake/typo email signups from consuming subscription slots
-- It gives you a verified contact for billing issues
-- It's standard practice for paid SaaS products
-
-However, enabling it right now would mean existing users can still sign in, but new signups would need to click a verification link before accessing the app. Given you're in early testing, this is fine to add soon but isn't causing any current issues. The current "failed to check subscription status" error is unrelated to email verification.
+- The Stripe webhook fix (already done — uses `constructEventAsync`)
+- The credits fix (already done — `credits` field is set correctly)
+- The silent error handling (already done — no false-alarm toasts)
 
 ### Summary
 
-| Change | File | Impact |
-|---|---|---|
-| Remove error toast from background subscription poll | `src/hooks/useSubscription.ts` | No more false-alarm error popups |
-
-The subscription system is working correctly. The credits fix from earlier is confirmed working (25,000 credits granted). This is purely a UX polish fix to stop the background check from alarming users with error toasts they can't act on.
+One file, one line changed. The `create-checkout` function needs to use the service role key for auth validation, not the anon key. This is the same pattern used by all other edge functions in this project.
