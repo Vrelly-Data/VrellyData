@@ -34,11 +34,20 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
     if (!user || loading) return;
     if (profileLoading && !profile) return;
     if (!isCheckoutSuccess) return;
-    // If polling already concluded, don't restart
     if (pollingDoneRef.current) return;
 
-    // Always start polling — never trust stale DB state when checkout=success
-    // is in the URL. check-subscription is the authoritative Stripe check.
+    // If profile is already active (webhook already fired), skip polling entirely
+    if (profile?.subscription_status === 'active') {
+      pollingDoneRef.current = true;
+      paymentVerifiedRef.current = true;
+      searchParams.delete('checkout');
+      setSearchParams(searchParams, { replace: true });
+      setPaymentSuccess(true);
+      setTimeout(() => setPaymentSuccess(false), 2000);
+      return;
+    }
+
+    // Profile not yet active — start polling
     if (!checkoutPolling) {
       setCheckoutPolling(true);
       pollCountRef.current = 0;
@@ -116,7 +125,7 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
     }
   }, [user, loading, profile, profileLoading, navigate, location.pathname, checkoutPolling, paymentSuccess, isCheckoutSuccess, authReady]);
 
-  if (loading || checkoutPolling) {
+  if (loading) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center gap-3">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
