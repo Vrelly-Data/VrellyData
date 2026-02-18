@@ -1,101 +1,88 @@
 
-## Comparisons: A Dedicated Standalone Page
+## Root Cause: Stripe Opens in a New Tab
 
-### What's Being Built
+The fundamental problem is one line in `src/hooks/useSubscription.ts`:
 
-A new public page at `/comparisons` that users reach by clicking "Comparisons" in the landing page navbar. It will NOT be embedded in the landing page — it's its own full-screen experience with the same Navbar and Footer.
+```typescript
+window.open(data.url, '_blank');  // Opens Stripe in a NEW tab
+```
 
----
+When Stripe completes payment, it redirects **that new tab** to `/dashboard?checkout=success`. But the new tab:
+1. Has a fresh browser context — auth session must re-hydrate from scratch
+2. During hydration, `loading = true` and `user = null`
+3. The navigation guard fires: `!loading && !user` → `navigate('/auth')`
+4. This redirect happens BEFORE `checkoutPolling` can ever start, because polling only starts when `user` exists
 
-### User Experience Flow
-
-1. User visits `vrelly.com` (landing page)
-2. Clicks **"Comparisons"** in the top nav
-3. Navigates to `/comparisons` — a fresh page
-4. Sees a hero header: **"Vrelly vs [animated competitor]"** where the competitor name cycles Apollo → ZoomInfo → Seamless → Standard LLM automatically
-5. Two tab-style toggle buttons: **"Data Providers"** and **"Copy AI"**
-6. The active tab shows a clear side-by-side comparison table
-7. A CTA at the bottom: "Start for free" → `/auth?tab=signup`
+So the user sees: Stripe tab closes/redirects → brief flash → login screen. The original `/choose-plan` tab is unaffected and still open, confused.
 
 ---
 
-### Page Structure: `/comparisons`
+### The Fix: Three coordinated changes
+
+**1. Open Stripe in the same tab** (`src/hooks/useSubscription.ts`)
+
+Change `window.open(data.url, '_blank')` to `window.location.href = data.url`. This means Stripe's success redirect lands back in the same tab that already has a valid, hydrated auth session — no re-hydration race condition.
+
+**2. Fix the navigation guard timing** (`src/components/ProtectedRoute.tsx`)
+
+The current guard fires `navigate('/auth')` the moment `!loading && !user`. But on a fresh page load (same tab returning from Stripe), there's a brief moment where `loading` flips to `false` before the session is confirmed. We need to add a short "grace period" — if `checkout=success` is in the URL, we should never redirect to `/auth` immediately. We can check for the param before redirecting.
+
+Also add a new `paymentSuccess` state that shows a proper success screen ("Payment confirmed! Welcome to Vrelly 🎉") for 2 seconds after `subscription_status` becomes `active`, then navigates to dashboard.
+
+**3. Show a proper success message** (`src/components/ProtectedRoute.tsx`)
+
+Instead of just clearing the `checkout` param and dumping the user on `/dashboard`, show a brief success screen:
+- Green checkmark icon
+- "Payment confirmed!" heading
+- "Welcome to Vrelly — your credits are ready." subtext
+- Auto-navigates to `/dashboard` after 2 seconds
+
+---
+
+### Files to Change
+
+**`src/hooks/useSubscription.ts`** — 1 line change
+```typescript
+// BEFORE:
+window.open(data.url, '_blank');
+
+// AFTER:
+window.location.href = data.url;
+```
+
+**`src/components/ProtectedRoute.tsx`** — Multiple changes:
+1. Add `paymentSuccess` state (`useState(false)`)
+2. When polling resolves with `active`, set `paymentSuccess = true` and show success screen for 2s, then navigate
+3. Guard the "redirect to /auth" logic: if `checkout=success` is in the URL, don't redirect to `/auth` — wait for auth to settle
+4. Update the loading/polling UI to show a branded "Verifying your payment..." screen
+5. Add a success screen with `CheckCircle` icon from lucide-react
+
+---
+
+### What the User Experience Becomes
 
 ```text
-[ Navbar ]
-  |
-  Hero: "See How Vrelly Compares"
-  Subtitle: "Vrelly vs [animated: Apollo / ZoomInfo / Seamless / Standard LLM]"
-  |
-  Tab Toggle: [ Data Providers ]  [ Copy AI ]
-  |
-  Comparison Table (changes per tab):
-    Left column: Competitor (red X marks)
-    Right column: Vrelly (green check marks)
-  |
-  CTA Section: "Ready to switch?" → Get Started button
-  |
-[ Footer ]
+1. User clicks "Subscribe" on /choose-plan
+2. Page navigates (same tab) to Stripe checkout
+3. User pays with test card
+4. Stripe redirects same tab to /dashboard?checkout=success
+5. ProtectedRoute detects checkout=success param
+6. Shows: [spinner] "Verifying your payment..."
+7. Polls check-subscription every 3s (up to 8 attempts = 24s)
+8. Stripe confirms active subscription → DB updated
+9. Shows: [green checkmark] "Payment confirmed! Welcome to Vrelly."
+10. After 2 seconds → navigates to /dashboard (clean URL)
+11. User sees the dashboard with full credits
 ```
 
 ---
 
-### Tab 1 — Data Providers (Apollo, ZoomInfo, Seamless)
+### Why This Is the Complete Fix
 
-Animated competitor name cycles: Apollo → ZoomInfo → Seamless (every 2.5s)
-
-| Feature | Apollo / ZoomInfo / Seamless | Vrelly |
+| Problem | Cause | Fix |
 |---|---|---|
-| 10,000 enriched credits | Extremely expensive | Affordable at scale |
-| Data Insights | None | Full campaign & performance analytics |
-| Learns from YOUR data | No | Yes — AI trained on your history |
-| Copy assistance | No | 1-click AI-powered copy improvement |
-| Data freshness | Stale | Continuously verified |
+| Redirected to /auth after payment | Stripe in new tab = fresh auth context, race condition with loading guard | Same-tab navigation keeps auth hydrated |
+| No "verifying payment" shown | Race condition meant redirect to /auth fired before polling started | Same-tab navigation means user is already authenticated when they return |
+| No success message | Polling immediately cleared and navigated | Add `paymentSuccess` state with 2s success screen |
 
-### Tab 2 — Copy AI (Standard LLM)
-
-Competitor name fixed to "Standard LLM" (ChatGPT, etc.)
-
-| Feature | Standard LLM | Vrelly |
-|---|---|---|
-| Trained on sales correlation | Generic, mediocre output | Proprietary model on 200K+ real campaigns |
-| Knows your data | No context about you | Learns from your historical performance |
-| Outreach copy quality | Generic slop | High-converting, data-backed copy |
-| Sales-specific training | None | Benchmarked against top performers |
-| Personalization | One-size-fits-all | Tailored to your audience & vertical |
-
----
-
-### Animation Details
-
-- The animated competitor name uses `useState` + `useEffect` with `setInterval` at 2,500ms — same pattern as `AnimatedCounter` in HeroSection
-- The name fades out and up using a CSS opacity + translateY transition (0.3s ease)
-- When "Copy AI" tab is active, the animation pauses and shows "Standard LLM" as static text
-- Scroll-entry animations use the existing `useScrollAnimation` hook for table rows fading in
-
----
-
-### Files to Create / Modify
-
-**New: `src/pages/Comparisons.tsx`**
-- Full page with Navbar + Footer
-- Hero header with animated competitor name
-- Tab switcher (React `useState`)
-- Side-by-side comparison grid
-- CTA section at bottom
-
-**Modified: `src/components/landing/Navbar.tsx`**
-- Add `navigate('/comparisons')` link for "Comparisons" between "How It Works" and "Pricing"
-- Logo click on the comparisons page navigates back to `/` (already handled by `window.scrollTo` — will change logo click to `navigate('/')` so it works from any page)
-
-**Modified: `src/App.tsx`**
-- Add `<Route path="/comparisons" element={<Comparisons />} />` as a public route (no auth required)
-
----
-
-### Technical Notes
-
-- No database or backend changes needed — purely frontend
-- No new dependencies — uses lucide-react icons (`Check`, `X`), existing Tailwind, existing hooks
-- The Navbar is already used on the Landing page; the same component works on `/comparisons` since it uses `useNavigate` (not scroll-based anchors for the new link)
-- Logo click on Navbar will be updated from `window.scrollTo` to `navigate('/')` so it works correctly when accessed from `/comparisons`
+No backend changes needed. Two frontend files only.
