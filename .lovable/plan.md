@@ -1,67 +1,74 @@
 
-## Root Cause: Definitively Identified
+## Root Cause: Finally Found
 
-The entire problem is a single line: `navigate('/dashboard', { replace: true })` on line 77.
+After reading all the code carefully, the real cause is a gap in the redirect guard logic at line 105-110 of `ProtectedRoute.tsx`.
 
-Here is exactly what happens:
+Here is the exact sequence:
 
 1. User returns from Stripe to `/dashboard?checkout=success`
-2. The `/dashboard` `ProtectedRoute` instance starts polling
-3. Polling confirms `subscription_status: active`
-4. `setCheckoutPolling(false)` — spinner stops
-5. `searchParams.delete('checkout')` — URL becomes `/dashboard` (no remount yet)
-6. `setPaymentSuccess(true)` — overlay appears
-7. After 2 seconds: `setPaymentSuccess(false)` then `navigate('/dashboard', { replace: true })`
+2. `AuthProvider`'s `onAuthStateChange` fires a `SIGNED_IN`/`TOKEN_REFRESHED` event, calling `fetchProfile()` — this sets `profileLoading: true` and fetches the profile, which at this point may have a stale `subscription_status` (not yet `'active'`)
+3. Polling starts, runs `check-subscription`, updates the DB, calls `fetchProfile()` again — now `profile.subscription_status = 'active'`
+4. `pollingDoneRef.current = true`, `setPaymentSuccess(true)` — overlay appears
+5. After 2 seconds, `setPaymentSuccess(false)` — re-render triggers
+6. The guard `useEffect` (line 92) fires. It sees `paymentSuccess = false`, `isCheckoutSuccess = false` (param was deleted), `pollingDoneRef.current = true` — **but has no logic to skip the subscription check just because polling succeeded**
+7. If `profileLoading` happens to be `true` at this moment (from another auth event's `fetchProfile` call), the component renders the spinner. When loading completes, the guard fires again — and if `profile.subscription_status` is stale in this new fetch cycle, it redirects to `/choose-plan` → white screen, or the redirect itself causes the blank
 
-**Step 7 is the problem.** `navigate('/dashboard', { replace: true })` — even though the URL is already `/dashboard` — causes React Router to re-process the route. This forces `ProtectedRoute` to re-render. The guard `useEffect` (line 93) fires with `paymentSuccess = false`, `pollingDoneRef.current = true`, `isCheckoutSuccess = false`, and `authReady = true`. All guards clear. It checks the profile — and for one render cycle, the profile's `subscription_status` may not yet be confirmed in the new render context, so the component hits `return null` (line 127) or flickers to a loading state. White screen.
+**The fix: use `pollingDoneRef` to skip the subscription gate after a successful checkout**
 
-The user sees: spinner → success screen for 2 seconds → white screen.
+When `pollingDoneRef.current` is `true` and polling confirmed an active subscription, we should never redirect to `/choose-plan`. Add a `paymentVerifiedRef` that specifically tracks whether polling confirmed `active`, and skip the subscription redirect when it's set.
 
-## The Fix: Remove `navigate('/dashboard', { replace: true })`
+## The Fix: One Additional Ref + One Guard Line
 
-The user is **already on `/dashboard`**. The URL has already been cleaned (line 70-71 deletes the `?checkout=success` param). There is nothing to navigate to. The overlay just needs to disappear, revealing the dashboard children that are already rendered underneath it (the overlay pattern is correct — `{children}` renders alongside the overlay).
+### Change 1: Add `paymentVerifiedRef` to track confirmed active subscription
 
-**Change lines 75-78 from:**
 ```typescript
-setTimeout(() => {
-  setPaymentSuccess(false);
-  navigate('/dashboard', { replace: true });
-}, 2000);
+const paymentVerifiedRef = useRef(false);
 ```
 
-**To:**
+### Change 2: Set it when polling confirms active
+
+Inside the polling interval, when `subscription_status === 'active'`:
 ```typescript
-setTimeout(() => {
-  setPaymentSuccess(false);
-}, 2000);
+if (currentProfile?.subscription_status === 'active') {
+  paymentVerifiedRef.current = true;  // ← add this
+  setPaymentSuccess(true);
+  setTimeout(() => {
+    setPaymentSuccess(false);
+  }, 2000);
+}
 ```
 
-That is the entire fix. Delete the `navigate` call. One line removed.
+### Change 3: Skip the subscription redirect guard if payment was verified
+
+In the guard `useEffect`, before redirecting to `/choose-plan`, check if payment was just verified:
+```typescript
+if (!loading && user && !profileLoading && profile) {
+  if (isAdmin()) return;
+  if (paymentVerifiedRef.current) return;  // ← add this — skip gate after confirmed payment
+  const isExempt = SUBSCRIPTION_EXEMPT_PATHS.some(p => location.pathname.startsWith(p));
+  if (!isExempt && profile.subscription_status !== 'active') {
+    navigate('/choose-plan');
+  }
+}
+```
+
+This is a targeted, minimal fix. If polling confirmed the payment, the gate never fires — no matter what state `profile` is in during subsequent re-renders while auth events are settling.
 
 ## Why This Works
 
 ```
 Timeline (after fix):
-t=0ms    → polling done → setPaymentSuccess(true)
-           → {children} renders immediately (dashboard already mounted)
-           → overlay covers it
-t=2000ms → setPaymentSuccess(false) → overlay disappears
-           → dashboard was already mounted underneath → instantly visible
-           No remount. No white screen. Ever.
+t=0ms    → polling confirms active → paymentVerifiedRef.current = true
+           → setPaymentSuccess(true) → overlay appears
+           → children already mounted underneath
+t=2000ms → setPaymentSuccess(false) → guard useEffect fires
+           → sees paymentVerifiedRef.current = true → returns early
+           → NO redirect to /choose-plan
+           → overlay disappears → dashboard visible
 ```
 
-The `{children}` (dashboard) is already rendered beneath the `paymentSuccess` overlay because the current return structure is:
-```tsx
-return (
-  <>
-    {children}           ← dashboard renders here immediately
-    {paymentSuccess && <overlay />}  ← just covers it
-  </>
-);
-```
-
-When `paymentSuccess` becomes `false`, the overlay is removed and the dashboard is immediately visible — because it never stopped rendering.
+The `paymentVerifiedRef` persists across re-renders (it's a ref, not state) and is never reset. Once the payment is confirmed, the gate is permanently bypassed for this component instance — which is correct, because the user just paid.
 
 ## File Changed
 
-**`src/components/ProtectedRoute.tsx`** — remove `navigate('/dashboard', { replace: true })` from the setTimeout. One line deleted.
+Only `src/components/ProtectedRoute.tsx` — three small additions.
