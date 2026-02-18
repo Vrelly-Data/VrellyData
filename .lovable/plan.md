@@ -1,88 +1,99 @@
 
-## The Actual Root Cause (No More Guessing)
+## Root Cause — Definitively
 
-Reading the current file carefully, the problem is on **line 117**:
+The entire problem is one line in the guard `useEffect` (line 96):
 
 ```typescript
-if (loading || profileLoading || checkoutPolling) {
-  return <Loader spinner />
+if (checkoutPolling || paymentSuccess) return;
+```
+
+This guard is supposed to prevent the subscription redirect during checkout. But look at the sequence on a full page reload (which is what happens on the published site when Stripe redirects back):
+
+1. Page loads fresh — `loading = true`, `checkoutPolling = false`, `paymentSuccess = false`
+2. `loading` goes `false` — user is found in session
+3. `profileLoading = true` → profile fetch starts
+4. Profile loads with **stale** `subscription_status` (DB not yet updated by Stripe)
+5. Guard `useEffect` fires: `checkoutPolling = false` (polling hasn't started yet!), `paymentSuccess = false` → **falls through to the redirect check**
+6. `profile.subscription_status !== 'active'` → **navigates to `/choose-plan`** — blank/wrong screen
+
+The polling hasn't started yet because it's gated on the profile loading. By the time polling would start, the guard has already fired and redirected the user away.
+
+**The fix is dead simple**: When `checkout=success` is in the URL, **never redirect to `/choose-plan`** in the guard. Full stop. The polling mechanism is authoritative — if it fails after 8 attempts, it does its own redirect to `/choose-plan`. The guard should stay out of the way entirely while `isCheckoutSuccess` is true.
+
+## The Fix: One Line Change in the Guard
+
+**Current code (line 95-115):**
+```typescript
+useEffect(() => {
+  if (checkoutPolling || paymentSuccess) return;
+  if (isCheckoutSuccess && !pollingDoneRef.current) return;  // ← this guard
+  if (!authReady) return;
+  ...
+```
+
+The problem: `isCheckoutSuccess && !pollingDoneRef.current` is already there as a guard — but it only applies to the `navigate('/auth')` check. The subscription redirect check at line 108 only checks `paymentVerifiedRef.current`, not `isCheckoutSuccess`.
+
+**Change the guard `useEffect` to also skip the subscription redirect when `isCheckoutSuccess` is true:**
+
+```typescript
+if (!loading && user && !profileLoading && profile) {
+  if (isAdmin()) return;
+  if (paymentVerifiedRef.current) return;
+  if (isCheckoutSuccess) return;  // ← ADD THIS: never redirect during checkout flow
+  const isExempt = SUBSCRIPTION_EXEMPT_PATHS.some(p => location.pathname.startsWith(p));
+  if (!isExempt && profile.subscription_status !== 'active') {
+    navigate('/choose-plan');
+  }
 }
 ```
 
-`profileLoading` is a **global Zustand store value**. It gets set to `true` every time `fetchProfile()` is called — including from `AuthProvider`'s `onAuthStateChange` handler, which fires independently on token refreshes completely outside of the polling flow.
+Also, the top-level early return needs to cover the checkout URL case too:
 
-Here is the exact sequence causing the blank screen:
-
-1. Polling completes → `setCheckoutPolling(false)` → `paymentVerifiedRef.current = true` → `setPaymentSuccess(true)` → overlay appears, children render underneath
-2. 2 seconds later → `setPaymentSuccess(false)` → overlay disappears → dashboard should be visible ✓
-3. BUT: Supabase fires a `TOKEN_REFRESHED` event at any point → `AuthProvider` calls `fetchProfile()` → `profileLoading = true` in the global store
-4. Component re-renders → hits line 117 → `profileLoading` is `true` → renders the spinner **instead of children**
-5. `profileLoading` goes back to `false` → guard `useEffect` re-runs → sees `paymentVerifiedRef.current = true` → returns early → renders children
-
-This is the "blink to white" — it's not a blank forever, it's the spinner flash or a brief `null` render between states.
-
-The reason it appears as a full blank screen is that the `profileLoading` spinner replaces `{children}` entirely while auth token refresh happens.
-
-## The Fix: Stop Blocking Renders on `profileLoading` After Auth Is Established
-
-The `profileLoading` guard on line 117 is correct for initial page load (before the user is known), but it must **not** block rendering when the user and profile are already loaded and valid. A background token refresh should never cause a full component unmount.
-
-### Change 1: Split the loading gate
-
-Instead of:
 ```typescript
-if (loading || profileLoading || checkoutPolling) {
-  return <spinner />
+// Top of the guard useEffect — also block if checkout=success is in URL
+if (checkoutPolling || paymentSuccess) return;
+if (isCheckoutSuccess && !pollingDoneRef.current) return;  // already exists
+```
+
+The existing `if (isCheckoutSuccess && !pollingDoneRef.current) return;` already returns before the `!user` check, but it returns **before any of the checks** — wait, actually reading the code again, line 99 returns BEFORE the auth check. But there are TWO early returns and then the subscription check at line 108 which does NOT have an `isCheckoutSuccess` guard.
+
+## Summary of Changes to `src/components/ProtectedRoute.tsx`
+
+**Single change:** Add `if (isCheckoutSuccess) return;` inside the subscription gate block:
+
+```typescript
+if (!loading && user && !profileLoading && profile) {
+  if (isAdmin()) return;
+  if (paymentVerifiedRef.current) return;
+  if (isCheckoutSuccess) return;  // ← NEW: never kick to /choose-plan during checkout
+  const isExempt = SUBSCRIPTION_EXEMPT_PATHS.some(p => location.pathname.startsWith(p));
+  if (!isExempt && profile.subscription_status !== 'active') {
+    navigate('/choose-plan');
+  }
 }
 ```
 
-Change to:
-```typescript
-// Only show spinner on initial auth load or active checkout polling
-// Never block on profileLoading alone when user + profile are already known
-if (loading || checkoutPolling) {
-  return <spinner />
-}
-
-// profileLoading mid-session (token refresh, background re-fetch) should not 
-// unmount children. Only block on initial profileLoading when profile is null.
-if (profileLoading && !profile) {
-  return <spinner />
-}
-```
-
-This means:
-- First page load with no profile yet → spinner (correct)
-- Background token refresh with profile already loaded → children stay rendered (correct)
-- Checkout polling → spinner with "Verifying payment..." (correct)
-
-### Change 2: Remove `profileLoading` from the polling trigger
-
-Line 34: `if (!user || loading || profileLoading) return;`
-
-This causes polling to be blocked or restarted when `profileLoading` toggles. Change to:
-
-```typescript
-if (!user || loading) return;
-if (profileLoading && !profile) return; // Only block if profile truly not loaded yet
-```
-
-### Why This Definitively Fixes It
+## Why This Works
 
 ```
 Timeline (after fix):
-t=0ms    → user returns to /dashboard?checkout=success  
-           → user known, profile known → children render immediately
-           → polling starts (not blocked by profileLoading)
-t=Xms    → TOKEN_REFRESHED fires → profileLoading = true
-           → profile already exists → condition `profileLoading && !profile` = false
-           → children STAY rendered, no spinner flash
-t=Ys     → polling confirms active → overlay shows
-t=Y+2s   → overlay hides → children already rendered underneath → dashboard visible
+
+Full page reload at /dashboard?checkout=success:
+  → loading=true → spinner
+  → user found, loading=false
+  → profileLoading=true → spinner (profile loading)
+  → profile loads (stale, subscription_status='inactive')
+  → guard fires → isCheckoutSuccess=true → RETURNS EARLY, no redirect
+  → polling trigger fires → checkoutPolling=true → spinner + "Verifying payment..."
+  → poll #1: check-subscription updates DB → subscription_status='active'
+  → polling done → paymentVerifiedRef.current=true → paymentSuccess=true
+  → overlay shows for 2s → clears → dashboard visible
+
+No redirect to /choose-plan. Ever.
 ```
 
-No more blank screen. No more spinner flash. Background token refreshes are completely invisible to the user.
+The polling mechanism already handles the failure case (after 8 attempts, it redirects to `/choose-plan` itself). The guard doesn't need to interfere at all when `checkout=success` is in the URL.
 
-## File to Change
+## Only File Changed
 
-Only `src/components/ProtectedRoute.tsx` — two small changes to the loading gate logic.
+`src/components/ProtectedRoute.tsx` — one line added inside the subscription redirect block.
