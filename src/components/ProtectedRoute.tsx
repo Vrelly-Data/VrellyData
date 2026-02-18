@@ -14,7 +14,13 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const [searchParams, setSearchParams] = useSearchParams();
 
   // True only while we're doing the one-time checkout verification
-  const [isVerifying, setIsVerifying] = useState(() => searchParams.get('checkout') === 'success');
+  const [isVerifying, setIsVerifying] = useState(() => {
+    const fromUrl = searchParams.get('checkout') === 'success';
+    if (fromUrl) {
+      sessionStorage.setItem('checkout_verifying', '1');
+    }
+    return fromUrl || sessionStorage.getItem('checkout_verifying') === '1';
+  });
   const verifyStartedRef = useRef(false);
 
   // One-time checkout verification — runs once when user is available
@@ -49,6 +55,7 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
         toast.success('Payment confirmed! Welcome to Vrelly — your credits are ready.');
       }
 
+      sessionStorage.removeItem('checkout_verifying');
       setIsVerifying(false);
     };
 
