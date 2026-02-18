@@ -17,6 +17,7 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const [authReady, setAuthReady] = useState(false);
   const pollCountRef = useRef(0);
   const pollingDoneRef = useRef(false);
+  const paymentVerifiedRef = useRef(false);
   const { toast } = useToast();
 
   const isCheckoutSuccess = searchParams.get('checkout') === 'success';
@@ -71,6 +72,7 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
         setSearchParams(searchParams, { replace: true });
 
         if (currentProfile?.subscription_status === 'active') {
+          paymentVerifiedRef.current = true;
           setPaymentSuccess(true);
           setTimeout(() => {
             setPaymentSuccess(false);
@@ -104,6 +106,7 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
     if (!loading && user && !profileLoading && profile) {
       if (isAdmin()) return;
+      if (paymentVerifiedRef.current) return;
       const isExempt = SUBSCRIPTION_EXEMPT_PATHS.some(p => location.pathname.startsWith(p));
       if (!isExempt && profile.subscription_status !== 'active') {
         navigate('/choose-plan');
