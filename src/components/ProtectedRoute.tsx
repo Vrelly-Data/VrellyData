@@ -3,6 +3,7 @@ import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { useAuthStore } from '@/stores/authStore';
 import { supabase } from '@/integrations/supabase/client';
 import { Loader2, CheckCircle } from 'lucide-react';
+import { useToast } from '@/hooks/use-toast';
 
 const SUBSCRIPTION_EXEMPT_PATHS = ['/choose-plan', '/settings', '/billing'];
 
@@ -14,6 +15,8 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const [checkoutPolling, setCheckoutPolling] = useState(false);
   const [paymentSuccess, setPaymentSuccess] = useState(false);
   const pollCountRef = useRef(0);
+  const pollingDoneRef = useRef(false);
+  const { toast } = useToast();
 
   const isCheckoutSuccess = searchParams.get('checkout') === 'success';
 
@@ -21,9 +24,12 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!user || loading || profileLoading) return;
     if (!isCheckoutSuccess) return;
+    // If polling already concluded, don't restart
+    if (pollingDoneRef.current) return;
 
     // If subscription is already active, show success and proceed
     if (profile?.subscription_status === 'active') {
+      pollingDoneRef.current = true;
       setPaymentSuccess(true);
       searchParams.delete('checkout');
       setSearchParams(searchParams, { replace: true });
@@ -64,6 +70,7 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
       if (currentProfile?.subscription_status === 'active' || pollCountRef.current >= 8) {
         clearInterval(interval);
         setCheckoutPolling(false);
+        pollingDoneRef.current = true;
         searchParams.delete('checkout');
         setSearchParams(searchParams, { replace: true });
 
@@ -74,7 +81,12 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
             navigate('/dashboard', { replace: true });
           }, 2000);
         } else {
-          navigate('/choose-plan');
+          toast({
+            title: "Couldn't verify payment",
+            description: "We couldn't confirm your subscription. Please try again or contact support.",
+            variant: 'destructive',
+          });
+          navigate('/choose-plan', { replace: true });
         }
       }
     }, 3000);
@@ -84,8 +96,9 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (checkoutPolling || paymentSuccess) return;
-    // If checkout=success is in the URL, give auth time to settle — never redirect to /auth
-    if (isCheckoutSuccess) return;
+    // If checkout=success is in the URL and polling hasn't concluded yet,
+    // give auth time to settle — never redirect to /auth prematurely.
+    if (isCheckoutSuccess && !pollingDoneRef.current) return;
 
     if (!loading && !user) {
       navigate('/auth');
@@ -118,7 +131,7 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center gap-3">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
-        {(checkoutPolling || isCheckoutSuccess) && (
+        {(checkoutPolling || (isCheckoutSuccess && !pollingDoneRef.current)) && (
           <p className="text-muted-foreground text-sm">Verifying your payment...</p>
         )}
       </div>
