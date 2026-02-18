@@ -10,6 +10,7 @@ import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { AdminRoute } from "@/components/AdminRoute";
 import { AppErrorBoundary } from "@/components/AppErrorBoundary";
 import Landing from "./pages/Landing";
+import Comparisons from "./pages/Comparisons";
 import Index from "./pages/Index";
 import Auth from "./pages/Auth";
 import Settings from "./pages/Settings";
@@ -34,6 +35,7 @@ const App = () => (
             <AuthProvider>
               <Routes>
                 <Route path="/" element={<Landing />} />
+                <Route path="/comparisons" element={<Comparisons />} />
                 <Route path="/auth" element={<Auth />} />
                 <Route path="/reset-password" element={<ResetPassword />} />
                 <Route path="/choose-plan" element={<ProtectedRoute><ChoosePlan /></ProtectedRoute>} />

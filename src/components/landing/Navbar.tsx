@@ -17,7 +17,7 @@ export const Navbar = () => {
             src={vrellyLogo}
             alt="Vrelly"
             className="h-[4.5rem] cursor-pointer"
-            onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+            onClick={() => navigate('/')}
           />
 
           <div className="hidden md:flex items-center gap-6 text-sm text-muted-foreground">
@@ -29,6 +29,9 @@ export const Navbar = () => {
             </button>
             <button onClick={() => scrollToSection('pricing')} className="hover:text-foreground transition-colors">
               Pricing
+            </button>
+            <button onClick={() => navigate('/comparisons')} className="hover:text-foreground transition-colors">
+              Comparisons
             </button>
           </div>
 
