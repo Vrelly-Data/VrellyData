@@ -1,70 +1,16 @@
-import { useEffect, useRef, useState } from 'react';
-import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
+import { useEffect } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from '@/stores/authStore';
-import { supabase } from '@/integrations/supabase/client';
 import { Loader2 } from 'lucide-react';
-import { toast } from 'sonner';
 
 const SUBSCRIPTION_EXEMPT_PATHS = ['/choose-plan', '/settings', '/billing'];
 
 export function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { user, loading, profile, profileLoading, isAdmin, fetchProfile } = useAuthStore();
+  const { user, loading, profile, profileLoading, isAdmin } = useAuthStore();
   const navigate = useNavigate();
   const location = useLocation();
-  const [searchParams, setSearchParams] = useSearchParams();
 
-  // True only while we're doing the one-time checkout verification
-  const [isVerifying, setIsVerifying] = useState(() => {
-    const fromUrl = searchParams.get('checkout') === 'success';
-    if (fromUrl) {
-      sessionStorage.setItem('checkout_verifying', '1');
-    }
-    return fromUrl || sessionStorage.getItem('checkout_verifying') === '1';
-  });
-  const verifyStartedRef = useRef(false);
-
-  // One-time checkout verification — runs once when user is available
   useEffect(() => {
-    if (!isVerifying) return;
-    if (!user || loading) return;
-    if (verifyStartedRef.current) return;
-
-    verifyStartedRef.current = true;
-
-    // Clean the URL immediately
-    const newParams = new URLSearchParams(searchParams);
-    newParams.delete('checkout');
-    setSearchParams(newParams, { replace: true });
-
-    // Call check-subscription + re-fetch profile, then release the gate
-    const verify = async () => {
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session) {
-          await supabase.functions.invoke('check-subscription', {
-            headers: { Authorization: `Bearer ${session.access_token}` },
-          });
-          await fetchProfile();
-        }
-      } catch {
-        // Silent — proceed regardless
-      }
-
-      const currentProfile = useAuthStore.getState().profile;
-      if (currentProfile?.subscription_status === 'active') {
-        toast.success('Payment confirmed! Welcome to Vrelly — your credits are ready.');
-      }
-
-      sessionStorage.removeItem('checkout_verifying');
-      setIsVerifying(false);
-    };
-
-    verify();
-  }, [isVerifying, user, loading]);
-
-  // Auth + subscription guard — only runs when not verifying
-  useEffect(() => {
-    if (isVerifying) return;
     if (loading) return;
 
     if (!user) {
@@ -79,27 +25,12 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
         navigate('/choose-plan');
       }
     }
-  }, [isVerifying, user, loading, profile, profileLoading, navigate, location.pathname]);
+  }, [user, loading, profile, profileLoading, navigate, location.pathname]);
 
-  // Show spinner only during initial auth load or initial profile load
   if (loading || (profileLoading && !profile)) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center gap-3">
+      <div className="min-h-screen flex items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
-        {isVerifying && (
-          <p className="text-muted-foreground text-sm">Verifying your payment...</p>
-        )}
-      </div>
-    );
-  }
-
-  // While verifying (after auth loaded), show a simple spinner instead of the dashboard
-  // This prevents the subscription guard from kicking in with a stale inactive profile
-  if (isVerifying) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center gap-3">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-        <p className="text-muted-foreground text-sm">Verifying your payment...</p>
       </div>
     );
   }
