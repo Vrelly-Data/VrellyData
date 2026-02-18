@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Check, Loader2, LogOut } from 'lucide-react';
+import { Check, Loader2, LogOut, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { SUBSCRIPTION_TIERS, PRICE_IDS } from '@/config/subscriptionTiers';
 import { useSubscription } from '@/hooks/useSubscription';
 import { useAuthStore } from '@/stores/authStore';
@@ -45,6 +46,9 @@ export default function ChoosePlan() {
     }
   };
 
+  const cancelAt = profile?.cancel_at;
+  const isCanceling = profile?.cancel_at_period_end && profile?.subscription_status === 'active';
+
   return (
     <div className="min-h-screen bg-background flex flex-col items-center justify-center px-4 py-12">
       <div className="text-center mb-10 max-w-2xl">
@@ -55,6 +59,17 @@ export default function ChoosePlan() {
           {profile?.name ? `Welcome, ${profile.name}! ` : ''}Select a plan to get started with Vrelly.
         </p>
       </div>
+
+      {isCanceling && cancelAt && (
+        <Alert className="max-w-5xl w-full mb-6 border-destructive/50 bg-destructive/10">
+          <AlertTriangle className="h-4 w-4 text-destructive" />
+          <AlertDescription className="text-destructive">
+            Your subscription has been cancelled and will end on{' '}
+            <strong>{new Date(cancelAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</strong>.
+            You'll lose access after that date. You can reactivate anytime before then.
+          </AlertDescription>
+        </Alert>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-5xl w-full">
         {plans.map(({ key, features, popular }) => {
