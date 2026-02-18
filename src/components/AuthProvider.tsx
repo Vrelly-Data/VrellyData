@@ -20,11 +20,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // Then set up the listener for changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (event, session) => {
+        // Ignore transient SIGNED_OUT during cross-origin redirects (e.g. Stripe).
+        // Explicit logout is handled by signOut() in authStore which clears state directly.
+        if (event === 'SIGNED_OUT') return;
+
         setSession(session);
         setUser(session?.user ?? null);
         
-        if (session?.user && (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED')) {
-          fetchProfile(session.user.id);
+        if (session?.user && (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION')) {
+          // setTimeout defers the Supabase DB call outside the auth callback to prevent deadlocks
+          setTimeout(() => fetchProfile(session.user.id), 0);
         }
       }
     );
