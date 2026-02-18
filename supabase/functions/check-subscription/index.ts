@@ -88,11 +88,15 @@ serve(async (req) => {
     let credits = 0;
     let subscriptionEnd = null;
     let subscriptionId = null;
+    let cancelAtPeriodEnd = false;
+    let cancelAt = null;
 
     if (hasActiveSub) {
       const subscription = subscriptions.data[0];
       subscriptionId = subscription.id;
       subscriptionEnd = new Date(subscription.current_period_end * 1000).toISOString();
+      cancelAtPeriodEnd = subscription.cancel_at_period_end;
+      cancelAt = subscription.cancel_at ? new Date(subscription.cancel_at * 1000).toISOString() : null;
       const productId = subscription.items.data[0].price.product as string;
       
       const tierInfo = TIER_CONFIG[productId];
@@ -100,7 +104,7 @@ serve(async (req) => {
         tier = tierInfo.tier;
         credits = tierInfo.credits;
       }
-      logStep("Active subscription found", { subscriptionId, tier, credits, endDate: subscriptionEnd });
+      logStep("Active subscription found", { subscriptionId, tier, credits, endDate: subscriptionEnd, cancelAtPeriodEnd, cancelAt });
 
       // Get current profile to check if billing period has changed
       const { data: currentProfile } = await supabaseClient
@@ -122,6 +126,8 @@ serve(async (req) => {
         monthly_credit_limit: credits,
         billing_period_start: newPeriodStart,
         billing_period_end: subscriptionEnd,
+        cancel_at_period_end: cancelAtPeriodEnd,
+        cancel_at: cancelAt,
       };
 
       // Reset credits_used_this_month if new billing period started
@@ -154,7 +160,9 @@ serve(async (req) => {
       subscribed: hasActiveSub,
       tier,
       credits,
-      subscription_end: subscriptionEnd
+      subscription_end: subscriptionEnd,
+      cancel_at_period_end: cancelAtPeriodEnd,
+      cancel_at: cancelAt,
     }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
       status: 200,

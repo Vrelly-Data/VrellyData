@@ -698,6 +698,8 @@ export type Database = {
         Row: {
           billing_period_end: string | null
           billing_period_start: string | null
+          cancel_at: string | null
+          cancel_at_period_end: boolean | null
           created_at: string
           credits: number
           credits_used_this_month: number | null
@@ -716,6 +718,8 @@ export type Database = {
         Insert: {
           billing_period_end?: string | null
           billing_period_start?: string | null
+          cancel_at?: string | null
+          cancel_at_period_end?: boolean | null
           created_at?: string
           credits?: number
           credits_used_this_month?: number | null
@@ -734,6 +738,8 @@ export type Database = {
         Update: {
           billing_period_end?: string | null
           billing_period_start?: string | null
+          cancel_at?: string | null
+          cancel_at_period_end?: boolean | null
           created_at?: string
           credits?: number
           credits_used_this_month?: number | null

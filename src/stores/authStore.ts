@@ -15,6 +15,8 @@ interface Profile {
   billing_period_end: string | null;
   stripe_customer_id: string | null;
   stripe_subscription_id: string | null;
+  cancel_at_period_end: boolean | null;
+  cancel_at: string | null;
 }
 
 interface UserRole {
