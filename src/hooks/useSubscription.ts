@@ -78,10 +78,17 @@ export const useSubscription = () => {
       }
 
       if (data?.url) {
-        // _top navigates the top-level browsing context — escapes the Lovable
-        // preview iframe without opening a new tab, keeping the auth session
-        // intact in localStorage on both preview and the published site.
-        window.open(data.url, '_top');
+        // In the Lovable preview the app runs inside a cross-origin iframe.
+        // window.open(url, '_top') is silently blocked there by the browser.
+        // Detect iframe context and fall back to _blank (new tab) so the
+        // redirect isn't swallowed. On the published site (no iframe) _top
+        // navigates the same tab, keeping the auth session intact.
+        const inIframe = window.self !== window.top;
+        if (inIframe) {
+          window.open(data.url, '_blank');
+        } else {
+          window.open(data.url, '_top');
+        }
       }
     } catch (error) {
       console.error('Error in createCheckoutSession:', error);
