@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { useAuthStore } from '@/stores/authStore';
+import { supabase } from '@/integrations/supabase/client';
 import { Loader2 } from 'lucide-react';
 
 const SUBSCRIPTION_EXEMPT_PATHS = ['/choose-plan', '/settings', '/billing'];
@@ -37,10 +38,23 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
     const interval = setInterval(async () => {
       pollCountRef.current += 1;
-      await fetchProfile();
+
+      // Actively query Stripe and update DB — don't just read stale DB state
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session) {
+          await supabase.functions.invoke('check-subscription', {
+            headers: { Authorization: `Bearer ${session.access_token}` },
+          });
+        }
+      } catch (e) {
+        // Silent — we'll check the profile next regardless
+      }
+
+      await fetchProfile(); // Now the profile should have the updated status
 
       const currentProfile = useAuthStore.getState().profile;
-      if (currentProfile?.subscription_status === 'active' || pollCountRef.current >= 5) {
+      if (currentProfile?.subscription_status === 'active' || pollCountRef.current >= 8) {
         clearInterval(interval);
         setCheckoutPolling(false);
         searchParams.delete('checkout');
@@ -50,7 +64,7 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
           navigate('/choose-plan');
         }
       }
-    }, 2000);
+    }, 3000);
 
     return () => clearInterval(interval);
   }, [checkoutPolling]);
