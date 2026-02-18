@@ -93,8 +93,6 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (!user) return null;
-
   // While verifying (after auth loaded), show a simple spinner instead of the dashboard
   // This prevents the subscription guard from kicking in with a stale inactive profile
   if (isVerifying) {
