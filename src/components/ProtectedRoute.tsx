@@ -73,7 +73,6 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
         if (currentProfile?.subscription_status === 'active') {
           setPaymentSuccess(true);
           setTimeout(() => {
-            setPaymentSuccess(false);
             navigate('/dashboard', { replace: true });
           }, 2000);
         } else {
