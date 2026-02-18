@@ -73,8 +73,8 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
         if (currentProfile?.subscription_status === 'active') {
           setPaymentSuccess(true);
           setTimeout(() => {
+            setPaymentSuccess(false);
             navigate('/dashboard', { replace: true });
-            setTimeout(() => setPaymentSuccess(false), 100);
           }, 2000);
         } else {
           toast({
@@ -112,19 +112,6 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
     }
   }, [user, loading, profile, profileLoading, navigate, location.pathname, checkoutPolling, paymentSuccess, isCheckoutSuccess, authReady]);
 
-  // Payment success screen
-  if (paymentSuccess) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center gap-4">
-        <div className="flex flex-col items-center gap-3 animate-in fade-in zoom-in duration-500">
-          <CheckCircle className="h-16 w-16 text-primary" />
-          <h1 className="text-2xl font-bold text-foreground">Payment confirmed!</h1>
-          <p className="text-muted-foreground text-sm">Welcome to Vrelly — your credits are ready.</p>
-        </div>
-      </div>
-    );
-  }
-
   if (loading || profileLoading || checkoutPolling) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center gap-3">
@@ -140,5 +127,18 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
     return null;
   }
 
-  return <>{children}</>;
+  return (
+    <>
+      {children}
+      {paymentSuccess && (
+        <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-4 bg-background">
+          <div className="flex flex-col items-center gap-3 animate-in fade-in zoom-in duration-500">
+            <CheckCircle className="h-16 w-16 text-primary" />
+            <h1 className="text-2xl font-bold text-foreground">Payment confirmed!</h1>
+            <p className="text-muted-foreground text-sm">Welcome to Vrelly — your credits are ready.</p>
+          </div>
+        </div>
+      )}
+    </>
+  );
 }
