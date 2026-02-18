@@ -1,99 +1,68 @@
 
-## Root Cause — Definitively
+## The Real Fix: Skip Polling When Profile Is Already Active
 
-The entire problem is one line in the guard `useEffect` (line 96):
+After reviewing all the code and network logs carefully, the issue is now clear:
+
+**What the network logs prove:**
+The profile response shows `subscription_status: "active"` immediately on page load. The Stripe webhook already updated the database BEFORE the user returned to the app. So when the user lands on `/dashboard?checkout=success`, the profile is already correct.
+
+**The actual deadlock being caused:**
+1. Page loads, profile is already `active`
+2. `isCheckoutSuccess = true` → polling trigger fires unconditionally → `setCheckoutPolling(true)`
+3. `checkoutPolling = true` → line 119 renders the full-screen spinner, blocking the dashboard
+4. After 3 seconds, poll completes, `paymentSuccess = true` → overlay shows for 2s
+5. `paymentSuccess = false` → overlay hides → dashboard should show, but something re-triggers or the component is now in a bad state
+
+The polling mechanism is the problem. It runs no matter what, even when the profile is already `active`. The 3-second spinner is unnecessary and the source of the stuck white screen.
+
+**The fix: In the checkout polling trigger, if profile already shows `active`, skip polling entirely and go straight to the success overlay.**
 
 ```typescript
-if (checkoutPolling || paymentSuccess) return;
-```
-
-This guard is supposed to prevent the subscription redirect during checkout. But look at the sequence on a full page reload (which is what happens on the published site when Stripe redirects back):
-
-1. Page loads fresh — `loading = true`, `checkoutPolling = false`, `paymentSuccess = false`
-2. `loading` goes `false` — user is found in session
-3. `profileLoading = true` → profile fetch starts
-4. Profile loads with **stale** `subscription_status` (DB not yet updated by Stripe)
-5. Guard `useEffect` fires: `checkoutPolling = false` (polling hasn't started yet!), `paymentSuccess = false` → **falls through to the redirect check**
-6. `profile.subscription_status !== 'active'` → **navigates to `/choose-plan`** — blank/wrong screen
-
-The polling hasn't started yet because it's gated on the profile loading. By the time polling would start, the guard has already fired and redirected the user away.
-
-**The fix is dead simple**: When `checkout=success` is in the URL, **never redirect to `/choose-plan`** in the guard. Full stop. The polling mechanism is authoritative — if it fails after 8 attempts, it does its own redirect to `/choose-plan`. The guard should stay out of the way entirely while `isCheckoutSuccess` is true.
-
-## The Fix: One Line Change in the Guard
-
-**Current code (line 95-115):**
-```typescript
+// Handle checkout=success polling
 useEffect(() => {
-  if (checkoutPolling || paymentSuccess) return;
-  if (isCheckoutSuccess && !pollingDoneRef.current) return;  // ← this guard
-  if (!authReady) return;
-  ...
-```
+  if (!user || loading) return;
+  if (profileLoading && !profile) return;
+  if (!isCheckoutSuccess) return;
+  if (pollingDoneRef.current) return;
 
-The problem: `isCheckoutSuccess && !pollingDoneRef.current` is already there as a guard — but it only applies to the `navigate('/auth')` check. The subscription redirect check at line 108 only checks `paymentVerifiedRef.current`, not `isCheckoutSuccess`.
-
-**Change the guard `useEffect` to also skip the subscription redirect when `isCheckoutSuccess` is true:**
-
-```typescript
-if (!loading && user && !profileLoading && profile) {
-  if (isAdmin()) return;
-  if (paymentVerifiedRef.current) return;
-  if (isCheckoutSuccess) return;  // ← ADD THIS: never redirect during checkout flow
-  const isExempt = SUBSCRIPTION_EXEMPT_PATHS.some(p => location.pathname.startsWith(p));
-  if (!isExempt && profile.subscription_status !== 'active') {
-    navigate('/choose-plan');
+  // If profile is already active (webhook already fired), skip polling
+  if (profile?.subscription_status === 'active') {
+    pollingDoneRef.current = true;
+    paymentVerifiedRef.current = true;
+    searchParams.delete('checkout');
+    setSearchParams(searchParams, { replace: true });
+    setPaymentSuccess(true);
+    setTimeout(() => setPaymentSuccess(false), 2000);
+    return;
   }
-}
-```
 
-Also, the top-level early return needs to cover the checkout URL case too:
-
-```typescript
-// Top of the guard useEffect — also block if checkout=success is in URL
-if (checkoutPolling || paymentSuccess) return;
-if (isCheckoutSuccess && !pollingDoneRef.current) return;  // already exists
-```
-
-The existing `if (isCheckoutSuccess && !pollingDoneRef.current) return;` already returns before the `!user` check, but it returns **before any of the checks** — wait, actually reading the code again, line 99 returns BEFORE the auth check. But there are TWO early returns and then the subscription check at line 108 which does NOT have an `isCheckoutSuccess` guard.
-
-## Summary of Changes to `src/components/ProtectedRoute.tsx`
-
-**Single change:** Add `if (isCheckoutSuccess) return;` inside the subscription gate block:
-
-```typescript
-if (!loading && user && !profileLoading && profile) {
-  if (isAdmin()) return;
-  if (paymentVerifiedRef.current) return;
-  if (isCheckoutSuccess) return;  // ← NEW: never kick to /choose-plan during checkout
-  const isExempt = SUBSCRIPTION_EXEMPT_PATHS.some(p => location.pathname.startsWith(p));
-  if (!isExempt && profile.subscription_status !== 'active') {
-    navigate('/choose-plan');
+  // Profile not yet active — start polling
+  if (!checkoutPolling) {
+    setCheckoutPolling(true);
+    pollCountRef.current = 0;
   }
-}
+}, [user, loading, profileLoading, isCheckoutSuccess, profile]);
 ```
 
-## Why This Works
+This means:
+- If DB is already updated (most common case when webhook fires fast) → instant success overlay, no 3-second wait, no spinner blocking the dashboard
+- If DB is NOT yet updated → polling starts as before
 
-```
-Timeline (after fix):
+**Also: Remove `checkoutPolling` from the render spinner logic** — the spinner should only show during initial `loading`, not during the checkout verification. The children (dashboard) should render underneath while verification happens, and the success overlay appears on top. This prevents the "stuck white screen" entirely.
 
-Full page reload at /dashboard?checkout=success:
-  → loading=true → spinner
-  → user found, loading=false
-  → profileLoading=true → spinner (profile loading)
-  → profile loads (stale, subscription_status='inactive')
-  → guard fires → isCheckoutSuccess=true → RETURNS EARLY, no redirect
-  → polling trigger fires → checkoutPolling=true → spinner + "Verifying payment..."
-  → poll #1: check-subscription updates DB → subscription_status='active'
-  → polling done → paymentVerifiedRef.current=true → paymentSuccess=true
-  → overlay shows for 2s → clears → dashboard visible
+```typescript
+// Change line 119 from:
+if (loading || checkoutPolling) {
 
-No redirect to /choose-plan. Ever.
+// To:
+if (loading) {
 ```
 
-The polling mechanism already handles the failure case (after 8 attempts, it redirects to `/choose-plan` itself). The guard doesn't need to interfere at all when `checkout=success` is in the URL.
+The success overlay (`paymentSuccess`) already covers the full screen with `fixed inset-0 z-50`, so children rendering underneath is invisible to the user. No need to block children with a spinner during checkout polling.
 
-## Only File Changed
+## Files to Change
 
-`src/components/ProtectedRoute.tsx` — one line added inside the subscription redirect block.
+Only `src/components/ProtectedRoute.tsx`:
+
+1. Add early-exit for already-active profile in the polling trigger `useEffect`
+2. Remove `checkoutPolling` from the render gate (line 119) so dashboard renders underneath while the overlay is shown
