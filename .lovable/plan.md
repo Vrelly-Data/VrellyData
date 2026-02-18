@@ -1,88 +1,82 @@
 
-## Root Cause: Stripe Opens in a New Tab
+## Root Cause: Two Separate Bugs
 
-The fundamental problem is one line in `src/hooks/useSubscription.ts`:
+### Bug 1: Stripe redirect blocked in Lovable preview iframe
+The `create-checkout` function is working perfectly — it returns a valid Stripe URL. The `window.location.href = data.url` call fires, but the **Lovable editor preview is an iframe** and iframes cannot navigate to external domains (cross-origin restriction). So the page appears frozen with a spinner.
 
+This will work fine in a **real browser** (published URL), but for testing in the preview you need a workaround.
+
+### Bug 2: User reaches dashboard without paying after refresh
+When the user refreshes, the URL still has `?checkout=success` if they navigated away mid-flow, OR the 8-attempt polling timeout expires and the code currently does:
 ```typescript
-window.open(data.url, '_blank');  // Opens Stripe in a NEW tab
+} else {
+  navigate('/choose-plan');  // ← This should work, but...
+}
 ```
-
-When Stripe completes payment, it redirects **that new tab** to `/dashboard?checkout=success`. But the new tab:
-1. Has a fresh browser context — auth session must re-hydrate from scratch
-2. During hydration, `loading = true` and `user = null`
-3. The navigation guard fires: `!loading && !user` → `navigate('/auth')`
-4. This redirect happens BEFORE `checkoutPolling` can ever start, because polling only starts when `user` exists
-
-So the user sees: Stripe tab closes/redirects → brief flash → login screen. The original `/choose-plan` tab is unaffected and still open, confused.
+However, the `ProtectedRoute` wrapping `/dashboard` sees `checkout=success` in the URL, skips the `/auth` redirect guard (`if (isCheckoutSuccess) return;`), and renders the dashboard children regardless — because the guard exits early when `checkout=success` is present, even after polling gives up.
 
 ---
 
-### The Fix: Three coordinated changes
+### The Fix: Three changes
 
-**1. Open Stripe in the same tab** (`src/hooks/useSubscription.ts`)
+**1. Open Stripe in a new tab for the preview environment (and as a fallback)**
 
-Change `window.open(data.url, '_blank')` to `window.location.href = data.url`. This means Stripe's success redirect lands back in the same tab that already has a valid, hydrated auth session — no re-hydration race condition.
+Instead of `window.location.href`, use `window.open(url, '_blank')` — this opens Stripe in a new tab which is never blocked by iframe restrictions. The success redirect will land in that new tab at `/dashboard?checkout=success`, which will then run the polling flow.
 
-**2. Fix the navigation guard timing** (`src/components/ProtectedRoute.tsx`)
+Wait — this was the original approach we moved away from because of the auth hydration race. The real fix is: use `window.open` but open the **current window**, not a new tab, when we're NOT in an iframe context. We detect if we're in an iframe and handle accordingly:
 
-The current guard fires `navigate('/auth')` the moment `!loading && !user`. But on a fresh page load (same tab returning from Stripe), there's a brief moment where `loading` flips to `false` before the session is confirmed. We need to add a short "grace period" — if `checkout=success` is in the URL, we should never redirect to `/auth` immediately. We can check for the param before redirecting.
+```typescript
+// Detect if running in an iframe (Lovable preview)
+const inIframe = window.self !== window.top;
+if (inIframe) {
+  window.open(data.url, '_blank'); // New tab — works in iframe context
+} else {
+  window.location.href = data.url; // Same tab — preserves auth in real browser
+}
+```
 
-Also add a new `paymentSuccess` state that shows a proper success screen ("Payment confirmed! Welcome to Vrelly 🎉") for 2 seconds after `subscription_status` becomes `active`, then navigates to dashboard.
+This means:
+- In the **Lovable preview**: opens Stripe in a new tab (avoids iframe restriction)
+- In the **real browser** (published): same-tab navigation (preserves auth session, avoids hydration race)
 
-**3. Show a proper success message** (`src/components/ProtectedRoute.tsx`)
+**2. Fix the polling timeout — don't leave user on dashboard without payment**
 
-Instead of just clearing the `checkout` param and dumping the user on `/dashboard`, show a brief success screen:
-- Green checkmark icon
-- "Payment confirmed!" heading
-- "Welcome to Vrelly — your credits are ready." subtext
-- Auto-navigates to `/dashboard` after 2 seconds
+When polling gives up (8 attempts, no active subscription), the `checkout=success` param needs to be cleared AND the guard needs to properly kick the user to `/choose-plan`. Currently the early-exit guard (`if (isCheckoutSuccess) return;`) prevents the subscription check from running even after polling is done.
+
+Fix: After polling gives up, navigate to `/choose-plan` and also add a `toast` explaining what happened.
+
+**3. Add a timeout guard in ProtectedRoute**
+
+The `isCheckoutSuccess` early exit currently says "never redirect away from this page if checkout=success is in URL". This is too broad — after polling concludes, this flag should no longer block normal routing. Fix by tracking whether polling has **concluded** (success or failed) in a `pollingDoneRef`, and only using the early exit while polling is actively in progress.
 
 ---
 
 ### Files to Change
 
-**`src/hooks/useSubscription.ts`** — 1 line change
-```typescript
-// BEFORE:
-window.open(data.url, '_blank');
+**`src/hooks/useSubscription.ts`**
+- Detect iframe context and use `window.open` vs `window.location.href` accordingly
 
-// AFTER:
-window.location.href = data.url;
-```
-
-**`src/components/ProtectedRoute.tsx`** — Multiple changes:
-1. Add `paymentSuccess` state (`useState(false)`)
-2. When polling resolves with `active`, set `paymentSuccess = true` and show success screen for 2s, then navigate
-3. Guard the "redirect to /auth" logic: if `checkout=success` is in the URL, don't redirect to `/auth` — wait for auth to settle
-4. Update the loading/polling UI to show a branded "Verifying your payment..." screen
-5. Add a success screen with `CheckCircle` icon from lucide-react
+**`src/components/ProtectedRoute.tsx`**
+- Add a `pollingDoneRef` to track when polling has concluded
+- Only skip the auth/subscription guard while polling is actively running (not after it finishes)
+- After polling timeout, clear `checkout` param, navigate to `/choose-plan`, and show a toast
 
 ---
 
-### What the User Experience Becomes
+### What the Experience Becomes
 
-```text
-1. User clicks "Subscribe" on /choose-plan
-2. Page navigates (same tab) to Stripe checkout
-3. User pays with test card
-4. Stripe redirects same tab to /dashboard?checkout=success
-5. ProtectedRoute detects checkout=success param
-6. Shows: [spinner] "Verifying your payment..."
-7. Polls check-subscription every 3s (up to 8 attempts = 24s)
-8. Stripe confirms active subscription → DB updated
-9. Shows: [green checkmark] "Payment confirmed! Welcome to Vrelly."
-10. After 2 seconds → navigates to /dashboard (clean URL)
-11. User sees the dashboard with full credits
-```
+**In Lovable preview (iframe):**
+1. Click Subscribe → Spinner briefly → Stripe opens in **new tab**
+2. Complete payment in new tab → redirected to `/dashboard?checkout=success` in new tab
+3. New tab shows "Verifying your payment..." while polling
+4. Subscription confirmed → "Payment confirmed!" → Dashboard
 
----
+**In real browser (published site):**
+1. Click Subscribe → Same tab navigates to Stripe (auth preserved)
+2. Complete payment → Returns to `/dashboard?checkout=success` in same tab
+3. Same "Verifying your payment..." polling flow
+4. "Payment confirmed!" → Dashboard
 
-### Why This Is the Complete Fix
-
-| Problem | Cause | Fix |
-|---|---|---|
-| Redirected to /auth after payment | Stripe in new tab = fresh auth context, race condition with loading guard | Same-tab navigation keeps auth hydrated |
-| No "verifying payment" shown | Race condition meant redirect to /auth fired before polling started | Same-tab navigation means user is already authenticated when they return |
-| No success message | Polling immediately cleared and navigated | Add `paymentSuccess` state with 2s success screen |
-
-No backend changes needed. Two frontend files only.
+**If payment not completed / times out:**
+- Polling gives up → toast "We couldn't verify your payment. Please try again." → redirected to `/choose-plan`
+- No accidental dashboard access
