@@ -1,74 +1,88 @@
 
-## Root Cause: Finally Found
+## The Actual Root Cause (No More Guessing)
 
-After reading all the code carefully, the real cause is a gap in the redirect guard logic at line 105-110 of `ProtectedRoute.tsx`.
-
-Here is the exact sequence:
-
-1. User returns from Stripe to `/dashboard?checkout=success`
-2. `AuthProvider`'s `onAuthStateChange` fires a `SIGNED_IN`/`TOKEN_REFRESHED` event, calling `fetchProfile()` — this sets `profileLoading: true` and fetches the profile, which at this point may have a stale `subscription_status` (not yet `'active'`)
-3. Polling starts, runs `check-subscription`, updates the DB, calls `fetchProfile()` again — now `profile.subscription_status = 'active'`
-4. `pollingDoneRef.current = true`, `setPaymentSuccess(true)` — overlay appears
-5. After 2 seconds, `setPaymentSuccess(false)` — re-render triggers
-6. The guard `useEffect` (line 92) fires. It sees `paymentSuccess = false`, `isCheckoutSuccess = false` (param was deleted), `pollingDoneRef.current = true` — **but has no logic to skip the subscription check just because polling succeeded**
-7. If `profileLoading` happens to be `true` at this moment (from another auth event's `fetchProfile` call), the component renders the spinner. When loading completes, the guard fires again — and if `profile.subscription_status` is stale in this new fetch cycle, it redirects to `/choose-plan` → white screen, or the redirect itself causes the blank
-
-**The fix: use `pollingDoneRef` to skip the subscription gate after a successful checkout**
-
-When `pollingDoneRef.current` is `true` and polling confirmed an active subscription, we should never redirect to `/choose-plan`. Add a `paymentVerifiedRef` that specifically tracks whether polling confirmed `active`, and skip the subscription redirect when it's set.
-
-## The Fix: One Additional Ref + One Guard Line
-
-### Change 1: Add `paymentVerifiedRef` to track confirmed active subscription
+Reading the current file carefully, the problem is on **line 117**:
 
 ```typescript
-const paymentVerifiedRef = useRef(false);
-```
-
-### Change 2: Set it when polling confirms active
-
-Inside the polling interval, when `subscription_status === 'active'`:
-```typescript
-if (currentProfile?.subscription_status === 'active') {
-  paymentVerifiedRef.current = true;  // ← add this
-  setPaymentSuccess(true);
-  setTimeout(() => {
-    setPaymentSuccess(false);
-  }, 2000);
+if (loading || profileLoading || checkoutPolling) {
+  return <Loader spinner />
 }
 ```
 
-### Change 3: Skip the subscription redirect guard if payment was verified
+`profileLoading` is a **global Zustand store value**. It gets set to `true` every time `fetchProfile()` is called — including from `AuthProvider`'s `onAuthStateChange` handler, which fires independently on token refreshes completely outside of the polling flow.
 
-In the guard `useEffect`, before redirecting to `/choose-plan`, check if payment was just verified:
+Here is the exact sequence causing the blank screen:
+
+1. Polling completes → `setCheckoutPolling(false)` → `paymentVerifiedRef.current = true` → `setPaymentSuccess(true)` → overlay appears, children render underneath
+2. 2 seconds later → `setPaymentSuccess(false)` → overlay disappears → dashboard should be visible ✓
+3. BUT: Supabase fires a `TOKEN_REFRESHED` event at any point → `AuthProvider` calls `fetchProfile()` → `profileLoading = true` in the global store
+4. Component re-renders → hits line 117 → `profileLoading` is `true` → renders the spinner **instead of children**
+5. `profileLoading` goes back to `false` → guard `useEffect` re-runs → sees `paymentVerifiedRef.current = true` → returns early → renders children
+
+This is the "blink to white" — it's not a blank forever, it's the spinner flash or a brief `null` render between states.
+
+The reason it appears as a full blank screen is that the `profileLoading` spinner replaces `{children}` entirely while auth token refresh happens.
+
+## The Fix: Stop Blocking Renders on `profileLoading` After Auth Is Established
+
+The `profileLoading` guard on line 117 is correct for initial page load (before the user is known), but it must **not** block rendering when the user and profile are already loaded and valid. A background token refresh should never cause a full component unmount.
+
+### Change 1: Split the loading gate
+
+Instead of:
 ```typescript
-if (!loading && user && !profileLoading && profile) {
-  if (isAdmin()) return;
-  if (paymentVerifiedRef.current) return;  // ← add this — skip gate after confirmed payment
-  const isExempt = SUBSCRIPTION_EXEMPT_PATHS.some(p => location.pathname.startsWith(p));
-  if (!isExempt && profile.subscription_status !== 'active') {
-    navigate('/choose-plan');
-  }
+if (loading || profileLoading || checkoutPolling) {
+  return <spinner />
 }
 ```
 
-This is a targeted, minimal fix. If polling confirmed the payment, the gate never fires — no matter what state `profile` is in during subsequent re-renders while auth events are settling.
+Change to:
+```typescript
+// Only show spinner on initial auth load or active checkout polling
+// Never block on profileLoading alone when user + profile are already known
+if (loading || checkoutPolling) {
+  return <spinner />
+}
 
-## Why This Works
+// profileLoading mid-session (token refresh, background re-fetch) should not 
+// unmount children. Only block on initial profileLoading when profile is null.
+if (profileLoading && !profile) {
+  return <spinner />
+}
+```
+
+This means:
+- First page load with no profile yet → spinner (correct)
+- Background token refresh with profile already loaded → children stay rendered (correct)
+- Checkout polling → spinner with "Verifying payment..." (correct)
+
+### Change 2: Remove `profileLoading` from the polling trigger
+
+Line 34: `if (!user || loading || profileLoading) return;`
+
+This causes polling to be blocked or restarted when `profileLoading` toggles. Change to:
+
+```typescript
+if (!user || loading) return;
+if (profileLoading && !profile) return; // Only block if profile truly not loaded yet
+```
+
+### Why This Definitively Fixes It
 
 ```
 Timeline (after fix):
-t=0ms    → polling confirms active → paymentVerifiedRef.current = true
-           → setPaymentSuccess(true) → overlay appears
-           → children already mounted underneath
-t=2000ms → setPaymentSuccess(false) → guard useEffect fires
-           → sees paymentVerifiedRef.current = true → returns early
-           → NO redirect to /choose-plan
-           → overlay disappears → dashboard visible
+t=0ms    → user returns to /dashboard?checkout=success  
+           → user known, profile known → children render immediately
+           → polling starts (not blocked by profileLoading)
+t=Xms    → TOKEN_REFRESHED fires → profileLoading = true
+           → profile already exists → condition `profileLoading && !profile` = false
+           → children STAY rendered, no spinner flash
+t=Ys     → polling confirms active → overlay shows
+t=Y+2s   → overlay hides → children already rendered underneath → dashboard visible
 ```
 
-The `paymentVerifiedRef` persists across re-renders (it's a ref, not state) and is never reset. Once the payment is confirmed, the gate is permanently bypassed for this component instance — which is correct, because the user just paid.
+No more blank screen. No more spinner flash. Background token refreshes are completely invisible to the user.
 
-## File Changed
+## File to Change
 
-Only `src/components/ProtectedRoute.tsx` — three small additions.
+Only `src/components/ProtectedRoute.tsx` — two small changes to the loading gate logic.
