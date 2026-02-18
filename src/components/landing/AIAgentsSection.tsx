@@ -45,7 +45,7 @@ export const AIAgentsSection = () => {
                 ))}
               </ul>
               <Button onClick={() => navigate('/auth?tab=signup')} className="bg-primary hover:bg-primary/90">
-                Get Started Free
+                Get Started
               </Button>
             </CardContent>
           </Card>
