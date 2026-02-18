@@ -1,32 +1,20 @@
 
-## Fix: User Deletion Still Blocked — New Constraint Identified
+## Fix: Apply Missing Database Migration
 
-### What Happened
+### Confirmed Root Cause
 
-The previous migration successfully fixed `audit_log` and `profiles`. However, there is a chain of blocking constraints. Now that profiles can be deleted, the database hits the next blocker:
+The backend logs show the exact same error persisting:
 
 ```
 ERROR: update or delete on table "profiles" violates foreign key constraint 
 "audiences_created_by_fkey" on table "audiences" (SQLSTATE 23503)
 ```
 
-### Full Constraint Audit
+The previously approved migration to fix `audiences.created_by` and `unlock_events.user_id` was never actually executed against the database. These two foreign key constraints are still set to `NO ACTION`, blocking deletion.
 
-A full scan of all foreign keys in the database was run. Here are every constraint referencing `profiles.id` and their current delete behavior:
+### Fix: Run the Migration Now
 
-| Constraint | Table | Column | Delete Rule | Status |
-|---|---|---|---|---|
-| `audiences_created_by_fkey` | `audiences` | `created_by` | NO ACTION | BLOCKING |
-| `unlock_events_user_id_fkey` | `unlock_events` | `user_id` | NO ACTION | BLOCKING |
-| `team_memberships_user_id_fkey` | `team_memberships` | `user_id` | CASCADE | OK |
-| `credit_transactions_user_id_fkey` | `credit_transactions` | `user_id` | CASCADE | OK |
-
-### Fix: One More Migration
-
-Two constraints need to be updated to `ON DELETE CASCADE`:
-
-1. `audiences.created_by` — when a user is deleted, their audiences should be deleted too (the audiences they created belong to their team, the team will also be cleaned up)
-2. `unlock_events.user_id` — when a user is deleted, their unlock event history should cascade away
+The SQL to apply:
 
 ```sql
 -- Fix audiences.created_by (NO ACTION → CASCADE)
@@ -48,11 +36,11 @@ ALTER TABLE public.unlock_events
 
 ### What This Does
 
-- When a user is deleted, their `audiences` records (where they are `created_by`) and `unlock_events` records will be automatically removed
-- The cascade chain then becomes: `auth.users` → `profiles` (CASCADE) → `audiences` (CASCADE), `unlock_events` (CASCADE), `audit_log` (CASCADE)
-- All other tables (`team_memberships`, `credit_transactions`) already have proper CASCADE rules
-- No code changes required — just this migration
+- When a user is deleted, their `audiences` rows (where they are `created_by`) are automatically removed
+- When a user is deleted, their `unlock_events` rows are automatically removed
+- The full cascade chain becomes: `auth.users` → `profiles` (CASCADE) → `audiences` (CASCADE), `unlock_events` (CASCADE), `audit_log` (CASCADE)
+- No code changes needed — only this migration
 
 ### No Code Changes Required
 
-The `admin-delete-user` edge function, hook, and UI are all correct. Only database constraint fixes are needed.
+The edge function, hook, and UI are all correct and ready. This database fix is the only remaining blocker.
