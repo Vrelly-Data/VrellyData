@@ -1,73 +1,67 @@
 
-## Root Cause: `window.open(url, '_top')` is Silently Blocked in the Preview
+## What's Actually Happening (Good News + Small Fix)
 
-### What the Evidence Shows
+### The Payment Flow Is Working
 
-The edge function logs are clear: `create-checkout` successfully creates a Stripe session and returns a URL every time. The session replay confirms the spinner appears and disappears. The button just resets. No error is thrown.
+The network data from the session confirms the payment went through successfully:
+- `check-subscription` returned `{"subscribed":true,"tier":"starter","credits":10000,...}`
+- The profile shows `subscription_status: "active"`, `stripe_subscription_id: "sub_1T2EJuRvAXonKS41UMz4OVaZ"`
 
-This is a silent browser security block. When code inside an iframe calls `window.open(url, '_top')`, the browser treats it as a cross-origin frame trying to navigate the top-level page — and **blocks it without throwing any error**. The function returns `null`. On the published site (no iframe), `_top` works correctly.
+Dennis Todd is a paying subscriber. The Stripe integration is working end-to-end.
 
-### The Fix: One Line Change in `useSubscription.ts`
+### Why the White Page Appears
 
-Detect whether the app is running inside an iframe. If yes, open in a new tab (`_blank`). If no (published site), navigate the top-level context (`_top`).
+The white page is a brief transitional blank caused by this sequence in `ProtectedRoute.tsx`:
 
-```typescript
-const inIframe = window.self !== window.top;
-if (inIframe) {
-  window.open(data.url, '_blank'); // Preview: new tab, no block
-} else {
-  window.open(data.url, '_top');   // Published: same tab, auth preserved
-}
+```
+1. checkoutPolling = true  → renders spinner ("Verifying your payment...")
+2. paymentSuccess = true   → renders success screen (green checkmark)
+3. After 2000ms timeout:
+   a. setPaymentSuccess(false)   ← React starts re-render, paymentSuccess = false
+   b. navigate('/dashboard')    ← URL changes, dashboard children try to mount
+   c. Between (a) and (b): none of the render branches match → white page flash
 ```
 
-This is actually what was implemented two iterations ago — but was replaced with the single `_top` call thinking it would work in the iframe context. It does not.
+Specifically: when `paymentSuccess` becomes `false`, the component no longer renders the success screen. But `checkoutPolling` is also `false` at this point (polling concluded), `loading` is `false`, and the children (`<Index />`) may take a render cycle to mount — so for a brief moment, nothing renders.
 
-### Why the New Tab (Preview) Path Now Works
+There is also a secondary issue: `navigate('/dashboard', { replace: true })` is called WHILE ALREADY on `/dashboard?checkout=success`. The URL change triggers a full re-render but the `ProtectedRoute` wrapping `/dashboard` re-evaluates its guards. At that exact moment, `pollingDoneRef.current` is `true` but `isCheckoutSuccess` just became `false` — so all guards run normally and children should render. But the transition can visually flash white.
 
-The previous concern with `_blank` was: "new tab = fresh auth context = race condition = redirect to /auth". That concern is now addressed by the current `ProtectedRoute`:
+### The Fix: One Small Change in ProtectedRoute.tsx
 
-1. The 500ms `authReady` guard delays any redirect before the auth session can hydrate from localStorage
-2. `if (isCheckoutSuccess && !pollingDoneRef.current) return;` prevents premature `/auth` redirects while checkout is being verified
-3. Polling always runs on `checkout=success` — no early shortcut trusting stale DB state
-
-So for the **preview testing flow**:
-1. Subscribe clicked → new tab opens to Stripe (not blocked)
-2. User completes payment → Stripe redirects new tab to `/dashboard?checkout=success`
-3. Auth hydrates from localStorage (same domain, session is available)
-4. 500ms guard + `isCheckoutSuccess` guard hold back any premature redirect
-5. Polling starts, `check-subscription` confirms active → success screen → dashboard
-
-For the **published site flow**:
-1. Subscribe clicked → `_top` navigates same tab to Stripe (no iframe to block)
-2. Payment → returns to same tab with session intact
-3. Polling confirms → success screen → dashboard
-
-### What Changes
-
-Only **one file, one code block** in `src/hooks/useSubscription.ts`:
-
-Replace:
+Instead of:
 ```typescript
-window.open(data.url, '_top');
+setPaymentSuccess(true);
+setTimeout(() => {
+  setPaymentSuccess(false);        // ← causes white flash
+  navigate('/dashboard', { replace: true });
+}, 2000);
 ```
 
-With:
+Do:
 ```typescript
-const inIframe = window.self !== window.top;
-if (inIframe) {
-  window.open(data.url, '_blank');
-} else {
-  window.open(data.url, '_top');
-}
+setPaymentSuccess(true);
+setTimeout(() => {
+  navigate('/dashboard', { replace: true });
+  // Don't clear paymentSuccess — let the component unmount naturally
+  // when navigation completes. The success screen stays visible until
+  // the new route renders, eliminating the white gap.
+}, 2000);
 ```
 
-No changes to `ProtectedRoute.tsx` — the current logic already handles both paths correctly.
+When `navigate('/dashboard', { replace: true })` fires (already on /dashboard), the route re-renders with clean URL and `ProtectedRoute` renders its children. Keeping `paymentSuccess = true` until the component fully unmounts means the success screen stays visible right up until the dashboard appears — no white gap.
 
-### Why This Is the Complete and Final Fix
+Additionally, remove the `setPaymentSuccess(false)` call entirely from the timeout since the component will unmount (or re-render with the dashboard) — there's no need to reset it manually.
 
-| Environment | Previous Behavior | After Fix |
-|---|---|---|
-| Lovable preview (iframe) | `_top` silently blocked, button resets | `_blank` opens new tab, works |
-| Published site (no iframe) | `_top` works correctly | `_top` still works correctly |
-| Auth after new tab payment | Would race to /auth | 500ms guard + isCheckoutSuccess guard holds |
-| Auth after same-tab payment | Session intact, polling runs | Session intact, polling runs |
+### What the Fixed Experience Looks Like
+
+```
+1. User completes Stripe payment in new tab (preview) or same tab (published)
+2. Returns to /dashboard?checkout=success
+3. [spinner] "Verifying your payment..." — for ~3 seconds
+4. [green checkmark] "Payment confirmed! Welcome to Vrelly."  — for 2 seconds  
+5. Dashboard slides in (no white gap)
+```
+
+### File to Change
+
+Only `src/components/ProtectedRoute.tsx` — remove the `setPaymentSuccess(false)` call from inside the 2-second timeout. The success screen will stay mounted until React naturally replaces it with the dashboard children on navigation.
