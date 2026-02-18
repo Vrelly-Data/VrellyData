@@ -5,7 +5,7 @@ const steps = [
   {
     icon: RefreshCw,
     title: 'Connect',
-    description: 'Sync your CRM, email tools, and LinkedIn. We capture every campaign, sequence, and result.',
+    description: 'Sync your Sales Data. We capture every campaign, sequence, and result.',
   },
   {
     icon: BarChart3,
