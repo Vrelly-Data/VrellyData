@@ -33,16 +33,16 @@ export const AIAgentsSection = () => {
                 <Bot className="w-7 h-7 text-primary" />
               </div>
               <h3 className="text-2xl font-bold text-foreground mb-3">Vrelly Sales Agent</h3>
-              <p className="text-muted-foreground mb-6 leading-relaxed">
-                Pre-trained on your live campaign data and our proprietary repository of hundreds of thousands of real outbound campaigns. Set up in 1 click.
+              <p className="text-muted-foreground mb-6 leading-relaxed">Pre-trained on your live campaign data and our proprietary sales repository
+
               </p>
               <ul className="space-y-3 mb-8">
-                {['Trained on your real sales data', 'Access to proprietary sales repository', '1-click setup and deployment', 'Continuous learning from new campaigns'].map((item) => (
-                  <li key={item} className="flex items-center gap-2 text-sm text-muted-foreground">
+                {['Trained on your real sales data', 'Access to proprietary sales repository', '1-click setup and deployment', 'Continuous learning from new campaigns'].map((item) =>
+                <li key={item} className="flex items-center gap-2 text-sm text-muted-foreground">
                     <div className="w-1.5 h-1.5 rounded-full bg-primary flex-shrink-0" />
                     {item}
                   </li>
-                ))}
+                )}
               </ul>
               <Button onClick={() => navigate('/auth?tab=signup')} className="bg-primary hover:bg-primary/90">
                 Get Started
@@ -61,12 +61,12 @@ export const AIAgentsSection = () => {
                 Built for your company, your data, your rules. Fully isolated AI sales agent with no third-party data sharing.
               </p>
               <ul className="space-y-3 mb-8">
-                {['Your data never leaves your environment', 'Custom-trained on your playbooks', 'SOC-2 compliance standards', 'Dedicated support & onboarding'].map((item) => (
-                  <li key={item} className="flex items-center gap-2 text-sm text-muted-foreground">
+                {['Your data never leaves your environment', 'Custom-trained on your playbooks', 'SOC-2 compliance standards', 'Dedicated support & onboarding'].map((item) =>
+                <li key={item} className="flex items-center gap-2 text-sm text-muted-foreground">
                     <div className="w-1.5 h-1.5 rounded-full bg-primary flex-shrink-0" />
                     {item}
                   </li>
-                ))}
+                )}
               </ul>
               <Button variant="outline">
                 Contact Sales
@@ -91,6 +91,6 @@ export const AIAgentsSection = () => {
           </div>
         </div>
       </div>
-    </section>
-  );
+    </section>);
+
 };
