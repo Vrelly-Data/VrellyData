@@ -1,81 +1,93 @@
 
-## Critical Bug: Every New User Gets Admin Role
+## Three Issues, One Root Cause
 
-### Root Cause Confirmed
+Everything traces back to a single bug in the Stripe webhook function.
 
-The `handle_new_user_team` database trigger, which runs automatically every time a new user signs up, contains this line:
+---
 
-```sql
-INSERT INTO public.user_roles (user_id, team_id, role)
-VALUES (NEW.id, new_team_id, 'admin');  -- BUG: should be 'member'
+### Issue 1: Wrong credits (25 instead of 25,000) — CRITICAL
+
+The webhook function uses `stripe.webhooks.constructEvent()` (synchronous), but the Deno runtime used by edge functions requires the async version. Every webhook event Stripe has ever sent has crashed with:
+
+```
+SubtleCryptoProvider cannot be used in a synchronous context.
+Use `await constructEventAsync(...)` instead of `constructEvent(...)`
 ```
 
-Every single user who creates an account is being inserted into `user_roles` with the `admin` role. This gives them full admin access to the platform — including the Admin panel, all user management, and all admin-only features.
+This means the webhook has **never successfully run a single time**. The database confirms this — the "Incrementums" test user shows `credits: 25` (the hardcoded default from profile creation) but `monthly_credit_limit: 25000` and `subscription_status: active`. The `monthly_credit_limit` was set by `check-subscription` (which reads directly from Stripe and bypasses the webhook), but the actual spendable `credits` field was never populated by the webhook.
 
-This was confirmed by querying the database: the test signup "Incrementums Test" (myall@incrementums.org) that just signed up moments ago is already an admin.
+**Fix:** Change `stripe.webhooks.constructEvent(body, signature, webhookSecret)` to `await stripe.webhooks.constructEventAsync(body, signature, webhookSecret)`.
 
-### Impact
+---
 
-- Every user who has signed up on the live site has admin-level access
-- They can access `/admin`, view all users, delete users, manage sales knowledge, etc.
-- This is an active security breach while the site is live
+### Issue 2: Redirected to sign-in page after payment
 
-### The Fix
+After Stripe checkout, users are sent to `/dashboard?checkout=success`. The `ProtectedRoute` then polls the profile to wait for `subscription_status === 'active'`. The polling works (because `check-subscription` correctly reads from Stripe directly and updates the database), but then after the polling succeeds, the user needs to be authenticated — they ARE authenticated. 
 
-One database migration to correct the trigger — changing `'admin'` to `'member'`:
+However, there's a UX gap: after Stripe redirect, if the user's browser session was lost or the Stripe redirect opened in a new tab and the original tab was on a different state, the user might land on `/dashboard` not logged in. Additionally, the `check-subscription` function correctly sets `subscription_status` to `active` BUT the `credits` field is never being set to the plan's credit value — it stays at 25.
 
-```sql
-CREATE OR REPLACE FUNCTION public.handle_new_user_team()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
-AS $$
-DECLARE
-  new_team_id UUID;
-BEGIN
-  -- Create a team for the new user
-  INSERT INTO public.teams (name)
-  VALUES (COALESCE(NEW.raw_user_meta_data->>'name', 'My Team') || '''s Team')
-  RETURNING id INTO new_team_id;
-  
-  -- Add user as member to their team
-  INSERT INTO public.team_memberships (user_id, team_id, role)
-  VALUES (NEW.id, new_team_id, 'member');
-  
-  -- Add user as MEMBER in user_roles (not admin)
-  INSERT INTO public.user_roles (user_id, team_id, role)
-  VALUES (NEW.id, new_team_id, 'member');
-  
-  RETURN NEW;
-END;
-$$;
+The credit grant logic needs to run. The fix for the webhook will also fix this, but we should also ensure `check-subscription` sets the `credits` field when it finds an active subscription (not just `monthly_credit_limit`).
+
+---
+
+### Issue 3: Email verification — Low priority for now
+
+Email verification is currently disabled (auto-confirm is on, per the project memory). For a paid B2B product like Vrelly, this is worth enabling eventually, but it's not causing the current payment flow issues. The more pressing fix is the webhook. Once the site is more stable, re-enabling email verification can be done as a separate step.
+
+---
+
+### Technical Implementation
+
+**File to change:** `supabase/functions/stripe-webhook/index.ts`
+
+**Change 1 — Fix async signature verification (line 50):**
+```typescript
+// BEFORE (broken):
+const event = stripe.webhooks.constructEvent(body, signature, webhookSecret);
+
+// AFTER (fixed):
+const event = await stripe.webhooks.constructEventAsync(body, signature, webhookSecret);
 ```
 
-### Cleanup: Remove Accidental Admin Roles
+**Change 2 — Also set `credits` when webhook processes subscription.created:**
 
-After fixing the trigger, any users who signed up and were incorrectly granted admin access need to have their role corrected to `member`:
+When `customer.subscription.created` fires, in addition to updating `monthly_credit_limit`, also set `credits` to the plan's credit value so users have spendable credits from the start.
 
-```sql
--- Downgrade all non-intended admins (everyone except myallbudden@gmail.com)
-UPDATE public.user_roles
-SET role = 'member'
-WHERE role = 'admin'
-AND user_id != '9840671d-369f-438e-ac6e-f319771a1b5a';  -- your admin user ID
+```typescript
+// In the 'customer.subscription.created' branch, add credits to updates:
+if (event.type === 'customer.subscription.created') {
+  updates.credits_used_this_month = 0;
+  updates.credits = credits;  // Grant the actual credits
+}
 ```
 
-Currently, the only users in the database are:
-- `myallbudden@gmail.com` (you, the legitimate admin) — stays as admin
-- `myall@incrementums.org` (the test signup from a moment ago) — gets corrected to member
+**File to change:** `supabase/functions/check-subscription/index.ts`
 
-### What This Does NOT Change
+**Change 3 — Also set `credits` when check-subscription detects a new subscription:**
 
-- Your admin account (`myallbudden@gmail.com`) keeps its `admin` role — no change
-- All future signups will correctly get the `member` role
-- The `isAdmin()` check in the app correctly reads from the database, so this fix takes effect immediately for all existing sessions
+The `check-subscription` function updates the profile with subscription info but also never sets `credits`. Add it to the update so the polling fallback after checkout also grants credits:
 
-### Steps to Apply
+```typescript
+// In the shouldResetCredits block, also grant the credits:
+if (shouldResetCredits) {
+  updateData.credits_used_this_month = 0;
+  updateData.credits = credits;  // Grant credits
+}
+```
 
-1. Run the migration to fix the trigger function (changes `'admin'` → `'member'`)
-2. Run the cleanup SQL to downgrade incorrectly-assigned admins
-3. Verify by signing up a test account — it should NOT have admin access
+**After the fix:** Manually update the existing "Incrementums" test user's credits from 25 to 25,000 to reflect what they paid for.
+
+---
+
+### Summary of Changes
+
+| File | Change | Impact |
+|---|---|---|
+| `stripe-webhook/index.ts` | `constructEventAsync` instead of `constructEvent` | Webhooks start working |
+| `stripe-webhook/index.ts` | Set `credits` on subscription.created | New signups get correct credits |
+| `check-subscription/index.ts` | Set `credits` on new billing period | Checkout polling grants credits as fallback |
+| Database (manual) | Set Incrementums credits to 25,000 | Fix existing test user |
+
+### Email Verification
+
+Not causing payment issues. Can be re-enabled separately when you're ready — it would require users to click a verification link before logging in, which adds friction but is good practice for a paid product.
