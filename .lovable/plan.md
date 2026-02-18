@@ -1,71 +1,101 @@
 
-## Root Cause: Polling Reads Stale Database, Never Queries Stripe
+## Comparisons: A Dedicated Standalone Page
 
-The timing breakdown from the logs explains everything:
+### What's Being Built
+
+A new public page at `/comparisons` that users reach by clicking "Comparisons" in the landing page navbar. It will NOT be embedded in the landing page — it's its own full-screen experience with the same Navbar and Footer.
+
+---
+
+### User Experience Flow
+
+1. User visits `vrelly.com` (landing page)
+2. Clicks **"Comparisons"** in the top nav
+3. Navigates to `/comparisons` — a fresh page
+4. Sees a hero header: **"Vrelly vs [animated competitor]"** where the competitor name cycles Apollo → ZoomInfo → Seamless → Standard LLM automatically
+5. Two tab-style toggle buttons: **"Data Providers"** and **"Copy AI"**
+6. The active tab shows a clear side-by-side comparison table
+7. A CTA at the bottom: "Start for free" → `/auth?tab=signup`
+
+---
+
+### Page Structure: `/comparisons`
 
 ```text
-03:42:48  create-checkout completes, Stripe checkout page opens
-~03:42:55  User completes payment, redirected to /dashboard?checkout=success
-~03:42:55  ProtectedRoute polling starts: checks fetchProfile() every 2s, max 5 times (10 seconds)
-~03:42:55  DB still has subscription_status = 'inactive' (webhook never fired for subscription.created)
-~03:43:05  Polling gives up after 5 attempts. Sends user back to /choose-plan ← FAILURE POINT
-03:43:35   check-subscription finally runs (60-second background poll) and updates DB to 'active'
-```
-
-The polling in `ProtectedRoute` only calls `fetchProfile()` — a database read. But the database doesn't know the subscription is active yet. The only function that queries Stripe and writes to the database is `check-subscription`, and it runs on a 60-second background timer from `useSubscription`. By the time it runs, the 10-second polling window has already closed.
-
----
-
-### The Fix: Call `check-subscription` During Polling
-
-The polling loop in `ProtectedRoute.tsx` needs to invoke `check-subscription` on each attempt, so it actively asks Stripe "is this subscription active?" and writes that answer to the database — not just read whatever stale value is already in the database.
-
-**File: `src/components/ProtectedRoute.tsx`**
-
-Changes:
-1. Import `supabase` client
-2. In the polling interval, call `supabase.functions.invoke('check-subscription')` before `fetchProfile()`
-3. Increase polling window from 5 attempts × 2s to 8 attempts × 3s (24 seconds total) to give Stripe more time to settle
-
-```typescript
-// In the polling interval:
-const interval = setInterval(async () => {
-  pollCountRef.current += 1;
-  
-  // Actively query Stripe and update DB — don't just read stale DB state
-  try {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session) {
-      await supabase.functions.invoke('check-subscription', {
-        headers: { Authorization: `Bearer ${session.access_token}` },
-      });
-    }
-  } catch (e) {
-    // Silent — we'll check the profile next regardless
-  }
-  
-  await fetchProfile(); // Now the profile should have the updated status
-  
-  const currentProfile = useAuthStore.getState().profile;
-  if (currentProfile?.subscription_status === 'active' || pollCountRef.current >= 8) {
-    // resolve...
-  }
-}, 3000);
+[ Navbar ]
+  |
+  Hero: "See How Vrelly Compares"
+  Subtitle: "Vrelly vs [animated: Apollo / ZoomInfo / Seamless / Standard LLM]"
+  |
+  Tab Toggle: [ Data Providers ]  [ Copy AI ]
+  |
+  Comparison Table (changes per tab):
+    Left column: Competitor (red X marks)
+    Right column: Vrelly (green check marks)
+  |
+  CTA Section: "Ready to switch?" → Get Started button
+  |
+[ Footer ]
 ```
 
 ---
 
-### Why the Stripe Webhook Is Not the Solution Here
+### Tab 1 — Data Providers (Apollo, ZoomInfo, Seamless)
 
-The webhook is correctly configured and IS receiving events — but the events it received were `invoice.created`, `invoice.paid`, `payment_intent.created`, etc. None of these write `subscription_status = 'active'` to the database. Only `customer.subscription.created` does that, and it either wasn't sent to the webhook endpoint or was missed. This is why the `check-subscription` function (the Stripe-polling fallback) is the correct mechanism for the post-checkout flow — it just needs to be called actively during the polling window, not waited on for 60 seconds.
+Animated competitor name cycles: Apollo → ZoomInfo → Seamless (every 2.5s)
 
----
-
-### Summary of Changes
-
-| File | Change | Impact |
+| Feature | Apollo / ZoomInfo / Seamless | Vrelly |
 |---|---|---|
-| `src/components/ProtectedRoute.tsx` | Call `check-subscription` on each poll iteration | DB gets updated during polling window |
-| `src/components/ProtectedRoute.tsx` | Increase polling to 8 attempts × 3s = 24s | More time for Stripe to settle |
+| 10,000 enriched credits | Extremely expensive | Affordable at scale |
+| Data Insights | None | Full campaign & performance analytics |
+| Learns from YOUR data | No | Yes — AI trained on your history |
+| Copy assistance | No | 1-click AI-powered copy improvement |
+| Data freshness | Stale | Continuously verified |
 
-This is a one-file change, approximately 10 lines added to the polling interval. No backend changes needed.
+### Tab 2 — Copy AI (Standard LLM)
+
+Competitor name fixed to "Standard LLM" (ChatGPT, etc.)
+
+| Feature | Standard LLM | Vrelly |
+|---|---|---|
+| Trained on sales correlation | Generic, mediocre output | Proprietary model on 200K+ real campaigns |
+| Knows your data | No context about you | Learns from your historical performance |
+| Outreach copy quality | Generic slop | High-converting, data-backed copy |
+| Sales-specific training | None | Benchmarked against top performers |
+| Personalization | One-size-fits-all | Tailored to your audience & vertical |
+
+---
+
+### Animation Details
+
+- The animated competitor name uses `useState` + `useEffect` with `setInterval` at 2,500ms — same pattern as `AnimatedCounter` in HeroSection
+- The name fades out and up using a CSS opacity + translateY transition (0.3s ease)
+- When "Copy AI" tab is active, the animation pauses and shows "Standard LLM" as static text
+- Scroll-entry animations use the existing `useScrollAnimation` hook for table rows fading in
+
+---
+
+### Files to Create / Modify
+
+**New: `src/pages/Comparisons.tsx`**
+- Full page with Navbar + Footer
+- Hero header with animated competitor name
+- Tab switcher (React `useState`)
+- Side-by-side comparison grid
+- CTA section at bottom
+
+**Modified: `src/components/landing/Navbar.tsx`**
+- Add `navigate('/comparisons')` link for "Comparisons" between "How It Works" and "Pricing"
+- Logo click on the comparisons page navigates back to `/` (already handled by `window.scrollTo` — will change logo click to `navigate('/')` so it works from any page)
+
+**Modified: `src/App.tsx`**
+- Add `<Route path="/comparisons" element={<Comparisons />} />` as a public route (no auth required)
+
+---
+
+### Technical Notes
+
+- No database or backend changes needed — purely frontend
+- No new dependencies — uses lucide-react icons (`Check`, `X`), existing Tailwind, existing hooks
+- The Navbar is already used on the Landing page; the same component works on `/comparisons` since it uses `useNavigate` (not scroll-based anchors for the new link)
+- Logo click on Navbar will be updated from `window.scrollTo` to `navigate('/')` so it works correctly when accessed from `/comparisons`
