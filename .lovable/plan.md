@@ -1,93 +1,69 @@
 
-## Three Issues, One Root Cause
+## Fix: Silent Error Handling in Subscription Check
 
-Everything traces back to a single bug in the Stripe webhook function.
+### What's Happening
 
----
+The "Failed to check subscription status" error toast is triggered by `useSubscription.ts` whenever the `check-subscription` backend function returns any error — including harmless auth errors like a stale cached token. This is not a real failure for the user, but it looks alarming.
 
-### Issue 1: Wrong credits (25 instead of 25,000) — CRITICAL
+The actual subscription data DID get set correctly (25,000 credits). The error was cosmetic noise from a stale session during testing.
 
-The webhook function uses `stripe.webhooks.constructEvent()` (synchronous), but the Deno runtime used by edge functions requires the async version. Every webhook event Stripe has ever sent has crashed with:
+### The Root Issue
 
-```
-SubtleCryptoProvider cannot be used in a synchronous context.
-Use `await constructEventAsync(...)` instead of `constructEvent(...)`
-```
-
-This means the webhook has **never successfully run a single time**. The database confirms this — the "Incrementums" test user shows `credits: 25` (the hardcoded default from profile creation) but `monthly_credit_limit: 25000` and `subscription_status: active`. The `monthly_credit_limit` was set by `check-subscription` (which reads directly from Stripe and bypasses the webhook), but the actual spendable `credits` field was never populated by the webhook.
-
-**Fix:** Change `stripe.webhooks.constructEvent(body, signature, webhookSecret)` to `await stripe.webhooks.constructEventAsync(body, signature, webhookSecret)`.
-
----
-
-### Issue 2: Redirected to sign-in page after payment
-
-After Stripe checkout, users are sent to `/dashboard?checkout=success`. The `ProtectedRoute` then polls the profile to wait for `subscription_status === 'active'`. The polling works (because `check-subscription` correctly reads from Stripe directly and updates the database), but then after the polling succeeds, the user needs to be authenticated — they ARE authenticated. 
-
-However, there's a UX gap: after Stripe redirect, if the user's browser session was lost or the Stripe redirect opened in a new tab and the original tab was on a different state, the user might land on `/dashboard` not logged in. Additionally, the `check-subscription` function correctly sets `subscription_status` to `active` BUT the `credits` field is never being set to the plan's credit value — it stays at 25.
-
-The credit grant logic needs to run. The fix for the webhook will also fix this, but we should also ensure `check-subscription` sets the `credits` field when it finds an active subscription (not just `monthly_credit_limit`).
-
----
-
-### Issue 3: Email verification — Low priority for now
-
-Email verification is currently disabled (auto-confirm is on, per the project memory). For a paid B2B product like Vrelly, this is worth enabling eventually, but it's not causing the current payment flow issues. The more pressing fix is the webhook. Once the site is more stable, re-enabling email verification can be done as a separate step.
-
----
-
-### Technical Implementation
-
-**File to change:** `supabase/functions/stripe-webhook/index.ts`
-
-**Change 1 — Fix async signature verification (line 50):**
+In `src/hooks/useSubscription.ts`, line 36-43:
 ```typescript
-// BEFORE (broken):
-const event = stripe.webhooks.constructEvent(body, signature, webhookSecret);
-
-// AFTER (fixed):
-const event = await stripe.webhooks.constructEventAsync(body, signature, webhookSecret);
-```
-
-**Change 2 — Also set `credits` when webhook processes subscription.created:**
-
-When `customer.subscription.created` fires, in addition to updating `monthly_credit_limit`, also set `credits` to the plan's credit value so users have spendable credits from the start.
-
-```typescript
-// In the 'customer.subscription.created' branch, add credits to updates:
-if (event.type === 'customer.subscription.created') {
-  updates.credits_used_this_month = 0;
-  updates.credits = credits;  // Grant the actual credits
+if (error) {
+  console.error('Error checking subscription:', error);
+  toast({
+    title: 'Error',
+    description: 'Failed to check subscription status',
+    variant: 'destructive',
+  });
 }
 ```
 
-**File to change:** `supabase/functions/check-subscription/index.ts`
+This fires on any error — including:
+- Stale/invalid JWT (user was deleted and re-signed up)
+- Brief network errors
+- The function cold-starting
 
-**Change 3 — Also set `credits` when check-subscription detects a new subscription:**
+None of these warrant a red error toast visible to the user.
 
-The `check-subscription` function updates the profile with subscription info but also never sets `credits`. Add it to the update so the polling fallback after checkout also grants credits:
+### The Fix
 
-```typescript
-// In the shouldResetCredits block, also grant the credits:
-if (shouldResetCredits) {
-  updateData.credits_used_this_month = 0;
-  updateData.credits = credits;  // Grant credits
-}
-```
+**Change 1 — Remove the error toast from the background subscription poll.**
 
-**After the fix:** Manually update the existing "Incrementums" test user's credits from 25 to 25,000 to reflect what they paid for.
+The periodic check (`useEffect` interval) should silently fail. Only show an error if the user explicitly triggered an action (like clicking "Subscribe") and it failed.
 
----
+The subscription check is a passive background poll. If it fails once, it will retry in 60 seconds. Showing a toast every time it fails is noisy and misleading — especially since the subscription status is also synced via the profile (which comes from `check-subscription` writing to the database directly).
 
-### Summary of Changes
+**Change 2 — Also suppress the toast for authentication errors from `check-subscription`.**
 
-| File | Change | Impact |
-|---|---|---|
-| `stripe-webhook/index.ts` | `constructEventAsync` instead of `constructEvent` | Webhooks start working |
-| `stripe-webhook/index.ts` | Set `credits` on subscription.created | New signups get correct credits |
-| `check-subscription/index.ts` | Set `credits` on new billing period | Checkout polling grants credits as fallback |
-| Database (manual) | Set Incrementums credits to 25,000 | Fix existing test user |
+When `check-subscription` returns a 500 with "Authentication error: User from sub claim in JWT does not exist", that means the JWT is stale. The correct response is to silently skip that check and wait for the auth state to refresh — not to show an error.
+
+### Technical Changes
+
+**File: `src/hooks/useSubscription.ts`**
+
+- Remove the `toast` import and error toast from `checkSubscription`
+- Keep the `console.error` for debugging
+- Only show user-visible errors from `createCheckoutSession` and `openCustomerPortal` (which are user-initiated actions)
+
+This is a small change — removing about 6 lines from the `checkSubscription` function.
 
 ### Email Verification
 
-Not causing payment issues. Can be re-enabled separately when you're ready — it would require users to click a verification link before logging in, which adds friction but is good practice for a paid product.
+Regarding your original question: email verification is **moderately important** for a paid B2B product like Vrelly, for these reasons:
+
+- It prevents fake/typo email signups from consuming subscription slots
+- It gives you a verified contact for billing issues
+- It's standard practice for paid SaaS products
+
+However, enabling it right now would mean existing users can still sign in, but new signups would need to click a verification link before accessing the app. Given you're in early testing, this is fine to add soon but isn't causing any current issues. The current "failed to check subscription status" error is unrelated to email verification.
+
+### Summary
+
+| Change | File | Impact |
+|---|---|---|
+| Remove error toast from background subscription poll | `src/hooks/useSubscription.ts` | No more false-alarm error popups |
+
+The subscription system is working correctly. The credits fix from earlier is confirmed working (25,000 credits granted). This is purely a UX polish fix to stop the background check from alarming users with error toasts they can't act on.
