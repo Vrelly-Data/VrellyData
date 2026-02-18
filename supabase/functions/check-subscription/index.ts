@@ -133,7 +133,8 @@ serve(async (req) => {
       // Reset credits_used_this_month if new billing period started
       if (shouldResetCredits) {
         updateData.credits_used_this_month = 0;
-        logStep("Resetting credits for new billing period");
+        updateData.credits = credits;
+        logStep("Resetting credits for new billing period", { credits });
       }
 
       await supabaseClient
