@@ -8,9 +8,10 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
-import { Loader2, Mail, Linkedin, MessageSquare, Phone, RefreshCw, Copy, FileText, Sparkles, ChevronDown, ChevronRight } from 'lucide-react';
+import { Loader2, Mail, Linkedin, MessageSquare, Phone, RefreshCw, Copy, FileText, Sparkles, ChevronDown, ChevronRight, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { RevampResultDialog } from './RevampResultDialog';
+import { CreateCopyDialog } from './CreateCopyDialog';
 
 const stepTypeIcons: Record<string, React.ReactNode> = {
   email: <Mail className="h-4 w-4" />,
@@ -45,6 +46,7 @@ export function CopyTab() {
   const [revampStepInfo, setRevampStepInfo] = useState<{ stepNumber: number; stepType: string } | null>(null);
   const [revampDialogOpen, setRevampDialogOpen] = useState(false);
   const [revampAllProgress, setRevampAllProgress] = useState<{ current: number; total: number } | null>(null);
+  const [createCopyOpen, setCreateCopyOpen] = useState(false);
   
   const { data: sequences, isLoading: sequencesLoading } = useSyncedSequences(
     selectedCampaignId || undefined
@@ -188,6 +190,12 @@ export function CopyTab() {
 
   return (
     <div className="space-y-6">
+      <div className="flex justify-end">
+        <Button onClick={() => setCreateCopyOpen(true)}>
+          <Plus className="h-4 w-4 mr-2" />
+          Create New Copy
+        </Button>
+      </div>
       {/* Campaign Selector */}
       <div className="flex items-center gap-4">
         <Select value={selectedCampaignId} onValueChange={setSelectedCampaignId}>
@@ -371,6 +379,8 @@ export function CopyTab() {
         stepNumber={revampStepInfo?.stepNumber || 0}
         stepType={revampStepInfo?.stepType || 'email'}
       />
+
+      <CreateCopyDialog open={createCopyOpen} onOpenChange={setCreateCopyOpen} />
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { BuildAudienceDialog } from './BuildAudienceDialog';
 import { useSyncedContactsPaged, fetchAllContactsForExport } from '@/hooks/useSyncedContactsPaged';
 import { useSyncedCampaigns } from '@/hooks/useSyncedCampaigns';
 import { useOutboundIntegrations } from '@/hooks/useOutboundIntegrations';
