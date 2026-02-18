@@ -14,11 +14,19 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [checkoutPolling, setCheckoutPolling] = useState(false);
   const [paymentSuccess, setPaymentSuccess] = useState(false);
+  const [authReady, setAuthReady] = useState(false);
   const pollCountRef = useRef(0);
   const pollingDoneRef = useRef(false);
   const { toast } = useToast();
 
   const isCheckoutSuccess = searchParams.get('checkout') === 'success';
+
+  // Give auth 500ms to hydrate before allowing redirects — prevents premature
+  // /auth redirects when returning from Stripe with a valid session.
+  useEffect(() => {
+    const t = setTimeout(() => setAuthReady(true), 500);
+    return () => clearTimeout(t);
+  }, []);
 
   // Handle checkout=success polling
   useEffect(() => {
@@ -27,20 +35,8 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
     // If polling already concluded, don't restart
     if (pollingDoneRef.current) return;
 
-    // If subscription is already active, show success and proceed
-    if (profile?.subscription_status === 'active') {
-      pollingDoneRef.current = true;
-      setPaymentSuccess(true);
-      searchParams.delete('checkout');
-      setSearchParams(searchParams, { replace: true });
-      setTimeout(() => {
-        setPaymentSuccess(false);
-        navigate('/dashboard', { replace: true });
-      }, 2000);
-      return;
-    }
-
-    // Start polling
+    // Always start polling — never trust stale DB state when checkout=success
+    // is in the URL. check-subscription is the authoritative Stripe check.
     if (!checkoutPolling) {
       setCheckoutPolling(true);
       pollCountRef.current = 0;
@@ -99,6 +95,8 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
     // If checkout=success is in the URL and polling hasn't concluded yet,
     // give auth time to settle — never redirect to /auth prematurely.
     if (isCheckoutSuccess && !pollingDoneRef.current) return;
+    // Wait for the 500ms auth hydration guard before redirecting
+    if (!authReady) return;
 
     if (!loading && !user) {
       navigate('/auth');
@@ -112,7 +110,7 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
         navigate('/choose-plan');
       }
     }
-  }, [user, loading, profile, profileLoading, navigate, location.pathname, checkoutPolling, paymentSuccess, isCheckoutSuccess]);
+  }, [user, loading, profile, profileLoading, navigate, location.pathname, checkoutPolling, paymentSuccess, isCheckoutSuccess, authReady]);
 
   // Payment success screen
   if (paymentSuccess) {
