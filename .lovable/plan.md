@@ -1,59 +1,71 @@
 
-## What Went Wrong During Signup
+## Root Cause: Polling Reads Stale Database, Never Queries Stripe
 
-The new user "Incrementums" was created successfully (their profile shows `credits: 25,000`, `subscription_status: active` — so the previous fixes worked). But the initial signup flow still broke at the checkout step before Stripe was even reached.
+The timing breakdown from the logs explains everything:
 
-### Root Cause: Wrong Key in create-checkout
-
-In `supabase/functions/create-checkout/index.ts`, line 22:
-
-```typescript
-// CURRENT (broken):
-const supabaseClient = createClient(
-  Deno.env.get("SUPABASE_URL") ?? "",
-  Deno.env.get("SUPABASE_ANON_KEY") ?? ""  // ← WRONG KEY
-);
+```text
+03:42:48  create-checkout completes, Stripe checkout page opens
+~03:42:55  User completes payment, redirected to /dashboard?checkout=success
+~03:42:55  ProtectedRoute polling starts: checks fetchProfile() every 2s, max 5 times (10 seconds)
+~03:42:55  DB still has subscription_status = 'inactive' (webhook never fired for subscription.created)
+~03:43:05  Polling gives up after 5 attempts. Sends user back to /choose-plan ← FAILURE POINT
+03:43:35   check-subscription finally runs (60-second background poll) and updates DB to 'active'
 ```
 
-The `SUPABASE_ANON_KEY` is the public key used by browsers. When an edge function uses it to call `supabaseClient.auth.getUser(token)`, it validates the JWT through the public auth API — which can fail or behave unexpectedly for brand-new sessions immediately after signup. The session logs confirm: `[CREATE-CHECKOUT] ERROR - {"message":"User not authenticated or email not available"}` at the exact moment the new Incrementums user tried to subscribe.
+The polling in `ProtectedRoute` only calls `fetchProfile()` — a database read. But the database doesn't know the subscription is active yet. The only function that queries Stripe and writes to the database is `check-subscription`, and it runs on a 60-second background timer from `useSubscription`. By the time it runs, the 10-second polling window has already closed.
 
-Compare this with `check-subscription` which correctly uses `SUPABASE_SERVICE_ROLE_KEY` — that's why check-subscription works fine while create-checkout fails.
+---
 
-### Why the Rest of the Flow Eventually Worked
+### The Fix: Call `check-subscription` During Polling
 
-Despite the checkout failure, the Incrementums test account shows `subscription_status: active` and `credits: 25,000` — because from the session replay, it appears a previous test payment from the same email address already existed in Stripe, and `check-subscription` picked it up on the next background poll.
+The polling loop in `ProtectedRoute.tsx` needs to invoke `check-subscription` on each attempt, so it actively asks Stripe "is this subscription active?" and writes that answer to the database — not just read whatever stale value is already in the database.
 
-### What Needs to Change
+**File: `src/components/ProtectedRoute.tsx`**
 
-**File: `supabase/functions/create-checkout/index.ts`**
-
-One-line fix — change `SUPABASE_ANON_KEY` to `SUPABASE_SERVICE_ROLE_KEY`:
+Changes:
+1. Import `supabase` client
+2. In the polling interval, call `supabase.functions.invoke('check-subscription')` before `fetchProfile()`
+3. Increase polling window from 5 attempts × 2s to 8 attempts × 3s (24 seconds total) to give Stripe more time to settle
 
 ```typescript
-// FIXED:
-const supabaseClient = createClient(
-  Deno.env.get("SUPABASE_URL") ?? "",
-  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
-  { auth: { persistSession: false } }
-);
+// In the polling interval:
+const interval = setInterval(async () => {
+  pollCountRef.current += 1;
+  
+  // Actively query Stripe and update DB — don't just read stale DB state
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session) {
+      await supabase.functions.invoke('check-subscription', {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+    }
+  } catch (e) {
+    // Silent — we'll check the profile next regardless
+  }
+  
+  await fetchProfile(); // Now the profile should have the updated status
+  
+  const currentProfile = useAuthStore.getState().profile;
+  if (currentProfile?.subscription_status === 'active' || pollCountRef.current >= 8) {
+    // resolve...
+  }
+}, 3000);
 ```
 
-This makes the function consistent with `check-subscription` and ensures JWT validation works reliably for all users including brand-new signups.
+---
 
-### What This Fixes
+### Why the Stripe Webhook Is Not the Solution Here
 
-| Symptom | Cause | After Fix |
+The webhook is correctly configured and IS receiving events — but the events it received were `invoice.created`, `invoice.paid`, `payment_intent.created`, etc. None of these write `subscription_status = 'active'` to the database. Only `customer.subscription.created` does that, and it either wasn't sent to the webhook endpoint or was missed. This is why the `check-subscription` function (the Stripe-polling fallback) is the correct mechanism for the post-checkout flow — it just needs to be called actively during the polling window, not waited on for 60 seconds.
+
+---
+
+### Summary of Changes
+
+| File | Change | Impact |
 |---|---|---|
-| "User not authenticated or email not available" | Anon key can't reliably validate fresh JWTs | Service role key validates all JWTs reliably |
-| Checkout silently fails after signup | Same as above | Checkout opens Stripe correctly |
-| User redirected nowhere after clicking Subscribe | Checkout URL never returned | Stripe checkout page opens |
+| `src/components/ProtectedRoute.tsx` | Call `check-subscription` on each poll iteration | DB gets updated during polling window |
+| `src/components/ProtectedRoute.tsx` | Increase polling to 8 attempts × 3s = 24s | More time for Stripe to settle |
 
-### What This Does NOT Change
-
-- The Stripe webhook fix (already done — uses `constructEventAsync`)
-- The credits fix (already done — `credits` field is set correctly)
-- The silent error handling (already done — no false-alarm toasts)
-
-### Summary
-
-One file, one line changed. The `create-checkout` function needs to use the service role key for auth validation, not the anon key. This is the same pattern used by all other edge functions in this project.
+This is a one-file change, approximately 10 lines added to the polling interval. No backend changes needed.
