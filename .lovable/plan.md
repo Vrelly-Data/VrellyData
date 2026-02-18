@@ -1,48 +1,58 @@
 
-## Fix: User Deletion Blocked by Foreign Key Constraint
+## Fix: User Deletion Still Blocked — New Constraint Identified
 
-### Confirmed Root Cause
+### What Happened
 
-The backend logs show this exact error every time a user deletion is attempted:
+The previous migration successfully fixed `audit_log` and `profiles`. However, there is a chain of blocking constraints. Now that profiles can be deleted, the database hits the next blocker:
 
 ```
-ERROR: update or delete on table "users" violates foreign key constraint 
-"audit_log_user_id_fkey" on table "audit_log"
+ERROR: update or delete on table "profiles" violates foreign key constraint 
+"audiences_created_by_fkey" on table "audiences" (SQLSTATE 23503)
 ```
 
-The `audit_log` table has a foreign key pointing to `auth.users` set to `NO ACTION` on delete — meaning the database refuses to delete any user who has audit log records. The `profiles` table has a similar `RESTRICT` constraint.
+### Full Constraint Audit
 
-### Fix: One Database Migration
+A full scan of all foreign keys in the database was run. Here are every constraint referencing `profiles.id` and their current delete behavior:
 
-Update both foreign key constraints to use `ON DELETE CASCADE` so that when a user is deleted, their audit log entries and profile are automatically cleaned up.
+| Constraint | Table | Column | Delete Rule | Status |
+|---|---|---|---|---|
+| `audiences_created_by_fkey` | `audiences` | `created_by` | NO ACTION | BLOCKING |
+| `unlock_events_user_id_fkey` | `unlock_events` | `user_id` | NO ACTION | BLOCKING |
+| `team_memberships_user_id_fkey` | `team_memberships` | `user_id` | CASCADE | OK |
+| `credit_transactions_user_id_fkey` | `credit_transactions` | `user_id` | CASCADE | OK |
 
-**SQL to run:**
+### Fix: One More Migration
+
+Two constraints need to be updated to `ON DELETE CASCADE`:
+
+1. `audiences.created_by` — when a user is deleted, their audiences should be deleted too (the audiences they created belong to their team, the team will also be cleaned up)
+2. `unlock_events.user_id` — when a user is deleted, their unlock event history should cascade away
 
 ```sql
--- Fix audit_log constraint (NO ACTION → CASCADE)
-ALTER TABLE public.audit_log
-  DROP CONSTRAINT IF EXISTS audit_log_user_id_fkey;
+-- Fix audiences.created_by (NO ACTION → CASCADE)
+ALTER TABLE public.audiences
+  DROP CONSTRAINT IF EXISTS audiences_created_by_fkey;
 
-ALTER TABLE public.audit_log
-  ADD CONSTRAINT audit_log_user_id_fkey
-  FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+ALTER TABLE public.audiences
+  ADD CONSTRAINT audiences_created_by_fkey
+  FOREIGN KEY (created_by) REFERENCES public.profiles(id) ON DELETE CASCADE;
 
--- Fix profiles constraint (RESTRICT → CASCADE)
-ALTER TABLE public.profiles
-  DROP CONSTRAINT IF EXISTS profiles_id_fkey;
+-- Fix unlock_events.user_id (NO ACTION → CASCADE)
+ALTER TABLE public.unlock_events
+  DROP CONSTRAINT IF EXISTS unlock_events_user_id_fkey;
 
-ALTER TABLE public.profiles
-  ADD CONSTRAINT profiles_id_fkey
-  FOREIGN KEY (id) REFERENCES auth.users(id) ON DELETE CASCADE;
+ALTER TABLE public.unlock_events
+  ADD CONSTRAINT unlock_events_user_id_fkey
+  FOREIGN KEY (user_id) REFERENCES public.profiles(id) ON DELETE CASCADE;
 ```
 
 ### What This Does
 
-- Deleting a user from the Admin panel will cascade-delete their `audit_log` rows and `profiles` row automatically
-- No data loss concerns — audit logs for a deleted user have no purpose once the user is gone
-- The `admin-delete-user` edge function and UI code are already correct — this database fix is the only change needed
-- After this runs, deleting any non-admin user from the Users tab will work immediately
+- When a user is deleted, their `audiences` records (where they are `created_by`) and `unlock_events` records will be automatically removed
+- The cascade chain then becomes: `auth.users` → `profiles` (CASCADE) → `audiences` (CASCADE), `unlock_events` (CASCADE), `audit_log` (CASCADE)
+- All other tables (`team_memberships`, `credit_transactions`) already have proper CASCADE rules
+- No code changes required — just this migration
 
 ### No Code Changes Required
 
-Only the database migration needs to run. The edge function, hook, and UI are all working correctly.
+The `admin-delete-user` edge function, hook, and UI are all correct. Only database constraint fixes are needed.
