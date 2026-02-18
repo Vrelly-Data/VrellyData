@@ -21,6 +21,7 @@ import Admin from "./pages/Admin";
 import DataPlayground from "./pages/DataPlayground";
 import ResetPassword from "./pages/ResetPassword";
 import ChoosePlan from "./pages/ChoosePlan";
+import CheckoutSuccess from "./pages/CheckoutSuccess";
 
 const queryClient = new QueryClient();
 
@@ -38,6 +39,7 @@ const App = () => (
                 <Route path="/comparisons" element={<Comparisons />} />
                 <Route path="/auth" element={<Auth />} />
                 <Route path="/reset-password" element={<ResetPassword />} />
+                <Route path="/checkout-success" element={<CheckoutSuccess />} />
                 <Route path="/choose-plan" element={<ProtectedRoute><ChoosePlan /></ProtectedRoute>} />
                 <Route path="/dashboard" element={<ProtectedRoute><Index /></ProtectedRoute>} />
                 <Route path="/people" element={<ProtectedRoute><People /></ProtectedRoute>} />
