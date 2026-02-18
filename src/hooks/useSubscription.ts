@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from './use-toast';
 
+
 export interface SubscriptionStatus {
   subscribed: boolean;
   tier: string;
@@ -35,11 +36,8 @@ export const useSubscription = () => {
 
       if (error) {
         console.error('Error checking subscription:', error);
-        toast({
-          title: 'Error',
-          description: 'Failed to check subscription status',
-          variant: 'destructive',
-        });
+        // Silently fail — this is a background poll and errors (stale JWT, cold start, etc.)
+        // are transient and will auto-retry in 60 seconds.
       } else if (data) {
         setSubscriptionStatus(data);
       }
