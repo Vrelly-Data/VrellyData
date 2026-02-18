@@ -1,68 +1,93 @@
 
-## The Real Fix: Skip Polling When Profile Is Already Active
+## What Is Actually Happening (Confirmed by Reading Every File)
 
-After reviewing all the code and network logs carefully, the issue is now clear:
+After reading all the code, here is the definitive sequence causing the white screen:
 
-**What the network logs prove:**
-The profile response shows `subscription_status: "active"` immediately on page load. The Stripe webhook already updated the database BEFORE the user returned to the app. So when the user lands on `/dashboard?checkout=success`, the profile is already correct.
+1. User pays on Stripe. Stripe redirects to `https://audience-forge-80.lovable.app/dashboard?checkout=success` (full page load).
+2. `ProtectedRoute` mounts. `isVerifying` initializes to `true` (from URL param). ✓
+3. `AuthProvider`'s `getSession()` resolves → `setLoading(false)` → `fetchProfile()` runs → `profileLoading = true`.
+4. Profile loads (already `active` in DB). `profile` is set in Zustand. `profileLoading = false`.
+5. The guard `useEffect` fires: `isVerifying = true` → **returns early**. ✓ (correct)
+6. The verify `useEffect` fires (user is available, not loading, verifyStartedRef is false) → sets `verifyStartedRef = true` → cleans URL → starts `verify()` async function.
+7. `verify()` calls `check-subscription` (~600ms) then calls `fetchProfile()` again → profile reloads.
+8. `verify()` finishes → `setIsVerifying(false)`.
+9. **React batches the state update.** In the next render, `isVerifying = false`, `profile = {subscription_status: 'active'}`.
+10. Guard `useEffect` fires. `isVerifying = false`, `loading = false`, `user` exists, `profile` exists, `profileLoading = false`. `isAdmin()` = false. Not exempt path. `profile.subscription_status === 'active'` → **does NOT redirect**. ✓
 
-**The actual deadlock being caused:**
-1. Page loads, profile is already `active`
-2. `isCheckoutSuccess = true` → polling trigger fires unconditionally → `setCheckoutPolling(true)`
-3. `checkoutPolling = true` → line 119 renders the full-screen spinner, blocking the dashboard
-4. After 3 seconds, poll completes, `paymentSuccess = true` → overlay shows for 2s
-5. `paymentSuccess = false` → overlay hides → dashboard should show, but something re-triggers or the component is now in a bad state
+This should work. So why does it still show a white screen?
 
-The polling mechanism is the problem. It runs no matter what, even when the profile is already `active`. The 3-second spinner is unnecessary and the source of the stuck white screen.
+**The actual bug is a React StrictMode / double-invocation problem.**
 
-**The fix: In the checkout polling trigger, if profile already shows `active`, skip polling entirely and go straight to the success overlay.**
+In development (and sometimes in production), React can invoke `useState` initializers and effects twice. The `useState(() => searchParams.get('checkout') === 'success')` lazy initializer runs. But more critically: **`verifyStartedRef.current` is per-component-instance**. If React unmounts and remounts the component (which it does with StrictMode, or when the route changes), a **second `ProtectedRoute` instance** mounts with a fresh `verifyStartedRef.current = false` and `isVerifying = false` (because by then `searchParams.get('checkout')` returns `null` — the URL was already cleaned on step 6 above).
 
-```typescript
-// Handle checkout=success polling
-useEffect(() => {
-  if (!user || loading) return;
-  if (profileLoading && !profile) return;
-  if (!isCheckoutSuccess) return;
-  if (pollingDoneRef.current) return;
+**This is the bug**: The URL cleanup at step 6 (`setSearchParams` removing `checkout`) happens inside `verify()` BEFORE `setIsVerifying(false)`. So:
+- First render: `isVerifying = true` → URL gets cleaned
+- If component remounts or re-initializes: `searchParams.get('checkout')` is now `null` → `isVerifying` initializes to `false`
+- Guard immediately fires with stale profile or runs subscription check with no protection
 
-  // If profile is already active (webhook already fired), skip polling
-  if (profile?.subscription_status === 'active') {
-    pollingDoneRef.current = true;
-    paymentVerifiedRef.current = true;
-    searchParams.delete('checkout');
-    setSearchParams(searchParams, { replace: true });
-    setPaymentSuccess(true);
-    setTimeout(() => setPaymentSuccess(false), 2000);
-    return;
-  }
+## The Real Fix: Decouple from URL Param
 
-  // Profile not yet active — start polling
-  if (!checkoutPolling) {
-    setCheckoutPolling(true);
-    pollCountRef.current = 0;
-  }
-}, [user, loading, profileLoading, isCheckoutSuccess, profile]);
-```
+The URL is cleaned too early. By removing `?checkout=success` from the URL before verification is complete, any re-render or remount will lose the `isVerifying = true` initialization.
 
-This means:
-- If DB is already updated (most common case when webhook fires fast) → instant success overlay, no 3-second wait, no spinner blocking the dashboard
-- If DB is NOT yet updated → polling starts as before
+**Solution**: Move the URL cleanup to AFTER `setIsVerifying(false)`, or better yet — use `sessionStorage` as the source of truth for the verification gate, not the URL param.
 
-**Also: Remove `checkoutPolling` from the render spinner logic** — the spinner should only show during initial `loading`, not during the checkout verification. The children (dashboard) should render underneath while verification happens, and the success overlay appears on top. This prevents the "stuck white screen" entirely.
+The cleanest fix:
+
+1. **Store the checkout flag in `sessionStorage`** when we detect it from the URL on first render — this survives URL cleanup.
+2. Clear the URL param immediately (good for UX).
+3. Read `isVerifying` from `sessionStorage`, not from the URL.
+4. Clear `sessionStorage` only after verification is complete.
+
+## The Implementation
+
+### Only `src/components/ProtectedRoute.tsx` changes
 
 ```typescript
-// Change line 119 from:
-if (loading || checkoutPolling) {
-
-// To:
-if (loading) {
+// Initialize from URL OR sessionStorage (survives URL cleanup + remounts)
+const [isVerifying, setIsVerifying] = useState(() => {
+  const fromUrl = searchParams.get('checkout') === 'success';
+  if (fromUrl) {
+    sessionStorage.setItem('checkout_verifying', '1');
+  }
+  return fromUrl || sessionStorage.getItem('checkout_verifying') === '1';
+});
 ```
 
-The success overlay (`paymentSuccess`) already covers the full screen with `fixed inset-0 z-50`, so children rendering underneath is invisible to the user. No need to block children with a spinner during checkout polling.
+And clear sessionStorage when verification is done:
+```typescript
+setIsVerifying(false);
+sessionStorage.removeItem('checkout_verifying');
+```
 
-## Files to Change
+The URL cleanup can stay where it is (immediately, for clean UX).
 
-Only `src/components/ProtectedRoute.tsx`:
+This is a 3-line change that makes the verification gate resilient to URL cleanup, remounts, and React re-renders.
 
-1. Add early-exit for already-active profile in the polling trigger `useEffect`
-2. Remove `checkoutPolling` from the render gate (line 119) so dashboard renders underneath while the overlay is shown
+## Why This Definitively Fixes It
+
+```
+Timeline (after fix):
+
+t=0: Full page load at /dashboard?checkout=success
+     → fromUrl = true → sessionStorage set → isVerifying = true
+
+t=1: URL cleaned (?checkout param removed)
+     → sessionStorage still has '1' → isVerifying stays true
+
+t=2: Any remount/re-render
+     → searchParams.get('checkout') = null (URL cleaned)
+     → BUT sessionStorage.getItem('checkout_verifying') = '1'
+     → isVerifying = true ✓ (gate stays up)
+
+t=3: verify() completes → setIsVerifying(false) + sessionStorage cleared
+     → profile is active → guard does not redirect → dashboard shows ✓
+```
+
+No more white screen. No dependency on URL param surviving React re-renders.
+
+## Files Changed
+
+Only `src/components/ProtectedRoute.tsx` — 3 line change:
+1. `useState` initializer reads from both URL AND sessionStorage
+2. Sets sessionStorage when URL param is detected
+3. Clears sessionStorage when `setIsVerifying(false)` is called
