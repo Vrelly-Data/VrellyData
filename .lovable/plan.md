@@ -1,46 +1,81 @@
 
-## Fix: Apply Missing Database Migration
+## Critical Bug: Every New User Gets Admin Role
 
-### Confirmed Root Cause
+### Root Cause Confirmed
 
-The backend logs show the exact same error persisting:
-
-```
-ERROR: update or delete on table "profiles" violates foreign key constraint 
-"audiences_created_by_fkey" on table "audiences" (SQLSTATE 23503)
-```
-
-The previously approved migration to fix `audiences.created_by` and `unlock_events.user_id` was never actually executed against the database. These two foreign key constraints are still set to `NO ACTION`, blocking deletion.
-
-### Fix: Run the Migration Now
-
-The SQL to apply:
+The `handle_new_user_team` database trigger, which runs automatically every time a new user signs up, contains this line:
 
 ```sql
--- Fix audiences.created_by (NO ACTION → CASCADE)
-ALTER TABLE public.audiences
-  DROP CONSTRAINT IF EXISTS audiences_created_by_fkey;
-
-ALTER TABLE public.audiences
-  ADD CONSTRAINT audiences_created_by_fkey
-  FOREIGN KEY (created_by) REFERENCES public.profiles(id) ON DELETE CASCADE;
-
--- Fix unlock_events.user_id (NO ACTION → CASCADE)
-ALTER TABLE public.unlock_events
-  DROP CONSTRAINT IF EXISTS unlock_events_user_id_fkey;
-
-ALTER TABLE public.unlock_events
-  ADD CONSTRAINT unlock_events_user_id_fkey
-  FOREIGN KEY (user_id) REFERENCES public.profiles(id) ON DELETE CASCADE;
+INSERT INTO public.user_roles (user_id, team_id, role)
+VALUES (NEW.id, new_team_id, 'admin');  -- BUG: should be 'member'
 ```
 
-### What This Does
+Every single user who creates an account is being inserted into `user_roles` with the `admin` role. This gives them full admin access to the platform — including the Admin panel, all user management, and all admin-only features.
 
-- When a user is deleted, their `audiences` rows (where they are `created_by`) are automatically removed
-- When a user is deleted, their `unlock_events` rows are automatically removed
-- The full cascade chain becomes: `auth.users` → `profiles` (CASCADE) → `audiences` (CASCADE), `unlock_events` (CASCADE), `audit_log` (CASCADE)
-- No code changes needed — only this migration
+This was confirmed by querying the database: the test signup "Incrementums Test" (myall@incrementums.org) that just signed up moments ago is already an admin.
 
-### No Code Changes Required
+### Impact
 
-The edge function, hook, and UI are all correct and ready. This database fix is the only remaining blocker.
+- Every user who has signed up on the live site has admin-level access
+- They can access `/admin`, view all users, delete users, manage sales knowledge, etc.
+- This is an active security breach while the site is live
+
+### The Fix
+
+One database migration to correct the trigger — changing `'admin'` to `'member'`:
+
+```sql
+CREATE OR REPLACE FUNCTION public.handle_new_user_team()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  new_team_id UUID;
+BEGIN
+  -- Create a team for the new user
+  INSERT INTO public.teams (name)
+  VALUES (COALESCE(NEW.raw_user_meta_data->>'name', 'My Team') || '''s Team')
+  RETURNING id INTO new_team_id;
+  
+  -- Add user as member to their team
+  INSERT INTO public.team_memberships (user_id, team_id, role)
+  VALUES (NEW.id, new_team_id, 'member');
+  
+  -- Add user as MEMBER in user_roles (not admin)
+  INSERT INTO public.user_roles (user_id, team_id, role)
+  VALUES (NEW.id, new_team_id, 'member');
+  
+  RETURN NEW;
+END;
+$$;
+```
+
+### Cleanup: Remove Accidental Admin Roles
+
+After fixing the trigger, any users who signed up and were incorrectly granted admin access need to have their role corrected to `member`:
+
+```sql
+-- Downgrade all non-intended admins (everyone except myallbudden@gmail.com)
+UPDATE public.user_roles
+SET role = 'member'
+WHERE role = 'admin'
+AND user_id != '9840671d-369f-438e-ac6e-f319771a1b5a';  -- your admin user ID
+```
+
+Currently, the only users in the database are:
+- `myallbudden@gmail.com` (you, the legitimate admin) — stays as admin
+- `myall@incrementums.org` (the test signup from a moment ago) — gets corrected to member
+
+### What This Does NOT Change
+
+- Your admin account (`myallbudden@gmail.com`) keeps its `admin` role — no change
+- All future signups will correctly get the `member` role
+- The `isAdmin()` check in the app correctly reads from the database, so this fix takes effect immediately for all existing sessions
+
+### Steps to Apply
+
+1. Run the migration to fix the trigger function (changes `'admin'` → `'member'`)
+2. Run the cleanup SQL to downgrade incorrectly-assigned admins
+3. Verify by signing up a test account — it should NOT have admin access
