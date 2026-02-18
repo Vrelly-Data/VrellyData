@@ -1,59 +1,76 @@
 
+## Fix: Ensure Cancellation Takes Effect at Billing Period End
 
-## Fix: Distinguish Platform Admins from Team Admins
+### What's Currently Happening
 
-### Problem
-The `handle_new_user_team` trigger gives every new user the `admin` role in their own auto-created team. The sidebar and `AdminRoute` check `userRoles.some(r => r.role === 'admin')`, which matches ANY admin role -- so every user sees the Admin panel.
+When Richard Dawson cancelled via the Stripe Customer Portal, Stripe set `cancel_at_period_end: true` on his subscription. This means:
+- His subscription stays **active in Stripe until March 17, 2026**
+- On March 17, Stripe fires `customer.subscription.deleted`
+- The stripe-webhook should then set his profile to `canceled`/`free`
 
-### Solution
-Use the existing `is_global_admin` database function (which checks if a user is admin in any team) is not the right check either since every user is admin of their own team. Instead, we need a concept of "platform admin" vs "team admin."
+This is actually correct behavior -- a user who cancels should retain access until the period they paid for ends.
 
-The cleanest fix: stop assigning `admin` role to every new user in `handle_new_user_team`. New users should get `member` role in `user_roles`. Only your account (myallbudden@gmail.com) should have `admin` in `user_roles`.
+### The Problem: Stripe Webhook Isn't Being Called
 
-### Changes
+The stripe-webhook logs show only a single "shutdown" entry -- no actual event processing. This means the webhook URL is either not registered in Stripe's dashboard, or it's pointed at the wrong URL.
 
-**1. Update `handle_new_user_team` trigger (database migration)**
-- Change the `user_roles` insert from `role = 'admin'` to `role = 'member'`
-- New users will still be members of their team but won't have admin privileges
+This matters because when March 17 arrives, the `customer.subscription.deleted` event won't reach the app, and Richard Dawson will keep his `active` status in the database indefinitely.
 
-**2. Clean up existing bad data (data update)**
-- Remove the `admin` role from Richard Dawson's `user_roles` entry (and any other non-admin users who got it)
-- Keep only your account's admin role intact
+The `check-subscription` function (called every minute per session) IS a reliable fallback -- it queries Stripe directly and will catch the cancellation -- but only when the user is actively logged in.
 
-**3. No frontend changes needed**
-- The sidebar already checks `userRoles.some(r => r.role === 'admin')` which will now correctly return `false` for regular users
-- `AdminRoute`, `ProtectedRoute`, and `is_global_admin()` all rely on the same `user_roles` table, so they'll work correctly once the data and trigger are fixed
+### Changes Required
+
+**1. Fix the stripe-webhook to handle `cancel_at_period_end` (stripe-webhook edge function)**
+
+Currently when a subscription is updated to `cancel_at_period_end: true`, the webhook fires `customer.subscription.updated` with `cancel_at_period_end: true`. The existing handler processes this and sets `subscription_status: active` (correct). We need to also save a `cancel_at_period_end` flag and `cancel_at` date to the profile so the UI can show a warning.
+
+We'll add a `cancel_at_period_end` boolean and `cancel_at` timestamp to the profile update logic in the webhook handler.
+
+**2. Update `check-subscription` to detect `cancel_at_period_end`**
+
+The function currently only looks at `status: "active"` subscriptions and returns `subscribed: true`. We need it to also return `cancel_at_period_end` and `cancel_at` so the UI can inform the user their cancellation is pending.
+
+**3. Show cancellation warning in `ChoosePlan` / Settings UI**
+
+When `cancel_at_period_end` is true, show a banner like: "Your subscription will end on March 17, 2026. You'll lose access after that date."
+
+**4. Add a database column `cancel_at_period_end` to profiles**
+
+A boolean column (default `false`) so the cancellation state persists between sessions, independent of the real-time Stripe check.
 
 ### Technical Details
 
-Database migration to update the trigger:
+**Database migration:**
 ```sql
-CREATE OR REPLACE FUNCTION public.handle_new_user_team()
-RETURNS trigger
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path TO 'public'
-AS $$
-DECLARE
-  new_team_id UUID;
-BEGIN
-  INSERT INTO public.teams (name)
-  VALUES (COALESCE(NEW.raw_user_meta_data->>'name', 'My Team') || '''s Team')
-  RETURNING id INTO new_team_id;
-
-  INSERT INTO public.team_memberships (user_id, team_id, role)
-  VALUES (NEW.id, new_team_id, 'member');
-
-  -- Changed: new users get 'member' role, not 'admin'
-  INSERT INTO public.user_roles (user_id, team_id, role)
-  VALUES (NEW.id, new_team_id, 'member');
-
-  RETURN NEW;
-END;
-$$;
+ALTER TABLE public.profiles 
+ADD COLUMN IF NOT EXISTS cancel_at_period_end boolean DEFAULT false,
+ADD COLUMN IF NOT EXISTS cancel_at timestamp with time zone;
 ```
 
-Data cleanup (using insert/update tool):
-- Query all `user_roles` where `role = 'admin'` and the user is NOT your account
-- Update those rows to `role = 'member'`
+**stripe-webhook update** -- in the `customer.subscription.updated` handler, add:
+```typescript
+updates.cancel_at_period_end = subscription.cancel_at_period_end;
+updates.cancel_at = subscription.cancel_at 
+  ? new Date(subscription.cancel_at * 1000).toISOString() 
+  : null;
+```
 
+**check-subscription update** -- return `cancel_at_period_end` and `cancel_at` in the response, and save them to the profile:
+```typescript
+// In the hasActiveSub block:
+updateData.cancel_at_period_end = subscription.cancel_at_period_end;
+updateData.cancel_at = subscription.cancel_at 
+  ? new Date(subscription.cancel_at * 1000).toISOString() 
+  : null;
+```
+
+**`customer.subscription.deleted` webhook handler** -- already sets `subscription_status: 'canceled'` and `subscription_tier: 'free'`. We'll also clear `cancel_at_period_end` and `cancel_at` here.
+
+**`ChoosePlan.tsx`** -- add a banner that reads from the profile's `cancel_at_period_end` and `cancel_at` fields when the user is on an `active` subscription with a pending cancellation.
+
+### What This Achieves
+
+- Users who cancel retain access until their billing period ends (correct)
+- A clear warning banner tells them when they'll lose access
+- The database correctly reflects the pending cancellation state
+- When the period ends, both the webhook AND the `check-subscription` polling will catch it and revoke access
