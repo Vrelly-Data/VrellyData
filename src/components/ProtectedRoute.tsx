@@ -31,7 +31,8 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
   // Handle checkout=success polling
   useEffect(() => {
-    if (!user || loading || profileLoading) return;
+    if (!user || loading) return;
+    if (profileLoading && !profile) return;
     if (!isCheckoutSuccess) return;
     // If polling already concluded, don't restart
     if (pollingDoneRef.current) return;
@@ -114,13 +115,23 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
     }
   }, [user, loading, profile, profileLoading, navigate, location.pathname, checkoutPolling, paymentSuccess, isCheckoutSuccess, authReady]);
 
-  if (loading || profileLoading || checkoutPolling) {
+  if (loading || checkoutPolling) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center gap-3">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
         {(checkoutPolling || (isCheckoutSuccess && !pollingDoneRef.current)) && (
           <p className="text-muted-foreground text-sm">Verifying your payment...</p>
         )}
+      </div>
+    );
+  }
+
+  // Only block on initial profileLoading when profile hasn't loaded yet.
+  // Background token refreshes (profileLoading=true but profile exists) must not unmount children.
+  if (profileLoading && !profile) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center gap-3">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
       </div>
     );
   }
