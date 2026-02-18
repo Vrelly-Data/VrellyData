@@ -1,76 +1,77 @@
 
-## Fix: Ensure Cancellation Takes Effect at Billing Period End
+## Fix Google Search Results for Vrelly
 
-### What's Currently Happening
+### What's Happening
 
-When Richard Dawson cancelled via the Stripe Customer Portal, Stripe set `cancel_at_period_end: true` on his subscription. This means:
-- His subscription stays **active in Stripe until March 17, 2026**
-- On March 17, Stripe fires `customer.subscription.deleted`
-- The stripe-webhook should then set his profile to `canceled`/`free`
+There are three separate problems causing the messy Google results:
 
-This is actually correct behavior -- a user who cancels should retain access until the period they paid for ends.
+1. **vrellydata.com** is a separate old domain that Google has independently indexed with its own old description ("B2B Audience Intelligence Platform"). That needs to be handled at the DNS/domain level — either point it to vrelly.com with a redirect, or leave it and let it age out.
 
-### The Problem: Stripe Webhook Isn't Being Called
+2. **"Everything You Need to Scale Outbound Sales"** — Google is pulling this from a cached version of either vrellydata.com or an older vrelly.com. Once vrelly.com is properly live and Google re-crawls it, this will update to the current `index.html` description. Nothing in the current codebase has that old copy.
 
-The stripe-webhook logs show only a single "shutdown" entry -- no actual event processing. This means the webhook URL is either not registered in Stripe's dashboard, or it's pointed at the wrong URL.
-
-This matters because when March 17 arrives, the `customer.subscription.deleted` event won't reach the app, and Richard Dawson will keep his `active` status in the database indefinitely.
-
-The `check-subscription` function (called every minute per session) IS a reliable fallback -- it queries Stripe directly and will catch the cancellation -- but only when the user is actively logged in.
+3. **"Inbox" and "Privacy Policy" sub-links** — Google is crawling `/auth` (shows "Welcome back. Sign in") and the footer links. These appear under the main result as sitelinks. To fix this, we need to:
+   - Add a `noindex` meta tag to the `/auth` page so Google stops indexing the login screen
+   - Create a real `sitemap.xml` (currently missing despite being referenced in `robots.txt`)
+   - Update `robots.txt` to block indexing of app-internal routes (`/auth`, `/dashboard`, `/people`, etc.)
 
 ### Changes Required
 
-**1. Fix the stripe-webhook to handle `cancel_at_period_end` (stripe-webhook edge function)**
+**1. `index.html` — Update meta description (main Google snippet)**
 
-Currently when a subscription is updated to `cancel_at_period_end: true`, the webhook fires `customer.subscription.updated` with `cancel_at_period_end: true`. The existing handler processes this and sets `subscription_status: active` (correct). We need to also save a `cancel_at_period_end` flag and `cancel_at` date to the profile so the UI can show a warning.
+The current description is fine technically but we'll sharpen it to exactly match what you want Google to show. This is the single most important change for what appears under "vrelly.com" in search.
 
-We'll add a `cancel_at_period_end` boolean and `cancel_at` timestamp to the profile update logic in the webhook handler.
+**2. `public/robots.txt` — Block internal app routes**
 
-**2. Update `check-subscription` to detect `cancel_at_period_end`**
-
-The function currently only looks at `status: "active"` subscriptions and returns `subscribed: true`. We need it to also return `cancel_at_period_end` and `cancel_at` so the UI can inform the user their cancellation is pending.
-
-**3. Show cancellation warning in `ChoosePlan` / Settings UI**
-
-When `cancel_at_period_end` is true, show a banner like: "Your subscription will end on March 17, 2026. You'll lose access after that date."
-
-**4. Add a database column `cancel_at_period_end` to profiles**
-
-A boolean column (default `false`) so the cancellation state persists between sessions, independent of the real-time Stripe check.
-
-### Technical Details
-
-**Database migration:**
-```sql
-ALTER TABLE public.profiles 
-ADD COLUMN IF NOT EXISTS cancel_at_period_end boolean DEFAULT false,
-ADD COLUMN IF NOT EXISTS cancel_at timestamp with time zone;
+Tell Google not to index pages that aren't public-facing:
+```
+Disallow: /auth
+Disallow: /dashboard
+Disallow: /people
+Disallow: /companies
+Disallow: /playground
+Disallow: /settings
+Disallow: /billing
+Disallow: /admin
+Disallow: /choose-plan
+Disallow: /reset-password
 ```
 
-**stripe-webhook update** -- in the `customer.subscription.updated` handler, add:
-```typescript
-updates.cancel_at_period_end = subscription.cancel_at_period_end;
-updates.cancel_at = subscription.cancel_at 
-  ? new Date(subscription.cancel_at * 1000).toISOString() 
-  : null;
+**3. `public/sitemap.xml` — Create it (currently missing)**
+
+The `robots.txt` references `https://vrelly.com/sitemap.xml` but that file doesn't exist. Google logs this as an error. We'll create it listing only the public pages:
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://vrelly.com/</loc>
+    <priority>1.0</priority>
+    <changefreq>weekly</changefreq>
+  </url>
+</urlset>
 ```
 
-**check-subscription update** -- return `cancel_at_period_end` and `cancel_at` in the response, and save them to the profile:
-```typescript
-// In the hasActiveSub block:
-updateData.cancel_at_period_end = subscription.cancel_at_period_end;
-updateData.cancel_at = subscription.cancel_at 
-  ? new Date(subscription.cancel_at * 1000).toISOString() 
-  : null;
-```
+**4. `src/pages/Auth.tsx` — Add noindex to the sign-in page**
 
-**`customer.subscription.deleted` webhook handler** -- already sets `subscription_status: 'canceled'` and `subscription_tier: 'free'`. We'll also clear `cancel_at_period_end` and `cancel_at` here.
+Inject a `<meta name="robots" content="noindex, nofollow">` tag via a `useEffect` on the auth page so Google stops surfacing "Welcome back. Sign in to your account" as a sitelink.
 
-**`ChoosePlan.tsx`** -- add a banner that reads from the profile's `cancel_at_period_end` and `cancel_at` fields when the user is on an `active` subscription with a pending cancellation.
+**5. `src/components/landing/Footer.tsx` — Add real links for Privacy Policy and Terms**
 
-### What This Achieves
+Currently those links go to `#` (nothing). Google is indexing them as broken. We'll either create `/privacy` and `/terms` pages with real content, or mark those links with `rel="nofollow"` so Google ignores them in the meantime.
 
-- Users who cancel retain access until their billing period ends (correct)
-- A clear warning banner tells them when they'll lose access
-- The database correctly reflects the pending cancellation state
-- When the period ends, both the webhook AND the `check-subscription` polling will catch it and revoke access
+### What This Will NOT Fix Immediately
+
+- **vrellydata.com** is a completely separate domain that only you can manage. If you own it, the best fix is to set up a 301 redirect from vrellydata.com → vrelly.com at the DNS level. If you don't own it, you can use Google Search Console to request removal.
+- **Cached results** from before the DNS change — Google typically updates these within 1–4 weeks after it re-crawls your live domain.
+
+### What This WILL Fix (After Google Re-crawls)
+
+- The auth/inbox sitelink will disappear once `noindex` is in place
+- The "Privacy Policy" sitelink will stop appearing
+- Google will have a valid sitemap to properly understand your site structure
+- The main description will be exactly what you specify in `index.html`
+
+### Recommended New Meta Description for `index.html`
+
+Something like: *"Vrelly provides enriched B2B prospect data, AI-powered sales agents, and outreach intelligence built on 200,000+ real sales campaigns. Scale your outbound today."*
+
+This is 160 characters (Google's limit) and hits all three core keywords.
