@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from 'react';
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { useAuthStore } from '@/stores/authStore';
 import { supabase } from '@/integrations/supabase/client';
-import { Loader2 } from 'lucide-react';
+import { Loader2, CheckCircle } from 'lucide-react';
 
 const SUBSCRIPTION_EXEMPT_PATHS = ['/choose-plan', '/settings', '/billing'];
 
@@ -12,17 +12,25 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const [checkoutPolling, setCheckoutPolling] = useState(false);
+  const [paymentSuccess, setPaymentSuccess] = useState(false);
   const pollCountRef = useRef(0);
+
+  const isCheckoutSuccess = searchParams.get('checkout') === 'success';
 
   // Handle checkout=success polling
   useEffect(() => {
     if (!user || loading || profileLoading) return;
-    if (searchParams.get('checkout') !== 'success') return;
+    if (!isCheckoutSuccess) return;
 
-    // If subscription is already active, clear param and proceed
+    // If subscription is already active, show success and proceed
     if (profile?.subscription_status === 'active') {
+      setPaymentSuccess(true);
       searchParams.delete('checkout');
       setSearchParams(searchParams, { replace: true });
+      setTimeout(() => {
+        setPaymentSuccess(false);
+        navigate('/dashboard', { replace: true });
+      }, 2000);
       return;
     }
 
@@ -31,7 +39,7 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
       setCheckoutPolling(true);
       pollCountRef.current = 0;
     }
-  }, [user, loading, profileLoading, searchParams, profile]);
+  }, [user, loading, profileLoading, isCheckoutSuccess, profile]);
 
   useEffect(() => {
     if (!checkoutPolling) return;
@@ -39,7 +47,6 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
     const interval = setInterval(async () => {
       pollCountRef.current += 1;
 
-      // Actively query Stripe and update DB — don't just read stale DB state
       try {
         const { data: { session } } = await supabase.auth.getSession();
         if (session) {
@@ -51,7 +58,7 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
         // Silent — we'll check the profile next regardless
       }
 
-      await fetchProfile(); // Now the profile should have the updated status
+      await fetchProfile();
 
       const currentProfile = useAuthStore.getState().profile;
       if (currentProfile?.subscription_status === 'active' || pollCountRef.current >= 8) {
@@ -60,7 +67,13 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
         searchParams.delete('checkout');
         setSearchParams(searchParams, { replace: true });
 
-        if (currentProfile?.subscription_status !== 'active') {
+        if (currentProfile?.subscription_status === 'active') {
+          setPaymentSuccess(true);
+          setTimeout(() => {
+            setPaymentSuccess(false);
+            navigate('/dashboard', { replace: true });
+          }, 2000);
+        } else {
           navigate('/choose-plan');
         }
       }
@@ -70,29 +83,42 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
   }, [checkoutPolling]);
 
   useEffect(() => {
-    if (checkoutPolling) return; // Don't redirect while polling
+    if (checkoutPolling || paymentSuccess) return;
+    // If checkout=success is in the URL, give auth time to settle — never redirect to /auth
+    if (isCheckoutSuccess) return;
 
     if (!loading && !user) {
       navigate('/auth');
       return;
     }
 
-    // Wait for profile to load before checking subscription
     if (!loading && user && !profileLoading && profile) {
-      // Admins bypass subscription check entirely
       if (isAdmin()) return;
       const isExempt = SUBSCRIPTION_EXEMPT_PATHS.some(p => location.pathname.startsWith(p));
       if (!isExempt && profile.subscription_status !== 'active') {
         navigate('/choose-plan');
       }
     }
-  }, [user, loading, profile, profileLoading, navigate, location.pathname, checkoutPolling]);
+  }, [user, loading, profile, profileLoading, navigate, location.pathname, checkoutPolling, paymentSuccess, isCheckoutSuccess]);
+
+  // Payment success screen
+  if (paymentSuccess) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center gap-4">
+        <div className="flex flex-col items-center gap-3 animate-in fade-in zoom-in duration-500">
+          <CheckCircle className="h-16 w-16 text-primary" />
+          <h1 className="text-2xl font-bold text-foreground">Payment confirmed!</h1>
+          <p className="text-muted-foreground text-sm">Welcome to Vrelly — your credits are ready.</p>
+        </div>
+      </div>
+    );
+  }
 
   if (loading || profileLoading || checkoutPolling) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center gap-3">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
-        {checkoutPolling && (
+        {(checkoutPolling || isCheckoutSuccess) && (
           <p className="text-muted-foreground text-sm">Verifying your payment...</p>
         )}
       </div>
