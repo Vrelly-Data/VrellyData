@@ -1,114 +1,67 @@
 
-## Root Cause: Identified With Certainty
+## Root Cause: Definitively Identified
 
-After reading the current code carefully, here is the exact sequence causing the blank screen:
+The entire problem is a single line: `navigate('/dashboard', { replace: true })` on line 77.
 
-**Line 71** runs `setSearchParams(searchParams, { replace: true })` which strips `?checkout=success` from the URL BEFORE the 2-second success screen even appears. This means by the time `setPaymentSuccess(false)` fires at t=2100ms, `isCheckoutSuccess` is already `false` and `pollingDoneRef.current` is `true`.
+Here is exactly what happens:
 
-So the guard `useEffect` on line 93 no longer has anything holding it back. It evaluates:
-- `checkoutPolling` = false ✓
-- `paymentSuccess` = false (just cleared) ✓  
-- `isCheckoutSuccess` = false (param already deleted) ✓
-- `authReady` = true ✓
-- `user` exists ✓
-- `profile` exists — but its `subscription_status` may still be `null` or stale in one render cycle
+1. User returns from Stripe to `/dashboard?checkout=success`
+2. The `/dashboard` `ProtectedRoute` instance starts polling
+3. Polling confirms `subscription_status: active`
+4. `setCheckoutPolling(false)` — spinner stops
+5. `searchParams.delete('checkout')` — URL becomes `/dashboard` (no remount yet)
+6. `setPaymentSuccess(true)` — overlay appears
+7. After 2 seconds: `setPaymentSuccess(false)` then `navigate('/dashboard', { replace: true })`
 
-This causes a brief window where all guards pass but children aren't ready — blank screen.
+**Step 7 is the problem.** `navigate('/dashboard', { replace: true })` — even though the URL is already `/dashboard` — causes React Router to re-process the route. This forces `ProtectedRoute` to re-render. The guard `useEffect` (line 93) fires with `paymentSuccess = false`, `pollingDoneRef.current = true`, `isCheckoutSuccess = false`, and `authReady = true`. All guards clear. It checks the profile — and for one render cycle, the profile's `subscription_status` may not yet be confirmed in the new render context, so the component hits `return null` (line 127) or flickers to a loading state. White screen.
 
-## The Correct Fix: Overlay Pattern
+The user sees: spinner → success screen for 2 seconds → white screen.
 
-The nested setTimeout approach keeps fighting React's render cycle timing. The real solution is to **render the children underneath the success overlay** using absolute positioning. This way:
+## The Fix: Remove `navigate('/dashboard', { replace: true })`
 
-- Children (`<Index />`) mount immediately when auth is valid
-- The success screen overlays on top with a full-screen div
-- When `paymentSuccess` flips to false, children are **already mounted and visible** — zero blank gap
+The user is **already on `/dashboard`**. The URL has already been cleaned (line 70-71 deletes the `?checkout=success` param). There is nothing to navigate to. The overlay just needs to disappear, revealing the dashboard children that are already rendered underneath it (the overlay pattern is correct — `{children}` renders alongside the overlay).
 
-```
-Structure:
-<>
-  {children}                        ← always rendered when auth is valid
-  {paymentSuccess && <SuccessOverlay />}  ← sits on top, fades out
-</>
-```
-
-This eliminates the timing problem entirely. No matter when `setPaymentSuccess(false)` fires, the dashboard is already rendered underneath.
-
-## Changes to `src/components/ProtectedRoute.tsx`
-
-### 1. Move the success screen to an overlay
-
-Change the early return `if (paymentSuccess)` block from a full-page replacement into an **absolutely-positioned overlay** rendered alongside children:
-
+**Change lines 75-78 from:**
 ```typescript
-// BEFORE (blocks children from rendering):
-if (paymentSuccess) {
-  return (
-    <div className="min-h-screen flex flex-col items-center justify-center gap-4">
-      ...success content...
-    </div>
-  );
-}
-// ...
-return <>{children}</>;
+setTimeout(() => {
+  setPaymentSuccess(false);
+  navigate('/dashboard', { replace: true });
+}, 2000);
 ```
 
+**To:**
 ```typescript
-// AFTER (children render behind the overlay):
+setTimeout(() => {
+  setPaymentSuccess(false);
+}, 2000);
+```
+
+That is the entire fix. Delete the `navigate` call. One line removed.
+
+## Why This Works
+
+```
+Timeline (after fix):
+t=0ms    → polling done → setPaymentSuccess(true)
+           → {children} renders immediately (dashboard already mounted)
+           → overlay covers it
+t=2000ms → setPaymentSuccess(false) → overlay disappears
+           → dashboard was already mounted underneath → instantly visible
+           No remount. No white screen. Ever.
+```
+
+The `{children}` (dashboard) is already rendered beneath the `paymentSuccess` overlay because the current return structure is:
+```tsx
 return (
   <>
-    {children}
-    {paymentSuccess && (
-      <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-4 bg-background">
-        <div className="flex flex-col items-center gap-3 animate-in fade-in zoom-in duration-500">
-          <CheckCircle className="h-16 w-16 text-primary" />
-          <h1 className="text-2xl font-bold text-foreground">Payment confirmed!</h1>
-          <p className="text-muted-foreground text-sm">Welcome to Vrelly — your credits are ready.</p>
-        </div>
-      </div>
-    )}
+    {children}           ← dashboard renders here immediately
+    {paymentSuccess && <overlay />}  ← just covers it
   </>
 );
 ```
 
-### 2. Simplify the timeout — no need for nested setTimeout
+When `paymentSuccess` becomes `false`, the overlay is removed and the dashboard is immediately visible — because it never stopped rendering.
 
-Since children are now always rendered behind the overlay, `setPaymentSuccess(false)` can simply be called after 2 seconds. No navigation is needed at all — the URL was already cleaned up on line 71:
+## File Changed
 
-```typescript
-if (currentProfile?.subscription_status === 'active') {
-  setPaymentSuccess(true);
-  setTimeout(() => {
-    setPaymentSuccess(false);
-    // Navigate to dashboard cleanly
-    navigate('/dashboard', { replace: true });
-  }, 2000);
-}
-```
-
-### 3. Fix the guard useEffect to hold while paymentSuccess is true
-
-The guard already has `if (checkoutPolling || paymentSuccess) return;` — this correctly blocks any premature redirect while the success overlay is showing. This part is fine.
-
-## Why This Definitively Works
-
-```
-Timeline (new approach):
-t=0ms    → polling done → setPaymentSuccess(true)
-           → {children} renders immediately (dashboard mounts)
-           → overlay sits on top — user sees "Payment confirmed!"
-t=2000ms → setPaymentSuccess(false) → overlay disappears
-           → dashboard is already mounted underneath → instantly visible
-           No blank gap. Ever.
-```
-
-The Lovable branding flash the user saw was likely the app shell's loading state or the `<Index />` component mounting for the first time with empty data — this will still happen briefly underneath the overlay, but the overlay hides it entirely.
-
-## Summary of Changes
-
-**File:** `src/components/ProtectedRoute.tsx` only
-
-1. Remove the early `if (paymentSuccess) return (...)` block
-2. Change the final `return <>{children}</>` to render children plus a conditional fixed overlay
-3. Simplify the timeout to a single `setTimeout` (no nested one needed)
-
-This is a structural fix — not a timing fix. Timing fixes will always be fragile. The overlay approach is the correct pattern used in production apps for post-payment confirmation screens.
+**`src/components/ProtectedRoute.tsx`** — remove `navigate('/dashboard', { replace: true })` from the setTimeout. One line deleted.
