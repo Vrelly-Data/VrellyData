@@ -35,6 +35,9 @@ const stepTypeLabels: Record<string, string> = {
 interface RevampResult {
   subject: string | null;
   body: string | null;
+  why_this_works?: string[];
+  key_insight?: string;
+  source_insights?: { title: string; category: string }[];
 }
 
 export function CopyTab() {
@@ -385,6 +388,7 @@ export function CopyTab() {
         revamped={revampResult}
         stepNumber={revampStepInfo?.stepNumber || 0}
         stepType={revampStepInfo?.stepType || 'email'}
+        campaignName={selectedCampaign?.name}
       />
 
       <CreateCopyDialog open={createCopyOpen} onOpenChange={setCreateCopyOpen} />
