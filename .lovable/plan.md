@@ -1,8 +1,8 @@
 
-## Simple Text Change: CTA Button on Comparisons Page
+## Simple Text Change: Navbar Link
 
-**File**: `src/pages/Comparisons.tsx`
+**File**: `src/components/landing/Navbar.tsx`
 
-**Change**: In the "Ready to make the switch?" CTA section, update the `Button` label from `"Get Started Free"` to `"Get Started"`. Everything else (size, styling, `ArrowRight` icon, `onClick` handler) stays the same.
+**Change**: Update the nav link label from `"Comparisons"` to `"Compare"`. The `onClick` handler and route (`/comparisons`) remain unchanged.
 
-One line change, no other files affected.
+One word change, no other files affected.
