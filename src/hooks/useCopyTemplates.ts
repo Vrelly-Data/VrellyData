@@ -115,6 +115,22 @@ export function useSaveCopyMutation() {
   });
 }
 
+export function useRenameCopyGroup() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ rows, newName }: { groupId: string; newName: string; rows: CopyTemplateRow[] }) => {
+      await Promise.all(rows.map((row) => {
+        const suffix = row.name.match(/(\s*[—–-]\s*Step\s*\d+.*$)/i)?.[1] || '';
+        const updatedName = newName + suffix;
+        return supabase.from('copy_templates').update({ name: updatedName }).eq('id', row.id);
+      }));
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['copy-templates', 'ai-groups'] });
+    },
+  });
+}
+
 export function useDeleteCopyGroup() {
   const queryClient = useQueryClient();
 
