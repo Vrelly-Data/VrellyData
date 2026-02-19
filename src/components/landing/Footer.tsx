@@ -22,6 +22,9 @@ export const Footer = () => {
             <a href="#" rel="nofollow" className="hover:text-foreground transition-colors">
               Contact
             </a>
+            <a href="/resources" className="hover:text-foreground transition-colors">
+              Resources
+            </a>
           </div>
 
           <p className="text-sm text-muted-foreground">
