@@ -62,7 +62,12 @@ Deno.serve(async (req) => {
     const topPerformers = (allResults || [])
       .map((e: any) => {
         const metrics = e.metrics as Record<string, any> || {};
-        return { ...e, _rate: parseFloat(metrics["email_reply_rate"]) || 0 };
+        const liRate = parseFloat(metrics["li_reply_rate"]) || 0;
+        const emailRate = parseFloat(metrics["email_reply_rate"]) || 0;
+        const combinedRate = parseFloat(metrics["combined_reply_rate"]) || 0;
+        const _rate = Math.max(liRate, emailRate, combinedRate);
+        const _rateSource = liRate >= emailRate && liRate >= combinedRate ? "LinkedIn" : emailRate >= combinedRate ? "Email" : "Combined";
+        return { ...e, _rate, _rateSource };
       })
       .filter((e: any) => e._rate > 0)
       .sort((a: any, b: any) => b._rate - a._rate)
@@ -70,16 +75,25 @@ Deno.serve(async (req) => {
 
     const topNames = topPerformers.map((e: any) => e.source_campaign || e.title).filter(Boolean);
     let copyDocs: any[] = [];
+    // Fetch email templates linked to top campaigns
     if (topNames.length > 0) {
-      const { data } = await supabase
+      const { data: linkedDocs } = await supabase
         .from("sales_knowledge")
         .select("title, content, category, source_campaign")
         .eq("is_active", true)
-        .in("category", ["email_template", "sequence_playbook"])
+        .in("category", ["email_template"])
         .in("source_campaign", topNames)
-        .limit(5);
-      copyDocs = data || [];
+        .limit(3);
+      copyDocs = linkedDocs || [];
     }
+    // Always fetch sequence_playbook entries (they have no source_campaign, so must be queried separately)
+    const { data: playbookDocs } = await supabase
+      .from("sales_knowledge")
+      .select("title, content, category, source_campaign")
+      .eq("is_active", true)
+      .eq("category", "sequence_playbook")
+      .limit(2);
+    copyDocs = [...copyDocs, ...(playbookDocs || [])];
 
     const { data: guidelines } = await supabase
       .from("sales_knowledge")
@@ -101,7 +115,7 @@ Deno.serve(async (req) => {
       ? "\n\n## TOP-PERFORMING CAMPAIGNS (study their patterns):\n\n" +
         topPerformers.map((k: any, i: number) => {
           const m = k.metrics as Record<string, any> || {};
-          return `### Campaign ${i + 1}: ${k.title} [${k._rate}% reply rate]\n${k.content}`;
+          return `### Campaign ${i + 1}: ${k.title} [${k._rate}% reply rate — ${k._rateSource}]\n${k.content}`;
         }).join("\n\n")
       : "";
 

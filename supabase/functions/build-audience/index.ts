@@ -54,7 +54,12 @@ Deno.serve(async (req) => {
     const topPerformers = (allResults || [])
       .map((e: any) => {
         const metrics = e.metrics as Record<string, any> || {};
-        return { ...e, _rate: parseFloat(metrics["email_reply_rate"]) || 0 };
+        const liRate = parseFloat(metrics["li_reply_rate"]) || 0;
+        const emailRate = parseFloat(metrics["email_reply_rate"]) || 0;
+        const combinedRate = parseFloat(metrics["combined_reply_rate"]) || 0;
+        const _rate = Math.max(liRate, emailRate, combinedRate);
+        const _rateSource = liRate >= emailRate && liRate >= combinedRate ? "LinkedIn" : emailRate >= combinedRate ? "Email" : "Combined";
+        return { ...e, _rate, _rateSource };
       })
       .filter((e: any) => e._rate > 0)
       .sort((a: any, b: any) => b._rate - a._rate)
@@ -72,7 +77,7 @@ Deno.serve(async (req) => {
         topPerformers.map((k: any, i: number) => {
           const m = k.metrics as Record<string, any> || {};
           const topInd = (m.topIndustries || []).map((ind: any) => `${ind.value} (${ind.percentage}%)`).join(", ");
-          return `### Campaign ${i + 1}: ${k.title} [${k._rate}% reply rate]${topInd ? `\nTop Industries: ${topInd}` : ""}\n${k.content}`;
+          return `### Campaign ${i + 1}: ${k.title} [${k._rate}% reply rate — ${k._rateSource}]${topInd ? `\nTop Industries: ${topInd}` : ""}\n${k.content}`;
         }).join("\n\n")
       : "";
 
