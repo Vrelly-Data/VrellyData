@@ -13,8 +13,9 @@ import { toast } from 'sonner';
 interface CopyStep {
   step: number;
   day: number;
-  subject: string;
+  subject?: string;
   body: string;
+  channel?: string;
 }
 
 interface GeneratedCopy {
@@ -75,6 +76,8 @@ function TagInput({ label, values, onChange, placeholder }: {
   );
 }
 
+const CHANNELS = ['Email', 'LinkedIn', 'Twitter message', 'Instagram message', 'Facebook message'];
+
 export function CreateCopyDialog({ open, onOpenChange }: CreateCopyDialogProps) {
   const [step, setStep] = useState<'form' | 'result'>('form');
   const [isGenerating, setIsGenerating] = useState(false);
@@ -84,9 +87,16 @@ export function CreateCopyDialog({ open, onOpenChange }: CreateCopyDialogProps) 
   const [product, setProduct] = useState('');
   const [industries, setIndustries] = useState<string[]>([]);
   const [isBtoB, setIsBtoB] = useState(true);
+  const [channels, setChannels] = useState<string[]>([]);
   const [targetTitles, setTargetTitles] = useState<string[]>([]);
   const [companyTypes, setCompanyTypes] = useState<string[]>([]);
   const [companyStandout, setCompanyStandout] = useState('');
+
+  const toggleChannel = (ch: string) => {
+    setChannels((prev) =>
+      prev.includes(ch) ? prev.filter((c) => c !== ch) : [...prev, ch]
+    );
+  };
 
   const handleGenerate = async () => {
     if (!product.trim()) {
@@ -97,7 +107,7 @@ export function CreateCopyDialog({ open, onOpenChange }: CreateCopyDialogProps) 
     setIsGenerating(true);
     try {
       const { data, error } = await supabase.functions.invoke('generate-copy', {
-        body: { product, industries, isBtoB, targetTitles, companyTypes, companyStandout },
+        body: { product, industries, isBtoB, targetTitles, companyTypes, companyStandout, channels },
       });
 
       if (error) throw error;
@@ -135,7 +145,7 @@ export function CreateCopyDialog({ open, onOpenChange }: CreateCopyDialogProps) 
           </DialogTitle>
           <DialogDescription>
             {step === 'form'
-              ? 'Tell us about your business and we\'ll generate a tailored email sequence using your top-performing campaign data.'
+              ? 'Tell us about your business and we\'ll generate a tailored outreach sequence using your top-performing campaign data.'
               : 'AI-generated copy based on your best-performing campaigns. Click to copy any section.'}
           </DialogDescription>
         </DialogHeader>
@@ -175,6 +185,26 @@ export function CreateCopyDialog({ open, onOpenChange }: CreateCopyDialogProps) 
                     }`}
                   >
                     {option}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>Which channels do you use for outreach?</Label>
+              <div className="flex flex-wrap gap-2">
+                {CHANNELS.map((ch) => (
+                  <button
+                    key={ch}
+                    type="button"
+                    onClick={() => toggleChannel(ch)}
+                    className={`px-3 py-1.5 rounded-md border text-sm font-medium transition-colors ${
+                      channels.includes(ch)
+                        ? 'bg-primary text-primary-foreground border-primary'
+                        : 'bg-background border-input hover:bg-muted'
+                    }`}
+                  >
+                    {ch}
                   </button>
                 ))}
               </div>
@@ -238,7 +268,7 @@ export function CreateCopyDialog({ open, onOpenChange }: CreateCopyDialogProps) 
               </Card>
             )}
 
-            {/* Email Steps */}
+            {/* Outreach Steps */}
             {result.steps?.map((s) => (
               <Card key={s.step}>
                 <CardHeader className="py-3">
@@ -247,6 +277,9 @@ export function CreateCopyDialog({ open, onOpenChange }: CreateCopyDialogProps) 
                       <Mail className="h-4 w-4" />
                       Step {s.step}
                       <Badge variant="secondary" className="text-xs">Day {s.day}</Badge>
+                      {s.channel && (
+                        <Badge variant="outline" className="text-xs">{s.channel}</Badge>
+                      )}
                     </CardTitle>
                   </div>
                 </CardHeader>
@@ -255,7 +288,7 @@ export function CreateCopyDialog({ open, onOpenChange }: CreateCopyDialogProps) 
                     <div className="space-y-1">
                       <div className="flex items-center justify-between">
                         <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Subject</p>
-                        <Button variant="ghost" size="sm" className="h-6 px-2" onClick={() => handleCopy(s.subject, 'Subject')}>
+                        <Button variant="ghost" size="sm" className="h-6 px-2" onClick={() => handleCopy(s.subject!, 'Subject')}>
                           <Copy className="h-3 w-3 mr-1" />Copy
                         </Button>
                       </div>

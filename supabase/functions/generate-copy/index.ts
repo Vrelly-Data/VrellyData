@@ -40,6 +40,7 @@ Deno.serve(async (req) => {
       targetTitles,
       companyTypes,
       companyStandout,
+      channels,
     } = await req.json();
 
     if (!product) {
@@ -107,7 +108,23 @@ Deno.serve(async (req) => {
         (guidelines as any[]).map((k: any, i: number) => `### ${i + 1}: ${k.title}\n${k.content}`).join("\n\n")
       : "";
 
-    const systemPrompt = `You are an expert B2B sales copywriter. Generate a complete, high-converting outbound email sequence for the following business.
+    const selectedChannels: string[] = Array.isArray(channels) && channels.length > 0 ? channels : ["Email"];
+    const isMultiChannel = selectedChannels.length > 1;
+
+    const channelInstructions = isMultiChannel
+      ? `Generate one outreach step per channel listed below, tailoring tone and format appropriately:
+- Email: include subject line + full body (professional, concise)
+- LinkedIn: no subject line, shorter and more conversational (2-4 sentences max)
+- Twitter message: very short, casual, 1-2 sentences max, no subject
+- Instagram message: short, casual, friendly tone, no subject
+- Facebook message: short, casual, 1-2 sentences, no subject
+Generate ${selectedChannels.length} steps total (one per channel), assigning logical send days.`
+      : `Generate a 3-step email sequence (initial outreach + 2 follow-ups). For each step provide:
+- subject line
+- email body (plain text, conversational, concise)
+- send day (e.g., Day 1, Day 4, Day 8)`;
+
+    const systemPrompt = `You are an expert B2B sales copywriter. Generate a complete, high-converting outbound outreach sequence for the following business.
 
 Business Details:
 - Product/Service: ${product}
@@ -116,14 +133,12 @@ Business Details:
 - Target titles: ${(targetTitles || []).join(", ") || "Not specified"}
 - Target company types: ${(companyTypes || []).join(", ") || "Not specified"}
 - Company differentiator/standout: ${companyStandout || "Not specified"}
+- Outreach channels: ${selectedChannels.join(", ")}
 ${performanceContext}
 ${copyContext}
 ${guidelinesContext}
 
-Generate a 3-step email sequence (initial outreach + 2 follow-ups). For each step provide:
-- subject line
-- email body (plain text, conversational, concise)
-- send day (e.g., Day 1, Day 4, Day 8)
+${channelInstructions}
 
 Also provide:
 - positioning_statement: A 1-2 sentence positioning statement for this prospect type
@@ -134,11 +149,11 @@ Return ONLY valid JSON in this exact shape:
   "positioning_statement": "...",
   "key_insight": "...",
   "steps": [
-    { "step": 1, "day": 1, "subject": "...", "body": "..." },
-    { "step": 2, "day": 4, "subject": "...", "body": "..." },
-    { "step": 3, "day": 8, "subject": "...", "body": "..." }
+    { "step": 1, "day": 1, "channel": "Email", "subject": "...", "body": "..." },
+    { "step": 2, "day": 4, "channel": "LinkedIn", "subject": null, "body": "..." }
   ]
-}`;
+}
+Note: set "subject" to null for non-email channels.`;
 
     const claudeResponse = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
