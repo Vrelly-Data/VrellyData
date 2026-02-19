@@ -31,7 +31,7 @@ export const Navbar = () => {
               Pricing
             </button>
             <button onClick={() => navigate('/comparisons')} className="hover:text-foreground transition-colors">
-              Comparisons
+              Compare
             </button>
           </div>
 
