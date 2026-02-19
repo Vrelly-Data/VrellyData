@@ -1,81 +1,179 @@
 
-## Add Channels Selection to "Create Copy" Form
+## Save Generated Copy + Enriched Insights Section + Google Drive-Style Library
 
-### Overview
-
-Add a multi-select channel picker to the Create Copy form so users can indicate which outreach channels they use. This information is then passed to the AI to generate channel-appropriate copy (e.g. shorter, no subject line for LinkedIn DMs vs. full email threads).
+This plan combines three things requested across the conversation that haven't been implemented yet:
+1. An enriched **Insights section** at the top of results explaining *why* this copy approach was chosen, drawing from the Sales Knowledge Base
+2. **Save with a title** — a name input and Save button in the result view
+3. **Google Drive-style saved copies** appearing below the "Create New Copy" button on the Playground dashboard
 
 ---
 
-### What Changes
+### What Already Exists
 
-#### File 1: `src/components/playground/CreateCopyDialog.tsx`
+- `copy_templates` table with `id`, `name`, `subject`, `body_text`, `tags`, `team_id`, `created_by`, `created_at` — ready to use, full RLS in place
+- `generate-copy` edge function — already pulls `sales_guideline` and `audience_insight` KB entries for prompt context, but does **not** return them to the frontend
+- `CreateCopyDialog` — result view shows `positioning_statement` and `key_insight` in a basic card; no save functionality yet
+- `PlaygroundDashboard` — shows the Generate Copy card with a button only; no saved copies below it
 
-**New UI field** — a clickable chip/toggle group between the B2B/B2C toggle and the "Target Titles" field:
+---
 
-- Label: `"Which channels do you use for outreach?"`
-- Pre-defined options rendered as toggleable badge chips:
-  - Email
-  - LinkedIn
-  - Twitter message
-  - Instagram message
-  - Facebook message
-- Users click to select/deselect — no typing required (fast UX)
-- State: `channels: string[]` (multi-select, no minimum required)
-- Pass `channels` alongside existing fields in the `supabase.functions.invoke('generate-copy', ...)` call
+### Part 1: Enriched Insights — Edge Function (`supabase/functions/generate-copy/index.ts`)
 
-The result view already shows steps with a `Mail` icon — that will be updated to show a channel label per step if multiple channels are selected (e.g. "Step 1 — Email", "Step 2 — LinkedIn").
+The KB data is already fetched but only used silently in the prompt. Changes:
 
-**Updated `GeneratedCopy` interface** — add optional `channel` field to `CopyStep`:
-```ts
-interface CopyStep {
-  step: number;
-  day: number;
-  subject?: string;  // already optional effectively
-  body: string;
-  channel?: string;  // new
+**Update the AI JSON schema** to return two more fields:
+```json
+{
+  "positioning_statement": "...",
+  "key_insight": "...",
+  "why_this_works": ["reason 1", "reason 2", "reason 3"],
+  "steps": [...]
 }
 ```
 
-**Updated description text** — change the dialog subtitle from "email sequence" to "outreach sequence" to reflect multi-channel.
+- `why_this_works` — AI-generated list of 2-4 bullet reasons explaining *why* this approach fits the user's inputs and KB data (e.g. "LinkedIn DMs outperform cold email in your industry segment by 34% based on Campaign X")
+- The existing `guidelines` query results are **also returned server-side** as `source_insights` — a list of `{ title, category }` objects injected directly into the response (not hallucinated). These represent the KB entries that informed the copy.
 
----
-
-#### File 2: `supabase/functions/generate-copy/index.ts`
-
-**Destructure `channels`** from the request body alongside existing fields.
-
-**Update the system prompt** to:
-1. Include the selected channels in the Business Details section: `- Outreach channels: ${channels.join(", ") || "Email"}`
-2. Change the generation instruction from "Generate a 3-step email sequence" to:
-   - If only Email selected (or none): keep the current 3-step email sequence instruction
-   - If multiple channels selected: instruct the AI to generate one sequence step per channel, tailoring tone and format to each (e.g. LinkedIn = shorter, no subject; Email = subject + body; Twitter/Instagram/Facebook = very short, casual)
-3. Update the JSON shape instruction to include `"channel"` in each step:
-   ```json
-   { "step": 1, "day": 1, "channel": "Email", "subject": "...", "body": "..." }
-   ```
-
-**Result view** — the step card in the dialog will show the channel badge if present (e.g. `LinkedIn` badge next to `Day 4`), and hide the "Subject" row for non-email channels where it's not applicable.
-
----
-
-### UI Layout of the New Field
-
-```text
-[ Is this B2B or B2C? ]
-  [ B2B ]  [ B2C ]
-
-[ Which channels do you use for outreach? ]
-  [ Email ✓ ]  [ LinkedIn ]  [ Twitter message ]
-  [ Instagram message ]  [ Facebook message ]
-
-[ Target titles... ]
+**Updated response shape:**
+```json
+{
+  "positioning_statement": "...",
+  "key_insight": "...",
+  "why_this_works": ["..."],
+  "source_insights": [{ "title": "SaaS Outreach Playbook", "category": "sales_guideline" }],
+  "steps": [...]
+}
 ```
 
-Chips use the same active/inactive styling as the B2B/B2C toggle buttons — filled primary when selected, outlined when not. Multiple can be selected simultaneously.
+`source_insights` is built server-side from the `guidelines` and `topPerformers` arrays — not generated by Claude. It only appears if the KB has data, degrades gracefully if empty.
+
+**Update the system prompt** to instruct Claude to produce `why_this_works` bullets grounded in the KB context it received. If KB is empty, it should still generate plausible reasoning from the business inputs.
 
 ---
 
-### No Database Changes Required
+### Part 2: Save & Title + Enriched Insights UI (`src/components/playground/CreateCopyDialog.tsx`)
 
-This is a pure UI + edge function prompt update. No schema migrations needed.
+**New interface fields:**
+```ts
+interface GeneratedCopy {
+  positioning_statement: string;
+  key_insight: string;
+  why_this_works?: string[];
+  source_insights?: { title: string; category: string }[];
+  steps: CopyStep[];
+}
+```
+
+**New state:**
+- `templateName: string` — pre-filled with `"AI Copy — {product snippet} — Feb 2026"` when result loads
+- `isSaving: boolean`
+- `savedGroupId: string | null` — tracks post-save state (drives "Saved ✓" disabled button)
+
+**Expanded Insights Card** — replaces the current simple card with:
+
+```
+[ Lightbulb icon ] Why This Copy Works
+─────────────────────────────────────
+Positioning: ...
+
+Key Insight: ...
+
+Why this approach:
+  • Reason 1
+  • Reason 2
+  • Reason 3
+
+Informed by:  [ SaaS Outreach Playbook ] [ Campaign: Q1 SaaS Push ]
+```
+
+The "Informed by" badges only render if `source_insights.length > 0`. If the Sales Repo has no data yet, the card simply shows positioning + key insight as before, so the UI degrades gracefully.
+
+**New Save section** (between insights and first step card):
+```
+[ Document name input __________________________ ]  [ Save to Library ]
+```
+- Input pre-filled with an auto-generated name
+- "Save to Library" button → on click: validates name, fetches user + team, inserts N rows into `copy_templates`, one per step, all sharing `tags: ["ai-generated", "group:{uuid}"]`
+- After save: button shows "Saved ✓" (green, disabled), toast: "Copy saved to your library"
+
+**Bottom action bar:**
+```
+[ ← Edit Inputs ]                           [ Done ]
+```
+(Save button is in the save section above, not duplicated here)
+
+---
+
+### Part 3: Google Drive-Style Library (`src/hooks/useCopyTemplates.ts` — new file)
+
+A custom hook with two exports:
+
+**`useAICopyGroups()`** — reads all `copy_templates` tagged `ai-generated`, groups them by their `group:` tag:
+- Fetches rows: `tags @> ARRAY['ai-generated']` (Postgres contains operator via `.contains`)
+- Groups client-side by the `group:{uuid}` tag prefix
+- Returns: `{ groupId, name, stepCount, channels, createdAt }[]` per document
+- Uses React Query with key `['copy-templates', 'ai-groups']`
+
+**`useSaveCopyMutation()`** — inserts N rows into `copy_templates`:
+- Fetches `team_id` from `team_memberships` (same pattern as other hooks in the codebase)
+- Inserts one row per step:
+  - `name`: `"{templateName} — Step {N} ({channel})"`
+  - `body_text`: step body
+  - `subject`: step subject (null for non-email)
+  - `tags`: `["ai-generated", "group:{uuid}"]`
+- Invalidates `['copy-templates', 'ai-groups']` on success
+
+---
+
+### Part 4: Dashboard Saved Copies Shelf (`src/components/playground/PlaygroundDashboard.tsx`)
+
+The Generate Copy card is expanded to show saved copies below the button. Uses `useAICopyGroups()`.
+
+**Layout after changes:**
+```
+┌─────────────────────────────────────────────────────────────┐
+│  ✦ Generate Copy                                            │
+│  AI-powered copy generation...                              │
+│                                                             │
+│  [ + Create New Copy ]                                      │
+│                                                             │
+│  ─────── Saved Copies ──────────────────────────────────── │
+│                                                             │
+│  ┌──────────────────┐  ┌──────────────────┐                │
+│  │ ✦ Document icon  │  │ ✦ Document icon  │                │
+│  │                  │  │                  │                │
+│  │ "My SaaS Copy"   │  │ "Q1 Outbound"   │                │
+│  │ 3 steps · Email  │  │ 2 steps · LI    │                │
+│  │ Feb 19, 2026     │  │ Feb 18, 2026    │                │
+│  │ [Open] [Delete]  │  │ [Open] [Delete] │                │
+│  └──────────────────┘  └──────────────────┘                │
+└─────────────────────────────────────────────────────────────┘
+```
+
+Cards use a Google Doc-like style: coloured icon area at top, document name bold, step count + channels subtitle, relative date, Open/Delete actions.
+
+- Grid: 2 per row on desktop, 1 on mobile (inside the existing card)
+- Empty state: nothing shown (just the button — no empty state message needed)
+- Delete: removes all rows with matching `group:` tag, shows toast, invalidates query
+
+---
+
+### Part 5: View Saved Copy Dialog (`src/components/playground/ViewCopyDialog.tsx` — new file)
+
+A lightweight read-only dialog that opens when "Open" is clicked on a doc card. Accepts the group's template rows as props and renders the same step card layout from `CreateCopyDialog`'s result view (reusing patterns, not the component itself).
+
+---
+
+### Files to Create/Modify
+
+| File | Action |
+|---|---|
+| `supabase/functions/generate-copy/index.ts` | Update: add `why_this_works` to prompt + inject `source_insights` server-side |
+| `src/components/playground/CreateCopyDialog.tsx` | Update: expanded Insights card + save section (name input + save button) |
+| `src/hooks/useCopyTemplates.ts` | Create: `useAICopyGroups` + `useSaveCopyMutation` |
+| `src/components/playground/PlaygroundDashboard.tsx` | Update: add saved copies card shelf below Generate Copy button |
+| `src/components/playground/ViewCopyDialog.tsx` | Create: read-only viewer for a saved sequence |
+
+### No Database Changes
+
+The `copy_templates` table already has all needed columns. The `group:uuid` grouping is done entirely via the `tags` array — no schema migration needed.
