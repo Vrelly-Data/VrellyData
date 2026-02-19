@@ -1,143 +1,115 @@
 
-## Revamp Copy: Insights Section + Save to Library
+## View Saved Copy: Copy Content + Rename Title
 
 ### What's Being Added
 
-When a user clicks "Revamp" on a synced sequence step and sees the result, they currently get a basic side-by-side comparison with copy buttons and a close button. This plan adds:
+When a user opens a saved copy card (from the dashboard library), the `ViewCopyDialog` currently shows read-only step cards with Copy buttons and a Close button. Two things are missing:
 
-1. **Enriched Insights Section** — "Why This Revamp Works" card with AI-generated reasoning bullets and "Informed by" badges referencing real Sales Repo entries
-2. **Save to Library** — same name input + "Save to Library" button pattern as Generate Copy, so revamped copies appear as document cards on the dashboard
-3. **Ranking Bug Fix** in `revamp-copy` — the same bug that was fixed in `generate-copy` and `build-audience` exists here too: it still ranks by a single metric (`li_reply_rate` OR `email_reply_rate`) rather than `Math.max(li, email, combined)`, causing your LinkedIn-dominant campaigns to be excluded from the AI context
+1. **Copy the copy** — the Copy buttons for subject/body are already there and work correctly. No change needed here — this already works.
+2. **Rename the title** — the dialog title just shows the name as static text. The user needs to be able to click and edit it inline, save the new name, which updates all rows in the group in the database.
+
+### How the Name is Stored
+
+The name is embedded inside each row's `name` column using the pattern: `"{templateName} — Step {N} ({Channel})"`. This means to rename a group, we must update **all rows** in the group to replace the base name prefix.
+
+For example, if the group has 3 rows:
+- `"My SaaS Copy — Step 1 (LinkedIn)"`
+- `"My SaaS Copy — Step 2 (Email)"`
+- `"My SaaS Copy — Step 3 (LinkedIn)"`
+
+Renaming to `"Q1 SaaS Outreach"` produces:
+- `"Q1 SaaS Outreach — Step 1 (LinkedIn)"`
+- `"Q1 SaaS Outreach — Step 2 (Email)"`
+- `"Q1 SaaS Outreach — Step 3 (LinkedIn)"`
+
+The base name is already extracted by the hook using `replace(/\s*[—–-]\s*Step\s*\d+.*$/i, '')`, so we know the suffix to preserve.
 
 ---
 
-### Current State Issues
+### Part 1: Add `useRenameCopyGroup` to `useCopyTemplates.ts`
 
-**`supabase/functions/revamp-copy/index.ts` has two bugs:**
-- Ranking still uses a single metric based on channel type, so LinkedIn campaigns are mostly excluded
-- `sequence_playbook` entries are fetched with `.in("source_campaign", topCampaignNames)` which misses them since playbooks have no `source_campaign`
+A new mutation that:
+1. Accepts `{ groupId, newName, rows }` where `rows` are the current `CopyTemplateRow[]`
+2. For each row, rebuilds the name by replacing the old base name with the new one, keeping the `" — Step N (Channel)"` suffix intact
+3. Runs `supabase.from('copy_templates').update({ name: newName }).eq('id', row.id)` for each row (using `Promise.all` for parallel updates)
+4. Invalidates `['copy-templates', 'ai-groups']` on success
 
-**Current response shape** (only returns 2 fields):
-```json
-{ "subject": "...", "body": "..." }
-```
+The suffix extraction logic: take each row's `name`, strip the base prefix (anything before `" — Step"`), and prepend the new name. Since the suffix follows the consistent `— Step N (Channel)` pattern, a simple regex replace is reliable.
 
-**`RevampResultDialog.tsx`** — no insights section, no save functionality, no name input.
-
----
-
-### Part 1: Update `revamp-copy` Edge Function
-
-**Fix ranking** (same fix applied to `generate-copy` and `build-audience`):
 ```ts
-// BEFORE (broken):
-const rate = parseFloat(metrics[rankMetric]) || 0;
-return { ...entry, _rankRate: rate };
-
-// AFTER (captures LinkedIn campaigns):
-const liRate = parseFloat(metrics["li_reply_rate"]) || 0;
-const emailRate = parseFloat(metrics["email_reply_rate"]) || 0;
-const combinedRate = parseFloat(metrics["combined_reply_rate"]) || 0;
-const _rankRate = Math.max(liRate, emailRate, combinedRate);
-const _rateSource = liRate >= emailRate && liRate >= combinedRate ? "LinkedIn" : emailRate >= combinedRate ? "Email" : "Combined";
-return { ...entry, _rankRate, _rateSource };
-```
-
-**Fix playbook fetching** — split into two separate queries:
-```ts
-// Email templates linked to top campaigns
-const { data: linkedDocs } = await supabase...eq("category", "email_template").in("source_campaign", topCampaignNames)
-
-// Playbooks fetched independently (no source_campaign filter)
-const { data: playbookDocs } = await supabase...eq("category", "sequence_playbook").limit(2)
-linkedCopyDocs = [...(linkedDocs || []), ...(playbookDocs || [])];
-```
-
-**Update Claude response schema** — ask for `why_this_works` and `key_insight` in addition to `subject` and `body`:
-```json
-{
-  "subject": "...",
-  "body": "...",
-  "key_insight": "One data-backed insight from the KB that informed this rewrite",
-  "why_this_works": ["reason 1", "reason 2", "reason 3"]
+export function useRenameCopyGroup() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ rows, newName }: { groupId: string; newName: string; rows: CopyTemplateRow[] }) => {
+      await Promise.all(rows.map((row) => {
+        const suffix = row.name.match(/(\s*[—–-]\s*Step\s*\d+.*$)/i)?.[1] || '';
+        const updatedName = newName + suffix;
+        return supabase.from('copy_templates').update({ name: updatedName }).eq('id', row.id);
+      }));
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['copy-templates', 'ai-groups'] });
+    },
+  });
 }
 ```
 
-**Inject `source_insights` server-side** — built from the actual KB entries fetched (top performers + guidelines), not hallucinated by Claude:
-```ts
-result.source_insights = sourceInsights; // [{title, category}]
-```
-
-**Updated system prompt** — instruct Claude to produce `why_this_works` bullets grounded in the KB data it received. If KB is empty, generate plausible reasoning from the copy itself. Increase `max_tokens` from 1024 → 1500 to accommodate the extra fields.
-
 ---
 
-### Part 2: Update `RevampResultDialog.tsx`
-
-**New props:**
-- Add `campaignName?: string` for generating a meaningful default save name
-
-**New response type:**
-```ts
-interface RevampResult {
-  subject: string | null;
-  body: string | null;
-  why_this_works?: string[];
-  key_insight?: string;
-  source_insights?: { title: string; category: string }[];
-}
-```
+### Part 2: Update `ViewCopyDialog.tsx`
 
 **New state:**
-- `templateName: string` — pre-filled with `"Revamped — {campaignName} Step {stepNumber} — Feb 2026"` when dialog opens
-- `savedGroupId: string | null` — post-save state
+- `isEditingName: boolean` — controls whether the title is shown as text or an input
+- `editedName: string` — the draft value while editing (initialised from `group.name` when the dialog opens via `useEffect`)
+- `isSavingName: boolean` — disables the save button during mutation
 
-**New layout (after the header, before the side-by-side comparison):**
+**Title area changes** (the `DialogHeader`):
+
+Instead of `<DialogTitle>{group.name}</DialogTitle>`, render:
 
 ```
-┌─ Why This Revamp Works ─────────────────────────────────┐
-│  Key Insight: "..."                                     │
-│                                                         │
-│  Why this approach:                                     │
-│  • LinkedIn messages with question openers averaged...  │
-│  • Campaigns referencing company-specific pain points.. │
-│                                                         │
-│  Informed by:  [ Campaign ] PestShare  [ Playbook ] ... │
-└─────────────────────────────────────────────────────────┘
-
-[ Name input: "Revamped — Campaign X Step 1 — Feb 2026" ] [ Save to Library ]
-
-┌─ Original ──────────┐  ┌─ Revamped ──────────────────┐
-│ Subject: ...        │  │ Subject: ...  [ Copy ]      │
-│ Body: ...           │  │ Body: ...     [ Copy ]      │
-└─────────────────────┘  └─────────────────────────────┘
-
-[ Close ]
+[ ✏️ edit icon ]  "My SaaS Copy"
 ```
 
-The insights card only renders if `why_this_works` or `source_insights` are present (degrades gracefully if KB is empty).
+When the pencil icon is clicked (or the title text is clicked), it switches to an inline input:
 
-**Save logic** — reuses the existing `useSaveCopyMutation` hook with a single step:
-```ts
-saveMutation.mutateAsync({
-  templateName: templateName.trim(),
-  steps: [{
-    step: stepNumber,
-    day: 1,
-    channel: stepType,
-    subject: revamped.subject,
-    body: revamped.body || '',
-  }]
-})
+```
+[ Input: "My SaaS Copy" ] [ ✓ Save ] [ ✕ Cancel ]
 ```
 
-After save: button shows "Saved ✓" (green, disabled), toast: "Revamped copy saved to your library" — and the doc card appears in the dashboard library.
+- Input is pre-focused on open
+- Enter key triggers save
+- Escape key cancels
+- "Save" calls `useRenameCopyGroup`, shows a spinner while saving, then exits edit mode
+- On success: toast "Title updated", query invalidated so the dashboard card also updates
 
----
+The layout within `DialogHeader`:
 
-### Part 3: Update `CopyTab.tsx`
+```tsx
+// View mode:
+<DialogTitle className="flex items-center gap-2 group/title">
+  <Mail className="h-5 w-5 text-primary" />
+  {group.name}
+  <Button variant="ghost" size="icon" className="h-6 w-6 opacity-0 group-hover/title:opacity-100" onClick={() => setIsEditingName(true)}>
+    <Pencil className="h-3.5 w-3.5" />
+  </Button>
+</DialogTitle>
 
-Update the local `RevampResult` interface to match the richer response shape, and pass `campaignName` as a prop to `RevampResultDialog`.
+// Edit mode:
+<div className="flex items-center gap-2">
+  <Input value={editedName} onChange={...} onKeyDown={...} autoFocus className="h-8 text-base font-semibold" />
+  <Button size="sm" onClick={handleSaveName} disabled={isSavingName}>
+    {isSavingName ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+  </Button>
+  <Button size="sm" variant="ghost" onClick={() => setIsEditingName(false)}>
+    <X className="h-3.5 w-3.5" />
+  </Button>
+</div>
+```
+
+**Reset on open**: a `useEffect` watching `group?.name` resets `editedName` and `isEditingName` whenever a new group is opened.
+
+**Copy buttons**: Already work — no changes needed.
 
 ---
 
@@ -145,10 +117,13 @@ Update the local `RevampResult` interface to match the richer response shape, an
 
 | File | Action |
 |---|---|
-| `supabase/functions/revamp-copy/index.ts` | Fix ranking bug, fix playbook fetch, add why_this_works/key_insight/source_insights to response |
-| `src/components/playground/RevampResultDialog.tsx` | Add insights card + save section (name input + save button) |
-| `src/components/playground/CopyTab.tsx` | Update RevampResult type, pass campaignName prop |
+| `src/hooks/useCopyTemplates.ts` | Add `useRenameCopyGroup` mutation |
+| `src/components/playground/ViewCopyDialog.tsx` | Add inline title editing with save/cancel + `useRenameCopyGroup` |
 
-### No Hook or Schema Changes
+### No Database Schema Changes
 
-`useSaveCopyMutation` already handles single-step saves perfectly — no changes needed. `copy_templates` table schema is unchanged. The revamped copy appears in the same library as generated copies.
+The `copy_templates` table already has the `name` column with an UPDATE policy allowing team members to update their own team's records. The rename writes directly to existing rows.
+
+### No Dashboard Changes
+
+Because `useAICopyGroups` is invalidated on rename success, the `DocCard` on the dashboard automatically re-renders with the updated name — no changes to `PlaygroundDashboard.tsx` needed.
