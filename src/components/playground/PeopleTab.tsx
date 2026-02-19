@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Progress } from '@/components/ui/progress';
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
-import { Loader2, Users, RefreshCw, Download, ExternalLink, Check, X } from 'lucide-react';
+import { Loader2, Users, RefreshCw, Download, ExternalLink, Check, X, Target } from 'lucide-react';
 import { toast } from 'sonner';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { PaginationControls } from '@/components/search/PaginationControls';
@@ -40,6 +40,7 @@ export function PeopleTab() {
   const [perPage, setPerPage] = useState(100);
   const [isExporting, setIsExporting] = useState(false);
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
+  const [buildAudienceOpen, setBuildAudienceOpen] = useState(false);
   
   const { data: pagedData, isLoading: contactsLoading } = useSyncedContactsPaged({
     campaignId: selectedCampaignId,
@@ -358,6 +359,10 @@ export function PeopleTab() {
             )}
             Export CSV
           </Button>
+          <Button size="sm" onClick={() => setBuildAudienceOpen(true)}>
+            <Target className="h-4 w-4 mr-2" />
+            Build Audience with AI
+          </Button>
         </div>
       </div>
 
@@ -513,6 +518,7 @@ export function PeopleTab() {
           )}
         </CardContent>
       </Card>
+      <BuildAudienceDialog open={buildAudienceOpen} onOpenChange={setBuildAudienceOpen} />
     </div>
   );
 }
