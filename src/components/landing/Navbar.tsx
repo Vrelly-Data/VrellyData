@@ -33,6 +33,9 @@ export const Navbar = () => {
             <button onClick={() => navigate('/comparisons')} className="hover:text-foreground transition-colors">
               Comparisons
             </button>
+            <button onClick={() => navigate('/resources')} className="hover:text-foreground transition-colors">
+              Resources
+            </button>
           </div>
 
           <div className="flex items-center gap-3">
