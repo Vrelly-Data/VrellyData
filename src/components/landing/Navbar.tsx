@@ -16,7 +16,7 @@ export const Navbar = () => {
           <img
             src={vrellyLogo}
             alt="Vrelly"
-            className="h-[4.5rem] cursor-pointer"
+            className="h-[6.75rem] cursor-pointer"
             onClick={() => navigate('/')}
           />
 
