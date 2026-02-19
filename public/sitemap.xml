@@ -4,6 +4,18 @@
     <loc>https://vrelly.com/</loc>
     <priority>1.0</priority>
     <changefreq>weekly</changefreq>
-    <lastmod>2026-02-18</lastmod>
+    <lastmod>2026-02-19</lastmod>
+  </url>
+  <url>
+    <loc>https://vrelly.com/comparisons</loc>
+    <priority>0.8</priority>
+    <changefreq>monthly</changefreq>
+    <lastmod>2026-02-19</lastmod>
+  </url>
+  <url>
+    <loc>https://vrelly.com/resources</loc>
+    <priority>0.8</priority>
+    <changefreq>weekly</changefreq>
+    <lastmod>2026-02-19</lastmod>
   </url>
 </urlset>

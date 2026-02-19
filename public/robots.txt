@@ -1,5 +1,7 @@
 User-agent: Googlebot
 Allow: /
+Allow: /resources
+Allow: /resources/*
 Disallow: /auth
 Disallow: /dashboard
 Disallow: /people
@@ -14,6 +16,8 @@ Disallow: /audience-builder
 
 User-agent: Bingbot
 Allow: /
+Allow: /resources
+Allow: /resources/*
 Disallow: /auth
 Disallow: /dashboard
 Disallow: /people
@@ -34,6 +38,8 @@ Allow: /
 
 User-agent: *
 Allow: /
+Allow: /resources
+Allow: /resources/*
 Disallow: /auth
 Disallow: /dashboard
 Disallow: /people
@@ -47,4 +53,3 @@ Disallow: /reset-password
 Disallow: /audience-builder
 
 Sitemap: https://vrelly.com/sitemap.xml
-
