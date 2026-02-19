@@ -6,14 +6,16 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Loader2, Sparkles, Copy, X, Plus, Lightbulb, Mail } from 'lucide-react';
+import { Loader2, Sparkles, Copy, X, Plus, Lightbulb, Mail, CheckCircle2, BookOpen, Zap } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
+import { useSaveCopyMutation } from '@/hooks/useCopyTemplates';
+import { format } from 'date-fns';
 
 interface CopyStep {
   step: number;
   day: number;
-  subject?: string;
+  subject?: string | null;
   body: string;
   channel?: string;
 }
@@ -21,6 +23,8 @@ interface CopyStep {
 interface GeneratedCopy {
   positioning_statement: string;
   key_insight: string;
+  why_this_works?: string[];
+  source_insights?: { title: string; category: string }[];
   steps: CopyStep[];
 }
 
@@ -78,10 +82,25 @@ function TagInput({ label, values, onChange, placeholder }: {
 
 const CHANNELS = ['Email', 'LinkedIn', 'Twitter message', 'Instagram message', 'Facebook message'];
 
+function categoryLabel(cat: string) {
+  switch (cat) {
+    case 'sales_guideline': return 'Guideline';
+    case 'audience_insight': return 'Insight';
+    case 'campaign_result': return 'Campaign';
+    case 'email_template': return 'Template';
+    case 'sequence_playbook': return 'Playbook';
+    default: return cat;
+  }
+}
+
 export function CreateCopyDialog({ open, onOpenChange }: CreateCopyDialogProps) {
   const [step, setStep] = useState<'form' | 'result'>('form');
   const [isGenerating, setIsGenerating] = useState(false);
   const [result, setResult] = useState<GeneratedCopy | null>(null);
+  const [templateName, setTemplateName] = useState('');
+  const [savedGroupId, setSavedGroupId] = useState<string | null>(null);
+
+  const saveMutation = useSaveCopyMutation();
 
   // Form state
   const [product, setProduct] = useState('');
@@ -96,6 +115,11 @@ export function CreateCopyDialog({ open, onOpenChange }: CreateCopyDialogProps) 
     setChannels((prev) =>
       prev.includes(ch) ? prev.filter((c) => c !== ch) : [...prev, ch]
     );
+  };
+
+  const buildDefaultName = () => {
+    const snippet = product.trim().split(' ').slice(0, 4).join(' ');
+    return `AI Copy — ${snippet} — ${format(new Date(), 'MMM yyyy')}`;
   };
 
   const handleGenerate = async () => {
@@ -114,6 +138,8 @@ export function CreateCopyDialog({ open, onOpenChange }: CreateCopyDialogProps) 
       if (data?.error) throw new Error(data.error);
 
       setResult(data as GeneratedCopy);
+      setTemplateName(buildDefaultName());
+      setSavedGroupId(null);
       setStep('result');
     } catch (err: any) {
       toast.error(`Failed to generate copy: ${err.message || 'Unknown error'}`);
@@ -127,11 +153,32 @@ export function CreateCopyDialog({ open, onOpenChange }: CreateCopyDialogProps) 
     toast.success(`${label} copied to clipboard`);
   };
 
+  const handleSave = async () => {
+    if (!templateName.trim()) {
+      toast.error('Please enter a name for this copy');
+      return;
+    }
+    if (!result?.steps?.length) return;
+
+    try {
+      const groupId = await saveMutation.mutateAsync({
+        templateName: templateName.trim(),
+        steps: result.steps,
+      });
+      setSavedGroupId(groupId);
+      toast.success('Copy saved to your library');
+    } catch (err: any) {
+      toast.error(`Failed to save: ${err.message || 'Unknown error'}`);
+    }
+  };
+
   const handleClose = () => {
     onOpenChange(false);
     setTimeout(() => {
       setStep('form');
       setResult(null);
+      setSavedGroupId(null);
+      setTemplateName('');
     }, 300);
   };
 
@@ -145,8 +192,8 @@ export function CreateCopyDialog({ open, onOpenChange }: CreateCopyDialogProps) 
           </DialogTitle>
           <DialogDescription>
             {step === 'form'
-              ? 'Tell us about your business and we\'ll generate a tailored outreach sequence using your top-performing campaign data.'
-              : 'AI-generated copy based on your best-performing campaigns. Click to copy any section.'}
+              ? "Tell us about your business and we'll generate a tailored outreach sequence using your top-performing campaign data."
+              : 'AI-generated copy based on your best-performing campaigns. Save it to your library or copy individual sections.'}
           </DialogDescription>
         </DialogHeader>
 
@@ -248,25 +295,87 @@ export function CreateCopyDialog({ open, onOpenChange }: CreateCopyDialogProps) 
           </div>
         ) : result ? (
           <div className="space-y-4 py-2">
-            {/* Insights */}
-            {(result.positioning_statement || result.key_insight) && (
-              <Card className="border-primary/20 bg-primary/5">
-                <CardHeader className="py-3">
-                  <CardTitle className="text-sm flex items-center gap-2">
-                    <Lightbulb className="h-4 w-4 text-primary" />
-                    AI Insights
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="py-0 pb-4 space-y-2">
-                  {result.positioning_statement && (
-                    <p className="text-sm"><span className="font-medium">Positioning:</span> {result.positioning_statement}</p>
-                  )}
-                  {result.key_insight && (
-                    <p className="text-sm text-muted-foreground"><span className="font-medium text-foreground">Key Insight:</span> {result.key_insight}</p>
-                  )}
-                </CardContent>
-              </Card>
-            )}
+            {/* Enhanced Insights Card */}
+            <Card className="border-primary/20 bg-primary/5">
+              <CardHeader className="py-3 pb-2">
+                <CardTitle className="text-sm flex items-center gap-2">
+                  <Lightbulb className="h-4 w-4 text-primary" />
+                  Why This Copy Works
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="py-0 pb-4 space-y-3">
+                {result.positioning_statement && (
+                  <p className="text-sm">
+                    <span className="font-medium">Positioning:</span> {result.positioning_statement}
+                  </p>
+                )}
+                {result.key_insight && (
+                  <p className="text-sm text-muted-foreground">
+                    <span className="font-medium text-foreground">Key Insight:</span> {result.key_insight}
+                  </p>
+                )}
+
+                {result.why_this_works && result.why_this_works.length > 0 && (
+                  <div className="space-y-1.5 pt-1">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1">
+                      <Zap className="h-3 w-3" />
+                      Why this approach
+                    </p>
+                    <ul className="space-y-1">
+                      {result.why_this_works.map((reason, i) => (
+                        <li key={i} className="text-sm flex gap-2">
+                          <span className="text-primary mt-0.5 shrink-0">•</span>
+                          <span>{reason}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {result.source_insights && result.source_insights.length > 0 && (
+                  <div className="space-y-1.5 pt-1">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1">
+                      <BookOpen className="h-3 w-3" />
+                      Informed by
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {result.source_insights.map((src, i) => (
+                        <Badge key={i} variant="outline" className="text-xs gap-1 border-primary/30 text-primary bg-primary/5">
+                          <span className="opacity-60">{categoryLabel(src.category)}</span>
+                          {src.title}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Save section */}
+            <div className="flex gap-2 items-center">
+              <Input
+                value={templateName}
+                onChange={(e) => setTemplateName(e.target.value)}
+                placeholder="Name this copy..."
+                className="flex-1"
+                disabled={!!savedGroupId}
+              />
+              <Button
+                size="sm"
+                variant={savedGroupId ? 'outline' : 'default'}
+                onClick={handleSave}
+                disabled={!!savedGroupId || saveMutation.isPending || !templateName.trim()}
+                className={savedGroupId ? 'text-green-600 border-green-300' : ''}
+              >
+                {saveMutation.isPending ? (
+                  <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />Saving...</>
+                ) : savedGroupId ? (
+                  <><CheckCircle2 className="h-3.5 w-3.5 mr-1.5" />Saved ✓</>
+                ) : (
+                  'Save to Library'
+                )}
+              </Button>
+            </div>
 
             {/* Outreach Steps */}
             {result.steps?.map((s) => (

@@ -50,7 +50,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Pull relevant Sales KB context
+    // Pull top-performing campaign results from KB
     const { data: allResults } = await supabase
       .from("sales_knowledge")
       .select("title, content, category, tags, metrics, source_campaign")
@@ -88,6 +88,15 @@ Deno.serve(async (req) => {
       .in("category", ["sales_guideline", "audience_insight"])
       .limit(5);
 
+    // Build source_insights server-side (not hallucinated — real KB references)
+    const sourceInsights: { title: string; category: string }[] = [];
+    for (const p of topPerformers) {
+      sourceInsights.push({ title: p.title, category: "campaign_result" });
+    }
+    for (const g of (guidelines || [])) {
+      sourceInsights.push({ title: (g as any).title, category: (g as any).category });
+    }
+
     const performanceContext = topPerformers.length > 0
       ? "\n\n## TOP-PERFORMING CAMPAIGNS (study their patterns):\n\n" +
         topPerformers.map((k: any, i: number) => {
@@ -108,6 +117,8 @@ Deno.serve(async (req) => {
         (guidelines as any[]).map((k: any, i: number) => `### ${i + 1}: ${k.title}\n${k.content}`).join("\n\n")
       : "";
 
+    const hasKBData = topPerformers.length > 0 || (guidelines || []).length > 0;
+
     const selectedChannels: string[] = Array.isArray(channels) && channels.length > 0 ? channels : ["Email"];
     const isMultiChannel = selectedChannels.length > 1;
 
@@ -123,6 +134,10 @@ Generate ${selectedChannels.length} steps total (one per channel), assigning log
 - subject line
 - email body (plain text, conversational, concise)
 - send day (e.g., Day 1, Day 4, Day 8)`;
+
+    const whyThisWorksInstruction = hasKBData
+      ? `Based on the KB data provided (top-performing campaigns, winning sequences, and strategic guidelines), produce a "why_this_works" field: a list of 2-4 bullet-point reasons explaining WHY this outreach approach is the right fit for the described business. Ground each reason in specific patterns or data from the KB context above (e.g., reference a campaign name, a reply rate, a guideline insight). Be specific and data-driven.`
+      : `Produce a "why_this_works" field: a list of 2-4 bullet-point reasons explaining WHY this outreach approach is the right fit for the described business, based on general B2B sales best practices and the business inputs provided.`;
 
     const systemPrompt = `You are an expert B2B sales copywriter. Generate a complete, high-converting outbound outreach sequence for the following business.
 
@@ -140,20 +155,23 @@ ${guidelinesContext}
 
 ${channelInstructions}
 
+${whyThisWorksInstruction}
+
 Also provide:
 - positioning_statement: A 1-2 sentence positioning statement for this prospect type
-- key_insight: One data-backed insight or pattern from the winning campaigns that informed this copy
+- key_insight: One data-backed insight or pattern from the winning campaigns that informed this copy (or a general best-practice insight if no KB data)
 
 Return ONLY valid JSON in this exact shape:
 {
   "positioning_statement": "...",
   "key_insight": "...",
+  "why_this_works": ["reason 1", "reason 2", "reason 3"],
   "steps": [
     { "step": 1, "day": 1, "channel": "Email", "subject": "...", "body": "..." },
     { "step": 2, "day": 4, "channel": "LinkedIn", "subject": null, "body": "..." }
   ]
 }
-Note: set "subject" to null for non-email channels.`;
+Note: set "subject" to null for non-email channels. Do NOT include "source_insights" in your response — that is injected server-side.`;
 
     const claudeResponse = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -166,7 +184,7 @@ Note: set "subject" to null for non-email channels.`;
         model: "claude-sonnet-4-20250514",
         max_tokens: 2048,
         system: systemPrompt,
-        messages: [{ role: "user", content: "Generate the email sequence now." }],
+        messages: [{ role: "user", content: "Generate the outreach sequence now." }],
       }),
     });
 
@@ -189,6 +207,9 @@ Note: set "subject" to null for non-email channels.`;
     } catch {
       result = { error: "Failed to parse AI response", raw: responseText };
     }
+
+    // Inject source_insights server-side (verified KB references, not hallucinated)
+    result.source_insights = sourceInsights;
 
     return new Response(JSON.stringify(result), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
