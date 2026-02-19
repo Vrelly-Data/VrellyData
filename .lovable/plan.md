@@ -1,85 +1,154 @@
 
-## Honest Assessment: Sales Repo → AI Generation Pipeline
+## Revamp Copy: Insights Section + Save to Library
 
-### What You Have Right Now
+### What's Being Added
 
-Your Sales Knowledge Base is genuinely impressive raw material:
-- **324 campaign results** — all with structured metrics: `email_reply_rate`, `li_reply_rate`, `combined_reply_rate`, `li_conn_rate`, `open_rate`, etc.
-- **1 audience insight** — M&A + Private Equity Email Outreach (high value)
-- **1 sales guideline** — LinkedIn vs. Email benchmarks (high value, data-backed)
-- **1 sequence playbook** — Multi-Channel outreach steps and sequencing
+When a user clicks "Revamp" on a synced sequence step and sees the result, they currently get a basic side-by-side comparison with copy buttons and a close button. This plan adds:
 
-Real top performers in your data:
-- PestShare LI + Email V2: **1.9% LI reply rate**, 0.28% combined
-- Corp wellness LI + Email: **1.29% LI reply rate**
-- Magento LI Only: **1.0% combined reply rate**
+1. **Enriched Insights Section** — "Why This Revamp Works" card with AI-generated reasoning bullets and "Informed by" badges referencing real Sales Repo entries
+2. **Save to Library** — same name input + "Save to Library" button pattern as Generate Copy, so revamped copies appear as document cards on the dashboard
+3. **Ranking Bug Fix** in `revamp-copy` — the same bug that was fixed in `generate-copy` and `build-audience` exists here too: it still ranks by a single metric (`li_reply_rate` OR `email_reply_rate`) rather than `Math.max(li, email, combined)`, causing your LinkedIn-dominant campaigns to be excluded from the AI context
 
-### The Problem: A Critical Bug
+---
 
-Both `generate-copy` and `build-audience` rank campaigns **exclusively by `email_reply_rate`**.
+### Current State Issues
 
-Looking at your top 10 performers, most have `email_reply_rate: 0` — because your campaigns are LinkedIn-dominant. The ranking filter `.filter((e: any) => e._rate > 0)` then **eliminates every single one of them**.
+**`supabase/functions/revamp-copy/index.ts` has two bugs:**
+- Ranking still uses a single metric based on channel type, so LinkedIn campaigns are mostly excluded
+- `sequence_playbook` entries are fetched with `.in("source_campaign", topCampaignNames)` which misses them since playbooks have no `source_campaign`
 
-The result: both AI tools currently receive **zero KB campaign context** despite having 324 real campaigns. They fall back to generic AI knowledge.
+**Current response shape** (only returns 2 fields):
+```json
+{ "subject": "...", "body": "..." }
+```
 
-Additionally:
-- The `sequence_playbook` entry ("Multi Channel outreach steps and sequencing") has no `source_campaign` set, so the query that tries to link it to top campaigns will never find it
-- The `audience_insight` and `sales_guideline` entries **are** correctly fetched (no metric filter applied to them) — so those 2 entries do reach the AI. But it's only 2 entries vs. 324 ignored campaign results.
+**`RevampResultDialog.tsx`** — no insights section, no save functionality, no name input.
 
-### What Needs To Be Fixed
+---
 
-**One targeted fix to `generate-copy/index.ts` and `build-audience/index.ts`:**
+### Part 1: Update `revamp-copy` Edge Function
 
-Change the ranking metric from `email_reply_rate` only → take the **maximum of all three rates**:
+**Fix ranking** (same fix applied to `generate-copy` and `build-audience`):
 ```ts
-// BEFORE (broken — returns 0 for most LI campaigns):
-return { ...e, _rate: parseFloat(metrics["email_reply_rate"]) || 0 };
+// BEFORE (broken):
+const rate = parseFloat(metrics[rankMetric]) || 0;
+return { ...entry, _rankRate: rate };
 
-// AFTER (captures your real top performers):
+// AFTER (captures LinkedIn campaigns):
 const liRate = parseFloat(metrics["li_reply_rate"]) || 0;
 const emailRate = parseFloat(metrics["email_reply_rate"]) || 0;
 const combinedRate = parseFloat(metrics["combined_reply_rate"]) || 0;
-const _rate = Math.max(liRate, emailRate, combinedRate);
-return { ...e, _rate };
+const _rankRate = Math.max(liRate, emailRate, combinedRate);
+const _rateSource = liRate >= emailRate && liRate >= combinedRate ? "LinkedIn" : emailRate >= combinedRate ? "Email" : "Combined";
+return { ...entry, _rankRate, _rateSource };
 ```
 
-Also fetch `sequence_playbook` entries separately (without the `source_campaign` filter) so the multi-channel playbook is always included.
+**Fix playbook fetching** — split into two separate queries:
+```ts
+// Email templates linked to top campaigns
+const { data: linkedDocs } = await supabase...eq("category", "email_template").in("source_campaign", topCampaignNames)
 
-And label the metric in the prompt correctly so the AI knows whether it's reading a LinkedIn or email rate.
+// Playbooks fetched independently (no source_campaign filter)
+const { data: playbookDocs } = await supabase...eq("category", "sequence_playbook").limit(2)
+linkedCopyDocs = [...(linkedDocs || []), ...(playbookDocs || [])];
+```
+
+**Update Claude response schema** — ask for `why_this_works` and `key_insight` in addition to `subject` and `body`:
+```json
+{
+  "subject": "...",
+  "body": "...",
+  "key_insight": "One data-backed insight from the KB that informed this rewrite",
+  "why_this_works": ["reason 1", "reason 2", "reason 3"]
+}
+```
+
+**Inject `source_insights` server-side** — built from the actual KB entries fetched (top performers + guidelines), not hallucinated by Claude:
+```ts
+result.source_insights = sourceInsights; // [{title, category}]
+```
+
+**Updated system prompt** — instruct Claude to produce `why_this_works` bullets grounded in the KB data it received. If KB is empty, generate plausible reasoning from the copy itself. Increase `max_tokens` from 1024 → 1500 to accommodate the extra fields.
 
 ---
 
-### What Happens After The Fix
+### Part 2: Update `RevampResultDialog.tsx`
 
-With the fix, both tools will start injecting into the AI prompt:
-- Your top 5 real campaigns (e.g. PestShare at 1.9% LI reply rate, Corp Wellness at 1.29%, Magento at 1.0%)
-- Your LinkedIn vs Email benchmark guideline (the 10.3% vs 5.1% data)
-- Your M&A/Private Equity audience insight
-- Your multi-channel sequencing playbook
+**New props:**
+- Add `campaignName?: string` for generating a meaningful default save name
 
-This is the foundation. As you add more `audience_insight`, `sales_guideline`, and `sequence_playbook` entries, they will all be pulled in immediately — no further code changes needed.
+**New response type:**
+```ts
+interface RevampResult {
+  subject: string | null;
+  body: string | null;
+  why_this_works?: string[];
+  key_insight?: string;
+  source_insights?: { title: string; category: string }[];
+}
+```
+
+**New state:**
+- `templateName: string` — pre-filled with `"Revamped — {campaignName} Step {stepNumber} — Feb 2026"` when dialog opens
+- `savedGroupId: string | null` — post-save state
+
+**New layout (after the header, before the side-by-side comparison):**
+
+```
+┌─ Why This Revamp Works ─────────────────────────────────┐
+│  Key Insight: "..."                                     │
+│                                                         │
+│  Why this approach:                                     │
+│  • LinkedIn messages with question openers averaged...  │
+│  • Campaigns referencing company-specific pain points.. │
+│                                                         │
+│  Informed by:  [ Campaign ] PestShare  [ Playbook ] ... │
+└─────────────────────────────────────────────────────────┘
+
+[ Name input: "Revamped — Campaign X Step 1 — Feb 2026" ] [ Save to Library ]
+
+┌─ Original ──────────┐  ┌─ Revamped ──────────────────┐
+│ Subject: ...        │  │ Subject: ...  [ Copy ]      │
+│ Body: ...           │  │ Body: ...     [ Copy ]      │
+└─────────────────────┘  └─────────────────────────────┘
+
+[ Close ]
+```
+
+The insights card only renders if `why_this_works` or `source_insights` are present (degrades gracefully if KB is empty).
+
+**Save logic** — reuses the existing `useSaveCopyMutation` hook with a single step:
+```ts
+saveMutation.mutateAsync({
+  templateName: templateName.trim(),
+  steps: [{
+    step: stepNumber,
+    day: 1,
+    channel: stepType,
+    subject: revamped.subject,
+    body: revamped.body || '',
+  }]
+})
+```
+
+After save: button shows "Saved ✓" (green, disabled), toast: "Revamped copy saved to your library" — and the doc card appears in the dashboard library.
 
 ---
 
-### Future-Proofing: As You Scale the Repo
+### Part 3: Update `CopyTab.tsx`
 
-The architecture is designed to scale, but there are two improvements worth making as you grow beyond the current entries:
-
-1. **Relevance-matching (not just top performers)**: Right now the top-5 campaigns are chosen by raw reply rate alone. As you accumulate hundreds of campaigns across different verticals (healthcare, SaaS, manufacturing, etc.), it would be better to filter campaigns relevant to the user's selected industries *before* ranking. For example, if someone is generating copy for a SaaS company, they should see top SaaS campaigns — not your top pest control campaign. This is a future enhancement once you have enough per-vertical data.
-
-2. **Guideline/insight limits**: Currently only 5 guidelines and 8 audience insights are fetched. As you add many more, you may want smarter selection. For now the limits are fine given you have 2 of each.
+Update the local `RevampResult` interface to match the richer response shape, and pass `campaignName` as a prop to `RevampResultDialog`.
 
 ---
 
-### Files To Change
+### Files to Change
 
-| File | Change |
+| File | Action |
 |---|---|
-| `supabase/functions/generate-copy/index.ts` | Fix ranking metric (max of li/email/combined), fetch sequence_playbook separately, label metric source in prompt |
-| `supabase/functions/build-audience/index.ts` | Same ranking fix |
+| `supabase/functions/revamp-copy/index.ts` | Fix ranking bug, fix playbook fetch, add why_this_works/key_insight/source_insights to response |
+| `src/components/playground/RevampResultDialog.tsx` | Add insights card + save section (name input + save button) |
+| `src/components/playground/CopyTab.tsx` | Update RevampResult type, pass campaignName prop |
 
-No database changes needed. No frontend changes needed. This is a pure edge function fix.
+### No Hook or Schema Changes
 
-### Summary
-
-Yes — once this fix is deployed, the pipeline will accurately pull and use your real campaign data. The architecture is sound. The only reason it's not working today is one ranking bug (using email_reply_rate exclusively when your data is LinkedIn-dominant). After the fix, every new entry you add to the Sales Repo — whether campaign results, guidelines, playbooks, or audience insights — will immediately feed into both generation tools.
+`useSaveCopyMutation` already handles single-step saves perfectly — no changes needed. `copy_templates` table schema is unchanged. The revamped copy appears in the same library as generated copies.
