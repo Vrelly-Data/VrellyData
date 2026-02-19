@@ -224,47 +224,56 @@ export function PeopleTab() {
 
   if (totalCount === 0 && selectedCampaignId === 'all' && statusFilter === 'all') {
     return (
-      <div className="flex flex-col items-center justify-center h-64 text-center">
-        <Users className="h-12 w-12 text-muted-foreground mb-4" />
-        <h2 className="text-xl font-semibold mb-2">No Contacts Synced</h2>
-        <p className="text-muted-foreground max-w-md mb-4">
-          Sync your campaigns to fetch contact details and engagement data.
-        </p>
-        {linkedCampaigns.length > 0 ? (
-          <Button 
-            onClick={() => syncAllCampaignsMutation.mutate()}
-            disabled={syncAllCampaignsMutation.isPending}
-          >
-            {syncAllCampaignsMutation.isPending ? (
-              <Loader2 className="h-4 w-4 animate-spin mr-2" />
-            ) : (
-              <RefreshCw className="h-4 w-4 mr-2" />
-            )}
-            Sync All {linkedCampaigns.length} Linked Campaigns
-          </Button>
-        ) : campaigns?.length ? (
-          <div className="flex flex-col gap-2">
-            <p className="text-sm text-muted-foreground">Select a campaign to sync its contacts:</p>
-            <Select 
-              onValueChange={(id) => syncContactsMutation.mutate(id)} 
-              disabled={syncContactsMutation.isPending}
-            >
-              <SelectTrigger className="w-64">
-                <SelectValue placeholder="Select campaign..." />
-              </SelectTrigger>
-              <SelectContent>
-                {campaigns.map(c => (
-                  <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        ) : (
-          <p className="text-sm text-muted-foreground">
-            First sync your campaigns from the Playground tab.
+      <>
+        <div className="flex flex-col items-center justify-center h-64 text-center">
+          <Users className="h-12 w-12 text-muted-foreground mb-4" />
+          <h2 className="text-xl font-semibold mb-2">No Contacts Synced</h2>
+          <p className="text-muted-foreground max-w-md mb-4">
+            Sync your campaigns to fetch contact details and engagement data.
           </p>
-        )}
-      </div>
+          {linkedCampaigns.length > 0 ? (
+            <Button 
+              onClick={() => syncAllCampaignsMutation.mutate()}
+              disabled={syncAllCampaignsMutation.isPending}
+            >
+              {syncAllCampaignsMutation.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+              ) : (
+                <RefreshCw className="h-4 w-4 mr-2" />
+              )}
+              Sync All {linkedCampaigns.length} Linked Campaigns
+            </Button>
+          ) : campaigns?.length ? (
+            <div className="flex flex-col gap-2">
+              <p className="text-sm text-muted-foreground">Select a campaign to sync its contacts:</p>
+              <Select 
+                onValueChange={(id) => syncContactsMutation.mutate(id)} 
+                disabled={syncContactsMutation.isPending}
+              >
+                <SelectTrigger className="w-64">
+                  <SelectValue placeholder="Select campaign..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {campaigns.map(c => (
+                    <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              First sync your campaigns from the Playground tab.
+            </p>
+          )}
+          <div className="mt-4 pt-4 border-t w-full flex justify-center">
+            <Button onClick={() => setBuildAudienceOpen(true)}>
+              <Target className="h-4 w-4 mr-2" />
+              Build Audience with AI
+            </Button>
+          </div>
+        </div>
+        <BuildAudienceDialog open={buildAudienceOpen} onOpenChange={setBuildAudienceOpen} />
+      </>
     );
   }
 

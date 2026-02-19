@@ -178,13 +178,20 @@ export function CopyTab() {
   // No campaigns available
   if (!campaigns?.length) {
     return (
-      <div className="flex flex-col items-center justify-center h-64 text-center">
-        <FileText className="h-12 w-12 text-muted-foreground mb-4" />
-        <h2 className="text-xl font-semibold mb-2">No Campaigns Synced</h2>
-        <p className="text-muted-foreground max-w-md">
-          First sync your campaigns from the Playground tab to see email copy here.
-        </p>
-      </div>
+      <>
+        <div className="flex flex-col items-center justify-center h-64 text-center border-2 border-dashed rounded-lg">
+          <FileText className="h-12 w-12 text-muted-foreground mb-4" />
+          <h2 className="text-xl font-semibold mb-2">No Campaigns Synced</h2>
+          <p className="text-muted-foreground max-w-md mb-4">
+            First sync your campaigns from the Playground tab to see email copy here.
+          </p>
+          <Button onClick={() => setCreateCopyOpen(true)}>
+            <Plus className="h-4 w-4 mr-2" />
+            Create New Copy
+          </Button>
+        </div>
+        <CreateCopyDialog open={createCopyOpen} onOpenChange={setCreateCopyOpen} />
+      </>
     );
   }
 
