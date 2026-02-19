@@ -21,7 +21,12 @@ import {
 import { Upload, CheckCircle, XCircle } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
 import type { SalesKnowledgeInsert } from '@/hooks/useAdminSalesKnowledge';
-import { detectStatsCSV, transformStatsRows } from '@/lib/statsCSVDetector';
+import {
+  detectStatsCSV,
+  transformStatsRows,
+  isKnowledgeBaseCSV,
+  transformKnowledgeBaseRows,
+} from '@/lib/statsCSVDetector';
 import {
   Select,
   SelectContent,
@@ -51,13 +56,18 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
   const invalidRows = useMemo(() => transformedRows.filter(r => !r.valid), [transformedRows]);
 
   const processData = useCallback((data: Record<string, string>[], headers: string[]) => {
-    const config = detectStatsCSV(headers, data);
-    const transformed = transformStatsRows(data, config);
+    const isKB = isKnowledgeBaseCSV(headers);
+    const transformed = isKB
+      ? transformKnowledgeBaseRows(data, headers)
+      : transformStatsRows(data, detectStatsCSV(headers, data));
     setTransformedRows(transformed);
     setStep('preview');
+    const validCount = transformed.filter(r => r.valid).length;
     toast({
       title: 'File parsed',
-      description: `Found ${transformed.filter(r => r.valid).length} campaign results.`,
+      description: isKB
+        ? `Found ${validCount} knowledge base entries (guidelines, insights, etc.)`
+        : `Found ${validCount} campaign results.`,
     });
   }, []);
 
@@ -145,8 +155,8 @@ export function SalesKnowledgeImportDialog({ open, onOpenChange, onImport, isPen
         {step === 'upload' && (
           <label className="flex flex-col items-center justify-center gap-3 border-2 border-dashed border-muted-foreground/30 rounded-lg p-10 cursor-pointer hover:border-primary/50 transition-colors">
             <Upload className="h-8 w-8 text-muted-foreground" />
-            <span className="text-sm text-muted-foreground">
-              Drop or select a CSV or Excel file with campaign stats — we'll extract the title and metrics
+            <span className="text-sm text-muted-foreground text-center">
+              Drop or select a CSV with campaign stats <strong>or</strong> knowledge base entries (category, title, content columns)
             </span>
             <input
               type="file"

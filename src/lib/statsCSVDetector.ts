@@ -1,5 +1,109 @@
 import type { SalesKnowledgeInsert } from '@/hooks/useAdminSalesKnowledge';
 
+// ---------------------------------------------------------------------------
+// Knowledge Base CSV detection & transform
+// ---------------------------------------------------------------------------
+
+const KB_CATEGORY_MAP: Record<string, string> = {
+  'sales guideline': 'sales_guideline',
+  'audience insight': 'audience_insight',
+  'email template': 'email_template',
+  'sequence playbook': 'sequence_playbook',
+  'campaign result': 'campaign_result',
+};
+
+/**
+ * Returns true when the CSV looks like a Knowledge Base schema file,
+ * i.e. it has both a "title" and a "content" column.
+ */
+export function isKnowledgeBaseCSV(headers: string[]): boolean {
+  const normalized = headers.map(h => h.toLowerCase().trim());
+  return normalized.some(h => h === 'title') && normalized.some(h => h === 'content');
+}
+
+/** Case-insensitive fuzzy map of a category string to a valid KB category slug. */
+function mapCategory(raw: string): string {
+  const key = raw.toLowerCase().trim();
+  // exact match first
+  if (KB_CATEGORY_MAP[key]) return KB_CATEGORY_MAP[key];
+  // partial match
+  for (const [k, v] of Object.entries(KB_CATEGORY_MAP)) {
+    if (key.includes(k) || k.includes(key)) return v;
+  }
+  return 'sales_guideline'; // default
+}
+
+/** Find the actual header string that normalizes to the target key. */
+function findHeader(headers: string[], target: string): string | null {
+  return headers.find(h => h.toLowerCase().trim() === target) ?? null;
+}
+
+/**
+ * Transform rows from a KB-schema CSV (category / title / content / tags /
+ * source_campaign / optional numeric cols) into SalesKnowledgeInsert entries.
+ */
+export function transformKnowledgeBaseRows(
+  data: Record<string, string>[],
+  headers: string[]
+): { entry: SalesKnowledgeInsert; valid: boolean; error?: string }[] {
+  const colTitle = findHeader(headers, 'title');
+  const colContent = findHeader(headers, 'content');
+  const colCategory = findHeader(headers, 'category');
+  const colTags = findHeader(headers, 'tags');
+  const colSourceCampaign = findHeader(headers, 'source_campaign');
+
+  // Numeric columns (anything that isn't one of the known text cols)
+  const knownText = new Set([colTitle, colContent, colCategory, colTags, colSourceCampaign].filter(Boolean));
+  const numericCols = headers.filter(h => {
+    if (knownText.has(h)) return false;
+    // sample first 5 rows to decide
+    const vals = data.slice(0, 5).map(r => (r[h] ?? '').trim()).filter(Boolean);
+    if (vals.length === 0) return false;
+    const numCount = vals.filter(v => !isNaN(parseFloat(v.replace(/[,%$]/g, '')))).length;
+    return numCount / vals.length >= 0.6;
+  });
+
+  return data.map(row => {
+    const title = colTitle ? (row[colTitle] ?? '').trim() : '';
+    const content = colContent ? (row[colContent] ?? '').trim() : '';
+
+    if (!title) return { entry: {} as SalesKnowledgeInsert, valid: false, error: 'Missing title' };
+    if (!content) return { entry: {} as SalesKnowledgeInsert, valid: false, error: 'Missing content' };
+
+    const rawCategory = colCategory ? (row[colCategory] ?? '').trim() : '';
+    const category = mapCategory(rawCategory) as SalesKnowledgeInsert['category'];
+
+    const rawTags = colTags ? (row[colTags] ?? '').trim() : '';
+    const tags = rawTags
+      ? rawTags.split(/[,;]+/).map(t => t.trim()).filter(Boolean)
+      : undefined;
+
+    const sourceCampaign = colSourceCampaign ? (row[colSourceCampaign] ?? '').trim() || undefined : undefined;
+
+    // Collect numeric columns into metrics
+    const metrics: Record<string, number> = {};
+    for (const col of numericCols) {
+      const raw = (row[col] ?? '').trim();
+      if (raw) {
+        const parsed = parseFloat(raw.replace(/[,%$\s]/g, ''));
+        if (!isNaN(parsed)) metrics[col.toLowerCase().replace(/[^a-z0-9]+/g, '_')] = parsed;
+      }
+    }
+
+    return {
+      valid: true,
+      entry: {
+        category,
+        title,
+        content,
+        tags,
+        source_campaign: sourceCampaign,
+        metrics: Object.keys(metrics).length ? metrics : undefined,
+      } as SalesKnowledgeInsert,
+    };
+  });
+}
+
 /** Pattern matches for campaign/sequence name columns */
 const NAME_PATTERNS = [
   /^campaign[\s_-]?name/i, /^sequence[\s_-]?name/i, /^name$/i,
