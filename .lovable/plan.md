@@ -1,90 +1,58 @@
 
-## Fix: CSV Import for Knowledge Base Entries (Guidelines, Insights, Playbooks)
+## Move Saved Copy Cards from Dashboard to Copy Tab
 
-### Root Cause
+### What's Changing
 
-The Import CSV button in the Sales Knowledge tab routes everything through `statsCSVDetector.ts`, which is designed exclusively for **campaign activity logs** — it looks for sequence names, action types, and numeric metrics. It has no awareness of the knowledge-base schema columns (`category`, `title`, `content`, `tags`, `source_campaign`).
+Currently, saved AI-generated copy groups (the Google Drive-style document cards) appear inside the "Generate Copy" card on the **Playground Dashboard tab**. The request is to move them so they appear in the **Copy tab**, below the "Select a campaign" dropdown — as a second section on that same page.
 
-When you uploaded your guidelines and insights CSV with headers `category | title | content | tags | source_campaign | reply_rate | sent`, the detector:
-1. Found no matching campaign-name column (none of the patterns matched `title` as a name column)
-2. Treated `category`, `title`, `content`, `tags`, `source_campaign` as text columns and ignored them
-3. Treated `reply_rate` and `sent` as the only meaningful data (numeric cols)
-4. Generated broken/empty entries
+### Current Layout (Copy Tab)
 
-### What Needs to Change
-
-The fix has two parts:
-
-**Part 1: Add a Knowledge Base CSV detection path to `statsCSVDetector.ts`**
-
-Add a `detectKnowledgeBaseCSV` function that checks whether a CSV looks like a KB schema file (has a `title` AND `content` column). If detected, use a completely different transform path:
-
-```ts
-// Detection: check for KB schema columns
-export function isKnowledgeBaseCSV(headers: string[]): boolean {
-  const normalized = headers.map(h => h.toLowerCase().trim());
-  const hasTitle = normalized.some(h => h === 'title');
-  const hasContent = normalized.some(h => h === 'content');
-  return hasTitle && hasContent;
-}
+```text
+Copy Tab
+├── [Create New Copy] button (top right)
+├── Campaign selector dropdown
+├── (if no campaign selected) → empty state with dashed border
+└── (if campaign selected) → sequence step cards
 ```
 
-The `transformKnowledgeBaseRows` function maps rows directly using robust column matching:
+### New Layout (Copy Tab)
 
-- `category` column → map to valid `KnowledgeCategory` (case-insensitive, handle "Sales Guideline" → `sales_guideline`, "Audience Insight" → `audience_insight`, etc.)
-- `title` column → `title`
-- `content` column → `content`
-- `tags` column → split on commas or semicolons → `tags[]`
-- `source_campaign` column → `source_campaign`
-- `reply_rate` + `sent` (and any other numeric columns) → stored in `metrics`
-- Rows missing `title` OR `content` are marked invalid
+```text
+Copy Tab
+├── [Create New Copy] button (top right)
+├── Campaign selector dropdown
+├── (if no campaign selected) → empty state with dashed border
+└── (if campaign selected) → sequence step cards
 
-Column matching uses normalized comparison (lowercase + trim) to handle spacing variations.
+── Saved Copies section (always visible below the campaign area) ──
+├── Section header: "Saved Copies"
+└── Google Drive-style document cards grid (same DocCard component)
+    └── Each card: Open → ViewCopyDialog, Delete button
+```
 
-**Category mapping (case-insensitive fuzzy match):**
+### Files to Change
 
-| CSV value | Stored as |
-|---|---|
-| "Sales Guideline" | `sales_guideline` |
-| "Audience Insight" | `audience_insight` |
-| "Email Template" | `email_template` |
-| "Sequence Playbook" | `sequence_playbook` |
-| "Campaign Result" | `campaign_result` |
-| Any unknown value | defaults to `sales_guideline` |
+**`src/components/playground/CopyTab.tsx`**
+- Import `useAICopyGroups`, `useDeleteCopyGroup`, `CopyGroup` from `useCopyTemplates`
+- Import `ViewCopyDialog` from `./ViewCopyDialog`
+- Import `formatDistanceToNow` from `date-fns`
+- Add state: `viewGroup` (for the ViewCopyDialog open/close)
+- Add the `DocCard` component (move/copy it from `PlaygroundDashboard.tsx` — it's a self-contained sub-component)
+- Add a "Saved Copies" section at the bottom of the tab, below the campaign area, using the same grid layout as the dashboard currently shows
+- If no saved copies exist, show nothing (no empty state needed since the campaign empty state already occupies the space)
 
-**Part 2: Update `SalesKnowledgeImportDialog.tsx` to use the new path**
+**`src/components/playground/PlaygroundDashboard.tsx`**
+- Remove the "Saved copies" shelf from inside the "Generate Copy" card (lines 113–132)
+- Remove the `ViewCopyDialog` import and state (`viewGroup`, `setViewGroup`) since it's no longer needed on the dashboard
+- Remove the `useAICopyGroups` import and usage
+- Remove the `DocCard` sub-component (it moves to CopyTab)
+- Remove the `ViewCopyDialog` render at the bottom of the component
+- The "Generate Copy" card becomes simpler: just the description + "Create New Copy" button
 
-In `processData`, check `isKnowledgeBaseCSV(headers)` first. If true, use `transformKnowledgeBaseRows`. Otherwise, fall back to the existing `detectStatsCSV` / `transformStatsRows` path (preserving all existing campaign stats behavior).
+### Technical Notes
 
-Also update the upload UI hint text to make clear both formats are supported:
-- Current: "Drop or select a CSV or Excel file with campaign stats — we'll extract the title and metrics"
-- New: "Drop or select a CSV with campaign stats OR knowledge base entries (category, title, content columns)"
-
-And update the preview table toast message to distinguish:
-- Campaign stats: "Found X campaign results"
-- KB entries: "Found X knowledge base entries (guidelines, insights, etc.)"
-
-### What Your CSV Produces After the Fix
-
-For each of your 19 rows:
-
-| Row | Category detected | title | content | tags | metrics |
-|---|---|---|---|---|---|
-| Row 1 | `sales_guideline` | "Cold Email Best Practices for SaaS..." | Full text | `["cold email","SaaS",...]` | `{}` |
-| Row 11 | `audience_insight` | "SaaS VP Sales Persona: Pain Points..." | Full text | `["SaaS","VP Sales",...]` | `{}` |
-| ... | ... | ... | ... | ... | ... |
-
-All 19 entries will be valid and importable in one click.
-
-### Technical Details
-
-**Files to change:**
-
-| File | Change |
-|---|---|
-| `src/lib/statsCSVDetector.ts` | Add `isKnowledgeBaseCSV()` detection function + `transformKnowledgeBaseRows()` transform |
-| `src/components/admin/SalesKnowledgeImportDialog.tsx` | Use `isKnowledgeBaseCSV` to branch to the new transform path; update UI hint text and toast messages |
-
-**No database changes needed.** The `sales_knowledge` table schema already has all the columns this data maps to.
-
-**No changes to the existing campaign stats path** — your 324 existing campaign imports and all future campaign log imports will continue to work exactly as before.
+- `DocCard` is currently defined inside `PlaygroundDashboard.tsx` as a local sub-component. It will be moved to live inside `CopyTab.tsx` the same way — no need to make it a separate file.
+- The `ViewCopyDialog` is already imported in both files; it will remain in `CopyTab.tsx` and be removed from `PlaygroundDashboard.tsx`.
+- The saved copies section in the Copy tab will use `useAICopyGroups()` hook (same as dashboard currently does).
+- No database changes needed — the data source is identical.
+- The saved copies section will always be visible in the Copy tab regardless of whether a campaign is selected, positioned below the campaign selector area.
