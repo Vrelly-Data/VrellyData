@@ -8,10 +8,13 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
-import { Loader2, Mail, Linkedin, MessageSquare, Phone, RefreshCw, Copy, FileText, Sparkles, ChevronDown, ChevronRight, Plus } from 'lucide-react';
+import { Loader2, Mail, Linkedin, MessageSquare, Phone, RefreshCw, Copy, FileText, Sparkles, ChevronDown, ChevronRight, Plus, ExternalLink, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { RevampResultDialog } from './RevampResultDialog';
 import { CreateCopyDialog } from './CreateCopyDialog';
+import { ViewCopyDialog } from './ViewCopyDialog';
+import { useAICopyGroups, useDeleteCopyGroup, type CopyGroup } from '@/hooks/useCopyTemplates';
+import { formatDistanceToNow } from 'date-fns';
 
 const stepTypeIcons: Record<string, React.ReactNode> = {
   email: <Mail className="h-4 w-4" />,
@@ -40,6 +43,69 @@ interface RevampResult {
   source_insights?: { title: string; category: string }[];
 }
 
+function DocCard({ group, onOpen }: { group: CopyGroup; onOpen: () => void }) {
+  const [deleting, setDeleting] = useState(false);
+  const deleteMutation = useDeleteCopyGroup();
+
+  const handleDelete = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setDeleting(true);
+    try {
+      await deleteMutation.mutateAsync(group.groupId);
+      toast.success('Copy deleted');
+    } catch {
+      toast.error('Failed to delete copy');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const channelLabel = group.channels.length > 0
+    ? group.channels.slice(0, 2).join(', ') + (group.channels.length > 2 ? ` +${group.channels.length - 2}` : '')
+    : 'Email';
+
+  return (
+    <div
+      className="group relative rounded-lg border border-border bg-card overflow-hidden cursor-pointer hover:shadow-md hover:border-primary/30 transition-all duration-200"
+      onClick={onOpen}
+    >
+      <div className="h-8 bg-gradient-to-r from-primary/20 to-primary/10 flex items-center px-3 gap-2">
+        <FileText className="h-3.5 w-3.5 text-primary/70" />
+        <Sparkles className="h-3 w-3 text-primary/50" />
+      </div>
+      <div className="p-3 space-y-1.5">
+        <p className="font-semibold text-sm leading-snug line-clamp-2">{group.name}</p>
+        <p className="text-xs text-muted-foreground">
+          {group.stepCount} step{group.stepCount !== 1 ? 's' : ''} · {channelLabel}
+        </p>
+        <p className="text-xs text-muted-foreground">
+          {formatDistanceToNow(new Date(group.createdAt), { addSuffix: true })}
+        </p>
+      </div>
+      <div className="px-3 pb-3 flex gap-1.5">
+        <Button
+          size="sm"
+          variant="outline"
+          className="flex-1 h-7 text-xs gap-1"
+          onClick={(e) => { e.stopPropagation(); onOpen(); }}
+        >
+          <ExternalLink className="h-3 w-3" />
+          Open
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+          onClick={handleDelete}
+          disabled={deleting}
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export function CopyTab() {
   const [selectedCampaignId, setSelectedCampaignId] = useState<string>('');
   const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
@@ -50,6 +116,9 @@ export function CopyTab() {
   const [revampDialogOpen, setRevampDialogOpen] = useState(false);
   const [revampAllProgress, setRevampAllProgress] = useState<{ current: number; total: number } | null>(null);
   const [createCopyOpen, setCreateCopyOpen] = useState(false);
+  const [viewGroup, setViewGroup] = useState<CopyGroup | null>(null);
+
+  const { data: copyGroups = [] } = useAICopyGroups();
   
   const { data: sequences, isLoading: sequencesLoading } = useSyncedSequences(
     selectedCampaignId || undefined
@@ -381,6 +450,26 @@ export function CopyTab() {
       )}
 
       {/* Revamp Result Dialog */}
+      {/* Saved Copies section */}
+      {copyGroups.length > 0 && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <div className="h-px flex-1 bg-border" />
+            <span className="text-sm font-medium text-muted-foreground">Saved Copies</span>
+            <div className="h-px flex-1 bg-border" />
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+            {copyGroups.map((group) => (
+              <DocCard
+                key={group.groupId}
+                group={group}
+                onOpen={() => setViewGroup(group)}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
       <RevampResultDialog
         open={revampDialogOpen}
         onClose={() => setRevampDialogOpen(false)}
@@ -392,6 +481,7 @@ export function CopyTab() {
       />
 
       <CreateCopyDialog open={createCopyOpen} onOpenChange={setCreateCopyOpen} />
+      <ViewCopyDialog group={viewGroup} open={!!viewGroup} onOpenChange={(o) => { if (!o) setViewGroup(null); }} />
     </div>
   );
 }
