@@ -1414,7 +1414,15 @@ export type Database = {
       }
     }
     Views: {
-      [_ in never]: never
+      mv_filter_suggestions: {
+        Row: {
+          industries: Json | null
+          interests: Json | null
+          skills: Json | null
+          technologies: Json | null
+        }
+        Relationships: []
+      }
     }
     Functions: {
       deduct_credits: {
@@ -1473,6 +1481,7 @@ export type Database = {
         Args: { revenue_str: string }
         Returns: number
       }
+      refresh_filter_suggestions: { Args: never; Returns: undefined }
       reset_daily_credits_if_needed: {
         Args: { p_user_id: string }
         Returns: undefined
