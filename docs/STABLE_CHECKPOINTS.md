@@ -1,8 +1,8 @@
 # Stable Checkpoints
 
-**Purpose**: Document stable states for easy recovery. Say "Revert to v3.6 stable state" to restore.  
-**Last Updated**: February 11, 2026  
-**Current Stable Version**: v3.6
+**Purpose**: Document stable states for easy recovery. Say "Revert to v3.9 stable state" to restore.  
+**Last Updated**: February 25, 2026  
+**Current Stable Version**: v3.9
 
 ---
 
@@ -21,7 +21,7 @@ If in doubt, **ASK FIRST**.
 
 Say this to revert to the last known good state:
 
-> **"Revert to v3.6 stable state"**
+> **"Revert to v3.9 stable state"**
 
 The AI will:
 1. Copy functions from the stable migration
@@ -32,9 +32,9 @@ The AI will:
 
 ---
 
-## ✅ Current Stable: v3.6
+## ✅ Current Stable: v3.9
 
-**Date**: February 11, 2026  
+**Date**: February 25, 2026  
 **Status**: All 18 filters + 8 DNC exclusions verified working
 
 ### Confirmed Working Filters (18 total)
@@ -62,53 +62,57 @@ The AI will:
 
 ---
 
-## 📊 Verified Baseline Counts (v3.3+)
+## 📊 Verified Baseline Counts (v3.9)
 
 Use these for regression testing. If counts change unexpectedly, something is broken.
 
 ### Data Source Summary
 | Source | Entity Type | Count |
 |--------|-------------|-------|
-| **Total Records** | All | **724** |
-| Person Records | person | 400 |
-| Company Records | company | 324 |
+| **Total Records** | All | **61,644** |
+| Person Records | person | 52,119 |
+| Company Records | company | 9,525 |
 
-### Company Filters
+### Company Size Filters (entity_type = person)
 | Filter | Value | Expected Count |
 |--------|-------|----------------|
-| Company Size | 1-10 | 15 |
-| Company Size | 11-50 | 96 |
-| Company Size | 51-200 | 81 |
-| Company Size | 201-500 | 78 |
-| Company Size | 5001-10000 | 86 |
-| Company Size | 10000+ | 8 |
-| Company Revenue | Under $1M | 3 |
-| Company Revenue | $1M - $10M | 42 |
-| Company Revenue | $10M - $50M | 56 |
+| Company Size | 1-10 | 5,109 |
+| Company Size | 11-50 | 10,283 |
+| Company Size | 51-200 | 9,013 |
+| Company Size | 201-500 | 4,893 |
+| Company Size | 5001-10000 | 2,725 |
+| Company Size | 10000+ | 10,202 |
+
+### Company Revenue Filters (entity_type = person)
+| Filter | Value | Expected Count |
+|--------|-------|----------------|
+| Company Revenue | Under $1M | 652 |
+| Company Revenue | $1M - $10M | 5,452 |
+| Company Revenue | $10M - $50M | 7,540 |
 
 ### Person Demographics
 | Filter | Value | Expected Count |
 |--------|-------|----------------|
 | Income | Under $50K | 55 |
-| Income | $50K - $100K | 45 |
-| Net Worth | Under $100K | 56 |
-| Gender | Male (M) | 137 |
+| Income | $50K - $100K | 77 |
+| Net Worth | Under $100K | 96 |
+| Gender | Male (M) | 136 |
 | Gender | Female (F) | 55 |
 
 ### Professional Filters
 | Filter | Value | Expected Count |
 |--------|-------|----------------|
-| Department | C-Suite / Leadership | 138 |
-| Seniority | Individual Contributor | 99 |
+| Department | C-Suite / Leadership | 11,725 |
+| Seniority | Individual Contributor | 174 |
 
 ### Prospect Data
 | Filter | Value | Expected Count |
 |--------|-------|----------------|
 | Personal Facebook | true | 13 |
 | Personal Twitter | true | 7 |
-| Company Facebook | true | 147 |
-| Company Twitter | true | 141 |
-| Company LinkedIn | true | 203 |
+| Company Facebook | true | 38,502 |
+| Company Twitter | true | 36,391 |
+| Company LinkedIn | true | 51,351 |
 
 ---
 
@@ -118,11 +122,9 @@ The Gender filter stores values as `M` or `F` in the database. The frontend (`sr
 - `male` → `M`
 - `female` → `F`
 
-This ensures the UI uses human-readable labels while the database uses short codes.
-
 ---
 
-## 🔧 Database Functions (v3.6)
+## 🔧 Database Functions (v3.9)
 
 | Function | Parameters | Status |
 |----------|------------|--------|
@@ -132,12 +134,28 @@ This ensures the UI uses human-readable labels while the database uses short cod
 | `title_matches_seniority` | 3 | ✅ Helper (2 versions) |
 | `get_filter_suggestions` | 0 | ✅ Suggestion provider |
 
+### Database Indexes on `free_data` (v3.9)
+
+| Index | Type | Notes |
+|-------|------|-------|
+| Primary key | btree | id |
+| entity_type | btree | Partition-like index |
+| entity_external_id | btree | Deduplication lookups |
+| entity_data | GIN (jsonb_path_ops) | `@>` containment only |
+| entity_type + created_at | btree | Sorted listing |
+| source_template_id | btree | Template FK |
+| Unique constraint | btree | entity_external_id + entity_type |
+
+**⚠️ No expression indexes on JSONB fields** — this is why queries time out at 61k+ records. The next optimization step (v3.10) will add expression indexes and rewrite the function to single-pass.
+
 ---
 
 ## 📝 Change Log
 
 | Version | Date | Changes |
 |---------|------|---------|
+| v3.9 | 2026-02-25 | Copy Tab reorganization (saved copies moved from Dashboard to Copy Tab), stable state docs refreshed with 61,644 records baseline |
+| v3.8 | 2026-02-20 | Resource CMS (database-backed SEO articles), AI Copy & Audience generation with Sales KB context, Sales Knowledge Base CSV import |
 | v3.7 | 2026-02-18 | Stripe checkout flow fixed: white screen, infinite spinner, and transient logout resolved |
 | v3.6 | 2026-02-11 | DNC exclusion filters (37 params), 100,000+ display cap, case-insensitive industry dedup in FilterBuilder |
 | v3.5 | 2026-02-10 | Email stats aggregation fix, webhook messaging removal from popovers |
@@ -148,9 +166,6 @@ This ensures the UI uses human-readable labels while the database uses short cod
 | v3.1 | 2026-01-17 | Added Company Size 5001-10000, 10000+ and Individual Contributor |
 | v3.0 | 2026-01-17 | Documented all 17 working filters, established revert mechanism |
 | v2.10 | 2026-01-17 | Fixed Company Revenue filter with parse_revenue_to_numeric |
-| v2.7 | 2026-01-17 | Fixed Facebook/Twitter Url variants |
-| v2.6 | 2026-01-17 | Fixed income label format |
-| v2.5 | 2026-01-17 | Fixed company size parsing |
 
 ---
 
@@ -159,7 +174,7 @@ This ensures the UI uses human-readable labels while the database uses short cod
 Before modifying any filter logic:
 
 - [ ] User explicitly requested the change
-- [ ] Current counts verified against baseline
+- [ ] Current counts verified against v3.9 baseline (61,644 total)
 - [ ] Migration uses `CREATE OR REPLACE FUNCTION`
 - [ ] Signature stays identical (37 parameters)
 - [ ] Run `docs/BUILDER_SEARCH_TEST.sql` after changes
@@ -197,100 +212,11 @@ If the quick command doesn't work:
 | Contact sync paging | ✅ Working | Page signature guard prevents loops |
 | Engagement stats derivation | ✅ Working | Uses V1 contact engagement flags |
 
-### Database Schema Additions (v3.4)
-
-| Table | Column | Type | Purpose |
-|-------|--------|------|---------|
-| outbound_integrations | links_initialized | boolean | Tracks first-sync auto-link |
-
 ### Edge Function Sync Order
 
 1. `fetch-available-campaigns` (V1 API) - Gets peopleCount, auto-links
 2. `sync-reply-campaigns` (V3 API) - Gets campaign status, preserves links
 3. `sync-reply-contacts` (V1 API) - Background, per-campaign, page-guarded
-
-### Recovery Commands
-
-- **"Link all campaigns for integration"** - Uses `linkAllCampaigns` mutation
-- **"Sync contacts for all linked campaigns"** - Uses `startContactsSync`
-- **"Reset integration and re-sync"** - Delete integration, recreate, auto-links fresh
-
----
-
-## 🎮 Data Playground Stable State (v3.5)
-
-**Date**: February 10, 2026  
-**Status**: Email stats aggregation fixed, webhook messaging removed
-
-### Changes from v3.4
-
-| Change | Description |
-|--------|-------------|
-| Email stats aggregation | Contact-level CSV rows summed by campaign before DB write |
-| Webhook messaging removed | "Real-time via webhooks" footer text removed from popovers |
-
-### Key Files
-
-| File | Role |
-|------|------|
-| `src/hooks/useEmailStatsUpload.ts` | Aggregation Map groups rows by campaignId before update |
-| `src/components/playground/EmailStatsUploadDialog.tsx` | Preview groups by campaign, shows "Result(s)" count |
-| `src/components/playground/PlaygroundStatsGrid.tsx` | Webhook footer blocks removed from popovers |
-
-### Recovery Commands
-
-- **"Re-upload email stats CSV"** - Required after aggregation fix to overwrite zeroed data
-- All v3.4 recovery commands still apply
-
----
-
-## 🔍 Audience Builder Stable State (v3.6)
-
-**Date**: February 11, 2026  
-**Status**: DNC exclusion filters, display cap, industry dedup all working
-
-### DNC Exclusion Filters
-
-8 new `p_exclude_*` parameters added to `search_free_data_builder` (29 → 37 params):
-
-| Parameter | Excludes |
-|-----------|----------|
-| `p_exclude_keywords` | Keyword matches |
-| `p_exclude_job_titles` | Job title matches |
-| `p_exclude_industries` | Industry matches |
-| `p_exclude_cities` | City matches |
-| `p_exclude_countries` | Country matches |
-| `p_exclude_technologies` | Technology matches |
-| `p_exclude_person_skills` | Person skill matches |
-| `p_exclude_person_interests` | Person interest matches |
-
-UI pattern: collapsible section beneath each tag-input field with a chevron toggle (turns red when active).
-
-### Display Cap
-
-`TOTAL_DISPLAY_CAP = 100_000` in `useFreeDataSearch.ts`. When results exceed 100,000:
-- Toasts show "100,000+"
-- "Found X" headers show "100,000+"
-- Selection badges show "100,000+"
-- `totalEstimate` and `totalPages` are clamped
-
-### Industry Deduplication
-
-`dedup()` helper in `FilterBuilder.tsx` applies `trim()` + Title Case normalization before `new Set()` dedup, collapsing casing variations (e.g., "insurance" and "Insurance" → "Insurance").
-
-### Key Files
-
-| File | Role |
-|------|------|
-| `src/hooks/useFreeDataSearch.ts` | Search hook with exclusion params and display cap |
-| `src/pages/AudienceBuilder.tsx` | Main builder page |
-| `src/components/search/PreviewTable.tsx` | Results display with 100,000+ formatting |
-| `src/components/search/FilterBuilder.tsx` | Filter UI with DNC sections and dedup helper |
-
-### Recovery Commands
-
-- **"Revert to v3.6 stable state"** - Restores search function and frontend
-- All v3.4 and v3.5 recovery commands still apply
 
 ---
 
@@ -301,8 +227,6 @@ UI pattern: collapsible section beneath each tag-input field with a chevron togg
 
 ### Architecture
 
-The checkout flow uses a dedicated, unprotected `/checkout-success` route to avoid race conditions with auth loading and subscription guards:
-
 ```
 Stripe payment complete
   → redirect to /checkout-success (unprotected)
@@ -312,29 +236,58 @@ Stripe payment complete
   → navigate('/dashboard', { replace: true })
 ```
 
-### Three Root Causes Fixed
-
-| # | Bug | Root Cause | Fix |
-|---|-----|------------|-----|
-| 1 | White screen | `if (!user) return null` in `ProtectedRoute` | Removed guard; spinner covers transient null |
-| 2 | Infinite spinner | Checkout logic in `ProtectedRoute` conflicted with `profileLoading` cycles | Moved to dedicated `/checkout-success` page |
-| 3 | Immediate logout | `onAuthStateChange('SIGNED_OUT')` cleared user during Supabase's cross-origin session recovery | Ignore `SIGNED_OUT` in listener; handle `INITIAL_SESSION` |
-
 ### Key Files
 
 | File | Role |
 |------|------|
 | `src/pages/CheckoutSuccess.tsx` | Unprotected post-payment verification page |
 | `src/components/ProtectedRoute.tsx` | Simplified to pure auth + subscription guard |
-| `src/components/AuthProvider.tsx` | Guards `SIGNED_OUT`; handles `INITIAL_SESSION`; `setTimeout` around `fetchProfile` |
+| `src/components/AuthProvider.tsx` | Guards `SIGNED_OUT`; handles `INITIAL_SESSION` |
 | `src/App.tsx` | `/checkout-success` registered as unprotected route |
 | `supabase/functions/create-checkout/index.ts` | `success_url` points to `/checkout-success` |
 
-### Known Remaining Issue
+---
 
-User may occasionally be logged out after the checkout success flow. Suspected cause: a second wave of `SIGNED_OUT` events after `INITIAL_SESSION` recovery. Low priority — subscription is correctly activated. See `docs/V3.7_RELEASE_NOTES.md` for full details.
+## 🔍 Audience Builder Stable State (v3.6 → v3.9)
 
-### Recovery Commands
+**Date**: February 25, 2026  
+**Status**: DNC exclusion filters, display cap, industry dedup all working. 61,644 records. Queries may time out without expression indexes (planned for v3.10).
 
-- **"Revert to v3.7 stable state"** - Restore the 5 files listed above to the state documented here
-- All v3.4, v3.5, and v3.6 recovery commands still apply
+### Key Files
+
+| File | Role |
+|------|------|
+| `src/hooks/useFreeDataSearch.ts` | Search hook with exclusion params and display cap |
+| `src/pages/AudienceBuilder.tsx` | Main builder page |
+| `src/components/search/PreviewTable.tsx` | Results display with 100,000+ formatting |
+| `src/components/search/FilterBuilder.tsx` | Filter UI with DNC sections and dedup helper |
+
+---
+
+## 📰 Resource CMS Stable State (v3.8)
+
+**Date**: February 20, 2026  
+**Status**: Database-backed article publishing with SEO
+
+### Key Components
+
+| Component | Status |
+|-----------|--------|
+| Resource CRUD (admin) | ✅ Working |
+| Public resource pages | ✅ Working |
+| SEO meta tags | ✅ Working |
+| publish-resource edge function | ✅ Working |
+
+---
+
+## 🎨 Data Playground Copy Tab (v3.9)
+
+**Date**: February 25, 2026  
+**Status**: Saved AI copies moved from Dashboard to Copy Tab
+
+### Key Files
+
+| File | Role |
+|------|------|
+| `src/components/playground/CopyTab.tsx` | Copy tab with campaign sequences + saved copies grid |
+| `src/components/playground/PlaygroundDashboard.tsx` | Dashboard simplified (no more saved copies shelf) |
