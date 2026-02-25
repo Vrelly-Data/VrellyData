@@ -1,13 +1,16 @@
 import { useState } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Loader2, Sparkles, X, Plus, Users, Lightbulb, Target, TrendingUp } from 'lucide-react';
+import { Loader2, Sparkles, Users, Lightbulb, Target, TrendingUp } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
+import { TagInput } from '@/components/ui/tag-input';
+import { MultiSelectDropdown } from '@/components/search/MultiSelectDropdown';
+import { useFreeDataSuggestions } from '@/hooks/useFreeDataSuggestions';
+import { useAudienceAttributes } from '@/hooks/useAudienceAttributes';
 
 interface AudienceInsights {
   icp_summary: string;
@@ -32,53 +35,6 @@ interface BuildAudienceDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
-function TagInput({ label, values, onChange, placeholder }: {
-  label: string;
-  values: string[];
-  onChange: (vals: string[]) => void;
-  placeholder?: string;
-}) {
-  const [input, setInput] = useState('');
-
-  const addTag = () => {
-    const trimmed = input.trim();
-    if (trimmed && !values.includes(trimmed)) {
-      onChange([...values, trimmed]);
-    }
-    setInput('');
-  };
-
-  return (
-    <div className="space-y-1.5">
-      <Label>{label}</Label>
-      <div className="flex gap-2">
-        <Input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addTag(); } }}
-          placeholder={placeholder}
-          className="flex-1"
-        />
-        <Button type="button" variant="outline" size="sm" onClick={addTag}>
-          <Plus className="h-4 w-4" />
-        </Button>
-      </div>
-      {values.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 mt-1.5">
-          {values.map((v) => (
-            <Badge key={v} variant="secondary" className="gap-1">
-              {v}
-              <button onClick={() => onChange(values.filter(x => x !== v))}>
-                <X className="h-3 w-3" />
-              </button>
-            </Badge>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function BlurredText({ text, blur = true }: { text: string | null; blur?: boolean }) {
   if (!text) return <span className="text-muted-foreground">—</span>;
   if (!blur) return <span>{text}</span>;
@@ -92,12 +48,17 @@ function BlurredText({ text, blur = true }: { text: string | null; blur?: boolea
   );
 }
 
+const dedup = (arr: string[]) => [...new Set(arr.filter(Boolean))];
+
 export function BuildAudienceDialog({ open, onOpenChange }: BuildAudienceDialogProps) {
   const [step, setStep] = useState<'form' | 'result'>('form');
   const [isGenerating, setIsGenerating] = useState(false);
   const [insights, setInsights] = useState<AudienceInsights | null>(null);
   const [prospects, setProspects] = useState<Prospect[]>([]);
   const [totalFound, setTotalFound] = useState(0);
+
+  const { suggestions } = useFreeDataSuggestions();
+  const { attributes } = useAudienceAttributes();
 
   // Form state
   const [industries, setIndustries] = useState<string[]>([]);
@@ -106,6 +67,11 @@ export function BuildAudienceDialog({ open, onOpenChange }: BuildAudienceDialogP
   const [companyTypes, setCompanyTypes] = useState<string[]>([]);
   const [companySizes, setCompanySizes] = useState<string[]>([]);
   const [locations, setLocations] = useState<string[]>([]);
+
+  // Merged suggestions (same pattern as Audience Builder)
+  const industrySuggestions = dedup([...attributes.industries, ...suggestions.industries]);
+  const jobTitleSuggestions = attributes.jobTitles || [];
+  const locationSuggestions = attributes.cities || [];
 
   const handleGenerate = async () => {
     setIsGenerating(true);
@@ -158,12 +124,15 @@ export function BuildAudienceDialog({ open, onOpenChange }: BuildAudienceDialogP
 
         {step === 'form' ? (
           <div className="space-y-5 py-2">
-            <TagInput
-              label="What Industry/Industries do you operate in?"
-              values={industries}
-              onChange={setIndustries}
-              placeholder="e.g. SaaS, Healthcare — press Enter"
-            />
+            <div className="space-y-1.5">
+              <Label>What Industry/Industries do you operate in?</Label>
+              <TagInput
+                value={industries}
+                onChange={setIndustries}
+                placeholder="Type to search industries..."
+                suggestions={industrySuggestions}
+              />
+            </div>
 
             <div className="space-y-1.5">
               <Label>Is this B2B or B2C?</Label>
@@ -185,33 +154,44 @@ export function BuildAudienceDialog({ open, onOpenChange }: BuildAudienceDialogP
               </div>
             </div>
 
-            <TagInput
-              label="Do you know the titles you typically sell to?"
-              values={targetTitles}
-              onChange={setTargetTitles}
-              placeholder="e.g. VP of Marketing, Head of Growth — press Enter"
-            />
+            <div className="space-y-1.5">
+              <Label>Do you know the titles you typically sell to?</Label>
+              <TagInput
+                value={targetTitles}
+                onChange={setTargetTitles}
+                placeholder="Type to search job titles..."
+                suggestions={jobTitleSuggestions}
+              />
+            </div>
 
-            <TagInput
-              label="What types of companies do you sell to?"
-              values={companyTypes}
-              onChange={setCompanyTypes}
-              placeholder="e.g. Series A startups, Enterprise, SMBs — press Enter"
-            />
+            <div className="space-y-1.5">
+              <Label>What types of companies do you sell to?</Label>
+              <TagInput
+                value={companyTypes}
+                onChange={setCompanyTypes}
+                placeholder="e.g. Series A startups, Enterprise, SMBs — press Enter"
+              />
+            </div>
 
-            <TagInput
-              label="Do you know the typical size of company you sell to?"
-              values={companySizes}
-              onChange={setCompanySizes}
-              placeholder="e.g. 51-200, 201-500 — press Enter"
-            />
+            <div className="space-y-1.5">
+              <Label>Do you know the typical size of company you sell to?</Label>
+              <MultiSelectDropdown
+                options={attributes.companySizeRanges || []}
+                selected={companySizes}
+                onChange={setCompanySizes}
+                placeholder="Select company size ranges..."
+              />
+            </div>
 
-            <TagInput
-              label="Do you know where the companies you sell to are located?"
-              values={locations}
-              onChange={setLocations}
-              placeholder="e.g. United States, United Kingdom — press Enter"
-            />
+            <div className="space-y-1.5">
+              <Label>Do you know where the companies you sell to are located?</Label>
+              <TagInput
+                value={locations}
+                onChange={setLocations}
+                placeholder="Type to search locations..."
+                suggestions={locationSuggestions}
+              />
+            </div>
 
             <div className="flex justify-end gap-3 pt-2">
               <Button variant="outline" onClick={handleClose}>Cancel</Button>
