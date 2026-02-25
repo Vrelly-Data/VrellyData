@@ -104,7 +104,15 @@ Deno.serve(async (req) => {
     if (companySizes && companySizes.length > 0) searchParams.p_company_size_ranges = companySizes;
     if (locations && locations.length > 0) searchParams.p_countries = locations;
 
-    const { data: prospects } = await supabase.rpc("search_free_data_builder", searchParams);
+    const { data: prospects, error: rpcError } = await supabase.rpc("search_free_data_builder", searchParams);
+
+    if (rpcError) {
+      console.error("RPC search_free_data_builder error:", rpcError);
+      return new Response(JSON.stringify({ error: "Failed to search prospects: " + rpcError.message }), {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     // Build AI prompt
     const systemPrompt = `You are a B2B sales intelligence expert. Based on the criteria and data below, provide:
