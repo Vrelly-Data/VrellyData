@@ -1,71 +1,33 @@
 
 
-# Stable State Documentation Update — v3.9
+# Fix "Build Audience" — UI-Only Approach
 
-## Why This Is Needed
+## Problem
+The Build Audience dialog uses plain free-text inputs, so users type values like "SaaS" or "10-200" that don't match the canonical values in the database (e.g., "Information Technology & Services", "11-50"). The backend function works fine — we just need to guide users to pick correct values.
 
-The current documentation (STABLE_CHECKPOINTS.md, SEARCH_FUNCTION_LOCK.md) references **724 total records** (400 person, 324 company). The actual database now contains **61,644 records** (52,119 person, 9,525 company) after two large CSV uploads. The baseline counts used for regression testing are completely stale.
+## Solution
+Reuse the exact same suggestion-powered inputs from the Audience Builder (TagInput with suggestions, MultiSelectDropdown for company sizes) in the Build Audience dialog. Also add basic error handling for the RPC call in the edge function.
 
-Additionally, several features have been added since v3.7 (the last documented checkpoint) that aren't captured: the Resource CMS (v3.8), AI Copy generation, Sales Knowledge Base, and the Copy Tab reorganization just completed.
+## Changes
 
-## What Gets Updated
+### 1. `src/components/playground/BuildAudienceDialog.tsx`
+- Import `useFreeDataSuggestions` and `useAudienceAttributes` (same hooks the Audience Builder uses)
+- Import `MultiSelectDropdown` from the search components
+- Replace the custom inline `TagInput` component with the shared `TagInput` from `@/components/ui/tag-input` (which supports `suggestions` prop)
+- **Industry field**: Use `TagInput` with `suggestions={dedup([...attributes.industries, ...suggestions.industries])}` — same as Audience Builder line 352
+- **Job Titles field**: Use `TagInput` with `suggestions={attributes.jobTitles}`
+- **Company Size field**: Replace free-text TagInput with `MultiSelectDropdown` using `attributes.companySizeRanges` — same as Audience Builder line 384-392
+- **Locations field**: Use `TagInput` with `suggestions={attributes.cities}` (or keep as-is with country suggestions)
+- Remove the custom inline `TagInput` component definition (lines 42-75) since we'll use the shared one
 
-### 1. `docs/STABLE_CHECKPOINTS.md`
+### 2. `supabase/functions/build-audience/index.ts`
+- Add error checking on the `supabase.rpc("search_free_data_builder", ...)` call
+- If `error` is returned, log it and return a proper error response instead of silently continuing with empty results
 
-- Update "Current Stable Version" from v3.6 to **v3.9**
-- Update the **Data Source Summary** table: 724 total to **61,644** (52,119 person + 9,525 company)
-- Remove the old baseline counts (they were for 724 records and are no longer valid)
-- Add **new baseline counts** queried from the live database at the current scale
-- Add **v3.8 changelog entry**: Resource CMS, AI Copy/Audience generation with Sales KB context
-- Add **v3.9 changelog entry**: Copy Tab reorganization (saved copies moved from Dashboard to Copy Tab), stable state documentation refresh, 61,644 total records confirmed
-- Update the database functions table to reflect current state (still 37 params, single function)
-- Update the Pre-Change Checklist baseline reference
+## What stays the same
+- `search_free_data_builder` function — no changes
+- All database indexes and logic — no changes
+- The AI insights / Claude integration — no changes
 
-### 2. `docs/SEARCH_FUNCTION_LOCK.md`
-
-- Update version from 3.6 to **3.9**
-- Update "Total Records" from 724 to **61,644**
-- Update the baseline verification SQL queries with **new expected counts** from the current dataset
-- Update the Quick Reference table
-- Keep the revert command pointing to the same stable migration file (the function itself hasn't changed)
-
-### 3. New baseline counts to document
-
-These will be queried from the live database before writing, capturing the actual current counts for:
-- Total person records (unfiltered)
-- Total company records (unfiltered)  
-- A selection of filter combinations (company size, gender, seniority, income) so future regressions can be detected
-
-### 4. What does NOT change
-
-- The `search_free_data_builder` function itself (still 37 params, still locked)
-- The frontend search hook (`useFreeDataSearch.ts`)
-- The filter builder UI
-- The stable migration reference file
-- Any filter logic or behavior
-
-## Revert Safety
-
-After this update, you can say **"Revert to v3.9 stable state"** to restore to this exact documented state. The existing v3.6 revert command for the search function itself remains valid since the function hasn't changed.
-
-## Technical Details
-
-### Files Modified
-
-| File | Change |
-|---|---|
-| `docs/STABLE_CHECKPOINTS.md` | Update record counts, add v3.8 + v3.9 entries, refresh baseline counts |
-| `docs/SEARCH_FUNCTION_LOCK.md` | Update version, record counts, and baseline verification queries |
-
-### Current Database State (verified)
-
-| Metric | Value |
-|---|---|
-| Total records | 61,644 |
-| Person records | 52,119 |
-| Company records | 9,525 |
-| search_free_data_builder params | 37 (single function) |
-| get_filter_suggestions params | 0 (single function) |
-| Existing indexes on free_data | 7 (pkey, entity_type, external_id, GIN jsonb, type+created, source_template, unique constraint) |
-| No expression indexes on JSONB fields | Confirmed (this is why queries time out) |
-
+## Result
+Users will see autocomplete suggestions as they type (pulled from real database values), and company size becomes a dropdown with exact canonical buckets. This eliminates the mismatch that causes 0 results.
