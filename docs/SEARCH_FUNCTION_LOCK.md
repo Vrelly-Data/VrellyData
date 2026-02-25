@@ -1,8 +1,8 @@
 # 🔒 Search Function Lock Document
 
 **Purpose**: Protect the `search_free_data_builder` function from unintended modifications.  
-**Version**: 3.6  
-**Last Updated**: February 11, 2026
+**Version**: 3.9  
+**Last Updated**: February 25, 2026
 
 ---
 
@@ -24,13 +24,13 @@ If you're unsure, **ASK THE USER FIRST**.
 
 If anything breaks, the user can say:
 
-> **"Revert to v3.6 stable state"**
+> **"Revert to v3.9 stable state"**
 
 ---
 
 ## ✅ 18 Verified Working Filters + 8 DNC Exclusions
 
-All of these filters have been tested and confirmed working as of v3.6:
+All of these filters have been tested and confirmed working as of v3.9:
 
 | # | Filter | Status |
 |---|--------|--------|
@@ -78,7 +78,7 @@ This migration contains:
 
 ---
 
-## 🎨 Frontend Normalization (v3.6)
+## 🎨 Frontend Normalization (v3.9)
 
 ### Industry Suggestions
 
@@ -108,7 +108,7 @@ The `dedup()` helper applies `trim()` + Title Case normalization before `new Set
 ### Before ANY Change to search_free_data_builder:
 
 1. ⚠️ **User must explicitly request the change**
-2. ⚠️ **Verify current baseline counts first**
+2. ⚠️ **Verify current baseline counts first (v3.9 baselines: 52,119 person / 9,525 company)**
 3. ⚠️ **Use CREATE OR REPLACE FUNCTION**
 4. ⚠️ **Never change the 37-parameter signature**
 5. ⚠️ **Run BUILDER_SEARCH_TEST.sql after changes**
@@ -116,36 +116,41 @@ The `dedup()` helper applies `trim()` + Title Case normalization before `new Set
 
 ### If You Break Something:
 
-1. Tell the user to say: "Revert to v3.6 stable state"
+1. Tell the user to say: "Revert to v3.9 stable state"
 2. Copy functions from the stable migration file
 3. Create new migration with CREATE OR REPLACE
 4. Verify counts match baseline
 
 ---
 
-## 📊 Baseline Counts for Verification
+## 📊 Baseline Counts for Verification (v3.9)
 
 Quick checks to verify function is working:
 
 ```sql
--- Should return 86
+-- Should return 52,119
+SELECT total_count FROM public.search_free_data_builder(
+  p_entity_type := 'person'
+) LIMIT 1;
+
+-- Should return 9,525
+SELECT total_count FROM public.search_free_data_builder(
+  p_entity_type := 'company'
+) LIMIT 1;
+
+-- Should return 2,725
 SELECT total_count FROM public.search_free_data_builder(
   p_entity_type := 'person',
   p_company_size_ranges := ARRAY['5001-10000']
 ) LIMIT 1;
 
--- Should return 8
+-- Should return 10,202
 SELECT total_count FROM public.search_free_data_builder(
   p_entity_type := 'person',
   p_company_size_ranges := ARRAY['10000+']
 ) LIMIT 1;
 
--- Should return 400 (all person records)
-SELECT total_count FROM public.search_free_data_builder(
-  p_entity_type := 'person'
-) LIMIT 1;
-
--- Should return 99
+-- Should return 174
 SELECT total_count FROM public.search_free_data_builder(
   p_entity_type := 'person',
   p_seniority_levels := ARRAY['Individual Contributor']
@@ -156,13 +161,19 @@ SELECT total_count FROM public.search_free_data_builder(
   p_entity_type := 'person',
   p_income := ARRAY['Under $50K']
 ) LIMIT 1;
+
+-- Should return 136
+SELECT total_count FROM public.search_free_data_builder(
+  p_entity_type := 'person',
+  p_gender := ARRAY['M']
+) LIMIT 1;
 ```
 
 ---
 
 ## 🔧 What the AI Should Do on Revert
 
-When user says "Revert to v3.6 stable state":
+When user says "Revert to v3.9 stable state":
 
 1. Read migration file: `20260117175524_38595ba8-3317-4946-8c7a-25ee0c6d6037.sql`
 2. Extract `parse_revenue_to_numeric` function
@@ -180,7 +191,6 @@ When user says "Revert to v3.6 stable state":
 - `docs/FILTER_CONTRACT.md` - Field mappings and parameter reference
 - `docs/BUILDER_SEARCH_TEST.sql` - Automated test suite
 - `docs/FILTER_DATA_MAPPING.md` - UI to database field mapping
-- `docs/V3.2_RELEASE_NOTES.md` - Full release notes
 
 ---
 
@@ -188,11 +198,12 @@ When user says "Revert to v3.6 stable state":
 
 | What | Value |
 |------|-------|
-| Current Version | v3.6 |
-| Total Records | 724 (400 person, 324 company) |
+| Current Version | v3.9 |
+| Total Records | 61,644 (52,119 person, 9,525 company) |
 | Parameter Count | 37 |
-| Revert Command | "Revert to v3.6 stable state" |
+| Revert Command | "Revert to v3.9 stable state" |
 | Test File | `docs/BUILDER_SEARCH_TEST.sql` |
 | Frontend Fix | `src/hooks/useFreeDataSuggestions.ts` (industry normalization) |
 | Display Cap | 100,000+ (`useFreeDataSearch.ts`) |
 | Industry Dedup | `dedup()` in `FilterBuilder.tsx` |
+| Known Issue | Queries time out at 61k+ records (no expression indexes — planned for v3.10) |
