@@ -86,10 +86,7 @@ Deno.serve(async (req) => {
         (audienceInsights as any[]).map((k: any, i: number) => `### ${i + 1}: ${k.title}\n${k.content}`).join("\n\n")
       : "";
 
-    // Set statement_timeout to prevent indefinite hangs
-    await supabase.rpc("deduct_credits", { p_user_id: "00000000-0000-0000-0000-000000000000", p_amount: 0 }).catch(() => {});
-    // Use a raw SQL approach via postgrest isn't possible, so we rely on the RPC's own timeout.
-    // Instead, we reduce the limit and add a fallback.
+    // Timeout protection is handled by Promise.race wrappers below
 
     // Build params for the search_free_data_builder function
     const searchParams: Record<string, any> = {
