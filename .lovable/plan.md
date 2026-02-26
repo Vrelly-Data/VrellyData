@@ -1,64 +1,36 @@
 
 
-# Cache Filter Suggestions with a Materialized View
+# Add Trigram Indexes to Fix Search Timeout
 
-## Problem
-The `get_filter_suggestions()` function scans the entire `free_data` table (currently 61K rows, soon 1M) to compute distinct values for industries, skills, interests, and technologies. At 61K rows it already takes ~40 seconds. At 1M rows it will exceed the 120-second database timeout, breaking both the Audience Builder and Build Audience dialog.
+## What's happening
+Your search logic is **completely untouched** -- nothing is broken. The timeout is a speed problem, not a logic problem. When you search for job titles, keywords, skills, etc., the database has to check every single row one by one (52,000+ rows) because it has no fast lookup for substring matches like "contains CEO."
 
-## Solution
-Create a materialized view that pre-computes the distinct suggestion values once, then update `get_filter_suggestions()` to read from the view instantly (~1ms instead of ~40s).
+## What we'll do
+Add a speed boost to the database -- specifically, enable a feature called trigram indexing that lets the database instantly find text matches instead of scanning every row. **Zero changes to your search function or frontend code.**
 
-## Changes
+## The fix (single database migration)
 
-### 1. Database Migration
+1. Enable the `pg_trgm` extension (built into the database, just needs to be turned on)
+2. Create fast-lookup indexes on the 8 text fields used in search:
+   - `title` (job titles + keywords)
+   - `firstName`, `lastName`, `company`, `companyName` (keywords)
+   - `skills`, `interests`, `technologies` (multi-value filters)
+3. No changes to `search_free_data_builder` -- the database automatically uses the new indexes
 
-Create a materialized view `mv_filter_suggestions` with four columns (interests, skills, industries, technologies), each storing a JSONB array of distinct lowercase values. This is the same data `get_filter_suggestions()` currently computes on-the-fly.
+## Expected result
 
-Create a unique index on the view to enable `REFRESH MATERIALIZED VIEW CONCURRENTLY` (non-blocking refresh).
+| Scenario | Before | After |
+|----------|--------|-------|
+| Search with no filters | ~7s | <1s |
+| Job title "CEO" | ~7.5s (timeout risk) | <200ms |
+| Keyword search | ~28s (timeout) | <500ms |
+| At 1M rows | Guaranteed timeout | Should stay under 2s |
 
-Replace the body of `get_filter_suggestions()` to simply `SELECT` from the materialized view — instant response.
+## Risk
 
-Create a helper function `refresh_filter_suggestions()` that admins or the CSV upload flow can call after importing new data.
-
-Populate the view as part of the migration so it works immediately.
-
-### 2. No Frontend Changes
-
-The `useFreeDataSuggestions` hook already calls `get_filter_suggestions()` — it will simply get results in milliseconds instead of timing out.
-
-### 3. No Edge Function Changes
-
-The `search_free_data_builder` function is unaffected — it uses indexes and WHERE clauses, not full-table scans.
-
-## Risk Assessment
-
-| Risk | Level | Mitigation |
-|------|-------|------------|
-| Stale suggestions after CSV upload | Low | Call `refresh_filter_suggestions()` after uploads; suggestions only change when admin adds new data |
-| Migration failure | Low | Pure additive change — creates new objects, replaces function body. No existing tables or indexes are modified |
-| Concurrent refresh blocking | None | Unique index enables `CONCURRENTLY` mode which doesn't lock reads |
-
-## What This Fixes
-- Audience Builder page load: no more statement timeout
-- Build Audience dialog: suggestions load instantly
-- Ready for 1M+ record scale
-
-## Technical Detail
-
-```text
-BEFORE (every page load):
-  get_filter_suggestions()
-    -> 4 full sequential scans of free_data (61K+ rows)
-    -> ~40 seconds (will be 500s+ at 1M)
-
-AFTER (every page load):
-  get_filter_suggestions()
-    -> SELECT from mv_filter_suggestions (1 row)
-    -> < 10ms
-
-REFRESH (admin uploads only):
-  refresh_filter_suggestions()
-    -> REFRESH MATERIALIZED VIEW CONCURRENTLY
-    -> runs in background, no user impact
-```
+| Risk | Level | Why |
+|------|-------|-----|
+| Search logic changes | None | Function is not modified at all |
+| Breaking anything | None | Only adds new indexes, touches nothing existing |
+| Result counts changing | None | Indexes only affect speed, not what gets returned |
 
