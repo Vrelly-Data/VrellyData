@@ -1,16 +1,21 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
+import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Loader2, Sparkles, Users, Lightbulb, Target, TrendingUp } from 'lucide-react';
+import { Loader2, Sparkles, Users, Lightbulb, Target, TrendingUp, Save, CheckCircle2 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { TagInput } from '@/components/ui/tag-input';
 import { MultiSelectDropdown } from '@/components/search/MultiSelectDropdown';
 import { useFreeDataSuggestions } from '@/hooks/useFreeDataSuggestions';
 import { useAudienceAttributes } from '@/hooks/useAudienceAttributes';
+import { useAuthStore } from '@/stores/authStore';
+import { usePersistRecords } from '@/hooks/usePersistRecords';
+import { useCreateList, useAddToList } from '@/hooks/useLists';
+import type { PersonEntity } from '@/types/audience';
 
 interface AudienceInsights {
   icp_summary: string;
@@ -57,8 +62,17 @@ export function BuildAudienceDialog({ open, onOpenChange }: BuildAudienceDialogP
   const [prospects, setProspects] = useState<Prospect[]>([]);
   const [totalFound, setTotalFound] = useState(0);
 
+  // Save flow state
+  const [audienceName, setAudienceName] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+  const [isSaved, setIsSaved] = useState(false);
+
   const { suggestions } = useFreeDataSuggestions();
   const { attributes } = useAudienceAttributes();
+  const { profile, fetchProfile } = useAuthStore();
+  const { saveRecords } = usePersistRecords();
+  const createList = useCreateList();
+  const addToList = useAddToList();
 
   // Form state
   const [industries, setIndustries] = useState<string[]>([]);
@@ -68,13 +82,26 @@ export function BuildAudienceDialog({ open, onOpenChange }: BuildAudienceDialogP
   const [companySizes, setCompanySizes] = useState<string[]>([]);
   const [locations, setLocations] = useState<string[]>([]);
 
-  // Merged suggestions (same pattern as Audience Builder)
+  // Merged suggestions
   const industrySuggestions = dedup([...attributes.industries, ...suggestions.industries]);
   const jobTitleSuggestions = attributes.jobTitles || [];
   const locationSuggestions = attributes.cities || [];
 
+  const creditCost = prospects.length;
+  const currentCredits = profile?.credits ?? 0;
+  const hasEnough = currentCredits >= creditCost;
+
+  const defaultAudienceName = useMemo(() => {
+    const parts: string[] = [];
+    if (industries.length > 0) parts.push(industries[0]);
+    if (targetTitles.length > 0) parts.push(targetTitles[0]);
+    const date = new Date().toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+    return `Audience - ${parts.join(' / ') || 'Custom'} - ${date}`;
+  }, [industries, targetTitles]);
+
   const handleGenerate = async () => {
     setIsGenerating(true);
+    setIsSaved(false);
     try {
       const { data, error } = await supabase.functions.invoke('build-audience', {
         body: { industries, isBtoB, targetTitles, companyTypes, companySizes, locations },
@@ -86,11 +113,88 @@ export function BuildAudienceDialog({ open, onOpenChange }: BuildAudienceDialogP
       setInsights(data.insights);
       setProspects(data.prospects || []);
       setTotalFound(data.totalFound || 0);
+      setAudienceName(defaultAudienceName);
       setStep('result');
     } catch (err: any) {
       toast.error(`Failed to build audience: ${err.message || 'Unknown error'}`);
     } finally {
       setIsGenerating(false);
+    }
+  };
+
+  const handleSaveAudience = async () => {
+    if (!audienceName.trim() || prospects.length === 0) return;
+    setIsSaving(true);
+
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('Not authenticated');
+
+      // 1. Deduct credits
+      const { data: deductResult, error: deductError } = await supabase.rpc('deduct_credits', {
+        p_user_id: user.id,
+        p_amount: creditCost,
+      });
+
+      if (deductError) throw deductError;
+      const result = deductResult as unknown as { success: boolean; remaining_credits: number; error?: string };
+      if (!result.success) throw new Error(result.error || 'Insufficient credits');
+
+      // Log credit transaction
+      await supabase.from('credit_transactions').insert({
+        user_id: user.id,
+        audience_id: '',
+        entity_type: 'person',
+        records_returned: creditCost,
+        credits_deducted: creditCost,
+      });
+
+      // 2. Save records to people_records
+      const entities: PersonEntity[] = prospects.map(p => ({
+        id: p.entity_external_id,
+        firstName: p.name.split(' ')[0] || '',
+        lastName: p.name.split(' ').slice(1).join(' ') || '',
+        title: p.title,
+        company: p.company,
+        industry: p.industry,
+        email: p.email || undefined,
+        linkedin: p.linkedin || undefined,
+      })) as any;
+
+      await saveRecords(entities, 'person', 'export');
+
+      // 3. Create list and add items
+      const newList = await createList.mutateAsync({
+        name: audienceName.trim(),
+        description: `Built from Data Playground audience builder`,
+        entityType: 'person',
+      });
+
+      await addToList.mutateAsync({
+        listId: newList.id,
+        records: prospects.map(p => ({
+          id: p.entity_external_id,
+          data: {
+            name: p.name,
+            title: p.title,
+            company: p.company,
+            industry: p.industry,
+            location: p.location,
+            email: p.email,
+            linkedin: p.linkedin,
+          },
+        })),
+      });
+
+      // Refresh profile for updated credits
+      await fetchProfile();
+
+      setIsSaved(true);
+      toast.success(`Saved ${prospects.length} contacts to "${audienceName.trim()}"`);
+    } catch (err: any) {
+      toast.error(`Failed to save: ${err.message || 'Unknown error'}`);
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -101,6 +205,8 @@ export function BuildAudienceDialog({ open, onOpenChange }: BuildAudienceDialogP
       setInsights(null);
       setProspects([]);
       setTotalFound(0);
+      setIsSaved(false);
+      setAudienceName('');
     }, 300);
   };
 
@@ -118,7 +224,7 @@ export function BuildAudienceDialog({ open, onOpenChange }: BuildAudienceDialogP
           <DialogDescription>
             {step === 'form'
               ? 'Define your ideal customer profile and we\'ll find matching prospects from our database with AI-powered insights.'
-              : `Found ${totalFound.toLocaleString()} matching prospects. Showing up to 100 below.`}
+              : `Found ${totalFound.toLocaleString()} matching prospects. Showing up to 50 below.`}
           </DialogDescription>
         </DialogHeader>
 
@@ -305,8 +411,52 @@ export function BuildAudienceDialog({ open, onOpenChange }: BuildAudienceDialogP
               </CardContent>
             </Card>
 
+            {/* Save Audience Section */}
+            {prospects.length > 0 && (
+              <Card className={isSaved ? 'border-green-500/30 bg-green-500/5' : ''}>
+                <CardContent className="py-4">
+                  {isSaved ? (
+                    <div className="flex items-center gap-3 justify-center text-green-600">
+                      <CheckCircle2 className="h-5 w-5" />
+                      <span className="font-medium">Saved! {prospects.length} contacts added to your People records and list.</span>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <div className="space-y-1.5">
+                        <Label>Audience Name</Label>
+                        <Input
+                          value={audienceName}
+                          onChange={(e) => setAudienceName(e.target.value)}
+                          placeholder="Name your audience..."
+                        />
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <div className="text-sm text-muted-foreground space-x-4">
+                          <span>{prospects.length} contacts × 1 credit = <strong className="text-foreground">{creditCost} credits</strong></span>
+                          <span>Balance: <strong className={hasEnough ? 'text-foreground' : 'text-destructive'}>{currentCredits.toLocaleString()}</strong></span>
+                        </div>
+                        <Button
+                          onClick={handleSaveAudience}
+                          disabled={isSaving || !hasEnough || !audienceName.trim()}
+                        >
+                          {isSaving ? (
+                            <><Loader2 className="h-4 w-4 animate-spin mr-2" />Saving...</>
+                          ) : (
+                            <><Save className="h-4 w-4 mr-2" />Save Audience</>
+                          )}
+                        </Button>
+                      </div>
+                      {!hasEnough && (
+                        <p className="text-xs text-destructive">Not enough credits. You need {creditCost} but have {currentCredits}.</p>
+                      )}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+
             <div className="flex justify-between pt-2">
-              <Button variant="outline" onClick={() => setStep('form')}>
+              <Button variant="outline" onClick={() => { setStep('form'); setIsSaved(false); }}>
                 ← Edit Criteria
               </Button>
               <Button onClick={handleClose}>Done</Button>
