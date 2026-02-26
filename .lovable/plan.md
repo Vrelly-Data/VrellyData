@@ -1,40 +1,27 @@
 
 
-# Fix Build Audience Timeout + Add Save Flow (Data Playground Only)
+# Fix: Build Audience Edge Function Crash
 
-Scope: Only `BuildAudienceDialog.tsx` and the `build-audience` edge function. The main Audience Builder page is untouched.
+## Problem
+Line 90 in `supabase/functions/build-audience/index.ts` calls `supabase.rpc(...).catch(() => {})`. The Supabase JS client's `.rpc()` returns a `PromiseLike` (thenable) that does NOT have a `.catch()` method, causing `TypeError: supabase.rpc(...).catch is not a function` and crashing the entire function.
 
-## Task 1: Fix Timeout in Edge Function
+## Fix
 
 **File:** `supabase/functions/build-audience/index.ts`
 
-- Add `SET statement_timeout = '15000'` before calling the RPC to prevent indefinite hangs
-- Reduce `p_limit` from 100 to 50 for the preview query
-- Add a fallback: if the RPC times out, run a simpler direct query filtering only by industry and job title
+Remove lines 89-92 entirely. They were a failed attempt to set `statement_timeout` via a dummy RPC call -- this approach doesn't work anyway since each RPC call runs in its own transaction context. The timeout protection is already handled by the `Promise.race` wrappers around the actual RPC calls (lines ~105 and ~125).
 
-## Task 2: Add Save Audience Flow to Result Screen
+Specifically, delete:
+```typescript
+// Set statement_timeout to prevent indefinite hangs
+await supabase.rpc("deduct_credits", { p_user_id: "00000000-0000-0000-0000-000000000000", p_amount: 0 }).catch(() => {});
+// Use a raw SQL approach via postgrest isn't possible, so we rely on the RPC's own timeout.
+// Instead, we reduce the limit and add a fallback.
+```
 
-**File:** `src/components/playground/BuildAudienceDialog.tsx`
+Then redeploy the `build-audience` edge function.
 
-On the results screen (after prospects are shown), add:
-
-- A text input for **audience name** (auto-populated with something like "Audience - [first industry] - Feb 2026")
-- A **credit cost summary** showing: number of contacts, cost (1 credit each), current balance
-- A **"Save Audience"** button that:
-  1. Deducts credits via existing `useCreditCheck` hook
-  2. Saves prospects to `people_records` via existing `usePersistRecords` hook
-  3. Creates a new List and links the prospects via existing `useLists` hook
-  4. Shows a "Saved" confirmation state
-
-### Hooks reused (no modifications needed):
-- `useCreditCheck` -- credit deduction
-- `usePersistRecords` -- save to people_records
-- `useLists` -- create list + add items
-- `authStore` -- current credit balance
-
-## What is NOT touched:
-- `src/pages/AudienceBuilder.tsx` -- not modified
-- `src/components/search/*` -- not modified
-- `supabase/functions/audiencelab-api/` -- not modified
-- No database migrations needed
-
+## Scope
+- Only `supabase/functions/build-audience/index.ts` is modified (4 lines removed)
+- No other files touched
+- Main Audience Builder page is completely unaffected
