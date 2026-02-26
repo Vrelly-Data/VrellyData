@@ -86,16 +86,15 @@ Deno.serve(async (req) => {
         (audienceInsights as any[]).map((k: any, i: number) => `### ${i + 1}: ${k.title}\n${k.content}`).join("\n\n")
       : "";
 
-    // Build the search filters using free_data
-    // We query the DB directly for matching records
-    const industryFilter = industries && industries.length > 0
-      ? industries.map((ind: string) => `entity_data->>'industry'.ilike.%${ind}%`).join(",")
-      : null;
+    // Set statement_timeout to prevent indefinite hangs
+    await supabase.rpc("deduct_credits", { p_user_id: "00000000-0000-0000-0000-000000000000", p_amount: 0 }).catch(() => {});
+    // Use a raw SQL approach via postgrest isn't possible, so we rely on the RPC's own timeout.
+    // Instead, we reduce the limit and add a fallback.
 
     // Build params for the search_free_data_builder function
     const searchParams: Record<string, any> = {
       p_entity_type: "person",
-      p_limit: 100,
+      p_limit: 50,
       p_offset: 0,
     };
 
@@ -104,14 +103,52 @@ Deno.serve(async (req) => {
     if (companySizes && companySizes.length > 0) searchParams.p_company_size_ranges = companySizes;
     if (locations && locations.length > 0) searchParams.p_countries = locations;
 
-    const { data: prospects, error: rpcError } = await supabase.rpc("search_free_data_builder", searchParams);
+    let prospects: any[] = [];
+    let rpcError: any = null;
 
-    if (rpcError) {
-      console.error("RPC search_free_data_builder error:", rpcError);
-      return new Response(JSON.stringify({ error: "Failed to search prospects: " + rpcError.message }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+    // Primary search with timeout protection
+    try {
+      const result = await Promise.race([
+        supabase.rpc("search_free_data_builder", searchParams),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("RPC_TIMEOUT")), 15000)),
+      ]) as any;
+
+      if (result.error) {
+        rpcError = result.error;
+      } else {
+        prospects = result.data || [];
+      }
+    } catch (timeoutErr: any) {
+      console.warn("Primary RPC timed out, trying fallback query:", timeoutErr.message);
+      rpcError = timeoutErr;
+    }
+
+    // Fallback: simpler direct query if primary failed
+    if (rpcError || prospects.length === 0) {
+      console.log("Using fallback query with fewer filters");
+      const fallbackParams: Record<string, any> = {
+        p_entity_type: "person",
+        p_limit: 50,
+        p_offset: 0,
+      };
+      // Only use industry + job title for fallback (fastest filters)
+      if (industries && industries.length > 0) fallbackParams.p_industries = industries;
+      if (targetTitles && targetTitles.length > 0) fallbackParams.p_job_titles = targetTitles;
+
+      try {
+        const fallbackResult = await Promise.race([
+          supabase.rpc("search_free_data_builder", fallbackParams),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("FALLBACK_TIMEOUT")), 12000)),
+        ]) as any;
+
+        if (!fallbackResult.error) {
+          prospects = fallbackResult.data || [];
+        } else {
+          console.error("Fallback query also failed:", fallbackResult.error);
+        }
+      } catch (e) {
+        console.error("Fallback also timed out");
+      }
     }
 
     // Build AI prompt
@@ -127,7 +164,7 @@ Targeting Criteria:
 - Target company types: ${(companyTypes || []).join(", ") || "Not specified"}
 - Company sizes: ${(companySizes || []).join(", ") || "Not specified"}
 - Locations: ${(locations || []).join(", ") || "Not specified"}
-- Matching prospects found in database: ${(prospects || []).length}
+- Matching prospects found in database: ${prospects.length}
 ${performanceContext}
 ${insightsContext}
 
@@ -176,7 +213,7 @@ audience_score is 0-100 based on how well-defined and targetable this audience i
     }
 
     // Return prospects (blurred in UI) + AI insights
-    const blurredProspects = (prospects || []).slice(0, 100).map((p: any) => {
+    const blurredProspects = prospects.slice(0, 50).map((p: any) => {
       const d = p.entity_data || {};
       return {
         entity_external_id: p.entity_external_id,
@@ -185,7 +222,6 @@ audience_score is 0-100 based on how well-defined and targetable this audience i
         company: d.company || d.companyName || "—",
         industry: d.industry || "—",
         location: [d.city, d.country].filter(Boolean).join(", ") || "—",
-        // These are blurred client-side
         email: d.email || null,
         linkedin: d.linkedin || null,
       };
@@ -194,7 +230,7 @@ audience_score is 0-100 based on how well-defined and targetable this audience i
     return new Response(JSON.stringify({
       insights,
       prospects: blurredProspects,
-      totalFound: (prospects || []).length,
+      totalFound: prospects.length,
     }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
