@@ -1533,6 +1533,8 @@ export type Database = {
           total_count: number
         }[]
       }
+      show_limit: { Args: never; Returns: number }
+      show_trgm: { Args: { "": string }; Returns: string[] }
       title_matches_seniority:
         | {
             Args: {
