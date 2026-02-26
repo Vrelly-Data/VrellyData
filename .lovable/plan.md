@@ -1,49 +1,62 @@
 
 
-# Security Fixes Implementation Plan
+# Fix: Search Performance at 240K+ Records (Scaling to Millions)
 
-## Migration 1: Single SQL migration covering all 9 fixes
+## Root Cause
 
-### Fix 1 - Create safe views for `outbound_integrations` and `external_projects`
-- Create `outbound_integrations_safe` view excluding `api_key_encrypted`, `webhook_secret`
-- Create `external_projects_safe` view excluding `api_key_encrypted`
-- Both views use `security_invoker = on` so RLS still applies
+The `search_free_data_builder` function uses `count(*) OVER()` as a window function to get the total result count. This forces Postgres to scan **every matching row** before returning even the first 50. At 155K person records, the unfiltered base query alone takes 35 seconds. This will only get worse as you add more data.
 
-### Fix 2 - Rename misleading policies on `people_records` and `company_records`
-- Drop "Only admins can bulk access people records" SELECT policy
-- Drop "Only admins can bulk access company records" SELECT policy
-- (The duplicate "Users can view team..." policies already exist and are correct, so just dropping the misleading ones)
+This is NOT related to the security changes -- it's a scaling bottleneck that was always going to surface as the dataset grew.
 
-### Fix 3 - Fix `teams` SELECT policy bug
-- Current policy has `team_memberships.team_id = team_memberships.id` (self-join bug)
-- Replace with `team_memberships.team_id = teams.id`
+## Solution: Two-Query Strategy
 
-### Fix 4 - Restrict `teams` INSERT policy
-- Change `WITH CHECK (true)` to `WITH CHECK (false)` since only the `handle_new_user_team` trigger (SECURITY DEFINER) should create teams
+Replace the single-query `count(*) OVER()` approach with a **separate count query** that uses a fast estimate for large result sets, while keeping the paginated data query lightweight.
 
-### Fix 5 - Restrict `team_memberships` INSERT policy
-- Change `WITH CHECK (true)` to `WITH CHECK (false)` since only the trigger should insert memberships
+### How it works
 
-### Fix 6 - Restrict `resources` ALL policy
-- Drop the overly permissive `USING (true) WITH CHECK (true)` ALL policy
-- Recreate scoped to global admins only: `USING (is_global_admin(auth.uid()))`
+1. **Data query**: Returns just the paginated rows (LIMIT/OFFSET) -- no window function, so Postgres can stop after finding 50 rows
+2. **Count strategy**: 
+   - When filters are applied: Run a separate `SELECT count(*)` with the same WHERE clause (this is faster than `count(*) OVER()` because it doesn't need to fetch `entity_data`)
+   - When NO filters are applied (just entity_type): Use `pg_class.reltuples` statistical estimate -- instant, no scan needed
+   - Apply a hard cap at 100,000 (already enforced in the frontend)
 
-### Fix 7 - Restrict `resource_api_keys` ALL policy
-- Same pattern as resources: drop permissive ALL, recreate for global admins only
+### Expected performance improvement
 
-### Fix 8 - Restrict `webhook_events` INSERT policy
-- Change `WITH CHECK (true)` to `WITH CHECK (false)` since only edge functions (service role) insert webhook events
+| Scenario | Current | After Fix |
+|----------|---------|-----------|
+| No filters (155K person) | 35s | Under 1s (estimate) |
+| Industry filter (3K rows) | 3.5s | Under 1s |
+| Keyword search (broad) | Timeout | 2-5s |
+| At 1M records, no filters | Would timeout | Under 1s (estimate) |
 
-### Fix 9 - Enable leaked password protection
-- Use auth configuration tool
+## Technical Details
 
-## Code Change: `src/components/settings/ExternalProjectsSettings.tsx`
-- Query from `external_projects_safe` view instead of `external_projects`
-- Remove the "show/hide API key" toggle since the key is no longer in the view
-- Show a static masked indicator instead
+### Step 1: Update `search_free_data_builder` function
 
-## Summary
-- 1 database migration (all policy fixes + views)
-- 1 file edit (ExternalProjectsSettings.tsx)
-- No logic changes to any other part of the app
+Remove `count(*) OVER()` from the data query. Instead, the function will:
+- Run the paginated data query (fast -- stops at LIMIT)
+- Run a separate count query using `SELECT count(*)` with the same WHERE clause but without fetching `entity_data`
+- For the unfiltered base case, use `pg_class.reltuples` as a near-instant statistical estimate
+- Return `total_count` as before (same return signature, no frontend changes needed)
+
+The 37-parameter signature stays identical. The return type stays identical (`entity_external_id`, `entity_data`, `total_count`).
+
+### Step 2: Add a composite index for the base sort
+
+```text
+CREATE INDEX idx_free_data_type_extid 
+ON free_data (entity_type, entity_external_id);
+```
+
+This lets the `ORDER BY entity_external_id LIMIT 50` use an index-only scan instead of sorting all rows.
+
+### Step 3: Frontend -- no changes needed
+
+The `useFreeDataSearch.ts` hook already reads `total_count` from the first result row and clamps it to `TOTAL_DISPLAY_CAP` (100,000). The function signature doesn't change, so the frontend continues working as-is.
+
+## Risk Assessment
+
+- **Low risk**: The return signature doesn't change, so no frontend or edge function changes are needed
+- **Count accuracy**: For filtered queries, count is exact. For unfiltered queries, the statistical estimate is refreshed by `ANALYZE` and is typically within 1-2% accuracy
+- **Revert**: If anything breaks, the existing `SEARCH_FUNCTION_LOCK.md` revert procedure works since we're using `CREATE OR REPLACE`
 
