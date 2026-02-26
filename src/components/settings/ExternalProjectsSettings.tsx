@@ -20,13 +20,12 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
-import { Plus, Trash2, Eye, EyeOff } from 'lucide-react';
+import { Plus, Trash2 } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 
 export function ExternalProjectsSettings() {
   const [projects, setProjects] = useState<any[]>([]);
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
-  const [showApiKey, setShowApiKey] = useState<Record<string, boolean>>({});
   const [newProject, setNewProject] = useState({
     name: '',
     api_endpoint: '',
@@ -47,7 +46,7 @@ export function ExternalProjectsSettings() {
 
     if (teamMemberships) {
       const { data } = await supabase
-        .from('external_projects')
+        .from('external_projects_safe' as any)
         .select('*')
         .eq('team_id', teamMemberships.team_id);
 
@@ -190,26 +189,8 @@ export function ExternalProjectsSettings() {
               <div className="flex items-center gap-2">
                 <Label className="text-xs">API Key:</Label>
                 <code className="text-xs bg-muted px-2 py-1 rounded">
-                  {showApiKey[project.id]
-                    ? project.api_key_encrypted
-                    : '••••••••••••••••'}
+                  ••••••••••••••••
                 </code>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() =>
-                    setShowApiKey((prev) => ({
-                      ...prev,
-                      [project.id]: !prev[project.id],
-                    }))
-                  }
-                >
-                  {showApiKey[project.id] ? (
-                    <EyeOff className="h-4 w-4" />
-                  ) : (
-                    <Eye className="h-4 w-4" />
-                  )}
-                </Button>
               </div>
             </CardContent>
           </Card>

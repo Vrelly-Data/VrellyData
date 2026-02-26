@@ -420,6 +420,13 @@ export type Database = {
             referencedRelation: "external_projects"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "external_campaigns_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "external_projects_safe"
+            referencedColumns: ["id"]
+          },
         ]
       }
       external_projects: {
@@ -996,6 +1003,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "synced_campaigns_integration_id_fkey"
+            columns: ["integration_id"]
+            isOneToOne: false
+            referencedRelation: "outbound_integrations_safe"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "synced_campaigns_team_id_fkey"
             columns: ["team_id"]
             isOneToOne: false
@@ -1372,6 +1386,13 @@ export type Database = {
             referencedRelation: "outbound_integrations"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "webhook_events_integration_id_fkey"
+            columns: ["integration_id"]
+            isOneToOne: false
+            referencedRelation: "outbound_integrations_safe"
+            referencedColumns: ["id"]
+          },
         ]
       }
       webhooks: {
@@ -1414,6 +1435,36 @@ export type Database = {
       }
     }
     Views: {
+      external_projects_safe: {
+        Row: {
+          api_endpoint: string | null
+          created_at: string | null
+          id: string | null
+          is_active: boolean | null
+          name: string | null
+          team_id: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          api_endpoint?: string | null
+          created_at?: string | null
+          id?: string | null
+          is_active?: boolean | null
+          name?: string | null
+          team_id?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          api_endpoint?: string | null
+          created_at?: string | null
+          id?: string | null
+          is_active?: boolean | null
+          name?: string | null
+          team_id?: string | null
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
       mv_filter_suggestions: {
         Row: {
           industries: Json | null
@@ -1422,6 +1473,68 @@ export type Database = {
           technologies: Json | null
         }
         Relationships: []
+      }
+      outbound_integrations_safe: {
+        Row: {
+          created_at: string | null
+          created_by: string | null
+          id: string | null
+          is_active: boolean | null
+          last_synced_at: string | null
+          links_initialized: boolean | null
+          name: string | null
+          platform: string | null
+          reply_team_id: string | null
+          sync_error: string | null
+          sync_status: string | null
+          team_id: string | null
+          updated_at: string | null
+          webhook_status: string | null
+          webhook_subscription_id: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          created_by?: string | null
+          id?: string | null
+          is_active?: boolean | null
+          last_synced_at?: string | null
+          links_initialized?: boolean | null
+          name?: string | null
+          platform?: string | null
+          reply_team_id?: string | null
+          sync_error?: string | null
+          sync_status?: string | null
+          team_id?: string | null
+          updated_at?: string | null
+          webhook_status?: string | null
+          webhook_subscription_id?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          created_by?: string | null
+          id?: string | null
+          is_active?: boolean | null
+          last_synced_at?: string | null
+          links_initialized?: boolean | null
+          name?: string | null
+          platform?: string | null
+          reply_team_id?: string | null
+          sync_error?: string | null
+          sync_status?: string | null
+          team_id?: string | null
+          updated_at?: string | null
+          webhook_status?: string | null
+          webhook_subscription_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "outbound_integrations_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
       }
     }
     Functions: {
