@@ -33,6 +33,7 @@ export default function Settings() {
   const { toast } = useToast();
   const { theme, setTheme } = useTheme();
   const [loading, setLoading] = useState(false);
+  const [showAllCredits, setShowAllCredits] = useState(false);
   const { subscriptionStatus, checkSubscription, createCheckoutSession, openCustomerPortal } = useSubscription();
   
   // Check for success/cancel params from Stripe
@@ -86,6 +87,12 @@ export default function Settings() {
     },
     enabled: !!user,
   });
+
+  // Compute total deductions for accurate balance
+  const totalDeductions = creditHistory?.reduce((acc, t) => acc + (t.credits_deducted || 0), 0) || 0;
+  const tier = (profile?.subscription_tier || 'starter') as SubscriptionTier;
+  const tierConfig = SUBSCRIPTION_TIERS[tier] || SUBSCRIPTION_TIERS.starter;
+  const computedBalance = tierConfig.credits - totalDeductions;
 
   const handleUpdateProfile = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -343,20 +350,18 @@ export default function Settings() {
                   <div className="flex justify-between items-center">
                     <span className="text-sm font-medium">Credit Balance</span>
                     <span className="text-2xl font-bold text-primary">
-                      {(profile?.credits ?? 0).toLocaleString()}
+                      {computedBalance.toLocaleString()}
                     </span>
                   </div>
                   {(() => {
-                    const tier = (profile?.subscription_tier || 'starter') as SubscriptionTier;
-                    const tierConfig = SUBSCRIPTION_TIERS[tier] || SUBSCRIPTION_TIERS.starter;
                     const percentRemaining = tierConfig.credits > 0 
-                      ? ((profile?.credits ?? 0) / tierConfig.credits) * 100 
+                      ? (computedBalance / tierConfig.credits) * 100 
                       : 0;
                     return (
                       <>
-                        <Progress value={percentRemaining} className="h-2" />
+                        <Progress value={Math.max(0, percentRemaining)} className="h-2" />
                         <p className="text-xs text-muted-foreground">
-                          {(profile?.credits ?? 0).toLocaleString()} of {tierConfig.credits.toLocaleString()} credits remaining ({tierConfig.label} plan)
+                          {computedBalance.toLocaleString()} of {tierConfig.credits.toLocaleString()} credits remaining ({tierConfig.label} plan)
                         </p>
                       </>
                     );
@@ -531,7 +536,7 @@ export default function Settings() {
                   </TableHeader>
                   <TableBody>
                     {creditHistory && creditHistory.length > 0 ? (
-                      creditHistory.map((event) => (
+                      (showAllCredits ? creditHistory : creditHistory.slice(0, 3)).map((event) => (
                         <TableRow key={event.id}>
                           <TableCell className="capitalize">{event.entity_type}</TableCell>
                           <TableCell>{event.credits_deducted}</TableCell>
@@ -548,6 +553,17 @@ export default function Settings() {
                     )}
                   </TableBody>
                 </Table>
+                {creditHistory && creditHistory.length > 3 && (
+                  <div className="mt-4 text-center">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setShowAllCredits(!showAllCredits)}
+                    >
+                      {showAllCredits ? 'Show Less' : `View All (${creditHistory.length})`}
+                    </Button>
+                  </div>
+                )}
               </CardContent>
             </Card>
           </div>
