@@ -70,12 +70,12 @@ export default function Settings() {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
 
-  // Fetch unlock history
-  const { data: unlockHistory } = useQuery({
-    queryKey: ["unlock-history"],
+  // Fetch credit usage history
+  const { data: creditHistory } = useQuery({
+    queryKey: ["credit-transactions"],
     queryFn: async () => {
       const { data, error } = await supabase
-        .from("unlock_events")
+        .from("credit_transactions")
         .select("*")
         .eq("user_id", user?.id)
         .order("created_at", { ascending: false })
@@ -525,21 +525,23 @@ export default function Settings() {
                     <TableRow>
                       <TableHead>Type</TableHead>
                       <TableHead>Credits</TableHead>
+                      <TableHead>Records</TableHead>
                       <TableHead>Date</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {unlockHistory && unlockHistory.length > 0 ? (
-                      unlockHistory.map((event) => (
+                    {creditHistory && creditHistory.length > 0 ? (
+                      creditHistory.map((event) => (
                         <TableRow key={event.id}>
                           <TableCell className="capitalize">{event.entity_type}</TableCell>
-                          <TableCell>{event.cost}</TableCell>
+                          <TableCell>{event.credits_deducted}</TableCell>
+                          <TableCell>{event.records_returned}</TableCell>
                           <TableCell>{formatDistanceToNow(new Date(event.created_at), { addSuffix: true })}</TableCell>
                         </TableRow>
                       ))
                     ) : (
                       <TableRow>
-                        <TableCell colSpan={3} className="text-center text-muted-foreground">
+                        <TableCell colSpan={4} className="text-center text-muted-foreground">
                           No activity yet
                         </TableCell>
                       </TableRow>
