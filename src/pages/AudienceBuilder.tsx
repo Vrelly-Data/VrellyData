@@ -97,6 +97,8 @@ export default function AudienceBuilder() {
   const [currentCreditsForSave, setCurrentCreditsForSave] = useState(0);
   const [previewMode, setPreviewMode] = useState<'expanded' | 'compact'>('expanded');
   
+  const { isEstimate, setIsEstimate } = useAudienceStore();
+
   const handleSearch = async (filterState: FilterBuilderState) => {
     setLoading(true);
     setSelectedRecords(new Set()); // Clear selection on new search
@@ -119,6 +121,7 @@ export default function AudienceBuilder() {
       
       setResults(filteredItems);
       setTotalEstimate(filterState.contactFilter === 'net_new' ? filteredItems.length : response.totalEstimate);
+      setIsEstimate(response.isEstimate);
       setTotalPages(filterState.contactFilter === 'net_new' ? 1 : response.pagination.total_pages);
       
       const displayTotal = filterState.contactFilter === 'net_new' 
@@ -128,9 +131,11 @@ export default function AudienceBuilder() {
       const formatTotal = (n: number) =>
         n >= TOTAL_DISPLAY_CAP ? `${TOTAL_DISPLAY_CAP.toLocaleString()}+` : n.toLocaleString();
 
+      const estimatePrefix = response.isEstimate ? '~' : '';
+
       toast({
         title: 'Search complete',
-        description: `Found ${formatTotal(displayTotal)} ${currentType === 'person' ? 'people' : 'companies'}${filterState.contactFilter === 'net_new' ? ' (net new only)' : ''}`,
+        description: `Found ${estimatePrefix}${formatTotal(displayTotal)} ${currentType === 'person' ? 'people' : 'companies'}${filterState.contactFilter === 'net_new' ? ' (net new only)' : ''}`,
       });
     } catch (error: any) {
       toast({
@@ -715,7 +720,7 @@ export default function AudienceBuilder() {
                       )}
                       {totalEstimate > 0 && (
                         <div className="text-sm text-muted-foreground">
-                          Found {totalEstimate >= TOTAL_DISPLAY_CAP ? `${TOTAL_DISPLAY_CAP.toLocaleString()}+` : totalEstimate.toLocaleString()} {currentType === 'person' ? 'people' : 'companies'}
+                          Found {isEstimate ? '~' : ''}{totalEstimate >= TOTAL_DISPLAY_CAP ? `${TOTAL_DISPLAY_CAP.toLocaleString()}+` : totalEstimate.toLocaleString()} {currentType === 'person' ? 'people' : 'companies'}
                         </div>
                       )}
                     </div>
@@ -865,7 +870,7 @@ export default function AudienceBuilder() {
                       )}
                       {totalEstimate > 0 && (
                         <div className="text-sm text-muted-foreground">
-                          Found {totalEstimate >= TOTAL_DISPLAY_CAP ? `${TOTAL_DISPLAY_CAP.toLocaleString()}+` : totalEstimate.toLocaleString()} {currentType === 'person' ? 'people' : 'companies'}
+                          Found {isEstimate ? '~' : ''}{totalEstimate >= TOTAL_DISPLAY_CAP ? `${TOTAL_DISPLAY_CAP.toLocaleString()}+` : totalEstimate.toLocaleString()} {currentType === 'person' ? 'people' : 'companies'}
                         </div>
                       )}
                     </div>

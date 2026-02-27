@@ -8,6 +8,7 @@ interface AudienceState {
   filters: FilterDSL | null;
   results: (PersonEntity | CompanyEntity)[];
   totalEstimate: number;
+  isEstimate: boolean;
   loading: boolean;
   selectedEntity: PersonEntity | CompanyEntity | null;
   
@@ -29,6 +30,7 @@ interface AudienceState {
   setFilters: (filters: FilterDSL | null) => void;
   setResults: (results: (PersonEntity | CompanyEntity)[]) => void;
   setTotalEstimate: (total: number) => void;
+  setIsEstimate: (isEstimate: boolean) => void;
   setLoading: (loading: boolean) => void;
   setSelectedEntity: (entity: PersonEntity | CompanyEntity | null) => void;
   setFilterBuilderState: (state: FilterBuilderState) => void;
@@ -47,6 +49,7 @@ export const useAudienceStore = create<AudienceState>((set) => ({
   filters: null,
   results: [],
   totalEstimate: 0,
+  isEstimate: false,
   loading: false,
   selectedEntity: null,
   
@@ -65,6 +68,7 @@ export const useAudienceStore = create<AudienceState>((set) => ({
   setFilters: (filters) => set({ filters }),
   setResults: (results) => set({ results }),
   setTotalEstimate: (total) => set({ totalEstimate: total }),
+  setIsEstimate: (isEstimate) => set({ isEstimate }),
   setLoading: (loading) => set({ loading }),
   setSelectedEntity: (entity) => set({ selectedEntity: entity }),
   setFilterBuilderState: (state) => set({ filterBuilderState: state }),
@@ -79,6 +83,7 @@ export const useAudienceStore = create<AudienceState>((set) => ({
     filters: null,
     results: [],
     totalEstimate: 0,
+    isEstimate: false,
     selectedEntity: null,
     currentPage: 1,
     estimatedCost: 0,

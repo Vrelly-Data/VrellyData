@@ -14,6 +14,7 @@ export interface FreeDataSearchParams {
 export interface FreeDataSearchResponse<T> {
   items: T[];
   totalEstimate: number;
+  isEstimate: boolean;
   pagination: {
     page: number;
     per_page: number;
@@ -22,18 +23,7 @@ export interface FreeDataSearchResponse<T> {
 }
 
 // Helper to convert prospectData flags to individual booleans
-function parseProspectData(prospectData: string[]): {
-  hasPersonalEmail: boolean;
-  hasBusinessEmail: boolean;
-  hasPhone: boolean;
-  hasLinkedin: boolean;
-  hasFacebook: boolean;
-  hasTwitter: boolean;
-  hasCompanyPhone: boolean;
-  hasCompanyLinkedin: boolean;
-  hasCompanyFacebook: boolean;
-  hasCompanyTwitter: boolean;
-} {
+function parseProspectData(prospectData: string[]) {
   return {
     hasPersonalEmail: prospectData.includes('personal_email'),
     hasBusinessEmail: prospectData.includes('business_email'),
@@ -48,7 +38,7 @@ function parseProspectData(prospectData: string[]): {
   };
 }
 
-// Convert gender value to M/F format for database (returns array for DB function)
+// Convert gender value to M/F format for database
 function convertGender(gender: string | undefined | null): string[] | null {
   if (!gender) return null;
   if (gender.toLowerCase() === 'male') return ['M'];
@@ -64,6 +54,65 @@ function arrayOrNull(arr: string[] | undefined | null): string[] | null {
 
 export const TOTAL_DISPLAY_CAP = 100_000;
 
+// Build shared filter params (without p_limit/p_offset)
+function buildFilterParams(entityType: EntityType, filterState: FilterBuilderState) {
+  const prospectFlags = parseProspectData(filterState.prospectData);
+
+  const combinedCities = [
+    ...(filterState.cities || []),
+    ...(filterState.personCity || []),
+    ...(filterState.companyCity || []),
+  ].filter(Boolean);
+  
+  const combinedCountries = [
+    ...(filterState.personCountry || []),
+    ...(filterState.companyCountry || []),
+  ].filter(Boolean);
+
+  return {
+    p_entity_type: entityType,
+    p_keywords: arrayOrNull(filterState.keywords),
+    p_job_titles: arrayOrNull(filterState.jobTitles),
+    p_seniority_levels: arrayOrNull(filterState.seniority),
+    p_company_size_ranges: arrayOrNull(filterState.companySize),
+    p_industries: arrayOrNull(filterState.industries),
+    p_countries: arrayOrNull(combinedCountries),
+    p_cities: arrayOrNull(combinedCities),
+    p_gender: convertGender(filterState.gender),
+    p_net_worth: arrayOrNull(filterState.netWorth),
+    p_income: arrayOrNull(filterState.income),
+    p_departments: arrayOrNull(filterState.department),
+    p_company_revenue: arrayOrNull(filterState.companyRevenue),
+    p_person_interests: arrayOrNull(filterState.personInterests),
+    p_person_skills: arrayOrNull(filterState.personSkills),
+    p_technologies: arrayOrNull(filterState.technologies),
+    p_has_personal_email: prospectFlags.hasPersonalEmail || null,
+    p_has_business_email: prospectFlags.hasBusinessEmail || null,
+    p_has_phone: prospectFlags.hasPhone || null,
+    p_has_linkedin: prospectFlags.hasLinkedin || null,
+    p_has_facebook: prospectFlags.hasFacebook || null,
+    p_has_twitter: prospectFlags.hasTwitter || null,
+    p_has_company_phone: prospectFlags.hasCompanyPhone || null,
+    p_has_company_linkedin: prospectFlags.hasCompanyLinkedin || null,
+    p_has_company_facebook: prospectFlags.hasCompanyFacebook || null,
+    p_has_company_twitter: prospectFlags.hasCompanyTwitter || null,
+    p_exclude_keywords: arrayOrNull(filterState.excludeKeywords),
+    p_exclude_job_titles: arrayOrNull(filterState.excludeJobTitles),
+    p_exclude_industries: arrayOrNull(filterState.excludeIndustries),
+    p_exclude_cities: arrayOrNull([
+      ...(filterState.excludePersonCity || []),
+      ...(filterState.excludeCompanyCity || []),
+    ].filter(Boolean)),
+    p_exclude_countries: arrayOrNull([
+      ...(filterState.excludePersonCountry || []),
+      ...(filterState.excludeCompanyCountry || []),
+    ].filter(Boolean)),
+    p_exclude_technologies: arrayOrNull(filterState.excludeTechnologies),
+    p_exclude_person_skills: arrayOrNull(filterState.excludePersonSkills),
+    p_exclude_person_interests: arrayOrNull(filterState.excludePersonInterests),
+  };
+}
+
 export function useFreeDataSearch() {
   const [loading, setLoading] = useState(false);
 
@@ -76,84 +125,34 @@ export function useFreeDataSearch() {
     
     try {
       const offset = (page - 1) * perPage;
-      const prospectFlags = parseProspectData(filterState.prospectData);
+      const sharedParams = buildFilterParams(entityType, filterState);
 
-      // Merge person and company location filters
-      const combinedCities = [
-        ...(filterState.cities || []),
-        ...(filterState.personCity || []),
-        ...(filterState.companyCity || []),
-      ].filter(Boolean);
-      
-      const combinedCountries = [
-        ...(filterState.personCountry || []),
-        ...(filterState.companyCountry || []),
-      ].filter(Boolean);
-
-      // Build parameters for the NEW canonical search function
-      const searchParams = {
-        p_entity_type: entityType,
-        p_keywords: arrayOrNull(filterState.keywords),
-        p_job_titles: arrayOrNull(filterState.jobTitles),
-        p_seniority_levels: arrayOrNull(filterState.seniority),
-        p_company_size_ranges: arrayOrNull(filterState.companySize), // Now supports multi-select!
-        p_industries: arrayOrNull(filterState.industries),
-        p_countries: arrayOrNull(combinedCountries),
-        p_cities: arrayOrNull(combinedCities),
-        p_gender: convertGender(filterState.gender),
-        p_net_worth: arrayOrNull(filterState.netWorth),
-        p_income: arrayOrNull(filterState.income),
-        p_departments: arrayOrNull(filterState.department),
-        p_company_revenue: arrayOrNull(filterState.companyRevenue),
-        p_person_interests: arrayOrNull(filterState.personInterests),
-        p_person_skills: arrayOrNull(filterState.personSkills),
-        p_technologies: arrayOrNull(filterState.technologies),
-        p_has_personal_email: prospectFlags.hasPersonalEmail || null,
-        p_has_business_email: prospectFlags.hasBusinessEmail || null,
-        p_has_phone: prospectFlags.hasPhone || null,
-        p_has_linkedin: prospectFlags.hasLinkedin || null,
-        p_has_facebook: prospectFlags.hasFacebook || null,
-        p_has_twitter: prospectFlags.hasTwitter || null,
-        p_has_company_phone: prospectFlags.hasCompanyPhone || null,
-        p_has_company_linkedin: prospectFlags.hasCompanyLinkedin || null,
-        p_has_company_facebook: prospectFlags.hasCompanyFacebook || null,
-        p_has_company_twitter: prospectFlags.hasCompanyTwitter || null,
+      // Build params for each function
+      const resultsParams = {
+        ...sharedParams,
         p_limit: perPage,
         p_offset: offset,
-        // DNC exclusion parameters
-        p_exclude_keywords: arrayOrNull(filterState.excludeKeywords),
-        p_exclude_job_titles: arrayOrNull(filterState.excludeJobTitles),
-        p_exclude_industries: arrayOrNull(filterState.excludeIndustries),
-        p_exclude_cities: arrayOrNull([
-          ...(filterState.excludePersonCity || []),
-          ...(filterState.excludeCompanyCity || []),
-        ].filter(Boolean)),
-        p_exclude_countries: arrayOrNull([
-          ...(filterState.excludePersonCountry || []),
-          ...(filterState.excludeCompanyCountry || []),
-        ].filter(Boolean)),
-        p_exclude_technologies: arrayOrNull(filterState.excludeTechnologies),
-        p_exclude_person_skills: arrayOrNull(filterState.excludePersonSkills),
-        p_exclude_person_interests: arrayOrNull(filterState.excludePersonInterests),
       };
 
-      console.log('[FreeDataSearch] Calling search_free_data_builder with:', searchParams);
+      const countParams = { ...sharedParams };
 
-      // Call the NEW canonical Builder search function
-      const { data, error } = await supabase.rpc('search_free_data_builder', searchParams as any);
+      console.log('[FreeDataSearch] Calling split functions in parallel');
 
-      if (error) {
-        console.error('Error in search_free_data_builder RPC:', error);
-        throw error;
-      }
+      // Call BOTH functions in parallel with Promise.allSettled
+      const [resultsResponse, countResponse] = await Promise.allSettled([
+        supabase.rpc('search_free_data_results', resultsParams as any),
+        supabase.rpc('search_free_data_count', countParams as any),
+      ]);
 
+      // Process results (fast path - always available)
       let items: T[] = [];
-      let totalCount = 0;
-
-      // Cast to any[] to handle ambiguous RPC return types
-      const results = (data || []) as any[];
-      if (results.length > 0) {
-        totalCount = Number(results[0].total_count) || 0;
+      if (resultsResponse.status === 'fulfilled') {
+        const { data, error } = resultsResponse.value;
+        if (error) {
+          console.error('Error in search_free_data_results:', error);
+          throw error;
+        }
+        const results = (data || []) as any[];
         items = results.map((record: any) => {
           const mappedRecord = {
             entity_external_id: record.entity_external_id,
@@ -165,6 +164,31 @@ export function useFreeDataSearch() {
             return mapFreeDataToCompany(mappedRecord) as T;
           }
         });
+      } else {
+        console.error('Results query rejected:', resultsResponse.reason);
+        throw resultsResponse.reason;
+      }
+
+      // Process count (may fail gracefully)
+      let totalCount = items.length; // fallback: at least what we got
+      let isEstimate = true;
+      
+      if (countResponse.status === 'fulfilled') {
+        const { data, error } = countResponse.value;
+        if (!error && data && (data as any[]).length > 0) {
+          const countRow = (data as any[])[0];
+          totalCount = Number(countRow.total_count) || 0;
+          isEstimate = Boolean(countRow.is_estimate);
+        } else if (error) {
+          console.warn('Count query failed (using fallback):', error.message);
+          // Fallback: use items.length as minimum estimate
+          totalCount = items.length;
+          isEstimate = true;
+        }
+      } else {
+        console.warn('Count query rejected (using fallback):', countResponse.reason);
+        totalCount = items.length;
+        isEstimate = true;
       }
 
       const cappedTotal = Math.min(totalCount, TOTAL_DISPLAY_CAP);
@@ -173,6 +197,7 @@ export function useFreeDataSearch() {
       console.log('[FreeDataSearch] Results:', {
         entityType,
         found: totalCount,
+        isEstimate,
         returned: items.length,
         page,
         totalPages,
@@ -181,6 +206,7 @@ export function useFreeDataSearch() {
       return {
         items,
         totalEstimate: cappedTotal,
+        isEstimate,
         pagination: {
           page,
           per_page: perPage,
