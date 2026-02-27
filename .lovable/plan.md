@@ -1,63 +1,103 @@
 
 
-# Fix: Revert Search Function + Keep Performance Improvements
+# Fix: Reliable Fast Search with Split Architecture
 
-## What Happened
+## Root Cause Found
 
-Several migrations were applied today to the `search_free_data_builder` function, each trying to fix a timeout issue:
-1. Migration `210832` -- Split into Two-Query Strategy (count + data separately), but the filtered count query still timed out
-2. Migration `212209` -- Replaced count with EXPLAIN planner estimates, which fixed timeouts but introduced **inaccurate counts** (e.g., "found: 60" but 100 rows actually returned)
+The `authenticated` database role has a **hard 8-second statement timeout**. Here's what happens with a keyword search like "CEO":
 
-The search IS currently working (no errors in the last few minutes), but the count estimates are wrong, which breaks pagination and confuses the UI.
+- **Data query** (get 100 rows): ~1.2 seconds -- FINE
+- **Bounded count query** (count all matches): ~18 seconds -- TIMES OUT
+- **Combined in one RPC**: exceeds 8s, gets killed with error `57014`
 
-## Root Cause
+The bounded count approach (LIMIT 100001 subquery) we added doesn't help for keyword searches because ILIKE across 6 JSONB fields must scan all 154K rows to find all ~21K matches. Even the trigram indexes can't speed up counting at this scale.
 
-The `EXPLAIN (FORMAT JSON)` planner estimate approach gives instant counts but they're often wildly inaccurate for JSONB-based filters (ILIKE, regex). Postgres doesn't have statistics on JSONB field values, so the planner guesses poorly.
+This is why other filters (industry, gender, company size) worked fine -- they use equality matches on indexed columns and count quickly. Keywords are the problematic case.
 
-## Solution: Hybrid Approach
+## Solution: Two-Phase Search Architecture
 
-Keep the Two-Query architecture but use a **bounded count** instead of EXPLAIN estimates:
+Split the single RPC into **two separate calls** from the frontend, run in parallel:
 
-1. **Filtered count with a hard LIMIT**: Instead of counting all matching rows (which times out), count up to 100,001 rows max. This tells us whether results exceed the 100K cap without scanning the entire table.
-2. **Use a subquery with LIMIT**: `SELECT count(*) FROM (SELECT 1 FROM free_data fd WHERE ... LIMIT 100001) sub` -- Postgres will stop scanning after finding 100,001 rows, preventing timeout for broad queries.
-3. **Keep the paginated data query** (already fast with the composite index).
+### 1. Data Function: `search_free_data_results` (new, fast)
+- Returns only paginated rows (LIMIT/OFFSET)
+- No count query at all
+- Completes in ~1-2 seconds consistently
+- Uses existing composite index for ordering
 
-This gives **exact counts** up to 100K (the display cap), and "100,000+" for anything larger -- matching the existing UI behavior.
+### 2. Count Function: `search_free_data_count` (new, smart)
+- Runs separately with its own timeout budget
+- Uses a **tiered counting strategy**:
+  - Non-keyword filters: exact bounded count (fast, under 2s)
+  - Keyword filters: EXPLAIN planner estimate (instant, approximate)
+- Returns `total_count` and `is_estimate` boolean
+- SET `statement_timeout TO '30s'` on this function (SECURITY DEFINER overrides role timeout)
+
+### 3. Frontend Changes: `useFreeDataSearch.ts`
+- Call both functions in parallel with `Promise.allSettled`
+- Display data immediately when results arrive
+- Show count when it arrives (or "many results" if count times out)
+- Show "~X results" indicator when count is an estimate
 
 ## Technical Details
 
-### Single migration: Update `search_free_data_builder`
-
-Replace the EXPLAIN-based count block with a bounded count:
+### Migration: Create two new functions + keep original
 
 ```text
--- CURRENT (inaccurate planner estimate):
-EXECUTE 'EXPLAIN (FORMAT JSON) SELECT 1 FROM ...' INTO explain_result;
-v_total_count := (explain_result->0->'Plan'->>'Plan Rows')::bigint;
+-- Function 1: Results only (fast, always succeeds)
+CREATE FUNCTION search_free_data_results(...)
+  RETURNS TABLE(entity_external_id text, entity_data jsonb)
+  SET statement_timeout TO '15s'
+  -- Same WHERE clause building, just no count step
 
--- NEW (exact count, bounded at 100,001):
-EXECUTE 'SELECT count(*) FROM (SELECT 1 FROM public.free_data fd '
-  || where_clause || ' LIMIT 100001) _sub'
-  INTO v_total_count USING ...;
-IF v_total_count > 100000 THEN v_total_count := 100000; END IF;
+-- Function 2: Count only (smart strategy)
+CREATE FUNCTION search_free_data_count(...)
+  RETURNS TABLE(total_count bigint, is_estimate boolean)
+  SET statement_timeout TO '30s'
+  -- Keyword filters: EXPLAIN estimate (instant)
+  -- Other filters: exact bounded count
 ```
 
-### Why This Won't Time Out
+Both functions use `SECURITY DEFINER` with explicit `SET statement_timeout` which overrides the role-level 8s limit.
 
-- The inner `LIMIT 100001` means Postgres stops scanning after finding 100,001 matching rows
-- For narrow filters (100s-1000s of results): scans only those rows -- fast
-- For broad filters (10,000s+ results): scans at most 100,001 rows then stops -- bounded time
-- Worst case: broad filter that matches 100K+ records still only scans ~100K rows, which with the composite index takes under 5 seconds
+The original `search_free_data_builder` remains for backward compatibility but won't be called from the frontend anymore.
 
-### Unfiltered queries
+### Frontend: `useFreeDataSearch.ts`
 
-Continue using `pg_class.reltuples` for the unfiltered base count (instant).
+```text
+// Call both in parallel
+const [resultsResponse, countResponse] = await Promise.allSettled([
+  supabase.rpc('search_free_data_results', dataParams),
+  supabase.rpc('search_free_data_count', countParams),
+]);
 
-### No frontend changes needed
+// Always show data (fast path)
+// Show count when available, "Loading..." or "~X" if still pending or estimated
+```
 
-Same function signature (37 parameters), same return type, same capped behavior. The only difference: counts will be accurate again.
+### Why This Works
 
-### Risks
-- Low risk: Same architecture, just replacing the count method
-- Bounded scan ensures no timeout even for broad filters
-- Exact counts up to 100K instead of rough estimates
+- **Data always returns fast**: ~1.2s, well within any timeout
+- **Count never blocks data**: runs independently
+- **Keyword counts are instant**: EXPLAIN estimate returns in <1ms
+- **Non-keyword counts are exact**: bounded count for equality filters is fast
+- **Graceful degradation**: if count fails, data still shows with approximate indicator
+
+### Accuracy Trade-off
+
+- Non-keyword filters: exact counts (same as before)
+- Keyword filters: approximate counts (EXPLAIN estimates can be 2-5x off, but the UI already caps at 100K and shows ranges)
+- The `is_estimate` flag lets the frontend show "~21,000 results" vs "21,282 results"
+
+### Files Changed
+
+1. **New migration**: Creates `search_free_data_results` and `search_free_data_count` functions
+2. **`src/hooks/useFreeDataSearch.ts`**: Parallel calls to both new functions
+3. **`src/pages/AudienceBuilder.tsx`**: Minor update to show estimate indicator if needed
+
+### Risk Assessment
+
+- Low risk: existing function untouched, new functions added alongside
+- Data retrieval path is simpler (no count overhead)
+- Worst case: count fails silently, data still shows
+- Rollback: revert to calling original function
+
