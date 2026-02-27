@@ -1,5 +1,8 @@
 import { useState } from 'react';
 import { BuildAudienceDialog } from './BuildAudienceDialog';
+import { ViewAudienceDialog } from './ViewAudienceDialog';
+import { useLists } from '@/hooks/useLists';
+import { Separator } from '@/components/ui/separator';
 import { useSyncedContactsPaged, fetchAllContactsForExport } from '@/hooks/useSyncedContactsPaged';
 import { useSyncedCampaigns } from '@/hooks/useSyncedCampaigns';
 import { useOutboundIntegrations } from '@/hooks/useOutboundIntegrations';
@@ -41,7 +44,9 @@ export function PeopleTab() {
   const [isExporting, setIsExporting] = useState(false);
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
   const [buildAudienceOpen, setBuildAudienceOpen] = useState(false);
+  const [selectedListId, setSelectedListId] = useState<string | null>(null);
   
+  const { data: savedLists } = useLists('person');
   const { data: pagedData, isLoading: contactsLoading } = useSyncedContactsPaged({
     campaignId: selectedCampaignId,
     status: statusFilter,
@@ -272,7 +277,42 @@ export function PeopleTab() {
             </Button>
           </div>
         </div>
+
+        {/* Saved Audiences */}
+        {savedLists && savedLists.length > 0 && (
+          <div className="space-y-3 mt-6">
+            <Separator />
+            <h3 className="text-sm font-medium text-muted-foreground">Saved Audiences</h3>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+              {savedLists.map((list) => (
+                <Card
+                  key={list.id}
+                  className="cursor-pointer hover:border-primary/50 transition-colors"
+                  onClick={() => setSelectedListId(list.id)}
+                >
+                  <CardHeader className="p-4 pb-2">
+                    <CardTitle className="text-sm font-medium truncate">{list.name}</CardTitle>
+                  </CardHeader>
+                  <CardContent className="p-4 pt-0">
+                    <p className="text-xs text-muted-foreground">
+                      {list.item_count} contacts · {new Date(list.created_at).toLocaleDateString()}
+                    </p>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          </div>
+        )}
+
         <BuildAudienceDialog open={buildAudienceOpen} onOpenChange={setBuildAudienceOpen} />
+        {selectedListId && (
+          <ViewAudienceDialog
+            open={!!selectedListId}
+            onOpenChange={(open) => !open && setSelectedListId(null)}
+            listId={selectedListId}
+            listName={savedLists?.find(l => l.id === selectedListId)?.name || 'Audience'}
+          />
+        )}
       </>
     );
   }
@@ -527,7 +567,42 @@ export function PeopleTab() {
           )}
         </CardContent>
       </Card>
+
+      {/* Saved Audiences */}
+      {savedLists && savedLists.length > 0 && (
+        <div className="space-y-3">
+          <Separator />
+          <h3 className="text-sm font-medium text-muted-foreground">Saved Audiences</h3>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+            {savedLists.map((list) => (
+              <Card
+                key={list.id}
+                className="cursor-pointer hover:border-primary/50 transition-colors"
+                onClick={() => setSelectedListId(list.id)}
+              >
+                <CardHeader className="p-4 pb-2">
+                  <CardTitle className="text-sm font-medium truncate">{list.name}</CardTitle>
+                </CardHeader>
+                <CardContent className="p-4 pt-0">
+                  <p className="text-xs text-muted-foreground">
+                    {list.item_count} contacts · {new Date(list.created_at).toLocaleDateString()}
+                  </p>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
+      )}
+
       <BuildAudienceDialog open={buildAudienceOpen} onOpenChange={setBuildAudienceOpen} />
+      {selectedListId && (
+        <ViewAudienceDialog
+          open={!!selectedListId}
+          onOpenChange={(open) => !open && setSelectedListId(null)}
+          listId={selectedListId}
+          listName={savedLists?.find(l => l.id === selectedListId)?.name || 'Audience'}
+        />
+      )}
     </div>
   );
 }
