@@ -218,9 +218,9 @@ audience_score is 0-100 based on how well-defined and targetable this audience i
         title: d.title || d.jobTitle || "—",
         company: d.company || d.companyName || "—",
         industry: d.industry || "—",
-        location: [d.city, d.country].filter(Boolean).join(", ") || "—",
-        email: d.email || null,
-        linkedin: d.linkedin || null,
+        location: [d.city || d.personCity, d.country || d.personCountry].filter(Boolean).join(", ") || "—",
+        email: d.email || d.businessEmail || d.personalEmail || null,
+        linkedin: d.linkedin || d.linkedinUrl || null,
       };
     });
 
