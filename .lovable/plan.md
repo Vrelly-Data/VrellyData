@@ -1,30 +1,31 @@
 
 
-# Fix: Saved Copies Not Visible in Copy Tab Library
+# Add Saved Audiences Library to People Tab
 
-## Problem
-The CopyTab component has an early return on line 251 when no campaigns are synced (`if (!campaigns?.length)`). This causes the "Saved Copies" grid and the ViewCopyDialog to never render -- even though copies exist in the database.
+## What Changes
+Add a "Saved Audiences" section at the bottom of the People tab (similar to the "Saved Copies" library in the Copy tab) so users can see and click into audiences they've built with the AI audience builder.
 
-The user saves copy via the Revamp dialog, but when they go to the Copy tab, the library section is completely hidden behind the "No Campaigns Synced" empty state.
-
-## Solution
-
-Restructure the CopyTab so that the "Saved Copies" library section and its ViewCopyDialog always render, regardless of whether campaigns are synced.
+## How It Works
+- After building and saving an audience, it already creates a `list` (with entity_type = 'person') and populates it with contacts via `list_items`
+- The People tab will query these lists and display them as clickable cards
+- Clicking a card opens a dialog showing the contacts in that audience
 
 ## Changes
 
-### `src/components/playground/CopyTab.tsx`
+### 1. `src/components/playground/PeopleTab.tsx`
+- Import `useLists`, `useListItems` from `@/hooks/useLists`
+- Add a "Saved Audiences" section below the contacts table (and also in the empty state), using the same divider + grid card pattern as the Copy tab
+- Each card shows: audience name, contact count, and creation date
+- Clicking a card opens a new `ViewAudienceDialog`
+- Add state for `selectedListId` to control the dialog
 
-1. **Move the "Saved Copies" section and dialogs outside the early return**: Instead of returning early when there are no campaigns, render the empty state inline and always show the saved copies grid below it.
+### 2. `src/components/playground/ViewAudienceDialog.tsx` (new file)
+- A dialog that receives a list ID and name
+- Fetches `list_items` for that list using `useListItems`
+- Displays a table of contacts (name, title, company, industry, location) from `entity_data`
+- Includes a close button and the audience name in the header
 
-2. Specifically:
-   - Remove the early `return` block for `!campaigns?.length` (lines 251-267)
-   - Instead, render it as inline conditional content within the main return
-   - Ensure the "Saved Copies" grid (lines 454-471), the RevampResultDialog, CreateCopyDialog, and ViewCopyDialog always render at the bottom
-
-3. The resulting layout will be:
-   - If no campaigns: show empty state card + "Create New Copy" button, then the saved copies library below
-   - If campaigns exist: show campaign selector + sequence steps, then saved copies library below
-   - Dialogs always rendered at the bottom
-
-This is a UI-only fix -- no database or backend changes needed.
+### Technical Details
+- Reuses existing `useLists('person')` hook -- no new queries needed
+- Lists created by the Build Audience flow have description containing "Built from Data Playground" so they can be identified, but we'll show all person lists for simplicity (they're the user's saved audiences regardless of source)
+- The `list_items.entity_data` JSON contains: name, title, company, industry, location, email, linkedin -- matching what BuildAudienceDialog saves
