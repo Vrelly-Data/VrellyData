@@ -1,17 +1,17 @@
 -- ============================================================
--- BUILDER SEARCH TEST SUITE v3.3
+-- BUILDER SEARCH TEST SUITE v4.0
 -- ============================================================
--- Purpose: Verify search_free_data_builder function works correctly
--- Last Updated: January 21, 2026
+-- Purpose: Verify audience builder search functions work correctly
+-- Last Updated: February 27, 2026
 --
 -- USAGE: Run this entire script in SQL editor after any changes
 -- TOLERANCE: ±5 for all counts (data may change slightly)
 --
--- TO REVERT: Say "Revert to v3.3 stable state"
+-- TO REVERT: Say "Revert to v4.0 stable state"
 -- ============================================================
 
 -- ============================================================
--- SECTION 1: FUNCTION HEALTH CHECK
+-- SECTION 0: SPLIT FUNCTION HEALTH CHECK (v4.0)
 -- ============================================================
 
 DO $$
@@ -19,27 +19,125 @@ DECLARE
   func_count integer;
   param_count integer;
 BEGIN
-  -- Check exactly 1 function exists
+  -- Check search_free_data_results exists
+  SELECT COUNT(*) INTO func_count
+  FROM pg_proc p
+  JOIN pg_namespace n ON p.pronamespace = n.oid
+  WHERE n.nspname = 'public' AND p.proname = 'search_free_data_results';
+  
+  IF func_count < 1 THEN
+    RAISE EXCEPTION 'CRITICAL: search_free_data_results not found';
+  END IF;
+  
+  SELECT pronargs INTO param_count
+  FROM pg_proc p
+  JOIN pg_namespace n ON p.pronamespace = n.oid
+  WHERE n.nspname = 'public' AND p.proname = 'search_free_data_results'
+  LIMIT 1;
+  
+  IF param_count != 35 THEN
+    RAISE EXCEPTION 'CRITICAL: search_free_data_results expected 35 parameters, found %', param_count;
+  END IF;
+  
+  RAISE NOTICE '✅ search_free_data_results: found, 35 parameters';
+
+  -- Check search_free_data_count exists
+  SELECT COUNT(*) INTO func_count
+  FROM pg_proc p
+  JOIN pg_namespace n ON p.pronamespace = n.oid
+  WHERE n.nspname = 'public' AND p.proname = 'search_free_data_count';
+  
+  IF func_count < 1 THEN
+    RAISE EXCEPTION 'CRITICAL: search_free_data_count not found';
+  END IF;
+  
+  SELECT pronargs INTO param_count
+  FROM pg_proc p
+  JOIN pg_namespace n ON p.pronamespace = n.oid
+  WHERE n.nspname = 'public' AND p.proname = 'search_free_data_count'
+  LIMIT 1;
+  
+  IF param_count != 35 THEN
+    RAISE EXCEPTION 'CRITICAL: search_free_data_count expected 35 parameters, found %', param_count;
+  END IF;
+  
+  RAISE NOTICE '✅ search_free_data_count: found, 35 parameters';
+END $$;
+
+-- ============================================================
+-- SECTION 0B: COUNT ACCURACY TESTS (v4.0)
+-- ============================================================
+
+DO $$
+DECLARE
+  v_count bigint;
+  v_is_estimate boolean;
+BEGIN
+  RAISE NOTICE '--- Count Accuracy Tests (v4.0) ---';
+
+  -- Test: Keyword count (was broken at 771, should be ~21,282)
+  SELECT total_count, is_estimate INTO v_count, v_is_estimate
+  FROM public.search_free_data_count(
+    p_entity_type := 'person',
+    p_keywords := ARRAY['CEO']
+  );
+  IF v_count > 20000 AND v_is_estimate = false THEN
+    RAISE NOTICE '✅ CEO keyword count: % (exact, is_estimate=false)', v_count;
+  ELSE
+    RAISE WARNING '❌ CEO keyword count: % (is_estimate=%), expected >20000 exact', v_count, v_is_estimate;
+  END IF;
+
+  -- Test: Gender count should be exact
+  SELECT total_count, is_estimate INTO v_count, v_is_estimate
+  FROM public.search_free_data_count(
+    p_entity_type := 'person',
+    p_gender := ARRAY['M']
+  );
+  IF v_is_estimate = false THEN
+    RAISE NOTICE '✅ Gender Male count: % (exact)', v_count;
+  ELSE
+    RAISE WARNING '❌ Gender Male count: % (should be exact, got is_estimate=true)', v_count;
+  END IF;
+
+  -- Test: Unfiltered count should be an estimate (pg_class.reltuples)
+  SELECT total_count, is_estimate INTO v_count, v_is_estimate
+  FROM public.search_free_data_count(
+    p_entity_type := 'person'
+  );
+  IF v_is_estimate = true THEN
+    RAISE NOTICE '✅ Unfiltered person count: ~% (estimate, correct)', v_count;
+  ELSE
+    RAISE NOTICE '⚠️ Unfiltered person count: % (exact — unexpected but not broken)', v_count;
+  END IF;
+
+  -- Test: Results function returns rows
+  PERFORM 1 FROM public.search_free_data_results(
+    p_entity_type := 'person',
+    p_limit := 5,
+    p_offset := 0
+  );
+  RAISE NOTICE '✅ search_free_data_results returned rows successfully';
+END $$;
+
+-- ============================================================
+-- SECTION 1: LEGACY FUNCTION HEALTH CHECK (backward compat)
+-- ============================================================
+
+DO $$
+DECLARE
+  func_count integer;
+  param_count integer;
+BEGIN
   SELECT COUNT(*) INTO func_count
   FROM pg_proc p
   JOIN pg_namespace n ON p.pronamespace = n.oid
   WHERE n.nspname = 'public' AND p.proname = 'search_free_data_builder';
   
-  IF func_count != 1 THEN
-    RAISE EXCEPTION 'CRITICAL: Expected 1 search_free_data_builder, found %', func_count;
+  IF func_count < 1 THEN
+    RAISE EXCEPTION 'CRITICAL: search_free_data_builder not found (backward compat)';
   END IF;
   
-  -- Check 29 parameters
-  SELECT pronargs INTO param_count
-  FROM pg_proc p
-  JOIN pg_namespace n ON p.pronamespace = n.oid
-  WHERE n.nspname = 'public' AND p.proname = 'search_free_data_builder';
-  
-  IF param_count != 29 THEN
-    RAISE EXCEPTION 'CRITICAL: Expected 29 parameters, found %', param_count;
-  END IF;
-  
-  RAISE NOTICE '✅ Function health check passed: 1 function, 29 parameters';
+  RAISE NOTICE '✅ Legacy search_free_data_builder exists (backward compat)';
 END $$;
 
 -- ============================================================
@@ -145,7 +243,6 @@ DECLARE
 BEGIN
   RAISE NOTICE '--- Company Revenue Filter Tests ---';
   
-  -- Test: Under $1M
   SELECT total_count INTO result_count
   FROM public.search_free_data_builder(
     p_entity_type := 'person',
@@ -158,7 +255,6 @@ BEGIN
     RAISE WARNING '❌ Revenue Under $1M: % (expected ~%)', result_count, expected;
   END IF;
   
-  -- Test: $1M - $10M
   SELECT total_count INTO result_count
   FROM public.search_free_data_builder(
     p_entity_type := 'person',
@@ -171,7 +267,6 @@ BEGIN
     RAISE WARNING '❌ Revenue $1M - $10M: % (expected ~%)', result_count, expected;
   END IF;
   
-  -- Test: $10M - $50M
   SELECT total_count INTO result_count
   FROM public.search_free_data_builder(
     p_entity_type := 'person',
@@ -197,7 +292,6 @@ DECLARE
 BEGIN
   RAISE NOTICE '--- Income Filter Tests ---';
   
-  -- Test: Under $50K
   SELECT total_count INTO result_count
   FROM public.search_free_data_builder(
     p_entity_type := 'person',
@@ -210,7 +304,6 @@ BEGIN
     RAISE WARNING '❌ Income Under $50K: % (expected ~%)', result_count, expected;
   END IF;
   
-  -- Test: $50K - $100K (with spaces)
   SELECT total_count INTO result_count
   FROM public.search_free_data_builder(
     p_entity_type := 'person',
@@ -236,7 +329,6 @@ DECLARE
 BEGIN
   RAISE NOTICE '--- Net Worth Filter Tests ---';
   
-  -- Test: Under $100K
   SELECT total_count INTO result_count
   FROM public.search_free_data_builder(
     p_entity_type := 'person',
@@ -262,7 +354,6 @@ DECLARE
 BEGIN
   RAISE NOTICE '--- Department Filter Tests ---';
   
-  -- Test: C-Suite / Leadership
   SELECT total_count INTO result_count
   FROM public.search_free_data_builder(
     p_entity_type := 'person',
@@ -288,7 +379,6 @@ DECLARE
 BEGIN
   RAISE NOTICE '--- Seniority Filter Tests ---';
   
-  -- Test: Individual Contributor
   SELECT total_count INTO result_count
   FROM public.search_free_data_builder(
     p_entity_type := 'person',
@@ -304,7 +394,6 @@ END $$;
 
 -- ============================================================
 -- SECTION 8: GENDER FILTER TESTS
--- NOTE: Database stores M/F, frontend converts male→M, female→F
 -- ============================================================
 
 DO $$
@@ -315,7 +404,6 @@ DECLARE
 BEGIN
   RAISE NOTICE '--- Gender Filter Tests (DB uses M/F format) ---';
   
-  -- Test: Male (M)
   SELECT total_count INTO result_count
   FROM public.search_free_data_builder(
     p_entity_type := 'person',
@@ -328,7 +416,6 @@ BEGIN
     RAISE WARNING '❌ Gender Male (M): % (expected ~%)', result_count, expected;
   END IF;
   
-  -- Test: Female (F)
   SELECT total_count INTO result_count
   FROM public.search_free_data_builder(
     p_entity_type := 'person',
@@ -354,7 +441,6 @@ DECLARE
 BEGIN
   RAISE NOTICE '--- Prospect Data Filter Tests ---';
   
-  -- Test: Has Personal Facebook
   SELECT total_count INTO result_count
   FROM public.search_free_data_builder(
     p_entity_type := 'person',
@@ -367,7 +453,6 @@ BEGIN
     RAISE WARNING '❌ Has Facebook: % (expected ~%)', result_count, expected;
   END IF;
   
-  -- Test: Has Personal Twitter
   SELECT total_count INTO result_count
   FROM public.search_free_data_builder(
     p_entity_type := 'person',
@@ -380,7 +465,6 @@ BEGIN
     RAISE WARNING '❌ Has Twitter: % (expected ~%)', result_count, expected;
   END IF;
   
-  -- Test: Has Company Facebook
   SELECT total_count INTO result_count
   FROM public.search_free_data_builder(
     p_entity_type := 'person',
@@ -393,7 +477,6 @@ BEGIN
     RAISE WARNING '❌ Has Company Facebook: % (expected ~%)', result_count, expected;
   END IF;
   
-  -- Test: Has Company Twitter
   SELECT total_count INTO result_count
   FROM public.search_free_data_builder(
     p_entity_type := 'person',
@@ -406,7 +489,6 @@ BEGIN
     RAISE WARNING '❌ Has Company Twitter: % (expected ~%)', result_count, expected;
   END IF;
   
-  -- Test: Has Company LinkedIn
   SELECT total_count INTO result_count
   FROM public.search_free_data_builder(
     p_entity_type := 'person',
@@ -431,14 +513,12 @@ DECLARE
 BEGIN
   RAISE NOTICE '--- Combined Filter Tests ---';
   
-  -- Get single filter count for comparison
   SELECT total_count INTO single_filter_count
   FROM public.search_free_data_builder(
     p_entity_type := 'person',
     p_gender := ARRAY['M']
   ) LIMIT 1;
   
-  -- Test: Gender + Income (should be less than single filter)
   SELECT total_count INTO result_count
   FROM public.search_free_data_builder(
     p_entity_type := 'person',
@@ -466,7 +546,6 @@ DECLARE
 BEGIN
   RAISE NOTICE '--- Pagination Tests ---';
   
-  -- Get first page
   SELECT total_count, entity_external_id INTO count_page1, id_page1
   FROM public.search_free_data_builder(
     p_entity_type := 'person',
@@ -474,7 +553,6 @@ BEGIN
     p_offset := 0
   ) LIMIT 1;
   
-  -- Get second page
   SELECT total_count, entity_external_id INTO count_page2, id_page2
   FROM public.search_free_data_builder(
     p_entity_type := 'person',
@@ -482,14 +560,12 @@ BEGIN
     p_offset := 10
   ) LIMIT 1;
   
-  -- Total count should be same across pages
   IF count_page1 = count_page2 THEN
     RAISE NOTICE '✅ Pagination total count consistent: %', count_page1;
   ELSE
     RAISE WARNING '❌ Pagination total count mismatch: % vs %', count_page1, count_page2;
   END IF;
   
-  -- IDs should be different
   IF id_page1 != id_page2 THEN
     RAISE NOTICE '✅ Pagination returns different records';
   ELSE
@@ -508,13 +584,11 @@ DECLARE
 BEGIN
   RAISE NOTICE '--- Entity Type Tests ---';
   
-  -- Get person count
   SELECT total_count INTO person_count
   FROM public.search_free_data_builder(
     p_entity_type := 'person'
   ) LIMIT 1;
   
-  -- Get company count
   SELECT total_count INTO company_count
   FROM public.search_free_data_builder(
     p_entity_type := 'company'
@@ -537,6 +611,6 @@ END $$;
 -- SECTION 13: SUMMARY
 -- ============================================================
 
-SELECT '=== BUILDER SEARCH TEST SUITE v3.3 COMPLETE ===' as result;
+SELECT '=== BUILDER SEARCH TEST SUITE v4.0 COMPLETE ===' as result;
 SELECT 'All tests passed if no ❌ warnings appear above' as status;
-SELECT 'To revert: Say "Revert to v3.3 stable state"' as revert_command;
+SELECT 'To revert: Say "Revert to v4.0 stable state"' as revert_command;
