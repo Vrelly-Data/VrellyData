@@ -1,12 +1,17 @@
 import { Button } from '@/components/ui/button';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import vrellyLogo from '@/assets/vrelly-logo.png';
 
 export const Navbar = () => {
   const navigate = useNavigate();
+  const location = useLocation();
 
   const scrollToSection = (id: string) => {
-    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' });
+    if (location.pathname === '/') {
+      document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' });
+    } else {
+      navigate(`/?section=${id}`);
+    }
   };
 
   return (
