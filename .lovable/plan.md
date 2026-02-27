@@ -1,22 +1,30 @@
 
-# Replace Integrations Tab with "Coming Soon" Dialog
 
-## What Changes
+# Fix Recent Credit Usage Display
 
-Instead of showing the full external projects management UI, clicking "Add Project" or "Add Your First Project" on the Integrations tab will show a "Coming Soon" dialog with a subtle working/loading animation.
+## Problem
+The "Recent Credit Usage" section in Settings queries the `unlock_events` table, which has no data. The actual credit usage is stored in the `credit_transactions` table -- that's where the 14-credit transaction exists.
 
-## Files to Change
+## Solution
+Update the Settings page to query `credit_transactions` instead of `unlock_events`.
 
-### `src/components/settings/ExternalProjectsSettings.tsx`
+## Changes
 
-- Remove the existing add-project dialog logic (form fields, API calls for add/delete/toggle)
-- Replace `isAddDialogOpen` dialog content with a simple "Coming Soon" popup containing:
-  - An animated spinner/loader icon (using Lucide's `Loader2` with `animate-spin`)
-  - "Coming Soon" title
-  - A short description like "We're working on integrations. Stay tuned!"
-  - A single "Got it" close button
-- Keep the overall layout (header + empty state card) so the tab still looks polished
-- Remove unused state and handlers (`newProject`, `handleAddProject`, `handleDeleteProject`, `toggleProjectStatus`, `loadProjects`) since nothing is functional yet
+### `src/pages/Settings.tsx`
 
-### No other files need changes
-The Settings page already renders `<ExternalProjectsSettings />` in the integrations tab -- that stays the same.
+1. Update the React Query `queryFn` to fetch from `credit_transactions` instead of `unlock_events`:
+   - Table: `credit_transactions`
+   - Filter by `user_id` = current user
+   - Order by `created_at` descending, limit 20
+
+2. Update the table columns to match `credit_transactions` fields:
+   - "Type" column: display `entity_type` (same field name, works as-is)
+   - "Credits" column: display `credits_deducted` instead of `cost`
+   - "Records" column (new): display `records_returned` for additional context
+   - "Date" column: display `created_at` (same as before)
+
+3. Update the query key to `["credit-transactions"]` for clarity.
+
+### No database changes needed
+The data is already being recorded correctly in `credit_transactions`.
+
