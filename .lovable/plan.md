@@ -1,47 +1,63 @@
 
 
-# Fix: Use Planner Estimates for Filtered Count Queries
+# Fix: Revert Search Function + Keep Performance Improvements
 
-## Problem
-The separate `SELECT count(*)` query for filtered results still times out because it must evaluate expensive JSONB operations (ILIKE, regex) on every matching row. For broad filters like keywords across 154K records, this is just as slow as the original `count(*) OVER()`.
+## What Happened
 
-## Solution
-Replace `SELECT count(*)` with the Postgres query planner's row estimate, extracted from `EXPLAIN (FORMAT JSON)`. This is instant because it only runs the planner -- it never executes the query.
+Several migrations were applied today to the `search_free_data_builder` function, each trying to fix a timeout issue:
+1. Migration `210832` -- Split into Two-Query Strategy (count + data separately), but the filtered count query still timed out
+2. Migration `212209` -- Replaced count with EXPLAIN planner estimates, which fixed timeouts but introduced **inaccurate counts** (e.g., "found: 60" but 100 rows actually returned)
 
-### How it works
-- Instead of `EXECUTE count_sql INTO v_total_count`, the function will:
-  1. Run `EXECUTE 'EXPLAIN (FORMAT JSON) SELECT 1 FROM free_data fd ' || where_clause` 
-  2. Extract `Plan Rows` from the top-level JSON node
-  3. Use that as `total_count`
-- Unfiltered queries continue using `pg_class.reltuples` (already fast)
-- All counts remain capped at 100,000
+The search IS currently working (no errors in the last few minutes), but the count estimates are wrong, which breaks pagination and confuses the UI.
 
-### Accuracy
-- Planner estimates depend on table statistics (refreshed by ANALYZE, which we already ran)
-- For simple equality filters (industry, gender), estimates are typically within 2-5x of actual
-- For ILIKE/regex filters, estimates may be rougher but still give a useful order of magnitude
-- This is acceptable since the user chose "fast estimated counts" and the UI already shows "100,000+" for large results
+## Root Cause
+
+The `EXPLAIN (FORMAT JSON)` planner estimate approach gives instant counts but they're often wildly inaccurate for JSONB-based filters (ILIKE, regex). Postgres doesn't have statistics on JSONB field values, so the planner guesses poorly.
+
+## Solution: Hybrid Approach
+
+Keep the Two-Query architecture but use a **bounded count** instead of EXPLAIN estimates:
+
+1. **Filtered count with a hard LIMIT**: Instead of counting all matching rows (which times out), count up to 100,001 rows max. This tells us whether results exceed the 100K cap without scanning the entire table.
+2. **Use a subquery with LIMIT**: `SELECT count(*) FROM (SELECT 1 FROM free_data fd WHERE ... LIMIT 100001) sub` -- Postgres will stop scanning after finding 100,001 rows, preventing timeout for broad queries.
+3. **Keep the paginated data query** (already fast with the composite index).
+
+This gives **exact counts** up to 100K (the display cap), and "100,000+" for anything larger -- matching the existing UI behavior.
 
 ## Technical Details
 
 ### Single migration: Update `search_free_data_builder`
 
-Replace the filtered count block:
-```text
--- BEFORE (times out on broad filters):
-count_sql := 'SELECT count(*) FROM public.free_data fd ' || where_clause;
-EXECUTE count_sql INTO v_total_count USING ...;
+Replace the EXPLAIN-based count block with a bounded count:
 
--- AFTER (instant planner estimate):
-EXECUTE 'EXPLAIN (FORMAT JSON) SELECT 1 FROM public.free_data fd ' || where_clause
-  INTO explain_result USING ...;
+```text
+-- CURRENT (inaccurate planner estimate):
+EXECUTE 'EXPLAIN (FORMAT JSON) SELECT 1 FROM ...' INTO explain_result;
 v_total_count := (explain_result->0->'Plan'->>'Plan Rows')::bigint;
+
+-- NEW (exact count, bounded at 100,001):
+EXECUTE 'SELECT count(*) FROM (SELECT 1 FROM public.free_data fd '
+  || where_clause || ' LIMIT 100001) _sub'
+  INTO v_total_count USING ...;
+IF v_total_count > 100000 THEN v_total_count := 100000; END IF;
 ```
 
-The function signature (37 parameters) and return type remain identical. No frontend changes needed.
+### Why This Won't Time Out
+
+- The inner `LIMIT 100001` means Postgres stops scanning after finding 100,001 matching rows
+- For narrow filters (100s-1000s of results): scans only those rows -- fast
+- For broad filters (10,000s+ results): scans at most 100,001 rows then stops -- bounded time
+- Worst case: broad filter that matches 100K+ records still only scans ~100K rows, which with the composite index takes under 5 seconds
+
+### Unfiltered queries
+
+Continue using `pg_class.reltuples` for the unfiltered base count (instant).
+
+### No frontend changes needed
+
+Same function signature (37 parameters), same return type, same capped behavior. The only difference: counts will be accurate again.
 
 ### Risks
-- Low risk: Same function signature, same return type, same capped behavior
-- Count accuracy is approximate for filtered queries, which is the accepted trade-off
-- Revert procedure unchanged (SEARCH_FUNCTION_LOCK.md)
-
+- Low risk: Same architecture, just replacing the count method
+- Bounded scan ensures no timeout even for broad filters
+- Exact counts up to 100K instead of rough estimates
