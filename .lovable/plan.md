@@ -1,24 +1,22 @@
 
+# Replace Integrations Tab with "Coming Soon" Dialog
 
-# Fix Navbar Section Links on All Pages
+## What Changes
 
-## Problem
-The Features, How It Works, and Pricing links in the Navbar only work on the Landing page because they use `scrollToSection()` which calls `document.getElementById()`. On other pages (Comparisons, Resources, Resource Article), those section IDs don't exist so nothing happens.
+Instead of showing the full external projects management UI, clicking "Add Project" or "Add Your First Project" on the Integrations tab will show a "Coming Soon" dialog with a subtle working/loading animation.
 
-## Solution
-Update the `scrollToSection` function in `Navbar.tsx` to check if the user is already on the landing page. If yes, smooth-scroll as before. If not, navigate to `/#section-id` first, then scroll after the page loads.
+## Files to Change
 
-## Changes
+### `src/components/settings/ExternalProjectsSettings.tsx`
 
-### `src/components/landing/Navbar.tsx`
-- Import `useLocation` from react-router-dom
-- Update `scrollToSection` to check `location.pathname === '/'`
-  - If on landing page: smooth scroll directly (current behavior)
-  - If on another page: navigate to `/?section=<id>`, which will trigger scroll on arrival
+- Remove the existing add-project dialog logic (form fields, API calls for add/delete/toggle)
+- Replace `isAddDialogOpen` dialog content with a simple "Coming Soon" popup containing:
+  - An animated spinner/loader icon (using Lucide's `Loader2` with `animate-spin`)
+  - "Coming Soon" title
+  - A short description like "We're working on integrations. Stay tuned!"
+  - A single "Got it" close button
+- Keep the overall layout (header + empty state card) so the tab still looks polished
+- Remove unused state and handlers (`newProject`, `handleAddProject`, `handleDeleteProject`, `toggleProjectStatus`, `loadProjects`) since nothing is functional yet
 
-### `src/pages/Landing.tsx`
-- Add a `useEffect` that reads the `section` query parameter on mount
-- If a section param exists, scroll to that element after a short delay (to allow render)
-- Clean up the URL by replacing state to remove the query param
-
-This approach keeps the smooth scroll experience on the landing page and reliably navigates + scrolls from any other page.
+### No other files need changes
+The Settings page already renders `<ExternalProjectsSettings />` in the integrations tab -- that stays the same.
