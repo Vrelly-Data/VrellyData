@@ -1,31 +1,41 @@
 
 
-# Add Saved Audiences Library to People Tab
+# Fix Missing Contact Data in Data Playground AI Audience Builder
 
-## What Changes
-Add a "Saved Audiences" section at the bottom of the People tab (similar to the "Saved Copies" library in the Copy tab) so users can see and click into audiences they've built with the AI audience builder.
+## Problem
+The `build-audience` edge function (used only by the Data Playground's People tab AI builder) maps contact fields too narrowly. It checks `d.email` and `d.linkedin`, but the actual database stores emails under `businessEmail`/`personalEmail` and LinkedIn under `linkedinUrl`. Every contact has this data -- it's just not being read.
 
-## How It Works
-- After building and saving an audience, it already creates a `list` (with entity_type = 'person') and populates it with contacts via `list_items`
-- The People tab will query these lists and display them as clickable cards
-- Clicking a card opens a dialog showing the contacts in that audience
+This does NOT affect the main Audience Builder page, which has its own separate data pipeline.
 
-## Changes
+## Fix
 
-### 1. `src/components/playground/PeopleTab.tsx`
-- Import `useLists`, `useListItems` from `@/hooks/useLists`
-- Add a "Saved Audiences" section below the contacts table (and also in the empty state), using the same divider + grid card pattern as the Copy tab
-- Each card shows: audience name, contact count, and creation date
-- Clicking a card opens a new `ViewAudienceDialog`
-- Add state for `selectedListId` to control the dialog
+### `supabase/functions/build-audience/index.ts` (lines 213-224)
 
-### 2. `src/components/playground/ViewAudienceDialog.tsx` (new file)
-- A dialog that receives a list ID and name
-- Fetches `list_items` for that list using `useListItems`
-- Displays a table of contacts (name, title, company, industry, location) from `entity_data`
-- Includes a close button and the audience name in the header
+Update the prospect mapping to include all known field name variants:
 
-### Technical Details
-- Reuses existing `useLists('person')` hook -- no new queries needed
-- Lists created by the Build Audience flow have description containing "Built from Data Playground" so they can be identified, but we'll show all person lists for simplicity (they're the user's saved audiences regardless of source)
-- The `list_items.entity_data` JSON contains: name, title, company, industry, location, email, linkedin -- matching what BuildAudienceDialog saves
+```text
+Current:
+  email: d.email || null,
+  linkedin: d.linkedin || null,
+
+Fixed:
+  email: d.email || d.businessEmail || d.personalEmail || null,
+  linkedin: d.linkedin || d.linkedinUrl || null,
+```
+
+Also improve location mapping to check additional fields:
+
+```text
+Current:
+  location: [d.city, d.country].filter(Boolean).join(", ") || "---",
+
+Fixed:
+  location: [d.city || d.personCity, d.country || d.personCountry].filter(Boolean).join(", ") || "---",
+```
+
+### Scope
+- Only the `build-audience` edge function is touched
+- No changes to the main Audience Builder, database, or any other component
+- Contacts saved going forward will have full email/LinkedIn data in `list_items.entity_data`
+- Previously saved audiences will still show old (incomplete) data since it was already persisted
+
