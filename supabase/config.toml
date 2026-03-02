@@ -9,8 +9,6 @@ verify_jwt = true
 [functions.audiencelab-api]
 verify_jwt = false
 
-[functions.audiencelab-api]
-verify_jwt = true
 
 [functions.create-stripe-products]
 verify_jwt = false
