@@ -1,88 +1,27 @@
-import { useEffect, useState } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
-import { supabase } from '@/integrations/supabase/client';
+import { useEffect } from 'react';
+import { useParams, Link } from 'react-router-dom';
+import ReactMarkdown from 'react-markdown';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Calendar, Clock, ArrowLeft, User } from 'lucide-react';
 import { Navbar } from '@/components/landing/Navbar';
 import { Footer } from '@/components/landing/Footer';
-
-interface Resource {
-  id: string;
-  slug: string;
-  title: string;
-  meta_description: string | null;
-  content_markdown: string;
-  excerpt: string | null;
-  tags: string[];
-  author: string;
-  cover_image_url: string | null;
-  published_at: string | null;
-  created_at: string;
-}
-
-function renderMarkdown(md: string): string {
-  return md
-    // Headings
-    .replace(/^### (.+)$/gm, '<h3 class="text-xl font-semibold mt-8 mb-3 text-foreground">$1</h3>')
-    .replace(/^## (.+)$/gm, '<h2 class="text-2xl font-bold mt-10 mb-4 text-foreground">$1</h2>')
-    .replace(/^# (.+)$/gm, '<h1 class="text-3xl font-bold mt-12 mb-6 text-foreground">$1</h1>')
-    // Bold
-    .replace(/\*\*(.+?)\*\*/g, '<strong class="font-semibold">$1</strong>')
-    // Italic
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    // Inline code
-    .replace(/`(.+?)`/g, '<code class="bg-muted px-1.5 py-0.5 rounded text-sm font-mono">$1</code>')
-    // Blockquotes
-    .replace(/^> (.+)$/gm, '<blockquote class="border-l-4 border-primary pl-4 italic text-muted-foreground my-4">$1</blockquote>')
-    // Unordered lists
-    .replace(/^\- (.+)$/gm, '<li class="ml-4 mb-1 list-disc">$1</li>')
-    .replace(/(<li.*<\/li>\n?)+/g, (match) => `<ul class="my-4 space-y-1">${match}</ul>`)
-    // Ordered lists
-    .replace(/^\d+\. (.+)$/gm, '<li class="ml-4 mb-1 list-decimal">$1</li>')
-    // Horizontal rule
-    .replace(/^---$/gm, '<hr class="my-8 border-border" />')
-    // Paragraphs (double newlines)
-    .replace(/\n\n/g, '</p><p class="mb-4 text-foreground/80 leading-relaxed">')
-    // Wrap in opening p tag
-    .replace(/^/, '<p class="mb-4 text-foreground/80 leading-relaxed">')
-    .replace(/$/, '</p>');
-}
+import { useResource } from '@/hooks/useResources';
 
 export default function ResourceArticle() {
   const { slug } = useParams<{ slug: string }>();
-  const navigate = useNavigate();
-  const [resource, setResource] = useState<Resource | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [notFound, setNotFound] = useState(false);
+  const { data: resource, isLoading, isError } = useResource(slug ?? '');
 
   useEffect(() => {
-    const fetchResource = async () => {
-      if (!slug) return;
-
-      const { data, error } = await supabase
-        .from('resources')
-        .select('*')
-        .eq('slug', slug)
-        .eq('is_published', true)
-        .single();
-
-      if (error || !data) {
-        setNotFound(true);
-      } else {
-        setResource(data);
-        document.title = `${data.title} | Vrelly`;
-        const metaDesc = document.querySelector('meta[name="description"]');
-        if (metaDesc && data.meta_description) {
-          metaDesc.setAttribute('content', data.meta_description);
-        }
+    if (resource) {
+      document.title = `${resource.title} | Vrelly`;
+      const metaDesc = document.querySelector('meta[name="description"]');
+      if (metaDesc && resource.meta_description) {
+        metaDesc.setAttribute('content', resource.meta_description);
       }
-      setIsLoading(false);
-    };
-
-    fetchResource();
-  }, [slug]);
+    }
+  }, [resource]);
 
   const formatDate = (dateStr: string | null) => {
     if (!dateStr) return '';
@@ -94,7 +33,7 @@ export default function ResourceArticle() {
     return `${Math.max(3, Math.ceil(words / 200))} min read`;
   };
 
-  if (notFound) {
+  if (isError) {
     return (
       <div className="min-h-screen bg-background">
         <Navbar />
@@ -174,10 +113,9 @@ export default function ResourceArticle() {
             )}
 
             {/* Content */}
-            <article
-              className="prose prose-neutral max-w-none"
-              dangerouslySetInnerHTML={{ __html: renderMarkdown(resource.content_markdown) }}
-            />
+            <article className="prose prose-neutral max-w-none">
+              <ReactMarkdown>{resource.content_markdown}</ReactMarkdown>
+            </article>
 
             {/* Footer CTA */}
             <div className="mt-16 p-8 rounded-xl bg-primary/5 border border-primary/20 text-center">

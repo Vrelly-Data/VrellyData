@@ -1,28 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { supabase } from '@/integrations/supabase/client';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Calendar, Clock, ArrowRight, BookOpen } from 'lucide-react';
 import { Navbar } from '@/components/landing/Navbar';
 import { Footer } from '@/components/landing/Footer';
-
-interface Resource {
-  id: string;
-  slug: string;
-  title: string;
-  meta_description: string | null;
-  excerpt: string | null;
-  tags: string[];
-  author: string;
-  cover_image_url: string | null;
-  published_at: string | null;
-  created_at: string;
-}
+import { useResources } from '@/hooks/useResources';
 
 export default function Resources() {
-  const [resources, setResources] = useState<Resource[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const { data: resources = [], isLoading } = useResources();
 
   useEffect(() => {
     document.title = 'Resources | Vrelly — B2B Sales Intelligence & Outreach Guides';
@@ -30,23 +16,6 @@ export default function Resources() {
     if (metaDesc) {
       metaDesc.setAttribute('content', 'Expert guides, playbooks, and data-driven insights on B2B outreach, sales sequences, and audience building. Learn from 200,000+ real campaigns.');
     }
-  }, []);
-
-  useEffect(() => {
-    const fetchResources = async () => {
-      const { data, error } = await supabase
-        .from('resources')
-        .select('id, slug, title, meta_description, excerpt, tags, author, cover_image_url, published_at, created_at')
-        .eq('is_published', true)
-        .order('published_at', { ascending: false });
-
-      if (!error && data) {
-        setResources(data);
-      }
-      setIsLoading(false);
-    };
-
-    fetchResources();
   }, []);
 
   const formatDate = (dateStr: string | null) => {
