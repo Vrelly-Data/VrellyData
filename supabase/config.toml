@@ -53,7 +53,7 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.generate-copy]
-verify_jwt = true
+verify_jwt = false
 
 [functions.build-audience]
 verify_jwt = true

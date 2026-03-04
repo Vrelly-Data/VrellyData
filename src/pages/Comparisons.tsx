@@ -1,38 +1,12 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { Check, X, ArrowRight, BookOpen } from 'lucide-react';
 import { Carousel, CarouselContent, CarouselItem, CarouselPrevious, CarouselNext } from '@/components/ui/carousel';
 import { Navbar } from '@/components/landing/Navbar';
 import { Footer } from '@/components/landing/Footer';
 import { Button } from '@/components/ui/button';
 import { useScrollAnimation } from '@/hooks/useScrollAnimation';
-
-const placeholderArticles = [
-  {
-    title: 'How We Benchmarked 200K Cold Email Campaigns (And What We Found)',
-    tag: 'Data Insights',
-    excerpt: 'A deep dive into the patterns that separate top-performing outreach from the noise.',
-    image: 'https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=600&q=80&auto=format&fit=crop',
-  },
-  {
-    title: 'Apollo vs Vrelly: A Hands-On Data Quality Test',
-    tag: 'Comparison',
-    excerpt: 'We ran the same list through both tools. Here is what we found about accuracy and freshness.',
-    image: 'https://images.unsplash.com/photo-1460925895917-afdab827c52f?w=600&q=80&auto=format&fit=crop',
-  },
-  {
-    title: 'The 5 Outreach Sequences That Consistently Book Meetings',
-    tag: 'Outreach',
-    excerpt: 'After analyzing thousands of campaigns, these sequence structures rise to the top every time.',
-    image: 'https://images.unsplash.com/photo-1522071820081-009f0129c71c?w=600&q=80&auto=format&fit=crop',
-  },
-  {
-    title: 'Why Generic AI Copy Kills Your Reply Rates',
-    tag: 'Copy AI',
-    excerpt: 'Generic prompts produce generic emails. Here is why sales-specific training changes everything.',
-    image: 'https://images.unsplash.com/photo-1499750310107-5fef28a66643?w=600&q=80&auto=format&fit=crop',
-  },
-];
+import { useResources } from '@/hooks/useResources';
 
 const dataProviderRows = [
   {
@@ -158,6 +132,8 @@ const Comparisons = () => {
   const { ref: heroRef, isVisible: heroVisible } = useScrollAnimation(0.01);
   const { ref: ctaRef, isVisible: ctaVisible } = useScrollAnimation(0.1);
   const { ref: blogRef, isVisible: blogVisible } = useScrollAnimation(0.1);
+  const { data: resources, isLoading: resourcesLoading } = useResources();
+  const articles = (resources ?? []).slice(0, 6);
 
   // Cycle through data provider competitors only when on the "data" tab
   useEffect(() => {
@@ -278,52 +254,67 @@ const Comparisons = () => {
       </section>
 
       {/* Blog article carousel */}
-      <section
-        ref={blogRef}
-        className={`py-20 px-4 transition-all duration-700 ${blogVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`}
-      >
-        <div className="max-w-5xl mx-auto">
-          <div className="flex items-center gap-3 mb-2">
-            <BookOpen className="w-5 h-5 text-primary" />
-            <span className="text-xs font-semibold uppercase tracking-widest text-primary">From the Vrelly Blog</span>
-          </div>
-          <h2 className="text-2xl font-bold text-foreground mb-8">Real insights from real campaign data.</h2>
+      {!resourcesLoading && articles.length > 0 && (
+        <section
+          ref={blogRef}
+          className={`py-20 px-4 transition-all duration-700 ${blogVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`}
+        >
+          <div className="max-w-5xl mx-auto">
+            <div className="flex items-center gap-3 mb-2">
+              <BookOpen className="w-5 h-5 text-primary" />
+              <span className="text-xs font-semibold uppercase tracking-widest text-primary">From the Vrelly Blog</span>
+            </div>
+            <h2 className="text-2xl font-bold text-foreground mb-8">Real insights from real campaign data.</h2>
 
-          <Carousel opts={{ align: 'start', loop: true }} className="w-full">
-            <CarouselContent className="-ml-4">
-              {placeholderArticles.map((article) => (
-                <CarouselItem key={article.title} className="pl-4 basis-full md:basis-1/2 lg:basis-1/3">
-                  <div className="rounded-2xl border border-border/50 bg-card overflow-hidden shadow-sm hover:shadow-md transition-shadow h-full flex flex-col">
-                    <div className="aspect-video overflow-hidden">
-                      <img
-                        src={article.image}
-                        alt={article.title}
-                        className="w-full h-full object-cover"
-                        loading="lazy"
-                      />
+            <Carousel opts={{ align: 'start', loop: true }} className="w-full">
+              <CarouselContent className="-ml-4">
+                {articles.map((article) => (
+                  <CarouselItem key={article.slug} className="pl-4 basis-full md:basis-1/2 lg:basis-1/3">
+                    <div className="rounded-2xl border border-border/50 bg-card overflow-hidden shadow-sm hover:shadow-md transition-shadow h-full flex flex-col">
+                      {article.cover_image_url && (
+                        <div className="aspect-video overflow-hidden">
+                          <img
+                            src={article.cover_image_url}
+                            alt={article.title}
+                            className="w-full h-full object-cover"
+                            loading="lazy"
+                          />
+                        </div>
+                      )}
+                      <div className="p-5 flex flex-col flex-1 gap-3">
+                        {article.tags?.[0] && (
+                          <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-primary/10 text-primary w-fit">
+                            {article.tags[0]}
+                          </span>
+                        )}
+                        <p className="text-sm font-semibold text-foreground leading-snug line-clamp-2">{article.title}</p>
+                        <p className="text-xs text-muted-foreground leading-relaxed line-clamp-2 flex-1">{article.excerpt}</p>
+                        <Link
+                          to={`/resources/${article.slug}`}
+                          className="inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:text-primary/80 transition-colors mt-auto"
+                        >
+                          Read Article <ArrowRight className="w-3.5 h-3.5" />
+                        </Link>
+                      </div>
                     </div>
-                    <div className="p-5 flex flex-col flex-1 gap-3">
-                      <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-primary/10 text-primary w-fit">
-                        {article.tag}
-                      </span>
-                      <p className="text-sm font-semibold text-foreground leading-snug line-clamp-2">{article.title}</p>
-                      <p className="text-xs text-muted-foreground leading-relaxed line-clamp-2 flex-1">{article.excerpt}</p>
-                      <button
-                        onClick={() => navigate('/resources')}
-                        className="inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:text-primary/80 transition-colors mt-auto"
-                      >
-                        Read Article <ArrowRight className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                </CarouselItem>
-              ))}
-            </CarouselContent>
-            <CarouselPrevious className="-left-4 md:-left-6" />
-            <CarouselNext className="-right-4 md:-right-6" />
-          </Carousel>
-        </div>
-      </section>
+                  </CarouselItem>
+                ))}
+              </CarouselContent>
+              <CarouselPrevious className="-left-4 md:-left-6" />
+              <CarouselNext className="-right-4 md:-right-6" />
+            </Carousel>
+
+            <div className="text-center mt-10">
+              <Link
+                to="/resources"
+                className="inline-flex items-center gap-2 text-sm font-medium text-primary hover:text-primary/80 transition-colors"
+              >
+                See More <ArrowRight className="w-4 h-4" />
+              </Link>
+            </div>
+          </div>
+        </section>
+      )}
 
       <Footer />
     </div>
