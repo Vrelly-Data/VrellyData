@@ -136,18 +136,37 @@ Deno.serve(async (req) => {
     const selectedChannels: string[] = Array.isArray(channels) && channels.length > 0 ? channels : ["Email"];
     const isMultiChannel = selectedChannels.length > 1;
 
-    const channelInstructions = isMultiChannel
-      ? `Generate one outreach step per channel listed below, tailoring tone and format appropriately:
+    const channelFormatGuide = `Channel tone & format rules:
 - Email: include subject line + full body (professional, concise)
 - LinkedIn: no subject line, shorter and more conversational (2-4 sentences max)
 - Twitter message: very short, casual, 1-2 sentences max, no subject
 - Instagram message: short, casual, friendly tone, no subject
-- Facebook message: short, casual, 1-2 sentences, no subject
-Generate ${selectedChannels.length} steps total (one per channel), assigning logical send days.`
-      : `Generate a 3-step email sequence (initial outreach + 2 follow-ups). For each step provide:
+- Facebook message: short, casual, 1-2 sentences, no subject`;
+
+    const channelInstructions = isMultiChannel
+      ? `Generate a 5-7 step outreach sequence spread across a 14-day cadence, distributed strategically across the selected channels (${selectedChannels.join(", ")}).
+
+${channelFormatGuide}
+
+Multi-channel sequencing best practices:
+- Lead with the strongest channel (usually Email) on Day 1
+- Alternate channels to create multiple touchpoints without being repetitive
+- Space steps roughly 1-3 days apart across the 14-day window
+- Use softer channels (LinkedIn, social) as mid-sequence nudges between emails
+- Each channel may appear more than once — vary the angle/message each time
+Generate between 5 and 7 steps total. Assign each step a logical send day within a 14-day timeline.`
+      : `Generate a 5-7 step email sequence spread across a 14-day cadence (initial outreach + strategic follow-ups). For each step provide:
 - subject line
 - email body (plain text, conversational, concise)
-- send day (e.g., Day 1, Day 4, Day 8)`;
+- send day within a 14-day timeline (e.g., Day 1, Day 3, Day 5, Day 8, Day 11, Day 14)
+
+Sequencing best practices:
+- Day 1: strong opening with clear value proposition
+- Days 2-5: follow up with social proof, case study, or a different angle
+- Days 6-10: address objections or share a quick insight
+- Days 11-14: final nudge with urgency or a breakup-style message
+- Space steps roughly 1-3 days apart — never send on consecutive days
+Generate between 5 and 7 steps total.`;
 
     const whyThisWorksInstruction = hasKBData
       ? `Based on the KB data provided (top-performing campaigns, winning sequences, and strategic guidelines), produce a "why_this_works" field: a list of 2-4 bullet-point reasons explaining WHY this outreach approach is the right fit for the described business. Ground each reason in specific patterns or data from the KB context above (e.g., reference a campaign name, a reply rate, a guideline insight). Be specific and data-driven.`
@@ -196,7 +215,7 @@ Note: set "subject" to null for non-email channels. Do NOT include "source_insig
       },
       body: JSON.stringify({
         model: "claude-sonnet-4-20250514",
-        max_tokens: 2048,
+        max_tokens: 4096,
         system: systemPrompt,
         messages: [{ role: "user", content: "Generate the outreach sequence now." }],
       }),
