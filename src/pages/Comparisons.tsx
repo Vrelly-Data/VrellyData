@@ -6,7 +6,6 @@ import { Navbar } from '@/components/landing/Navbar';
 import { Footer } from '@/components/landing/Footer';
 import { Button } from '@/components/ui/button';
 import { useScrollAnimation } from '@/hooks/useScrollAnimation';
-import { supabase } from '@/integrations/supabase/client';
 
 const dataProviderRows = [
   {
@@ -136,17 +135,16 @@ const Comparisons = () => {
   const [resourcesLoading, setResourcesLoading] = useState(true);
 
   useEffect(() => {
-    supabase
-      .from('resources')
-      .select('id, slug, title, excerpt, tags, cover_image_url')
-      .eq('is_published', true)
-      .order('published_at', { ascending: false })
-      .limit(6)
-      .then(({ data, error }) => {
-        console.log('[Comparisons] Supabase resources response:', { data, error });
-        setArticles(data ?? []);
-        setResourcesLoading(false);
-      });
+    const url = `${import.meta.env.VITE_SUPABASE_URL}/rest/v1/resources?is_published=eq.true&select=id,slug,title,excerpt,tags,cover_image_url&order=published_at.desc&limit=6`;
+    fetch(url, {
+      headers: {
+        apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+      },
+    })
+      .then((res) => res.json())
+      .then((data) => setArticles(data ?? []))
+      .catch(() => {})
+      .finally(() => setResourcesLoading(false));
   }, []);
 
   // Cycle through data provider competitors only when on the "data" tab
@@ -268,7 +266,6 @@ const Comparisons = () => {
       </section>
 
       {/* Blog article carousel */}
-      {console.log('[Comparisons] articles.length:', articles.length, 'resourcesLoading:', resourcesLoading)}
       {!resourcesLoading && articles.length > 0 && (
         <section
           ref={blogRef}
