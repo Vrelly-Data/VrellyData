@@ -6,7 +6,7 @@ import { Navbar } from '@/components/landing/Navbar';
 import { Footer } from '@/components/landing/Footer';
 import { Button } from '@/components/ui/button';
 import { useScrollAnimation } from '@/hooks/useScrollAnimation';
-import { useResources } from '@/hooks/useResources';
+import { supabase } from '@/integrations/supabase/client';
 
 const dataProviderRows = [
   {
@@ -132,8 +132,21 @@ const Comparisons = () => {
   const { ref: heroRef, isVisible: heroVisible } = useScrollAnimation(0.01);
   const { ref: ctaRef, isVisible: ctaVisible } = useScrollAnimation(0.1);
   const { ref: blogRef, isVisible: blogVisible } = useScrollAnimation(0.1);
-  const { data: resources, isLoading: resourcesLoading } = useResources();
-  const articles = (resources ?? []).slice(0, 6);
+  const [articles, setArticles] = useState<{ id: string; slug: string; title: string; excerpt: string | null; tags: string[] | null; cover_image_url: string | null }[]>([]);
+  const [resourcesLoading, setResourcesLoading] = useState(true);
+
+  useEffect(() => {
+    supabase
+      .from('resources')
+      .select('id, slug, title, excerpt, tags, cover_image_url')
+      .eq('is_published', true)
+      .order('published_at', { ascending: false })
+      .limit(6)
+      .then(({ data }) => {
+        setArticles(data ?? []);
+        setResourcesLoading(false);
+      });
+  }, []);
 
   // Cycle through data provider competitors only when on the "data" tab
   useEffect(() => {
