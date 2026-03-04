@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { Helmet } from 'react-helmet-async';
 import { useParams, Link } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import { Badge } from '@/components/ui/badge';
@@ -12,16 +12,6 @@ import { useResource } from '@/hooks/useResources';
 export default function ResourceArticle() {
   const { slug } = useParams<{ slug: string }>();
   const { data: resource, isLoading, isError } = useResource(slug ?? '');
-
-  useEffect(() => {
-    if (resource) {
-      document.title = `${resource.title} | Vrelly`;
-      const metaDesc = document.querySelector('meta[name="description"]');
-      if (metaDesc && resource.meta_description) {
-        metaDesc.setAttribute('content', resource.meta_description);
-      }
-    }
-  }, [resource]);
 
   const formatDate = (dateStr: string | null) => {
     if (!dateStr) return '';
@@ -51,6 +41,14 @@ export default function ResourceArticle() {
 
   return (
     <div className="min-h-screen bg-background">
+      {resource && (
+        <Helmet>
+          <title>{resource.title} | Vrelly</title>
+          {resource.meta_description && (
+            <meta name="description" content={resource.meta_description} />
+          )}
+        </Helmet>
+      )}
       <Navbar />
 
       <main className="max-w-3xl mx-auto px-4 pt-24 pb-16">

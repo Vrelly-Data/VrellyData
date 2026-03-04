@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { Helmet } from 'react-helmet-async';
 import { Link } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -9,14 +9,6 @@ import { useResources } from '@/hooks/useResources';
 
 export default function Resources() {
   const { data: resources = [], isLoading } = useResources();
-
-  useEffect(() => {
-    document.title = 'Resources | Vrelly — B2B Sales Intelligence & Outreach Guides';
-    const metaDesc = document.querySelector('meta[name="description"]');
-    if (metaDesc) {
-      metaDesc.setAttribute('content', 'Expert guides, playbooks, and data-driven insights on B2B outreach, sales sequences, and audience building. Learn from 200,000+ real campaigns.');
-    }
-  }, []);
 
   const formatDate = (dateStr: string | null) => {
     if (!dateStr) return '';
@@ -31,6 +23,10 @@ export default function Resources() {
 
   return (
     <div className="min-h-screen bg-background">
+      <Helmet>
+        <title>Sales Resources &amp; Guides | Vrelly</title>
+        <meta name="description" content="Expert guides, playbooks, and data-driven insights on B2B outreach, sales sequences, and audience building. Learn from 200,000+ real campaigns." />
+      </Helmet>
       <Navbar />
 
       {/* Hero */}

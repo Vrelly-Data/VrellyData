@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { Helmet } from 'react-helmet-async';
 import { useNavigate, Link } from 'react-router-dom';
 import { Check, X, ArrowRight, BookOpen } from 'lucide-react';
 import { Carousel, CarouselContent, CarouselItem, CarouselPrevious, CarouselNext } from '@/components/ui/carousel';
@@ -164,6 +165,10 @@ const Comparisons = () => {
 
   return (
     <div className="min-h-screen bg-background">
+      <Helmet>
+        <title>Vrelly vs Competitors | Side-by-Side Comparison</title>
+        <meta name="description" content="See how Vrelly compares to Apollo, ZoomInfo, Seamless, and standard AI tools for B2B data enrichment and sales copy generation." />
+      </Helmet>
       <Navbar />
 
       {/* Hero */}
