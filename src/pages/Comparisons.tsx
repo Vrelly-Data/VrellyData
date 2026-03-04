@@ -142,7 +142,8 @@ const Comparisons = () => {
       .eq('is_published', true)
       .order('published_at', { ascending: false })
       .limit(6)
-      .then(({ data }) => {
+      .then(({ data, error }) => {
+        console.log('[Comparisons] Supabase resources response:', { data, error });
         setArticles(data ?? []);
         setResourcesLoading(false);
       });
@@ -267,6 +268,7 @@ const Comparisons = () => {
       </section>
 
       {/* Blog article carousel */}
+      {console.log('[Comparisons] articles.length:', articles.length, 'resourcesLoading:', resourcesLoading)}
       {!resourcesLoading && articles.length > 0 && (
         <section
           ref={blogRef}
