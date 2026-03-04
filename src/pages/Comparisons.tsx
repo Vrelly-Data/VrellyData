@@ -65,6 +65,15 @@ const copyAiRows = [
 
 const dataProviderCompetitors = ['Apollo', 'ZoomInfo', 'Seamless'];
 
+const featuredArticles = [
+  { slug: 'ai-powered-lead-scoring-replacing-gut-feel-sales-prioritization', title: 'How AI-Powered Lead Scoring Is Replacing Gut-Feel Sales Prioritization' },
+  { slug: 'using-ai-to-personalize-cold-outreach-at-scale-without-sounding-robotic', title: 'Using AI to Personalize Cold Outreach at Scale Without Sounding Robotic' },
+  { slug: 'building-ideal-customer-profile-drives-pipeline', title: 'Building an Ideal Customer Profile That Actually Drives Pipeline' },
+  { slug: 'multi-channel-prospecting-email-linkedin-phone-maximum-response-rates', title: 'Multi-Channel Prospecting: Combining Email, LinkedIn, and Phone for Maximum Response Rates' },
+  { slug: 'linkedin-lead-generation-tactics-that-wont-get-you-banned', title: "LinkedIn Lead Generation Tactics That Won't Get You Banned" },
+  { slug: 'the-art-of-the-follow-up-timing-and-frequency-that-convert', title: 'The Art of the Follow-Up: Timing and Frequency That Convert' },
+];
+
 const ComparisonTable = ({
   rows,
   competitorLabel,
@@ -131,21 +140,6 @@ const Comparisons = () => {
   const { ref: heroRef, isVisible: heroVisible } = useScrollAnimation(0.01);
   const { ref: ctaRef, isVisible: ctaVisible } = useScrollAnimation(0.1);
   const { ref: blogRef, isVisible: blogVisible } = useScrollAnimation(0.1);
-  const [articles, setArticles] = useState<{ id: string; slug: string; title: string; excerpt: string | null; tags: string[] | null; cover_image_url: string | null }[]>([]);
-  const [resourcesLoading, setResourcesLoading] = useState(true);
-
-  useEffect(() => {
-    const url = `${import.meta.env.VITE_SUPABASE_URL}/rest/v1/resources?is_published=eq.true&select=id,slug,title,excerpt,tags,cover_image_url&order=published_at.desc&limit=6`;
-    fetch(url, {
-      headers: {
-        apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-      },
-    })
-      .then((res) => res.json())
-      .then((data) => setArticles(data ?? []))
-      .catch(() => {})
-      .finally(() => setResourcesLoading(false));
-  }, []);
 
   // Cycle through data provider competitors only when on the "data" tab
   useEffect(() => {
@@ -266,67 +260,49 @@ const Comparisons = () => {
       </section>
 
       {/* Blog article carousel */}
-      {!resourcesLoading && articles.length > 0 && (
-        <section
-          ref={blogRef}
-          className={`py-20 px-4 transition-all duration-700 ${blogVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`}
-        >
-          <div className="max-w-5xl mx-auto">
-            <div className="flex items-center gap-3 mb-2">
-              <BookOpen className="w-5 h-5 text-primary" />
-              <span className="text-xs font-semibold uppercase tracking-widest text-primary">From the Vrelly Blog</span>
-            </div>
-            <h2 className="text-2xl font-bold text-foreground mb-8">Real insights from real campaign data.</h2>
-
-            <Carousel opts={{ align: 'start', loop: true }} className="w-full">
-              <CarouselContent className="-ml-4">
-                {articles.map((article) => (
-                  <CarouselItem key={article.slug} className="pl-4 basis-full md:basis-1/2 lg:basis-1/3">
-                    <div className="rounded-2xl border border-border/50 bg-card overflow-hidden shadow-sm hover:shadow-md transition-shadow h-full flex flex-col">
-                      {article.cover_image_url && (
-                        <div className="aspect-video overflow-hidden">
-                          <img
-                            src={article.cover_image_url}
-                            alt={article.title}
-                            className="w-full h-full object-cover"
-                            loading="lazy"
-                          />
-                        </div>
-                      )}
-                      <div className="p-5 flex flex-col flex-1 gap-3">
-                        {article.tags?.[0] && (
-                          <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-primary/10 text-primary w-fit">
-                            {article.tags[0]}
-                          </span>
-                        )}
-                        <p className="text-sm font-semibold text-foreground leading-snug line-clamp-2">{article.title}</p>
-                        <p className="text-xs text-muted-foreground leading-relaxed line-clamp-2 flex-1">{article.excerpt}</p>
-                        <Link
-                          to={`/resources/${article.slug}`}
-                          className="inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:text-primary/80 transition-colors mt-auto"
-                        >
-                          Read Article <ArrowRight className="w-3.5 h-3.5" />
-                        </Link>
-                      </div>
-                    </div>
-                  </CarouselItem>
-                ))}
-              </CarouselContent>
-              <CarouselPrevious className="-left-4 md:-left-6" />
-              <CarouselNext className="-right-4 md:-right-6" />
-            </Carousel>
-
-            <div className="text-center mt-10">
-              <Link
-                to="/resources"
-                className="inline-flex items-center gap-2 text-sm font-medium text-primary hover:text-primary/80 transition-colors"
-              >
-                See More <ArrowRight className="w-4 h-4" />
-              </Link>
-            </div>
+      <section
+        ref={blogRef}
+        className={`py-20 px-4 transition-all duration-700 ${blogVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`}
+      >
+        <div className="max-w-5xl mx-auto">
+          <div className="flex items-center gap-3 mb-2">
+            <BookOpen className="w-5 h-5 text-primary" />
+            <span className="text-xs font-semibold uppercase tracking-widest text-primary">From the Vrelly Blog</span>
           </div>
-        </section>
-      )}
+          <h2 className="text-2xl font-bold text-foreground mb-8">Real insights from real campaign data.</h2>
+
+          <Carousel opts={{ align: 'start', loop: true }} className="w-full">
+            <CarouselContent className="-ml-4">
+              {featuredArticles.map((article) => (
+                <CarouselItem key={article.slug} className="pl-4 basis-full md:basis-1/2 lg:basis-1/3">
+                  <div className="rounded-2xl border border-border/50 bg-card overflow-hidden shadow-sm hover:shadow-md transition-shadow h-full flex flex-col">
+                    <div className="p-5 flex flex-col flex-1 gap-3">
+                      <p className="text-sm font-semibold text-foreground leading-snug line-clamp-2">{article.title}</p>
+                      <Link
+                        to={`/resources/${article.slug}`}
+                        className="inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:text-primary/80 transition-colors mt-auto"
+                      >
+                        Read Article <ArrowRight className="w-3.5 h-3.5" />
+                      </Link>
+                    </div>
+                  </div>
+                </CarouselItem>
+              ))}
+            </CarouselContent>
+            <CarouselPrevious className="-left-4 md:-left-6" />
+            <CarouselNext className="-right-4 md:-right-6" />
+          </Carousel>
+
+          <div className="text-center mt-10">
+            <Link
+              to="/resources"
+              className="inline-flex items-center gap-2 text-sm font-medium text-primary hover:text-primary/80 transition-colors"
+            >
+              See More <ArrowRight className="w-4 h-4" />
+            </Link>
+          </div>
+        </div>
+      </section>
 
       <Footer />
     </div>
