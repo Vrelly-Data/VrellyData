@@ -201,29 +201,26 @@ export function buildFreeDataQuery(
 }
 
 /**
- * Map a free_data record to PersonEntity
+ * Map a prospects record (flat columns) to PersonEntity
  */
-export function mapFreeDataToPerson(record: { 
-  entity_external_id: string; 
-  entity_data: Record<string, any>;
-}): PersonEntity {
-  const data = record.entity_data || {};
-  
+export function mapFreeDataToPerson(record: Record<string, any>): PersonEntity {
+  const data = record || {};
+
   // Extract first value if comma-separated, but don't break numbers with thousand separators
   const extractFirst = (value: any): string | undefined => {
     if (!value) return undefined;
     const strVal = String(value).trim();
-    
+
     // Don't split if it looks like a number with thousand separators (e.g., "26,000")
     if (/^\d{1,3}(,\d{3})+(\+)?$/.test(strVal)) {
       return strVal;
     }
-    
+
     // Don't split if it looks like a range with commas (e.g., "1,001 to 5,000")
     if (/^\d[\d,]*\s+(to|-)\s+\d[\d,]*$/.test(strVal)) {
       return strVal;
     }
-    
+
     // For actual comma-separated lists, take the first value
     if (strVal.includes(',')) {
       return strVal.split(',')[0].trim();
@@ -232,64 +229,56 @@ export function mapFreeDataToPerson(record: {
   };
 
   // Parse employee count and compute standardized range for company size
-  const rawCompanySize = extractFirst(data.companySize) || extractFirst(data.employeeCount);
+  const rawCompanySize = extractFirst(data.company_size);
   const parsedCount = parseEmployeeCountFromData(rawCompanySize);
   const computedCompanySize = employeeCountToRange(parsedCount);
 
   return {
-    id: record.entity_external_id,
-    name: data.name || `${data.firstName || ''} ${data.lastName || ''}`.trim() || 'Unknown',
-    firstName: extractFirst(data.firstName),
-    lastName: extractFirst(data.lastName),
-    title: extractFirst(data.title) || extractFirst(data.jobTitle),
+    id: data.entity_external_id || data.id,
+    name: `${data.first_name || ''} ${data.last_name || ''}`.trim() || 'Unknown',
+    firstName: extractFirst(data.first_name),
+    lastName: extractFirst(data.last_name),
+    title: extractFirst(data.job_title),
     seniority: extractFirst(data.seniority),
     department: extractFirst(data.department),
-    location: extractFirst(data.location) || extractFirst(data.city),
-    company: extractFirst(data.company),
+    location: extractFirst(data.city),
+    company: extractFirst(data.company_name),
     companySize: computedCompanySize,
-    companyDescription: data.companyDescription || data.description,
-    industry: extractFirst(data.industry),
-    technologies: Array.isArray(data.technologies) 
-      ? data.technologies 
-      : (typeof data.technologies === 'string' && data.technologies 
-          ? data.technologies.split(',').map((t: string) => t.trim()).filter(Boolean) 
-          : []),
-    email: extractFirst(data.email) || extractFirst(data.businessEmail) || extractFirst(data.personalEmail),
-    personalEmail: extractFirst(data.personalEmail),
+    companyDescription: undefined,
+    industry: extractFirst(data.company_industry),
+    technologies: [],
+    email: extractFirst(data.business_email) || extractFirst(data.personal_email),
+    personalEmail: extractFirst(data.personal_email),
     phone: extractFirst(data.phone),
-    linkedin: extractFirst(data.linkedin) || extractFirst(data.linkedinUrl),
-    website: extractFirst(data.website),
-    companyLinkedin: extractFirst(data.companyLinkedin),
-    companyPhone: extractFirst(data.companyPhone),
-    age: data.age ? Number(data.age) : undefined,
-    gender: extractFirst(data.gender),
+    linkedin: extractFirst(data.linkedin_url),
+    website: extractFirst(data.company_domain),
+    companyLinkedin: undefined,
+    companyPhone: undefined,
+    age: undefined,
+    gender: undefined,
     city: extractFirst(data.city),
     state: extractFirst(data.state),
-    country: extractFirst(data.country),
-    jobTitle: extractFirst(data.jobTitle) || extractFirst(data.title),
-    personalEmails: Array.isArray(data.personalEmails) ? data.personalEmails : undefined,
-    businessEmail: extractFirst(data.businessEmail),
-    directNumber: extractFirst(data.directNumber) || extractFirst(data.phone),
-    linkedinUrl: extractFirst(data.linkedinUrl) || extractFirst(data.linkedin),
-    facebookUrl: extractFirst(data.facebookUrl),
-    twitterUrl: extractFirst(data.twitterUrl),
+    country: undefined,
+    jobTitle: extractFirst(data.job_title),
+    personalEmails: undefined,
+    businessEmail: extractFirst(data.business_email),
+    directNumber: extractFirst(data.phone),
+    linkedinUrl: extractFirst(data.linkedin_url),
+    facebookUrl: extractFirst(data.facebook_url),
+    twitterUrl: extractFirst(data.twitter_url),
     // Additional demographic fields
-    address: extractFirst(data.address),
-    zipCode: extractFirst(data.zipCode),
-    children: extractFirst(data.children),
-    homeowner: extractFirst(data.homeowner),
-    married: extractFirst(data.married),
-    netWorth: extractFirst(data.netWorth),
-    incomeRange: extractFirst(data.incomeRange) || extractFirst(data.income),
+    address: undefined,
+    zipCode: undefined,
+    children: undefined,
+    homeowner: undefined,
+    married: undefined,
+    netWorth: undefined,
+    incomeRange: undefined,
     skills: extractFirst(data.skills),
     interests: extractFirst(data.interests),
-    educationHistory: extractFirst(data.educationHistory) || extractFirst(data.education),
-    keywords: Array.isArray(data.keywords) 
-      ? data.keywords 
-      : (typeof data.keywords === 'string' && data.keywords 
-          ? data.keywords.split(',').map((k: string) => k.trim()).filter(Boolean) 
-          : []),
-    customFields: data.customFields || {},
+    educationHistory: undefined,
+    keywords: [],
+    customFields: {},
     isUnlocked: false,
   };
 }
@@ -352,13 +341,10 @@ function employeeCountToRange(count: number | undefined): string | undefined {
 }
 
 /**
- * Map a free_data record to CompanyEntity
+ * Map a prospects record (flat columns) to CompanyEntity
  */
-export function mapFreeDataToCompany(record: { 
-  entity_external_id: string; 
-  entity_data: Record<string, any>;
-}): CompanyEntity {
-  const data = record.entity_data || {};
+export function mapFreeDataToCompany(record: Record<string, any>): CompanyEntity {
+  const data = record || {};
   
   // Extract first value if comma-separated, but don't break numbers with thousand separators
   const extractFirst = (value: any): string | undefined => {
