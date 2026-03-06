@@ -216,6 +216,16 @@ export function mapFreeDataToPerson(record: Record<string, any>): PersonEntity {
       return strVal;
     }
 
+    // Don't split if it looks like a currency value (e.g., "$1,000,000 or more")
+    if (/^-?\$[\d,]+/.test(strVal)) {
+      return strVal;
+    }
+
+    // Don't split if it looks like a currency range (e.g., "$375,000 to $499,999")
+    if (/^-?\$[\d,]+.*to.*\$[\d,]+/.test(strVal)) {
+      return strVal;
+    }
+
     // Don't split if it looks like a range with commas (e.g., "1,001 to 5,000")
     if (/^\d[\d,]*\s+(to|-)\s+\d[\d,]*$/.test(strVal)) {
       return strVal;
@@ -356,6 +366,16 @@ export function mapFreeDataToCompany(record: Record<string, any>): CompanyEntity
       return strVal;
     }
     
+    // Don't split if it looks like a currency value (e.g., "$1,000,000 or more")
+    if (/^-?\$[\d,]+/.test(strVal)) {
+      return strVal;
+    }
+
+    // Don't split if it looks like a currency range (e.g., "$375,000 to $499,999")
+    if (/^-?\$[\d,]+.*to.*\$[\d,]+/.test(strVal)) {
+      return strVal;
+    }
+
     // Don't split if it looks like a range with commas (e.g., "1,001 to 5,000")
     if (/^\d[\d,]*\s+(to|-)\s+\d[\d,]*$/.test(strVal)) {
       return strVal;
