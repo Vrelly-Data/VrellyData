@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { MOCK_ATTRIBUTES, MockAttributeOptions } from '@/lib/mockData';
 import { audienceLabClient } from '@/lib/audienceLabClient';
 
-const MOCK_MODE = false;
+const MOCK_MODE = true;
 
 export function useAudienceAttributes() {
   const [attributes, setAttributes] = useState<MockAttributeOptions>(MOCK_ATTRIBUTES);
