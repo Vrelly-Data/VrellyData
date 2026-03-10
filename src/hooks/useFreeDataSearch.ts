@@ -70,7 +70,6 @@ function buildFilterParams(entityType: EntityType, filterState: FilterBuilderSta
   ].filter(Boolean);
 
   return {
-    p_entity_type: entityType,
     p_keywords: arrayOrNull(filterState.keywords),
     p_job_titles: arrayOrNull(filterState.jobTitles),
     p_seniority_levels: arrayOrNull(filterState.seniority),
@@ -138,10 +137,12 @@ export function useFreeDataSearch() {
 
       console.log('[FreeDataSearch] Calling split functions in parallel');
 
+      console.log('[DEBUG] resultsParams:', JSON.stringify(resultsParams));
+
       // Call BOTH functions in parallel with Promise.allSettled
       const [resultsResponse, countResponse] = await Promise.allSettled([
-        supabase.rpc('search_free_data_results', resultsParams as any),
-        supabase.rpc('search_free_data_count', countParams as any),
+        supabase.rpc('search_prospects_results', resultsParams as any),
+        supabase.rpc('search_prospects_count', countParams as any),
       ]);
 
       // Process results (fast path - always available)
@@ -149,19 +150,15 @@ export function useFreeDataSearch() {
       if (resultsResponse.status === 'fulfilled') {
         const { data, error } = resultsResponse.value;
         if (error) {
-          console.error('Error in search_free_data_results:', error);
+          console.error('Error in search_prospects_results:', JSON.stringify(error));
           throw error;
         }
         const results = (data || []) as any[];
         items = results.map((record: any) => {
-          const mappedRecord = {
-            entity_external_id: record.entity_external_id,
-            entity_data: (record.entity_data || {}) as Record<string, any>,
-          };
           if (entityType === 'person') {
-            return mapFreeDataToPerson(mappedRecord) as T;
+            return mapFreeDataToPerson(record) as T;
           } else {
-            return mapFreeDataToCompany(mappedRecord) as T;
+            return mapFreeDataToCompany(record) as T;
           }
         });
       } else {

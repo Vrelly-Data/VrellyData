@@ -88,9 +88,8 @@ Deno.serve(async (req) => {
 
     // Timeout protection is handled by Promise.race wrappers below
 
-    // Build params for the search_free_data_builder function
+    // Build params for the search_prospects functions
     const searchParams: Record<string, any> = {
-      p_entity_type: "person",
       p_limit: 50,
       p_offset: 0,
     };
@@ -101,19 +100,31 @@ Deno.serve(async (req) => {
     if (locations && locations.length > 0) searchParams.p_countries = locations;
 
     let prospects: any[] = [];
+    let totalCount = 0;
     let rpcError: any = null;
 
-    // Primary search with timeout protection
+    // Primary search with timeout protection — run results + count in parallel
     try {
-      const result = await Promise.race([
-        supabase.rpc("search_free_data_builder", searchParams),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("RPC_TIMEOUT")), 15000)),
-      ]) as any;
+      const countParams = { ...searchParams };
+      delete countParams.p_limit;
+      delete countParams.p_offset;
 
-      if (result.error) {
-        rpcError = result.error;
+      const [resultsResult, countResult] = await Promise.race([
+        Promise.all([
+          supabase.rpc("search_prospects_results", searchParams),
+          supabase.rpc("search_prospects_count", countParams),
+        ]),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("RPC_TIMEOUT")), 15000)),
+      ]);
+
+      if (resultsResult.error) {
+        rpcError = resultsResult.error;
       } else {
-        prospects = result.data || [];
+        prospects = resultsResult.data || [];
+      }
+
+      if (!countResult.error && countResult.data && (countResult.data as any[]).length > 0) {
+        totalCount = Number((countResult.data as any[])[0].total_count) || 0;
       }
     } catch (timeoutErr: any) {
       console.warn("Primary RPC timed out, trying fallback query:", timeoutErr.message);
@@ -124,7 +135,6 @@ Deno.serve(async (req) => {
     if (rpcError || prospects.length === 0) {
       console.log("Using fallback query with fewer filters");
       const fallbackParams: Record<string, any> = {
-        p_entity_type: "person",
         p_limit: 50,
         p_offset: 0,
       };
@@ -134,8 +144,8 @@ Deno.serve(async (req) => {
 
       try {
         const fallbackResult = await Promise.race([
-          supabase.rpc("search_free_data_builder", fallbackParams),
-          new Promise((_, reject) => setTimeout(() => reject(new Error("FALLBACK_TIMEOUT")), 12000)),
+          supabase.rpc("search_prospects_results", fallbackParams),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error("FALLBACK_TIMEOUT")), 12000)),
         ]) as any;
 
         if (!fallbackResult.error) {
@@ -211,23 +221,22 @@ audience_score is 0-100 based on how well-defined and targetable this audience i
 
     // Return prospects (blurred in UI) + AI insights
     const blurredProspects = prospects.slice(0, 50).map((p: any) => {
-      const d = p.entity_data || {};
       return {
-        entity_external_id: p.entity_external_id,
-        name: [d.firstName, d.lastName].filter(Boolean).join(" ") || "Unknown",
-        title: d.title || d.jobTitle || "—",
-        company: d.company || d.companyName || "—",
-        industry: d.industry || "—",
-        location: [d.city || d.personCity, d.country || d.personCountry].filter(Boolean).join(", ") || "—",
-        email: d.email || d.businessEmail || d.personalEmail || null,
-        linkedin: d.linkedin || d.linkedinUrl || null,
+        entity_external_id: p.entity_external_id || p.id,
+        name: [p.first_name, p.last_name].filter(Boolean).join(" ") || "Unknown",
+        title: p.job_title || "—",
+        company: p.company_name || "—",
+        industry: p.company_industry || "—",
+        location: [p.city, p.state].filter(Boolean).join(", ") || "—",
+        email: p.business_email || p.personal_email || null,
+        linkedin: p.linkedin_url || null,
       };
     });
 
     return new Response(JSON.stringify({
       insights,
       prospects: blurredProspects,
-      totalFound: prospects.length,
+      totalFound: totalCount || prospects.length,
     }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });

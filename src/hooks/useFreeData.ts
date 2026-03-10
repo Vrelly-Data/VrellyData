@@ -33,7 +33,7 @@ export function useFreeData(entityType?: 'person' | 'company') {
     setLoading(true);
     try {
       let query = supabase
-        .from('free_data')
+        .from('prospects')
         .select('*', { count: 'exact' });
 
       if (entityType) {
@@ -80,7 +80,7 @@ export function useFreeData(entityType?: 'person' | 'company') {
         const batch = recordsWithUser.slice(i * BATCH_SIZE, (i + 1) * BATCH_SIZE);
 
         const { data, error } = await supabase
-          .from('free_data')
+          .from('prospects')
           .upsert(batch, {
             onConflict: 'entity_type,entity_external_id',
             ignoreDuplicates: false
@@ -122,7 +122,7 @@ export function useFreeData(entityType?: 'person' | 'company') {
   const deleteFreeData = async (ids: string[]) => {
     try {
       const { error } = await supabase
-        .from('free_data')
+        .from('prospects')
         .delete()
         .in('id', ids);
 
