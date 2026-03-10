@@ -203,6 +203,21 @@ export function buildFreeDataQuery(
 /**
  * Map a prospects record (flat columns) to PersonEntity
  */
+function parseEducationHistory(raw: string | null): string {
+  if (!raw) return '';
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return parsed.map((e: any) => e.name || e.institution_name || '').filter(Boolean).join(', ');
+    }
+    if (typeof parsed === 'object') {
+      return parsed.name || parsed.institution_name || '';
+    }
+  } catch {
+    return raw;
+  }
+  return raw;
+}
 export function mapFreeDataToPerson(record: Record<string, any>): PersonEntity {
   const data = record || {};
 
@@ -248,7 +263,7 @@ export function mapFreeDataToPerson(record: Record<string, any>): PersonEntity {
     name: `${data.first_name || ''} ${data.last_name || ''}`.trim() || 'Unknown',
     firstName: extractFirst(data.first_name),
     lastName: extractFirst(data.last_name),
-    title: extractFirst(data.job_title),
+
     seniority: extractFirst(data.seniority),
     department: extractFirst(data.department),
     location: extractFirst(data.city),
@@ -277,8 +292,8 @@ export function mapFreeDataToPerson(record: Record<string, any>): PersonEntity {
     facebookUrl: extractFirst(data.facebook_url),
     twitterUrl: extractFirst(data.twitter_url),
     // Additional demographic fields
-    address: extractFirst(data.personal_address),
-    zipCode: extractFirst(data.personal_zip),
+    address: extractFirst(data.address),
+    zipCode: extractFirst(data.zip_code),
     children: extractFirst(data.children),
     homeowner: extractFirst(data.homeowner),
     married: extractFirst(data.married),
@@ -286,7 +301,7 @@ export function mapFreeDataToPerson(record: Record<string, any>): PersonEntity {
     incomeRange: extractFirst(data.income_range),
     skills: extractFirst(data.skills),
     interests: extractFirst(data.interests),
-    educationHistory: extractFirst(data.education_history),
+    educationHistory: parseEducationHistory(data.education_history),
     keywords: data.keywords ? [data.keywords] : [],
     customFields: {},
     isUnlocked: false,

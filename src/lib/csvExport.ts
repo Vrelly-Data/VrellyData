@@ -11,7 +11,7 @@ const PERSON_FIELD_MAP: { header: string; key: keyof PersonEntity }[] = [
   { header: 'Full Name', key: 'name' },
   
   // Professional
-  { header: 'Title', key: 'title' },
+
   { header: 'Job Title', key: 'jobTitle' },
   { header: 'Seniority', key: 'seniority' },
   { header: 'Department', key: 'department' },
