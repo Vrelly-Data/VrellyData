@@ -3,6 +3,7 @@ import { useSyncedSequences, useSyncSequences } from '@/hooks/useSyncedSequences
 import { useSyncedCampaigns } from '@/hooks/useSyncedCampaigns';
 import { useOutboundIntegrations } from '@/hooks/useOutboundIntegrations';
 import { supabase } from '@/integrations/supabase/client';
+import { useCredit } from '@/lib/credits';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -189,13 +190,22 @@ export function CopyTab() {
 
     setRevampingStepId(stepId);
     try {
+      // Deduct 1 AI generation credit per revamp
+      await useCredit('ai_generation', 1);
+
       const result = await callRevamp(step.subject, step.body_text || step.body_html, step.step_type);
       setRevampResult(result);
       setRevampOriginal({ subject: step.subject, body: step.body_text || step.body_html });
       setRevampStepInfo({ stepNumber: step.step_number, stepType: step.step_type || 'email' });
       setRevampDialogOpen(true);
     } catch (err: any) {
-      toast.error(`Revamp failed: ${err.message || 'Unknown error'}`);
+      if (err.message === 'UPGRADE_REQUIRED') {
+        toast.error('You need an active subscription to revamp copy.');
+      } else if (err.message === 'OUT_OF_CREDITS') {
+        toast.error('You have run out of AI generation credits for this period.');
+      } else {
+        toast.error(`Revamp failed: ${err.message || 'Unknown error'}`);
+      }
     } finally {
       setRevampingStepId(null);
     }
@@ -205,6 +215,21 @@ export function CopyTab() {
     if (!sequencesWithDays.length) return;
 
     const total = sequencesWithDays.length;
+
+    // Check credits for all steps upfront
+    try {
+      await useCredit('ai_generation', total);
+    } catch (err: any) {
+      if (err.message === 'UPGRADE_REQUIRED') {
+        toast.error('You need an active subscription to revamp copy.');
+      } else if (err.message === 'OUT_OF_CREDITS') {
+        toast.error(`Not enough AI credits to revamp all ${total} steps.`);
+      } else {
+        toast.error(`Credit check failed: ${err.message}`);
+      }
+      return;
+    }
+
     setRevampAllProgress({ current: 0, total });
 
     const results: { stepNumber: number; stepType: string; original: { subject: string | null; body: string | null }; revamped: RevampResult }[] = [];

@@ -40,17 +40,31 @@ serve(async (req) => {
     logStep("User authenticated", { userId: user.id, email: user.email });
 
     const stripe = new Stripe(stripeKey, { apiVersion: "2023-10-16" });
-    const customers = await stripe.customers.list({ email: user.email, limit: 1 });
-    if (customers.data.length === 0) {
-      throw new Error("No Stripe customer found for this user");
+
+    // Try user_credits table first, fall back to profiles
+    const { data: credits } = await supabaseClient
+      .from('user_credits')
+      .select('stripe_customer_id')
+      .eq('user_id', user.id)
+      .single();
+
+    let customerId = credits?.stripe_customer_id;
+
+    if (!customerId) {
+      // Fallback: lookup by email in Stripe
+      const customers = await stripe.customers.list({ email: user.email, limit: 1 });
+      if (customers.data.length === 0) {
+        throw new Error("No Stripe customer found for this user");
+      }
+      customerId = customers.data[0].id;
     }
-    const customerId = customers.data[0].id;
+
     logStep("Found Stripe customer", { customerId });
 
-    const origin = req.headers.get("origin") || "http://localhost:8080";
+    const appUrl = Deno.env.get('APP_URL') || req.headers.get("origin") || "http://localhost:8080";
     const portalSession = await stripe.billingPortal.sessions.create({
       customer: customerId,
-      return_url: `${origin}/settings`,
+      return_url: `${appUrl}/billing`,
     });
     logStep("Customer portal session created", { sessionId: portalSession.id, url: portalSession.url });
 

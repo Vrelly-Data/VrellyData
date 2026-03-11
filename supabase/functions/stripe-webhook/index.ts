@@ -1,22 +1,76 @@
 import Stripe from 'https://esm.sh/stripe@14.21.0';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.3';
 
-// Map Stripe Product IDs to tiers and credits
-const TIER_CONFIG: Record<string, { tier: string; credits: number }> = {
-  'prod_TMHGcnFjx5n8DZ': { tier: 'starter', credits: 10000 },
-  'prod_TMHHjUdtt2Xbdl': { tier: 'professional', credits: 25000 },
-  'prod_TMHItV1NP0yBYU': { tier: 'enterprise', credits: 75000 },
+// Credit allocations per plan
+const PLAN_CREDITS: Record<string, { export_credits: number; ai_credits: number }> = {
+  starter:      { export_credits: 10000,  ai_credits: 50   },
+  professional: { export_credits: 25000,  ai_credits: 250  },
+  enterprise:   { export_credits: 999999, ai_credits: 1250 }, // 999999 = internal "unlimited" flag
 };
 
-// Backward compatibility with tier names
-const TIER_CREDITS: Record<string, number> = {
-  starter: 10000,
-  professional: 25000,
-  enterprise: 75000,
-  // Legacy names
-  pro: 25000,
-  premium: 75000,
+// Map Stripe Product IDs to tiers (backward compatibility)
+const TIER_CONFIG: Record<string, string> = {
+  'prod_TMHGcnFjx5n8DZ': 'starter',
+  'prod_TMHHjUdtt2Xbdl': 'professional',
+  'prod_TMHItV1NP0yBYU': 'enterprise',
 };
+
+// Map Stripe price IDs to plan names
+function getPlanFromPriceId(priceId: string): string | null {
+  const map: Record<string, string> = {
+    [Deno.env.get('STRIPE_PRICE_STARTER_MONTHLY') || '']:      'starter',
+    [Deno.env.get('STRIPE_PRICE_STARTER_ANNUAL') || '']:       'starter',
+    [Deno.env.get('STRIPE_PRICE_PROFESSIONAL_MONTHLY') || '']: 'professional',
+    [Deno.env.get('STRIPE_PRICE_PROFESSIONAL_ANNUAL') || '']:  'professional',
+    [Deno.env.get('STRIPE_PRICE_ENTERPRISE_MONTHLY') || '']:   'enterprise',
+    [Deno.env.get('STRIPE_PRICE_ENTERPRISE_ANNUAL') || '']:    'enterprise',
+  };
+  return map[priceId] ?? null;
+}
+
+function getBillingInterval(priceId: string): string {
+  const annualIds = [
+    Deno.env.get('STRIPE_PRICE_STARTER_ANNUAL'),
+    Deno.env.get('STRIPE_PRICE_PROFESSIONAL_ANNUAL'),
+    Deno.env.get('STRIPE_PRICE_ENTERPRISE_ANNUAL'),
+  ];
+  return annualIds.includes(priceId) ? 'annual' : 'monthly';
+}
+
+function resolvePlanFromProduct(productId: string): string {
+  return TIER_CONFIG[productId] || 'starter';
+}
+
+async function provisionCredits(
+  supabase: any,
+  userId: string,
+  plan: string,
+  interval: string,
+  subscriptionId: string,
+  customerId: string,
+  periodEnd: Date,
+) {
+  const credits = PLAN_CREDITS[plan] || PLAN_CREDITS.starter;
+  const now = new Date();
+
+  await supabase.from('user_credits').upsert({
+    user_id: userId,
+    plan,
+    billing_interval: interval,
+    stripe_subscription_id: subscriptionId,
+    stripe_customer_id: customerId,
+    subscription_status: 'active',
+    current_period_end: periodEnd.toISOString(),
+    export_credits_total: credits.export_credits,
+    export_credits_used: 0,
+    export_credits_reset_at: now.toISOString(),
+    ai_credits_total: credits.ai_credits,
+    ai_credits_used: 0,
+    ai_credits_reset_at: now.toISOString(),
+    enterprise_daily_exports: 0,
+    enterprise_daily_reset_at: now.toISOString(),
+  }, { onConflict: 'user_id' });
+}
 
 const logStep = (step: string, details?: any) => {
   const detailsStr = details ? ` - ${JSON.stringify(details)}` : '';
@@ -35,7 +89,7 @@ Deno.serve(async (req) => {
     }
 
     if (!webhookSecret) {
-      throw new Error('STRIPE_WEBHOOK_SECRET is not configured - webhook signature verification required');
+      throw new Error('STRIPE_WEBHOOK_SECRET is not configured');
     }
 
     const stripe = new Stripe(stripeKey, { apiVersion: '2023-10-16' });
@@ -49,115 +103,182 @@ Deno.serve(async (req) => {
     const body = await req.text();
     const event = await stripe.webhooks.constructEventAsync(body, signature, webhookSecret);
 
-    logStep(`Processing webhook event: ${event.type}`);
+    logStep(`Processing event: ${event.type}`);
 
     switch (event.type) {
+      case 'checkout.session.completed': {
+        const session = event.data.object as Stripe.Checkout.Session;
+        const userId = session.metadata?.supabase_user_id;
+        const metaPlan = session.metadata?.plan;
+        const metaInterval = session.metadata?.interval;
+
+        if (userId && session.subscription) {
+          const subscription = await stripe.subscriptions.retrieve(session.subscription as string);
+          const priceId = subscription.items.data[0].price.id;
+          const productId = subscription.items.data[0].price.product as string;
+
+          const plan = metaPlan || getPlanFromPriceId(priceId) || resolvePlanFromProduct(productId);
+          const interval = metaInterval || getBillingInterval(priceId);
+          const periodEnd = new Date(subscription.current_period_end * 1000);
+          const customerId = session.customer as string;
+
+          logStep('Provisioning credits for checkout', { userId, plan, interval });
+          await provisionCredits(supabase, userId, plan, interval, subscription.id, customerId, periodEnd);
+
+          // Also update profiles table for backward compatibility
+          await supabase.from('profiles').update({
+            stripe_customer_id: customerId,
+            stripe_subscription_id: subscription.id,
+            subscription_status: subscription.status,
+            subscription_tier: plan,
+            monthly_credit_limit: PLAN_CREDITS[plan]?.export_credits || 10000,
+            credits: PLAN_CREDITS[plan]?.export_credits || 10000,
+            credits_used_this_month: 0,
+            billing_period_start: new Date(subscription.current_period_start * 1000).toISOString(),
+            billing_period_end: periodEnd.toISOString(),
+          }).eq('id', userId);
+        }
+        break;
+      }
+
       case 'customer.subscription.created':
       case 'customer.subscription.updated': {
         const subscription = event.data.object as Stripe.Subscription;
         const customerId = subscription.customer as string;
-        
-        logStep('Processing subscription event', { 
-          subscriptionId: subscription.id, 
-          customerId,
-          status: subscription.status 
-        });
-
-        // Get product ID from subscription items
+        const priceId = subscription.items.data[0]?.price?.id;
         const productId = subscription.items.data[0]?.price?.product as string;
-        logStep('Subscription product', { productId });
 
-        // Look up tier from product ID or fallback to metadata
-        let tier = 'starter';
-        let credits = 10000;
-        
-        if (productId && TIER_CONFIG[productId]) {
-          tier = TIER_CONFIG[productId].tier;
-          credits = TIER_CONFIG[productId].credits;
-          logStep('Tier from product ID', { productId, tier, credits });
-        } else if (subscription.metadata.tier) {
-          tier = subscription.metadata.tier;
-          credits = TIER_CREDITS[tier] || 10000;
-          logStep('Tier from metadata', { tier, credits });
-        }
+        const plan = getPlanFromPriceId(priceId) || resolvePlanFromProduct(productId);
+        const interval = getBillingInterval(priceId);
+        const periodEnd = new Date(subscription.current_period_end * 1000);
 
-        // Find user by Stripe customer ID
-        const { data: profile, error: profileError } = await supabase
-          .from('profiles')
-          .select('id, billing_period_end')
+        logStep('Subscription event', { customerId, plan, status: subscription.status });
+
+        // Find user by stripe_customer_id in user_credits
+        const { data: creditRow } = await supabase
+          .from('user_credits')
+          .select('user_id')
           .eq('stripe_customer_id', customerId)
           .single();
 
-        if (profileError || !profile) {
-          // Try finding by user ID in metadata
-          const userId = subscription.metadata.supabase_user_id;
-          if (!userId) {
-            logStep('Could not find user', { customerId, error: profileError?.message });
-            break;
+        // Fallback: find in profiles
+        let userId = creditRow?.user_id || subscription.metadata.supabase_user_id;
+        if (!userId) {
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('id')
+            .eq('stripe_customer_id', customerId)
+            .single();
+          userId = profile?.id;
+        }
+
+        if (userId) {
+          if (subscription.status === 'active') {
+            // Check if this is a new billing period (renewal)
+            const { data: existingCredits } = await supabase
+              .from('user_credits')
+              .select('current_period_end')
+              .eq('user_id', userId)
+              .single();
+
+            const isNewPeriod = !existingCredits?.current_period_end ||
+              new Date(existingCredits.current_period_end) < new Date(subscription.current_period_start * 1000);
+
+            if (event.type === 'customer.subscription.created' || isNewPeriod) {
+              await provisionCredits(supabase, userId, plan, interval, subscription.id, customerId, periodEnd);
+            } else {
+              // Just update status and period
+              await supabase.from('user_credits').update({
+                subscription_status: subscription.status,
+                current_period_end: periodEnd.toISOString(),
+              }).eq('user_id', userId);
+            }
+          } else {
+            await supabase.from('user_credits').update({
+              subscription_status: subscription.status,
+            }).eq('user_id', userId);
           }
-          
-          const updates: Record<string, any> = {
+
+          // Backward compat: update profiles
+          const profileUpdates: Record<string, any> = {
             stripe_customer_id: customerId,
             stripe_subscription_id: subscription.id,
             subscription_status: subscription.status,
-            subscription_tier: tier,
-            monthly_credit_limit: credits,
+            subscription_tier: plan,
+            monthly_credit_limit: PLAN_CREDITS[plan]?.export_credits || 10000,
             billing_period_start: new Date(subscription.current_period_start * 1000).toISOString(),
-            billing_period_end: new Date(subscription.current_period_end * 1000).toISOString(),
+            billing_period_end: periodEnd.toISOString(),
+            cancel_at_period_end: subscription.cancel_at_period_end,
+            cancel_at: subscription.cancel_at ? new Date(subscription.cancel_at * 1000).toISOString() : null,
           };
 
-          // Reset credits for new subscription
           if (event.type === 'customer.subscription.created') {
-            updates.credits_used_this_month = 0;
-            updates.credits = credits;
+            profileUpdates.credits_used_this_month = 0;
+            profileUpdates.credits = PLAN_CREDITS[plan]?.export_credits || 10000;
           }
 
-          const { error } = await supabase
-            .from('profiles')
-            .update(updates)
-            .eq('id', userId);
-
-          if (error) {
-            logStep('Error updating profile by user ID', { userId, error: error.message });
-          } else {
-            logStep('Updated subscription for user', { userId, tier, credits });
-          }
-          break;
-        }
-
-        const userId = profile.id;
-        const updates: Record<string, any> = {
-          stripe_subscription_id: subscription.id,
-          subscription_status: subscription.status,
-          subscription_tier: tier,
-          monthly_credit_limit: credits,
-          billing_period_start: new Date(subscription.current_period_start * 1000).toISOString(),
-          billing_period_end: new Date(subscription.current_period_end * 1000).toISOString(),
-          cancel_at_period_end: subscription.cancel_at_period_end,
-          cancel_at: subscription.cancel_at ? new Date(subscription.cancel_at * 1000).toISOString() : null,
-        };
-
-        // Reset credits used if it's a new billing period
-        if (event.type === 'customer.subscription.updated') {
-          if (profile.billing_period_end && new Date(profile.billing_period_end) < new Date(subscription.current_period_start * 1000)) {
-            updates.credits_used_this_month = 0;
-            logStep('Resetting credits for new billing period');
-          }
+          await supabase.from('profiles').update(profileUpdates).eq('id', userId);
+          logStep('Updated subscription', { userId, plan, status: subscription.status });
         } else {
-          // New subscription created — grant credits
-          updates.credits_used_this_month = 0;
-          updates.credits = credits;
+          logStep('Could not find user for customer', { customerId });
         }
+        break;
+      }
 
-        const { error } = await supabase
-          .from('profiles')
-          .update(updates)
-          .eq('id', userId);
+      case 'invoice.paid': {
+        const invoice = event.data.object as Stripe.Invoice;
+        if (!invoice.subscription) break;
 
-        if (error) {
-          logStep('Error updating profile', { userId, error: error.message });
-        } else {
-          logStep('Updated subscription', { userId, tier, credits, status: subscription.status });
+        const subscription = await stripe.subscriptions.retrieve(invoice.subscription as string);
+        const priceId = subscription.items.data[0].price.id;
+        const productId = subscription.items.data[0].price.product as string;
+        const plan = getPlanFromPriceId(priceId) || resolvePlanFromProduct(productId);
+        const interval = getBillingInterval(priceId);
+        const customerId = invoice.customer as string;
+
+        // Find user by stripe_customer_id
+        const { data: credits } = await supabase
+          .from('user_credits')
+          .select('user_id')
+          .eq('stripe_customer_id', customerId)
+          .single();
+
+        if (credits?.user_id) {
+          const periodEnd = new Date(subscription.current_period_end * 1000);
+          logStep('Invoice paid — resetting credits', { userId: credits.user_id, plan });
+          await provisionCredits(supabase, credits.user_id, plan, interval, subscription.id, customerId, periodEnd);
+
+          // Backward compat
+          await supabase.from('profiles').update({
+            subscription_status: 'active',
+            credits_used_this_month: 0,
+            credits: PLAN_CREDITS[plan]?.export_credits || 10000,
+          }).eq('id', credits.user_id);
+        }
+        break;
+      }
+
+      case 'invoice.payment_failed': {
+        const invoice = event.data.object as Stripe.Invoice;
+        if (!invoice.subscription) break;
+
+        const customerId = invoice.customer as string;
+        const { data: credits } = await supabase
+          .from('user_credits')
+          .select('user_id')
+          .eq('stripe_customer_id', customerId)
+          .single();
+
+        if (credits?.user_id) {
+          await supabase.from('user_credits').update({
+            subscription_status: 'past_due',
+          }).eq('user_id', credits.user_id);
+
+          await supabase.from('profiles').update({
+            subscription_status: 'past_due',
+          }).eq('id', credits.user_id);
+
+          logStep('Payment failed', { userId: credits.user_id });
         }
         break;
       }
@@ -168,86 +289,32 @@ Deno.serve(async (req) => {
 
         logStep('Processing subscription deletion', { subscriptionId: subscription.id, customerId });
 
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('id')
+        const { data: credits } = await supabase
+          .from('user_credits')
+          .select('user_id')
           .eq('stripe_customer_id', customerId)
           .single();
 
-        const userId = profile?.id || subscription.metadata.supabase_user_id;
+        const userId = credits?.user_id || subscription.metadata.supabase_user_id;
 
-        if (!userId) {
-          logStep('No user ID found for subscription deletion');
-          break;
-        }
+        if (userId) {
+          await supabase.from('user_credits').update({
+            plan: 'none',
+            subscription_status: 'cancelled',
+            export_credits_total: 0,
+            ai_credits_total: 0,
+          }).eq('user_id', userId);
 
-        const { error } = await supabase
-          .from('profiles')
-          .update({
+          // Backward compat
+          await supabase.from('profiles').update({
             subscription_status: 'canceled',
             subscription_tier: 'free',
             monthly_credit_limit: 0,
             cancel_at_period_end: false,
             cancel_at: null,
-          })
-          .eq('id', userId);
+          }).eq('id', userId);
 
-        if (error) {
-          logStep('Error updating profile on cancellation', { userId, error: error.message });
-        } else {
-          logStep('Canceled subscription', { userId });
-        }
-        break;
-      }
-
-      case 'invoice.payment_succeeded': {
-        const invoice = event.data.object as Stripe.Invoice;
-        if (!invoice.subscription) break;
-        
-        const subscription = await stripe.subscriptions.retrieve(invoice.subscription as string);
-        const customerId = subscription.customer as string;
-
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('id')
-          .eq('stripe_customer_id', customerId)
-          .single();
-
-        const userId = profile?.id || subscription.metadata.supabase_user_id;
-
-        if (userId) {
-          await supabase
-            .from('profiles')
-            .update({ subscription_status: 'active' })
-            .eq('id', userId);
-
-          logStep('Payment succeeded', { userId });
-        }
-        break;
-      }
-
-      case 'invoice.payment_failed': {
-        const invoice = event.data.object as Stripe.Invoice;
-        if (!invoice.subscription) break;
-        
-        const subscription = await stripe.subscriptions.retrieve(invoice.subscription as string);
-        const customerId = subscription.customer as string;
-
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('id')
-          .eq('stripe_customer_id', customerId)
-          .single();
-
-        const userId = profile?.id || subscription.metadata.supabase_user_id;
-
-        if (userId) {
-          await supabase
-            .from('profiles')
-            .update({ subscription_status: 'past_due' })
-            .eq('id', userId);
-
-          logStep('Payment failed', { userId });
+          logStep('Cancelled subscription', { userId });
         }
         break;
       }
@@ -260,15 +327,11 @@ Deno.serve(async (req) => {
       headers: { 'Content-Type': 'application/json' },
       status: 200,
     });
-
   } catch (error) {
     logStep('Webhook error', { error: error instanceof Error ? error.message : 'Unknown error' });
     return new Response(
       JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }),
-      {
-        status: 400,
-        headers: { 'Content-Type': 'application/json' },
-      }
+      { status: 400, headers: { 'Content-Type': 'application/json' } }
     );
   }
 });

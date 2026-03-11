@@ -1,12 +1,25 @@
+import { useEffect } from 'react';
 import { SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import { AppSidebar } from '@/components/AppSidebar';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import AudienceBuilder from './AudienceBuilder';
 import vrellyLogo from '@/assets/vrelly-logo.png';
 import { UserMenu } from '@/components/UserMenu';
+import { toast } from 'sonner';
 
 const Index = () => {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const queryClient = useQueryClient();
+
+  useEffect(() => {
+    if (searchParams.get('checkout') === 'success') {
+      queryClient.invalidateQueries({ queryKey: ['user-credits'] });
+      toast.success('Subscription activated! Your credits are ready.');
+      setSearchParams({});
+    }
+  }, []);
 
   return (
     <SidebarProvider>

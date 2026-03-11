@@ -23,8 +23,9 @@ import { useSubscription } from "@/hooks/useSubscription";
 import { ExternalProjectsSettings } from "@/components/settings/ExternalProjectsSettings";
 import { UserMenu } from "@/components/UserMenu";
 import { SUBSCRIPTION_TIERS, SubscriptionTier } from "@/config/subscriptionTiers";
+import { useCreditDisplay } from "@/hooks/useCredits";
 
-import { PRICE_IDS } from "@/config/subscriptionTiers";
+import { PLANS } from "@/data/plans";
 
 export default function Settings() {
   const location = useLocation();
@@ -35,7 +36,8 @@ export default function Settings() {
   const [loading, setLoading] = useState(false);
   const [showAllCredits, setShowAllCredits] = useState(false);
   const { subscriptionStatus, checkSubscription, createCheckoutSession, openCustomerPortal } = useSubscription();
-  
+  const creditDisplay = useCreditDisplay();
+
   // Check for success/cancel params from Stripe
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -48,7 +50,6 @@ export default function Settings() {
         checkSubscription();
         fetchProfile();
       }, 2000);
-      // Remove query params
       navigate('/settings?tab=billing', { replace: true });
     } else if (params.get('canceled')) {
       toast({
@@ -59,13 +60,13 @@ export default function Settings() {
       navigate('/settings?tab=billing', { replace: true });
     }
   }, [location.search]);
-  
+
   // Determine default tab based on route
   const defaultTab = location.pathname === '/billing' ? 'billing' : 'profile';
-  
+
   // Profile form state
   const [name, setName] = useState(profile?.name || "");
-  
+
   // Password form state
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -81,31 +82,25 @@ export default function Settings() {
         .eq("user_id", user?.id)
         .order("created_at", { ascending: false })
         .limit(20);
-      
+
       if (error) throw error;
       return data;
     },
     enabled: !!user,
   });
 
-  // Compute total deductions for accurate balance
-  const totalDeductions = creditHistory?.reduce((acc, t) => acc + (t.credits_deducted || 0), 0) || 0;
-  const tier = (profile?.subscription_tier || 'starter') as SubscriptionTier;
-  const tierConfig = SUBSCRIPTION_TIERS[tier] || SUBSCRIPTION_TIERS.starter;
-  const computedBalance = tierConfig.credits - totalDeductions;
-
   const handleUpdateProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    
+
     try {
       const { error } = await supabase
         .from("profiles")
         .update({ name })
         .eq("id", user?.id);
-      
+
       if (error) throw error;
-      
+
       await fetchProfile();
       toast({
         title: "Profile updated",
@@ -124,7 +119,7 @@ export default function Settings() {
 
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (newPassword !== confirmPassword) {
       toast({
         title: "Error",
@@ -133,7 +128,7 @@ export default function Settings() {
       });
       return;
     }
-    
+
     if (newPassword.length < 6) {
       toast({
         title: "Error",
@@ -142,20 +137,20 @@ export default function Settings() {
       });
       return;
     }
-    
+
     setLoading(true);
-    
+
     try {
       const { error } = await supabase.auth.updateUser({
         password: newPassword,
       });
-      
+
       if (error) throw error;
-      
+
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
-      
+
       toast({
         title: "Password changed",
         description: "Your password has been changed successfully.",
@@ -171,9 +166,12 @@ export default function Settings() {
     }
   };
 
-  const handleUpgrade = (tier: keyof typeof PRICE_IDS) => {
-    createCheckoutSession(PRICE_IDS[tier]);
+  const handleUpgrade = (planId: string, interval: 'monthly' | 'annual' = 'monthly') => {
+    createCheckoutSession(planId, interval);
   };
+
+  const currentPlan = creditDisplay.plan || profile?.subscription_tier || 'none';
+  const isActive = creditDisplay.status === 'active' || profile?.subscription_status === 'active';
 
   return (
     <SidebarProvider>
@@ -182,10 +180,10 @@ export default function Settings() {
         <div className="flex-1 flex flex-col">
           <header className="h-12 flex items-center gap-3 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 px-4">
             <SidebarTrigger />
-            <img 
-              src={vrellyLogo} 
-              alt="Vrelly Data" 
-              className="h-[4.5rem] cursor-pointer" 
+            <img
+              src={vrellyLogo}
+              alt="Vrelly Data"
+              className="h-[4.5rem] cursor-pointer"
               onClick={() => navigate('/')}
             />
             <h1 className="text-lg font-semibold ml-4">Settings</h1>
@@ -225,7 +223,7 @@ export default function Settings() {
                     placeholder="Enter your name"
                   />
                 </div>
-                
+
                 <div className="space-y-2">
                   <Label htmlFor="email">Email</Label>
                   <Input
@@ -239,12 +237,12 @@ export default function Settings() {
                     Email cannot be changed at this time.
                   </p>
                 </div>
-                
+
                 <div className="space-y-2">
                   <Label>Current Plan</Label>
-                  <div className="text-sm font-medium capitalize">{profile?.plan || "free"}</div>
+                  <div className="text-sm font-medium capitalize">{currentPlan === 'none' ? 'Free' : currentPlan}</div>
                 </div>
-                
+
                 <Button type="submit" disabled={loading}>
                   {loading ? "Saving..." : "Save Changes"}
                 </Button>
@@ -294,7 +292,7 @@ export default function Settings() {
                     placeholder="Enter new password"
                   />
                 </div>
-                
+
                 <div className="space-y-2">
                   <Label htmlFor="confirm-password">Confirm New Password</Label>
                   <Input
@@ -305,7 +303,7 @@ export default function Settings() {
                     placeholder="Confirm new password"
                   />
                 </div>
-                
+
                 <Button type="submit" disabled={loading}>
                   {loading ? "Updating..." : "Change Password"}
                 </Button>
@@ -321,7 +319,7 @@ export default function Settings() {
               <CardHeader>
                 <CardTitle>Subscription & Usage</CardTitle>
                 <CardDescription>
-                  Your current plan and monthly credit usage
+                  Your current plan and credit usage
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
@@ -329,48 +327,69 @@ export default function Settings() {
                   <div>
                     <div className="text-sm text-muted-foreground">Current Plan</div>
                     <div className="text-2xl font-bold capitalize flex items-center gap-2">
-                      {profile?.subscription_tier || 'Free'}
-                      <Badge variant={profile?.subscription_status === 'active' ? 'default' : 'secondary'}>
-                        {profile?.subscription_status || 'inactive'}
+                      {currentPlan === 'none' ? 'Free' : currentPlan}
+                      <Badge variant={isActive ? 'default' : 'secondary'}>
+                        {creditDisplay.status || profile?.subscription_status || 'inactive'}
                       </Badge>
+                      {creditDisplay.billingInterval === 'annual' && (
+                        <Badge variant="outline" className="text-xs">Annual</Badge>
+                      )}
                     </div>
                   </div>
-                  {profile?.subscription_tier !== 'free' && profile?.billing_period_end && (
+                  {creditDisplay.periodEnd && (
                     <div className="text-right">
                       <div className="text-sm text-muted-foreground">Next billing date</div>
                       <div className="text-sm font-medium">
-                        {format(new Date(profile.billing_period_end), 'MMM dd, yyyy')}
+                        {format(new Date(creditDisplay.periodEnd), 'MMM dd, yyyy')}
                       </div>
                     </div>
                   )}
                 </div>
 
-                {/* Credit Balance Display */}
-                <div className="border rounded-lg p-4 space-y-3">
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm font-medium">Credit Balance</span>
-                    <span className="text-2xl font-bold text-primary">
-                      {computedBalance.toLocaleString()}
-                    </span>
+                {/* Export Credits */}
+                {creditDisplay.exports && (
+                  <div className="border rounded-lg p-4 space-y-3">
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm font-medium">Export Credits</span>
+                      <span className="text-lg font-bold text-primary">
+                        {creditDisplay.exports.display === 'Unlimited'
+                          ? 'Unlimited'
+                          : `${(creditDisplay.exports.total - creditDisplay.exports.used).toLocaleString()} remaining`
+                        }
+                      </span>
+                    </div>
+                    <Progress
+                      value={creditDisplay.exports.total > 0
+                        ? ((creditDisplay.exports.total - creditDisplay.exports.used) / creditDisplay.exports.total) * 100
+                        : 0
+                      }
+                      className="h-2"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      {creditDisplay.exports.used.toLocaleString()} of {creditDisplay.exports.total.toLocaleString()} used {creditDisplay.exports.label}
+                    </p>
                   </div>
-                  {(() => {
-                    const percentRemaining = tierConfig.credits > 0 
-                      ? (computedBalance / tierConfig.credits) * 100 
-                      : 0;
-                    return (
-                      <>
-                        <Progress value={Math.max(0, percentRemaining)} className="h-2" />
-                        <p className="text-xs text-muted-foreground">
-                          {computedBalance.toLocaleString()} of {tierConfig.credits.toLocaleString()} credits remaining ({tierConfig.label} plan)
-                        </p>
-                      </>
-                    );
-                  })()}
-                </div>
+                )}
 
-                {profile?.billing_period_start && profile?.billing_period_end && (
-                  <div className="text-sm text-muted-foreground">
-                    Current billing period: {format(new Date(profile.billing_period_start), 'MMM dd')} - {format(new Date(profile.billing_period_end), 'MMM dd, yyyy')}
+                {/* AI Generation Credits */}
+                {creditDisplay.aiGens && (
+                  <div className="border rounded-lg p-4 space-y-3">
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm font-medium">AI Generation Credits</span>
+                      <span className="text-lg font-bold text-primary">
+                        {(creditDisplay.aiGens.total - creditDisplay.aiGens.used).toLocaleString()} remaining
+                      </span>
+                    </div>
+                    <Progress
+                      value={creditDisplay.aiGens.total > 0
+                        ? ((creditDisplay.aiGens.total - creditDisplay.aiGens.used) / creditDisplay.aiGens.total) * 100
+                        : 0
+                      }
+                      className="h-2"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      {creditDisplay.aiGens.used.toLocaleString()} of {creditDisplay.aiGens.total.toLocaleString()} used {creditDisplay.aiGens.label}
+                    </p>
                   </div>
                 )}
               </CardContent>
@@ -386,126 +405,44 @@ export default function Settings() {
               </CardHeader>
               <CardContent>
                 <div className="grid md:grid-cols-3 gap-6">
-                  {/* Starter Plan */}
-                  <div className="border rounded-lg p-6 flex flex-col h-full">
-                    <div className="space-y-4 flex-1">
-                      <div>
-                        <h3 className="text-xl font-bold">Starter</h3>
-                        <div className="mt-2">
-                          <span className="text-3xl font-bold">${SUBSCRIPTION_TIERS.starter.price}</span>
-                          <span className="text-muted-foreground">/month</span>
+                  {PLANS.map((plan) => {
+                    const isCurrent = currentPlan === plan.id;
+                    return (
+                      <div key={plan.id} className={`border rounded-lg p-6 flex flex-col h-full ${plan.popular ? 'border-2 border-primary relative' : ''}`}>
+                        {plan.popular && (
+                          <Badge className="absolute -top-3 left-1/2 -translate-x-1/2">Popular</Badge>
+                        )}
+                        <div className="space-y-4 flex-1">
+                          <div>
+                            <h3 className="text-xl font-bold">{plan.name}</h3>
+                            <div className="mt-2">
+                              <span className="text-3xl font-bold">${plan.monthlyPrice}</span>
+                              <span className="text-muted-foreground">/month</span>
+                            </div>
+                          </div>
+                          <ul className="space-y-2 text-sm">
+                            {plan.features.map((feature, idx) => (
+                              <li key={idx} className="flex items-center gap-2">
+                                <Check className="h-4 w-4 text-primary" />
+                                {feature}
+                              </li>
+                            ))}
+                          </ul>
                         </div>
+                        <Button
+                          className="w-full mt-4"
+                          variant={isCurrent ? 'outline' : 'default'}
+                          disabled={isCurrent}
+                          onClick={() => handleUpgrade(plan.id)}
+                        >
+                          {isCurrent ? 'Current Plan' : 'Upgrade'}
+                        </Button>
                       </div>
-                      <ul className="space-y-2 text-sm">
-                        <li className="flex items-center gap-2">
-                          <Check className="h-4 w-4 text-primary" />
-                          {SUBSCRIPTION_TIERS.starter.credits.toLocaleString()} credits
-                        </li>
-                        <li className="flex items-center gap-2">
-                          <Check className="h-4 w-4 text-primary" />
-                          Email support
-                        </li>
-                        <li className="flex items-center gap-2">
-                          <Check className="h-4 w-4 text-primary" />
-                          Standard features
-                        </li>
-                      </ul>
-                    </div>
-                    <Button 
-                      className="w-full mt-4" 
-                      variant={profile?.subscription_tier === 'starter' ? 'outline' : 'default'}
-                      disabled={profile?.subscription_tier === 'starter'}
-                      onClick={() => handleUpgrade('starter')}
-                    >
-                      {profile?.subscription_tier === 'starter' ? 'Current Plan' : 'Upgrade'}
-                    </Button>
-                  </div>
-
-                  {/* Professional Plan */}
-                  <div className="border-2 border-primary rounded-lg p-6 flex flex-col h-full relative">
-                    <Badge className="absolute -top-3 left-1/2 -translate-x-1/2">Popular</Badge>
-                    <div className="space-y-4 flex-1">
-                      <div>
-                        <h3 className="text-xl font-bold">Professional</h3>
-                        <div className="mt-2">
-                          <span className="text-3xl font-bold">${SUBSCRIPTION_TIERS.professional.price}</span>
-                          <span className="text-muted-foreground">/month</span>
-                        </div>
-                      </div>
-                      <ul className="space-y-2 text-sm">
-                        <li className="flex items-center gap-2">
-                          <Check className="h-4 w-4 text-primary" />
-                          {SUBSCRIPTION_TIERS.professional.credits.toLocaleString()} credits
-                        </li>
-                        <li className="flex items-center gap-2">
-                          <Check className="h-4 w-4 text-primary" />
-                          Priority support
-                        </li>
-                        <li className="flex items-center gap-2">
-                          <Check className="h-4 w-4 text-primary" />
-                          Advanced features
-                        </li>
-                        <li className="flex items-center gap-2">
-                          <Check className="h-4 w-4 text-primary" />
-                          API access
-                        </li>
-                      </ul>
-                    </div>
-                    <Button 
-                      className="w-full mt-4" 
-                      variant={profile?.subscription_tier === 'professional' ? 'outline' : 'default'}
-                      disabled={profile?.subscription_tier === 'professional'}
-                      onClick={() => handleUpgrade('professional')}
-                    >
-                      {profile?.subscription_tier === 'professional' ? 'Current Plan' : 'Upgrade'}
-                    </Button>
-                  </div>
-
-                  {/* Enterprise Plan */}
-                  <div className="border rounded-lg p-6 flex flex-col h-full">
-                    <div className="space-y-4 flex-1">
-                      <div>
-                        <h3 className="text-xl font-bold">Enterprise</h3>
-                        <div className="mt-2">
-                          <span className="text-3xl font-bold">${SUBSCRIPTION_TIERS.enterprise.price}</span>
-                          <span className="text-muted-foreground">/month</span>
-                        </div>
-                      </div>
-                      <ul className="space-y-2 text-sm">
-                        <li className="flex items-center gap-2">
-                          <Check className="h-4 w-4 text-primary" />
-                          {SUBSCRIPTION_TIERS.enterprise.credits.toLocaleString()} credits
-                        </li>
-                        <li className="flex items-center gap-2">
-                          <Check className="h-4 w-4 text-primary" />
-                          24/7 priority support
-                        </li>
-                        <li className="flex items-center gap-2">
-                          <Check className="h-4 w-4 text-primary" />
-                          All features
-                        </li>
-                        <li className="flex items-center gap-2">
-                          <Check className="h-4 w-4 text-primary" />
-                          Dedicated account manager
-                        </li>
-                        <li className="flex items-center gap-2">
-                          <Check className="h-4 w-4 text-primary" />
-                          Custom integrations
-                        </li>
-                      </ul>
-                    </div>
-                    <Button 
-                      className="w-full mt-4" 
-                      variant={profile?.subscription_tier === 'enterprise' ? 'outline' : 'default'}
-                      disabled={profile?.subscription_tier === 'enterprise'}
-                      onClick={() => handleUpgrade('enterprise')}
-                    >
-                      {profile?.subscription_tier === 'enterprise' ? 'Current Plan' : 'Upgrade'}
-                    </Button>
-                  </div>
+                    );
+                  })}
                 </div>
 
-                {profile?.subscription_tier !== 'free' && (
+                {isActive && (
                   <div className="mt-6 pt-6 border-t">
                     <Button variant="outline" size="sm" onClick={openCustomerPortal}>
                       Manage Subscription

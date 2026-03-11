@@ -48,7 +48,7 @@ export const useSubscription = () => {
     }
   };
 
-  const createCheckoutSession = async (priceId: string) => {
+  const createCheckoutSession = async (priceIdOrPlan: string, interval?: 'monthly' | 'annual') => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) {
@@ -60,8 +60,13 @@ export const useSubscription = () => {
         return;
       }
 
+      // Support both legacy (priceId) and new (plan + interval) formats
+      const body = interval
+        ? { plan: priceIdOrPlan, interval }
+        : { priceId: priceIdOrPlan };
+
       const { data, error } = await supabase.functions.invoke('create-checkout', {
-        body: { priceId },
+        body,
         headers: {
           Authorization: `Bearer ${session.access_token}`,
         },

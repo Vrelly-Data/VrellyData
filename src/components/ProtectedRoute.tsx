@@ -21,7 +21,9 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
     if (!profileLoading && profile) {
       if (isAdmin()) return;
       const isExempt = SUBSCRIPTION_EXEMPT_PATHS.some(p => location.pathname.startsWith(p));
-      if (!isExempt && profile.subscription_status !== 'active') {
+      // Allow users returning from Stripe checkout — the webhook may not have processed yet
+      const isPostCheckout = location.search.includes('checkout=success');
+      if (!isExempt && !isPostCheckout && profile.subscription_status !== 'active') {
         navigate('/choose-plan');
       }
     }

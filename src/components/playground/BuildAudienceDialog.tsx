@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Loader2, Sparkles, Users, Lightbulb, Target, TrendingUp, Save, CheckCircle2 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
+import { useCredit } from '@/lib/credits';
 import { TagInput } from '@/components/ui/tag-input';
 import { MultiSelectDropdown } from '@/components/search/MultiSelectDropdown';
 import { useFreeDataSuggestions } from '@/hooks/useFreeDataSuggestions';
@@ -103,6 +104,9 @@ export function BuildAudienceDialog({ open, onOpenChange }: BuildAudienceDialogP
     setIsGenerating(true);
     setIsSaved(false);
     try {
+      // Deduct 1 AI generation credit for audience building
+      await useCredit('ai_generation', 1);
+
       const { data, error } = await supabase.functions.invoke('build-audience', {
         body: { industries, isBtoB, targetTitles, companyTypes, companySizes, locations },
       });
@@ -116,6 +120,14 @@ export function BuildAudienceDialog({ open, onOpenChange }: BuildAudienceDialogP
       setAudienceName(defaultAudienceName);
       setStep('result');
     } catch (err: any) {
+      if (err.message === 'UPGRADE_REQUIRED') {
+        toast.error('You need an active subscription to build audiences.');
+        return;
+      }
+      if (err.message === 'OUT_OF_CREDITS') {
+        toast.error('You have run out of AI generation credits for this period.');
+        return;
+      }
       toast.error(`Failed to build audience: ${err.message || 'Unknown error'}`);
     } finally {
       setIsGenerating(false);

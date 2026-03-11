@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuthStore } from '@/stores/authStore';
 import { toast } from 'sonner';
@@ -8,6 +9,7 @@ import { Loader2 } from 'lucide-react';
 export default function CheckoutSuccess() {
   const navigate = useNavigate();
   const { fetchProfile } = useAuthStore();
+  const queryClient = useQueryClient();
 
   useEffect(() => {
     const verify = async () => {
@@ -22,7 +24,9 @@ export default function CheckoutSuccess() {
       } catch {
         // proceed regardless
       }
-      toast.success('Payment confirmed! Welcome to Vrelly — your credits are ready.');
+      // Invalidate user-credits cache so billing page shows fresh data
+      queryClient.invalidateQueries({ queryKey: ['user-credits'] });
+      toast.success('Subscription activated! Your credits are ready.');
       navigate('/dashboard', { replace: true });
     };
     verify();

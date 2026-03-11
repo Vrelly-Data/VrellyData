@@ -1,0 +1,51 @@
+export const PLANS = [
+  {
+    id: 'starter' as const,
+    name: 'Starter',
+    monthlyPrice: 75,
+    annualPrice: 62,        // per month, billed annually ($749/yr)
+    annualTotal: 749,
+    features: [
+      '10,000 prospect export credits/month',
+      '50 AI copy generations/month',
+      'Wholesale prospect database access',
+      'AI copy builder',
+      'Email support',
+    ],
+    cta: 'Get Started',
+  },
+  {
+    id: 'professional' as const,
+    name: 'Professional',
+    monthlyPrice: 150,
+    annualPrice: 125,
+    annualTotal: 1499,
+    popular: true,
+    features: [
+      '25,000 prospect export credits/month',
+      '250 AI copy generations/month',
+      'Wholesale prospect database access',
+      'AI copy builder',
+      'Audience generator',
+      'Priority support',
+    ],
+    cta: 'Get Started',
+  },
+  {
+    id: 'enterprise' as const,
+    name: 'Enterprise',
+    monthlyPrice: 350,
+    annualPrice: 292,
+    annualTotal: 3499,
+    features: [
+      'Unlimited prospect exports',
+      '1,250 AI copy generations/month',
+      'Wholesale prospect database access',
+      'AI copy builder',
+      'Audience generator',
+      'Sales knowledge repository',
+      'Dedicated support',
+    ],
+    cta: 'Get Started',
+  },
+];

@@ -10,6 +10,7 @@ import { Loader2, Sparkles, Copy, X, Plus, Lightbulb, Mail, CheckCircle2, BookOp
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { useSaveCopyMutation } from '@/hooks/useCopyTemplates';
+import { useCredit } from '@/lib/credits';
 import { format } from 'date-fns';
 
 interface CopyStep {
@@ -130,6 +131,9 @@ export function CreateCopyDialog({ open, onOpenChange }: CreateCopyDialogProps) 
 
     setIsGenerating(true);
     try {
+      // Deduct 1 AI generation credit
+      await useCredit('ai_generation', 1);
+
       const { data, error } = await supabase.functions.invoke('generate-copy', {
         body: { product, industries, isBtoB, targetTitles, companyTypes, companyStandout, channels },
       });
@@ -142,6 +146,14 @@ export function CreateCopyDialog({ open, onOpenChange }: CreateCopyDialogProps) 
       setSavedGroupId(null);
       setStep('result');
     } catch (err: any) {
+      if (err.message === 'UPGRADE_REQUIRED') {
+        toast.error('You need an active subscription to generate copy. Please upgrade your plan.');
+        return;
+      }
+      if (err.message === 'OUT_OF_CREDITS') {
+        toast.error('You have run out of AI generation credits for this period.');
+        return;
+      }
       toast.error(`Failed to generate copy: ${err.message || 'Unknown error'}`);
     } finally {
       setIsGenerating(false);

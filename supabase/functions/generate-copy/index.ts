@@ -214,7 +214,7 @@ Note: set "subject" to null for non-email channels. Do NOT include "source_insig
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
+        model: "claude-sonnet-4-5-20250929",
         max_tokens: 4096,
         system: systemPrompt,
         messages: [{ role: "user", content: "Generate the outreach sequence now." }],
