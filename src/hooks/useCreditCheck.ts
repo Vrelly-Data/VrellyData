@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { supabase } from '@/integrations/supabase/client';
-import { useAudienceStore } from '@/stores/audienceStore';
-import { useAuthStore } from '@/stores/authStore';
+import { useCredit } from '@/lib/credits';
+import { useCredits } from '@/hooks/useCredits';
+import { useQueryClient } from '@tanstack/react-query';
 import { toast } from '@/hooks/use-toast';
 
 interface DeductResult {
@@ -12,97 +12,81 @@ interface DeductResult {
 
 export function useCreditCheck() {
   const [isDeducting, setIsDeducting] = useState(false);
-  const currentType = useAudienceStore(state => state.currentType);
-  const { profile, fetchProfile } = useAuthStore();
+  const { data: credits } = useCredits();
+  const queryClient = useQueryClient();
 
   const getRemainingCredits = (): number => {
-    return profile?.credits ?? 0;
+    if (!credits) return 0;
+    if (credits.plan === 'enterprise') {
+      // Enterprise: show daily remaining (100,000 - daily used)
+      return 100000 - (credits.enterprise_daily_exports ?? 0);
+    }
+    return (credits.export_credits_total ?? 0) - (credits.export_credits_used ?? 0);
   };
 
   const hasEnoughCredits = async (requiredCredits: number): Promise<boolean> => {
-    const remaining = getRemainingCredits();
-    return remaining >= requiredCredits;
+    return getRemainingCredits() >= requiredCredits;
   };
 
-  const deductCredits = async (amount: number, audienceId?: string): Promise<DeductResult> => {
+  const deductCredits = async (amount: number, _audienceId?: string): Promise<DeductResult> => {
     setIsDeducting(true);
-    
+
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error('User not authenticated');
-      
-      const currentCredits = profile?.credits ?? 0;
-      
-      if (currentCredits < amount) {
-        toast({
-          title: 'Insufficient Credits',
-          description: `You need ${amount.toLocaleString()} credits but only have ${currentCredits.toLocaleString()}.`,
-          variant: 'destructive',
-        });
-        return { 
-          success: false, 
-          remainingCredits: currentCredits,
-          error: 'Insufficient credits',
-        };
-      }
-      
-      // Call the simplified database function
-      const { data, error } = await supabase.rpc('deduct_credits', {
-        p_user_id: user.id,
-        p_amount: amount,
-      });
-      
-      if (error) throw error;
-      
-      const result = data as unknown as { success: boolean; remaining_credits: number; error?: string };
-      
-      if (!result.success) {
-        toast({
-          title: 'Insufficient Credits',
-          description: result.error || 'You do not have enough credits.',
-          variant: 'destructive',
-        });
-        return { 
-          success: false, 
-          remainingCredits: result.remaining_credits,
-          error: result.error,
-        };
-      }
-      
-      // Log transaction
-      await supabase.from('credit_transactions').insert({
-        user_id: user.id,
-        audience_id: audienceId || '',
-        entity_type: currentType,
-        records_returned: amount,
-        credits_deducted: amount,
-      });
-      
-      // Refresh profile to update credits in UI
-      await fetchProfile();
-      
+      await useCredit('export', amount);
+
+      // Refresh credits cache so UI updates
+      queryClient.invalidateQueries({ queryKey: ['user-credits'] });
+
+      const remaining = Math.max(0, getRemainingCredits() - amount);
+
       toast({
         title: 'Credits Used',
-        description: `${amount.toLocaleString()} credits used. ${result.remaining_credits.toLocaleString()} remaining.`,
+        description: `${amount.toLocaleString()} credits used.`,
       });
-      
-      return { success: true, remainingCredits: result.remaining_credits };
+
+      return { success: true, remainingCredits: remaining };
     } catch (error) {
-      console.error('Error deducting credits:', error);
-      toast({
-        title: 'Error',
-        description: 'Failed to deduct credits',
-        variant: 'destructive',
-      });
-      return { success: false, remainingCredits: 0, error: 'Failed to deduct credits' };
+      const message = error instanceof Error ? error.message : 'Credit check failed';
+
+      if (message === 'UPGRADE_REQUIRED') {
+        toast({
+          title: 'Subscription Required',
+          description: 'Please subscribe to a plan to use export credits.',
+          variant: 'destructive',
+        });
+      } else if (message === 'OUT_OF_CREDITS') {
+        toast({
+          title: 'Insufficient Credits',
+          description: 'You have run out of export credits. Please upgrade your plan.',
+          variant: 'destructive',
+        });
+      } else if (message === 'DAILY_LIMIT_REACHED') {
+        toast({
+          title: 'Daily Limit Reached',
+          description: 'You have reached your daily export limit of 100,000. Resets tomorrow.',
+          variant: 'destructive',
+        });
+      } else {
+        toast({
+          title: 'Error',
+          description: 'Failed to deduct credits',
+          variant: 'destructive',
+        });
+      }
+
+      return {
+        success: false,
+        remainingCredits: getRemainingCredits(),
+        error: message,
+      };
     } finally {
       setIsDeducting(false);
     }
   };
 
-  return { 
-    hasEnoughCredits, 
-    deductCredits, 
+  return {
+    hasEnoughCredits,
+    deductCredits,
     getRemainingCredits,
     isDeducting,
   };

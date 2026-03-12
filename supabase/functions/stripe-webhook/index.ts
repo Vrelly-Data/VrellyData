@@ -173,19 +173,44 @@ Deno.serve(async (req) => {
         }
 
         if (userId) {
-          if (subscription.status === 'active') {
+          const isActivatable = subscription.status === 'active' || subscription.status === 'trialing';
+          const isNewSub = event.type === 'customer.subscription.created';
+
+          if (isActivatable || isNewSub) {
             // Check if this is a new billing period (renewal)
             const { data: existingCredits } = await supabase
               .from('user_credits')
-              .select('current_period_end')
+              .select('current_period_end, subscription_status')
               .eq('user_id', userId)
               .single();
 
             const isNewPeriod = !existingCredits?.current_period_end ||
               new Date(existingCredits.current_period_end) < new Date(subscription.current_period_start * 1000);
 
-            if (event.type === 'customer.subscription.created' || isNewPeriod) {
-              await provisionCredits(supabase, userId, plan, interval, subscription.id, customerId, periodEnd);
+            if (isNewSub || isNewPeriod) {
+              // For new subs arriving as 'incomplete', provision credits but keep actual status.
+              // checkout.session.completed will set status to 'active'.
+              const effectiveStatus = isActivatable ? 'active' : subscription.status;
+              const credits = PLAN_CREDITS[plan] || PLAN_CREDITS.starter;
+              const now = new Date();
+
+              await supabase.from('user_credits').upsert({
+                user_id: userId,
+                plan,
+                billing_interval: interval,
+                stripe_subscription_id: subscription.id,
+                stripe_customer_id: customerId,
+                subscription_status: effectiveStatus,
+                current_period_end: periodEnd.toISOString(),
+                export_credits_total: credits.export_credits,
+                export_credits_used: 0,
+                export_credits_reset_at: now.toISOString(),
+                ai_credits_total: credits.ai_credits,
+                ai_credits_used: 0,
+                ai_credits_reset_at: now.toISOString(),
+                enterprise_daily_exports: 0,
+                enterprise_daily_reset_at: now.toISOString(),
+              }, { onConflict: 'user_id' });
             } else {
               // Just update status and period
               await supabase.from('user_credits').update({
@@ -193,7 +218,8 @@ Deno.serve(async (req) => {
                 current_period_end: periodEnd.toISOString(),
               }).eq('user_id', userId);
             }
-          } else {
+          } else if (subscription.status !== 'incomplete') {
+            // Don't let 'incomplete' overwrite an 'active' status set by checkout.session.completed
             await supabase.from('user_credits').update({
               subscription_status: subscription.status,
             }).eq('user_id', userId);

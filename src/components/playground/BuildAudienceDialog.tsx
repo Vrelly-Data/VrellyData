@@ -142,24 +142,8 @@ export function BuildAudienceDialog({ open, onOpenChange }: BuildAudienceDialogP
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('Not authenticated');
 
-      // 1. Deduct credits
-      const { data: deductResult, error: deductError } = await supabase.rpc('deduct_credits', {
-        p_user_id: user.id,
-        p_amount: creditCost,
-      });
-
-      if (deductError) throw deductError;
-      const result = deductResult as unknown as { success: boolean; remaining_credits: number; error?: string };
-      if (!result.success) throw new Error(result.error || 'Insufficient credits');
-
-      // Log credit transaction
-      await supabase.from('credit_transactions').insert({
-        user_id: user.id,
-        audience_id: '',
-        entity_type: 'person',
-        records_returned: creditCost,
-        credits_deducted: creditCost,
-      });
+      // 1. Deduct export credits via check-and-use-credits
+      await useCredit('export', creditCost);
 
       // 2. Save records to people_records
       const entities: PersonEntity[] = prospects.map(p => ({
