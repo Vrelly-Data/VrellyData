@@ -415,7 +415,7 @@ export function mapFreeDataToCompany(record: Record<string, any>): CompanyEntity
     industry: extractFirst(data.industry),
     employeeCount: parsedCount,
     companySize: computedRange,
-    revenue: extractFirst(data.companyRevenue) || extractFirst(data.revenue),
+    revenue: extractFirst(data.company_revenue),
     location: extractFirst(data.location) || extractFirst(data.companyCity) || extractFirst(data.city),
     technologies: Array.isArray(data.technologies) 
       ? data.technologies 
