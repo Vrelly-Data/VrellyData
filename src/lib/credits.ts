@@ -18,9 +18,11 @@ export async function useCredit(type: 'export' | 'ai_generation', amount = 1): P
 
   if (!response.ok) {
     const err = await response.json();
+    console.error('[useCredit] Edge function error:', { status: response.status, ...err });
     if (err.code === 'NO_SUBSCRIPTION') throw new Error('UPGRADE_REQUIRED');
     if (err.code === 'NO_CREDITS') throw new Error('OUT_OF_CREDITS');
     if (err.code === 'DAILY_LIMIT') throw new Error('DAILY_LIMIT_REACHED');
+    if (err.code === 'NO_CREDITS_RECORD') throw new Error('UPGRADE_REQUIRED');
     throw new Error(err.error || 'Credit check failed');
   }
 }

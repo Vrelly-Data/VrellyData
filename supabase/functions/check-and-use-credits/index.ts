@@ -19,9 +19,13 @@ serve(async (req) => {
   );
 
   const { data: { user }, error } = await supabase.auth.getUser();
-  if (error || !user) return new Response('Unauthorized', { status: 401 });
+  if (error || !user) {
+    console.error('Auth failed:', error?.message ?? 'no user');
+    return new Response('Unauthorized', { status: 401 });
+  }
 
   const { credit_type, amount = 1 } = await req.json();
+  console.log(`[check-and-use-credits] user=${user.id} type=${credit_type} amount=${amount}`);
   // credit_type: 'export' | 'ai_generation'
 
   const supabaseAdmin = createClient(
@@ -36,12 +40,16 @@ serve(async (req) => {
     .single();
 
   if (fetchError || !credits) {
-    return new Response(JSON.stringify({ error: 'No credit record found' }), {
+    console.error(`[check-and-use-credits] No credit record for user=${user.id}`, fetchError?.message);
+    return new Response(JSON.stringify({ error: 'No credit record found', code: 'NO_CREDITS_RECORD' }), {
       status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
 
+  console.log(`[check-and-use-credits] user=${user.id} plan=${credits.plan} status=${credits.subscription_status} export_used=${credits.export_credits_used}/${credits.export_credits_total} ai_used=${credits.ai_credits_used}/${credits.ai_credits_total}`);
+
   if (credits.subscription_status !== 'active') {
+    console.warn(`[check-and-use-credits] Inactive subscription for user=${user.id} status=${credits.subscription_status} plan=${credits.plan}`);
     return new Response(JSON.stringify({ error: 'No active subscription', code: 'NO_SUBSCRIPTION' }), {
       status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
@@ -63,39 +71,63 @@ serve(async (req) => {
         });
       }
 
-      await supabaseAdmin.from('user_credits').update({
+      const { error: updateError } = await supabaseAdmin.from('user_credits').update({
         enterprise_daily_exports: currentDailyCount + amount,
         enterprise_daily_reset_at: isNewDay ? now.toISOString() : credits.enterprise_daily_reset_at,
       }).eq('user_id', user.id);
+
+      if (updateError) {
+        console.error(`[check-and-use-credits] Failed to update enterprise daily exports for user=${user.id}`, updateError.message);
+        return new Response(JSON.stringify({ error: 'Failed to update credits', code: 'UPDATE_FAILED' }), {
+          status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
 
     } else {
       // Starter / Professional: monthly credits
       const remaining = credits.export_credits_total - credits.export_credits_used;
       if (remaining < amount) {
+        console.warn(`[check-and-use-credits] Insufficient export credits for user=${user.id} remaining=${remaining} requested=${amount}`);
         return new Response(JSON.stringify({ error: 'Insufficient export credits', code: 'NO_CREDITS', remaining }), {
           status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
 
-      await supabaseAdmin.from('user_credits').update({
+      const { error: updateError } = await supabaseAdmin.from('user_credits').update({
         export_credits_used: credits.export_credits_used + amount,
       }).eq('user_id', user.id);
+
+      if (updateError) {
+        console.error(`[check-and-use-credits] Failed to update export credits for user=${user.id}`, updateError.message);
+        return new Response(JSON.stringify({ error: 'Failed to update credits', code: 'UPDATE_FAILED' }), {
+          status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
     }
   }
 
   if (credit_type === 'ai_generation') {
     const remaining = credits.ai_credits_total - credits.ai_credits_used;
     if (remaining < amount) {
+      console.warn(`[check-and-use-credits] Insufficient AI credits for user=${user.id} remaining=${remaining} requested=${amount}`);
       return new Response(JSON.stringify({ error: 'Insufficient AI generation credits', code: 'NO_CREDITS', remaining }), {
         status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
-    await supabaseAdmin.from('user_credits').update({
+    const { error: updateError } = await supabaseAdmin.from('user_credits').update({
       ai_credits_used: credits.ai_credits_used + amount,
     }).eq('user_id', user.id);
+
+    if (updateError) {
+      console.error(`[check-and-use-credits] Failed to update AI credits for user=${user.id}`, updateError.message);
+      return new Response(JSON.stringify({ error: 'Failed to update credits', code: 'UPDATE_FAILED' }), {
+        status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
   }
 
+  console.log(`[check-and-use-credits] Success: user=${user.id} type=${credit_type} amount=${amount}`);
   return new Response(JSON.stringify({ success: true }), {
     headers: { ...corsHeaders, 'Content-Type': 'application/json' },
   });

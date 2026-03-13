@@ -47,6 +47,7 @@ export function useCreditCheck() {
       return { success: true, remainingCredits: remaining };
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Credit check failed';
+      console.error('[deductCredits] Failed:', message, error);
 
       if (message === 'UPGRADE_REQUIRED') {
         toast({
@@ -69,7 +70,7 @@ export function useCreditCheck() {
       } else {
         toast({
           title: 'Error',
-          description: 'Failed to deduct credits',
+          description: `Failed to deduct credits: ${message}`,
           variant: 'destructive',
         });
       }
