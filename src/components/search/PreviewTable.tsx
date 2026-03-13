@@ -246,7 +246,7 @@ export function PreviewTable({ data, entityType, isUnlocked, selectedRecords, on
                   </div>
                 </TableCell>
                 <TableCell className="sticky left-[50px] bg-background font-medium">{person.name}</TableCell>
-                <TableCell>{person.title || 'N/A'}</TableCell>
+                <TableCell>{person.jobTitle || 'N/A'}</TableCell>
                 <TableCell>
                   <BlurredField value={person.email || 'N/A'} isUnlocked={isUnlocked(person)} />
                 </TableCell>
