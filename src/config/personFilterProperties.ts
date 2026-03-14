@@ -75,14 +75,11 @@ export const PERSON_FILTER_PROPERTIES: PropertyDefinition[] = [
     category: 'Job Information',
     operators: ['in', 'not_in', 'is_known', 'is_unknown'],
     options: [
-      { label: 'C-Level', value: 'C-Level' },
-      { label: 'VP', value: 'VP' },
+      { label: 'C-Level / Executive', value: 'Cxo' },
+      { label: 'VP', value: 'Vp' },
       { label: 'Director', value: 'Director' },
       { label: 'Manager', value: 'Manager' },
-      { label: 'Senior', value: 'Senior' },
-      { label: 'Individual Contributor', value: 'Individual Contributor' },
-      { label: 'Entry Level', value: 'Entry Level' },
-      { label: 'Intern', value: 'Intern' },
+      { label: 'Staff / Individual Contributor', value: 'Staff' },
     ]
   },
   {
