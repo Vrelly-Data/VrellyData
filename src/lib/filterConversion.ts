@@ -32,6 +32,16 @@ export interface FilterBuilderState {
   excludeTechnologies: string[];
   excludeCompanyCity: string[];
   excludeCompanyCountry: string[];
+  // Missing filters - now wired up
+  zipCode: string | null;
+  children: string | null;
+  homeowner: boolean | null;
+  married: boolean | null;
+  education: string[];
+  ageMin: number | null;
+  ageMax: number | null;
+  company: string[];
+  addedOnDaysAgo: number | null;
 }
 
 export function getDefaultFilterBuilderState(): FilterBuilderState {
@@ -66,6 +76,15 @@ export function getDefaultFilterBuilderState(): FilterBuilderState {
     excludeTechnologies: [],
     excludeCompanyCity: [],
     excludeCompanyCountry: [],
+    zipCode: null,
+    children: null,
+    homeowner: null,
+    married: null,
+    education: [],
+    ageMin: null,
+    ageMax: null,
+    company: [],
+    addedOnDaysAgo: null,
   };
 }
 

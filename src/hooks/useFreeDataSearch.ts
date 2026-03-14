@@ -109,6 +109,15 @@ function buildFilterParams(entityType: EntityType, filterState: FilterBuilderSta
     p_exclude_technologies: arrayOrNull(filterState.excludeTechnologies),
     p_exclude_person_skills: arrayOrNull(filterState.excludePersonSkills),
     p_exclude_person_interests: arrayOrNull(filterState.excludePersonInterests),
+    p_zip_code: filterState.zipCode || null,
+    p_children: filterState.children ? [filterState.children] : null,
+    p_homeowner: filterState.homeowner !== null && filterState.homeowner !== undefined ? filterState.homeowner : null,
+    p_married: filterState.married !== null && filterState.married !== undefined ? filterState.married : null,
+    p_education: arrayOrNull(filterState.education),
+    p_age_min: filterState.ageMin || null,
+    p_age_max: filterState.ageMax || null,
+    p_company_names: arrayOrNull(filterState.company),
+    p_added_on_days_ago: filterState.addedOnDaysAgo || null,
   };
 }
 
