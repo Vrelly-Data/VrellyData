@@ -303,6 +303,14 @@ export function mapFreeDataToPerson(record: Record<string, any>): PersonEntity {
     interests: extractFirst(data.interests),
     educationHistory: parseEducationHistory(data.education_history),
     keywords: data.keywords ? [data.keywords] : [],
+    // Company location fields
+    companyCity: extractFirst(data.company_city),
+    companyState: extractFirst(data.company_state),
+    companyCountry: extractFirst(data.company_country),
+    companyZipCode: extractFirst(data.company_zip_code),
+    companyRevenue: extractFirst(data.company_revenue),
+    companySic: extractFirst(data.company_sic),
+    companyNaics: extractFirst(data.company_naics),
     customFields: {},
     isUnlocked: false,
   };
