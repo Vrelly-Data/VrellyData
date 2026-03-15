@@ -306,7 +306,7 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
                   value={filterState.personSkills}
                   onChange={(values) => updateFilter('personSkills', values)}
                   placeholder="Type skills and press Enter..."
-                  suggestions={suggestions.skills}
+                  suggestions={attributes.skills.length > 0 ? attributes.skills : suggestions.skills}
                 />
                 <DncSection
                   excludeKey="excludePersonSkills"
@@ -367,7 +367,7 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
               value={filterState.technologies}
               onChange={(values) => updateFilter('technologies', values)}
               placeholder="Type technologies and press Enter..."
-              suggestions={suggestions.technologies}
+              suggestions={attributes.technologies.length > 0 ? attributes.technologies : suggestions.technologies}
             />
             <DncSection
               excludeKey="excludeTechnologies"

@@ -1,8 +1,16 @@
 import { useState, useEffect } from 'react';
 import { MOCK_ATTRIBUTES, MockAttributeOptions } from '@/lib/mockData';
-import { audienceLabClient } from '@/lib/audienceLabClient';
+import { supabase } from '@/integrations/supabase/client';
 
-const MOCK_MODE = true;
+async function fetchFilterCounts(field: string, limit = 200): Promise<string[]> {
+  const { data, error } = await supabase.rpc('get_filter_counts', {
+    p_field: field,
+    p_search: null,
+    p_limit: limit,
+  });
+  if (error || !data) return [];
+  return data.map((row: any) => row.value).filter(Boolean);
+}
 
 export function useAudienceAttributes() {
   const [attributes, setAttributes] = useState<MockAttributeOptions>(MOCK_ATTRIBUTES);
@@ -16,37 +24,29 @@ export function useAudienceAttributes() {
   async function fetchAttributes() {
     setLoading(true);
     setError(null);
-    
+
     try {
-      if (MOCK_MODE) {
-        // Return mock attributes
-        await new Promise(resolve => setTimeout(resolve, 300));
-        setAttributes(MOCK_ATTRIBUTES);
-      } else {
-        // Fetch real attributes from API
-        const [segments, industries, departments, seniority] = await Promise.all([
-          audienceLabClient.getAttributes('segments'),
-          audienceLabClient.getAttributes('industries'),
-          audienceLabClient.getAttributes('departments'),
-          audienceLabClient.getAttributes('seniority'),
-        ]);
-        
-        setAttributes({
-          industries: industries || MOCK_ATTRIBUTES.industries,
-          cities: MOCK_ATTRIBUTES.cities,
-          jobTitles: MOCK_ATTRIBUTES.jobTitles,
-          seniority: ['Cxo', 'Vp', 'Director', 'Manager', 'Staff'],
-          departments: MOCK_ATTRIBUTES.departments,
-          companySizeRanges: MOCK_ATTRIBUTES.companySizeRanges,
-          companyRevenueRanges: MOCK_ATTRIBUTES.companyRevenueRanges,
-          netWorthRanges: MOCK_ATTRIBUTES.netWorthRanges,
-          incomeRanges: MOCK_ATTRIBUTES.incomeRanges,
-        });
-      }
+      const [industries, cities, seniority, departments, skills, technologies] = await Promise.all([
+        fetchFilterCounts('company_industry', 300),
+        fetchFilterCounts('city', 300),
+        fetchFilterCounts('seniority', 20),
+        fetchFilterCounts('department', 100),
+        fetchFilterCounts('skills', 500),
+        fetchFilterCounts('technologies', 500),
+      ]);
+
+      setAttributes({
+        ...MOCK_ATTRIBUTES,
+        industries: industries.length > 0 ? industries : MOCK_ATTRIBUTES.industries,
+        cities: cities.length > 0 ? cities : MOCK_ATTRIBUTES.cities,
+        seniority: seniority.length > 0 ? seniority : ['Cxo', 'Vp', 'Director', 'Manager', 'Staff'],
+        departments: departments.length > 0 ? departments : MOCK_ATTRIBUTES.departments,
+        skills: skills.length > 0 ? skills : [],
+        technologies: technologies.length > 0 ? technologies : [],
+      });
     } catch (err) {
       console.error('Error fetching attributes:', err);
       setError('Failed to load filter options');
-      // Fall back to mock data
       setAttributes(MOCK_ATTRIBUTES);
     } finally {
       setLoading(false);
