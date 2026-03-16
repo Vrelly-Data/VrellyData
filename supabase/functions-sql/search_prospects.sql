@@ -1,0 +1,11 @@
+-- This file documents the current search_prospects_results and search_prospects_count
+-- functions deployed to Supabase. Update this file whenever the functions change.
+-- Last updated: 2026-03-15
+
+-- See Supabase SQL Editor for full function definitions.
+-- Key design decisions:
+-- 1. Dynamic SQL built with quote_literal to enable index usage
+-- 2. normalize_country() maps "United States" -> "US" etc
+-- 3. ILIKE used everywhere for natural language matching
+-- 4. Minimum filter requirement prevents full table scans
+-- 5. filter_counts table + trigger keeps dropdown options in sync with DB
