@@ -26,13 +26,16 @@ export function useAudienceAttributes() {
     setError(null);
 
     try {
-      const [industries, cities, seniority, departments, skills, technologies] = await Promise.all([
+      const [industries, cities, seniority, departments, skills, technologies, states, incomeRanges, netWorthRanges] = await Promise.all([
         fetchFilterCounts('company_industry', 300),
         fetchFilterCounts('city', 300),
         fetchFilterCounts('seniority', 20),
         fetchFilterCounts('department', 100),
         fetchFilterCounts('skills', 500),
         fetchFilterCounts('technologies', 500),
+        fetchFilterCounts('state', 100),
+        fetchFilterCounts('income_range', 50),
+        fetchFilterCounts('net_worth', 50),
       ]);
 
       setAttributes({
@@ -43,6 +46,9 @@ export function useAudienceAttributes() {
         departments: departments.length > 0 ? departments : MOCK_ATTRIBUTES.departments,
         skills: skills.length > 0 ? skills : [],
         technologies: technologies.length > 0 ? technologies : [],
+        states: states.length > 0 ? states : [],
+        incomeRanges: incomeRanges.length > 0 ? incomeRanges : MOCK_ATTRIBUTES.incomeRanges,
+        netWorthRanges: netWorthRanges.length > 0 ? netWorthRanges : MOCK_ATTRIBUTES.netWorthRanges,
       });
     } catch (err) {
       console.error('Error fetching attributes:', err);
