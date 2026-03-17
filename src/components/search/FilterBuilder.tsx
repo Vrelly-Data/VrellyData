@@ -454,7 +454,6 @@ export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
                   { label: 'Direct Mobile', value: 'direct_mobile' },
                   { label: 'Personal LinkedIn', value: 'personal_linkedin' },
                   { label: 'Personal Facebook', value: 'personal_facebook' },
-                  { label: 'Personal Twitter', value: 'personal_twitter' },
                   { label: 'Company Phone', value: 'company_phone' },
                   { label: 'Company LinkedIn', value: 'company_linkedin' },
                   { label: 'Company Facebook', value: 'company_facebook' },
