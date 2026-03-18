@@ -412,36 +412,34 @@ export function mapFreeDataToCompany(record: Record<string, any>): CompanyEntity
   };
 
   // Parse employee count from companySize or employeeCount field
-  const rawSize = extractFirst(data.companySize) || extractFirst(data.employeeCount);
+  const rawSize = extractFirst(data.company_size) || extractFirst(data.company_employee_count);
   const parsedCount = parseEmployeeCountFromData(rawSize);
   const computedRange = employeeCountToRange(parsedCount);
 
   return {
-    id: record.entity_external_id,
-    name: extractFirst(data.name) || extractFirst(data.company) || 'Unknown',
-    domain: extractFirst(data.domain) || extractFirst(data.website),
-    industry: extractFirst(data.industry),
+    id: data.entity_external_id || data.id,
+    name: extractFirst(data.company_name) || extractFirst(data.name) || 'Unknown',
+    domain: extractFirst(data.company_domain) || extractFirst(data.domain) || extractFirst(data.website),
+    industry: extractFirst(data.company_industry) || extractFirst(data.industry),
     employeeCount: parsedCount,
     companySize: computedRange,
-    revenue: extractFirst(data.company_revenue),
-    location: extractFirst(data.location) || extractFirst(data.companyCity) || extractFirst(data.city),
-    technologies: Array.isArray(data.technologies) 
-      ? data.technologies 
-      : (typeof data.technologies === 'string' && data.technologies 
-          ? data.technologies.split(',').map((t: string) => t.trim()).filter(Boolean) 
-          : []),
+    revenue: extractFirst(data.company_revenue) || extractFirst(data.revenue),
+    location: extractFirst(data.company_city) || extractFirst(data.city),
+    technologies: typeof data.technologies === 'string' && data.technologies
+      ? data.technologies.split(',').map((t: string) => t.trim()).filter(Boolean)
+      : [],
     fundingStage: extractFirst(data.fundingStage) || extractFirst(data.funding),
-    description: extractFirst(data.companyDescription) || extractFirst(data.description),
-    linkedin: extractFirst(data.linkedin) || extractFirst(data.companyLinkedin),
-    email: extractFirst(data.email) || extractFirst(data.companyEmail),
-    phone: extractFirst(data.phone) || extractFirst(data.companyPhone),
-    city: extractFirst(data.companyCity) || extractFirst(data.city),
-    state: extractFirst(data.companyState) || extractFirst(data.state),
-    country: extractFirst(data.companyCountry) || extractFirst(data.country),
-    zipCode: extractFirst(data.companyZipCode) || extractFirst(data.zipCode),
-    sic: extractFirst(data.companySic) || extractFirst(data.sic),
-    naics: extractFirst(data.companyNaics) || extractFirst(data.naics),
-    companyAddress: extractFirst(data.companyAddress),
+    description: extractFirst(data.company_description) || extractFirst(data.description),
+    linkedin: extractFirst(data.company_linkedin) || extractFirst(data.linkedin),
+    email: extractFirst(data.business_email) || extractFirst(data.email),
+    phone: extractFirst(data.company_phone) || extractFirst(data.phone),
+    city: extractFirst(data.company_city) || extractFirst(data.city),
+    state: extractFirst(data.company_state) || extractFirst(data.state),
+    country: extractFirst(data.company_country) || extractFirst(data.country),
+    zipCode: extractFirst(data.company_zip_code) || extractFirst(data.zip_code),
+    sic: extractFirst(data.company_sic) || extractFirst(data.sic),
+    naics: extractFirst(data.company_naics) || extractFirst(data.naics),
+    companyAddress: extractFirst(data.company_address) || extractFirst(data.address),
     keywords: Array.isArray(data.keywords) 
       ? data.keywords 
       : (typeof data.keywords === 'string' && data.keywords 
