@@ -120,8 +120,15 @@ export default function AudienceBuilder() {
       }
       
       setResults(filteredItems);
-      setTotalEstimate(filterState.contactFilter === 'net_new' ? filteredItems.length : response.totalEstimate);
-      setIsEstimate(response.isEstimate);
+      // If results returned < page size, we have the true total - no estimation needed
+      const trueTotal = response.items.length < perPage && response.items.length > 0
+        ? response.items.length
+        : response.totalEstimate;
+      const trueIsEstimate = response.items.length < perPage && response.items.length > 0
+        ? false
+        : response.isEstimate;
+      setTotalEstimate(filterState.contactFilter === 'net_new' ? filteredItems.length : trueTotal);
+      setIsEstimate(trueIsEstimate);
       setTotalPages(filterState.contactFilter === 'net_new' ? 1 : response.pagination.total_pages);
       
       const displayTotal = filterState.contactFilter === 'net_new' 
