@@ -56,7 +56,7 @@ const features = [
 ];
 
 const stats = [
-  { value: '4.2M+', label: 'Prospects in database' },
+  { value: '100M+', label: 'Prospects in database' },
   { value: '10M+', label: 'Campaigns analyzed' },
   { value: '3x', label: 'Average reply rate lift' },
   { value: '< 48h', label: 'Agent deployment time' },
