@@ -39,7 +39,9 @@ export const FeaturesSection = () => {
   const { ref, isVisible } = useScrollAnimation();
 
   return (
-    <section id="features" className="py-24 bg-muted/30">
+    <section id="features" className="py-24 bg-muted/30 relative overflow-hidden">
+      <div className="absolute top-0 right-1/4 w-[500px] h-[500px] bg-primary/4 rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute bottom-0 left-1/4 w-[400px] h-[400px] bg-blue-500/4 rounded-full blur-3xl pointer-events-none" />
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8" ref={ref}>
         <div className={`text-center mb-16 transition-all duration-700 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'}`}>
           <h2 className="text-3xl md:text-4xl font-bold mb-4 text-foreground">
@@ -75,6 +77,7 @@ export const FeaturesSection = () => {
               </CardContent>
 
               <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
+              <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-primary/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
             </Card>
           ))}
         </div>

@@ -48,6 +48,10 @@ export const HeroSection = () => {
     <section className="relative min-h-screen flex items-center justify-center overflow-hidden bg-gradient-to-br from-background via-background to-primary/5">
       {/* Grid */}
       <div className="absolute inset-0 bg-[linear-gradient(rgba(59,130,246,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(59,130,246,0.03)_1px,transparent_1px)] bg-[size:64px_64px]" />
+      {/* Glowing orbs */}
+      <div className="absolute top-1/4 left-1/4 w-[500px] h-[500px] bg-primary/5 rounded-full blur-3xl animate-pulse pointer-events-none" style={{ animationDuration: '4s' }} />
+      <div className="absolute bottom-1/4 right-1/4 w-[400px] h-[400px] bg-blue-500/5 rounded-full blur-3xl animate-pulse pointer-events-none" style={{ animationDuration: '6s', animationDelay: '2s' }} />
+      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-primary/3 rounded-full blur-3xl pointer-events-none" />
 
       {/* Floating particles */}
       {particles.map((p) => (
@@ -116,7 +120,9 @@ export const HeroSection = () => {
         </div>
 
         <div className="mt-16 flex flex-wrap items-center justify-center gap-8 text-sm text-muted-foreground opacity-0 animate-fade-up" style={{ animationDelay: '1.3s' }}>
+          <AnimatedCounter target={4200000} label="verified prospects" />
           <AnimatedCounter target={200000} label="campaigns analyzed" />
+          <AnimatedCounter target={78000} label="Apollo contacts" />
         </div>
       </div>
     </section>
