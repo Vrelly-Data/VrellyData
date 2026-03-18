@@ -121,7 +121,7 @@ export const HeroSection = () => {
 
         <div className="mt-16 flex flex-wrap items-center justify-center gap-8 text-sm text-muted-foreground opacity-0 animate-fade-up" style={{ animationDelay: '1.3s' }}>
           <AnimatedCounter target={100000000} label="prospects" />
-          <AnimatedCounter target={10000000} label="outbound campaigns analyzed" />
+          <AnimatedCounter target={1000000} label="outbound campaigns analyzed" />
           <AnimatedCounter target={1000} label="sales skills implemented" />
         </div>
       </div>
