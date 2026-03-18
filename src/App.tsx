@@ -17,6 +17,8 @@ import Comparisons from "./pages/Comparisons";
 import Index from "./pages/Index";
 import Auth from "./pages/Auth";
 import Agents from "./pages/Agents";
+import Terms from "./pages/Terms";
+import Privacy from "./pages/Privacy";
 import Settings from "./pages/Settings";
 import NotFound from "./pages/NotFound";
 import People from "./pages/People";
@@ -45,6 +47,8 @@ const App = () => (
                 <Route path="/resources/:slug" element={<ResourceArticle />} />
                 <Route path="/comparisons" element={<Comparisons />} />
                 <Route path="/agents" element={<Agents />} />
+                <Route path="/terms" element={<Terms />} />
+                <Route path="/privacy" element={<Privacy />} />
                 <Route path="/auth" element={<Auth />} />
                 <Route path="/reset-password" element={<ResetPassword />} />
                 <Route path="/checkout-success" element={<CheckoutSuccess />} />

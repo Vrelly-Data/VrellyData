@@ -13,10 +13,10 @@ export const Footer = () => {
           </div>
 
           <div className="flex items-center gap-6 text-sm text-muted-foreground">
-            <a href="#" rel="nofollow" className="hover:text-foreground transition-colors">
+            <a href="/terms" className="hover:text-foreground transition-colors">
               Terms of Service
             </a>
-            <a href="#" rel="nofollow" className="hover:text-foreground transition-colors">
+            <a href="/privacy" className="hover:text-foreground transition-colors">
               Privacy Policy
             </a>
             <a href="#" rel="nofollow" className="hover:text-foreground transition-colors">
