@@ -30,8 +30,8 @@ const features = [
   },
   {
     icon: TrendingUp,
-    title: 'Benchmark Your Sales Trends',
-    description: 'Get insight into top performing campaigns across anonymous users of the platform.',
+    title: 'Benchmark Your Sales',
+    description: 'Pull from real sales data and benchmark against current outbound trends.',
   },
 ];
 
