@@ -18,7 +18,7 @@ export const SignUpSection = () => {
         </h2>
 
         <p className={`text-lg text-muted-foreground max-w-2xl mx-auto mb-10 transition-all duration-700 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'}`} style={{ transitionDelay: '0.2s' }}>
-          AI sales agents, enriched prospect data, and predictive intelligence — all powered by real campaign performance. Start with 25 free credits today.
+          AI sales agents, enriched prospect data, and predictive intelligence — all powered by real campaign performance.
         </p>
 
         <Button
@@ -42,7 +42,7 @@ export const SignUpSection = () => {
             <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
               <Zap className="w-5 h-5 text-primary" />
             </div>
-            <span className="text-sm">No credit card required</span>
+            <span className="text-sm">Powered by real sales data</span>
           </div>
           <div className="flex flex-col items-center gap-2 text-muted-foreground">
             <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
