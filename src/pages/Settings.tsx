@@ -19,7 +19,7 @@ import { formatDistanceToNow, format } from "date-fns";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { Check } from "lucide-react";
-import { useSubscription } from "@/hooks/useSubscription";
+import { useSubscription, useSubscriptionActions } from "@/hooks/useSubscription";
 import { ExternalProjectsSettings } from "@/components/settings/ExternalProjectsSettings";
 import { UserMenu } from "@/components/UserMenu";
 import { SUBSCRIPTION_TIERS, SubscriptionTier } from "@/config/subscriptionTiers";
@@ -35,7 +35,14 @@ export default function Settings() {
   const { theme, setTheme } = useTheme();
   const [loading, setLoading] = useState(false);
   const [showAllCredits, setShowAllCredits] = useState(false);
-  const { subscriptionStatus, checkSubscription, createCheckoutSession, openCustomerPortal } = useSubscription();
+  const { data: subscriptionData } = useSubscription();
+  const subscriptionStatus = {
+    subscribed: subscriptionData?.subscription_status === 'active',
+    tier: subscriptionData?.plan ?? 'free',
+    credits: subscriptionData?.export_credits_total ?? 0,
+    subscription_end: subscriptionData?.current_period_end ?? undefined,
+  };
+  const { checkSubscription, createCheckoutSession, openCustomerPortal } = useSubscriptionActions();
   const creditDisplay = useCreditDisplay();
 
   // Check for success/cancel params from Stripe

@@ -6,11 +6,11 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { PLANS } from '@/data/plans';
-import { useSubscription } from '@/hooks/useSubscription';
+import { useSubscriptionActions } from '@/hooks/useSubscription';
 import { useAuthStore } from '@/stores/authStore';
 
 export default function ChoosePlan() {
-  const { createCheckoutSession } = useSubscription();
+  const { createCheckoutSession } = useSubscriptionActions();
   const { signOut, profile } = useAuthStore();
   const navigate = useNavigate();
   const [loadingPlan, setLoadingPlan] = useState<string | null>(null);

@@ -1,41 +1,57 @@
-import { useEffect } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { supabase } from '@/integrations/supabase/client';
-import { useAuthStore } from '@/stores/authStore';
-import { toast } from 'sonner';
+import { useSubscription } from '@/hooks/useSubscription';
 import { Loader2 } from 'lucide-react';
+
+const MAX_ATTEMPTS = 10;
+const POLL_INTERVAL_MS = 1_000;
 
 export default function CheckoutSuccess() {
   const navigate = useNavigate();
-  const { fetchProfile } = useAuthStore();
   const queryClient = useQueryClient();
+  const { data, refetch } = useSubscription();
+  const [timedOut, setTimedOut] = useState(false);
+  const attempts = useRef(0);
 
   useEffect(() => {
-    const verify = async () => {
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session) {
-          await supabase.functions.invoke('check-subscription', {
-            headers: { Authorization: `Bearer ${session.access_token}` },
-          });
-          await fetchProfile();
-        }
-      } catch {
-        // proceed regardless
-      }
-      // Invalidate user-credits cache so billing page shows fresh data
+    if (data?.subscription_status === 'active') {
       queryClient.invalidateQueries({ queryKey: ['user-credits'] });
-      toast.success('Subscription activated! Your credits are ready.');
       navigate('/dashboard', { replace: true });
-    };
-    verify();
-  }, []);
+      return;
+    }
+
+    const interval = setInterval(async () => {
+      attempts.current += 1;
+      await refetch();
+
+      if (attempts.current >= MAX_ATTEMPTS) {
+        clearInterval(interval);
+        setTimedOut(true);
+      }
+    }, POLL_INTERVAL_MS);
+
+    return () => clearInterval(interval);
+  }, [data?.subscription_status]);
+
+  if (timedOut) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center gap-4 px-4 text-center">
+        <p className="text-lg font-medium">Taking longer than expected</p>
+        <p className="text-muted-foreground text-sm">
+          Please contact{' '}
+          <a href="mailto:support@vrelly.com" className="underline">
+            support@vrelly.com
+          </a>
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center gap-3">
       <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      <p className="text-muted-foreground text-sm">Verifying your payment...</p>
+      <p className="text-muted-foreground text-sm">Setting up your account...</p>
     </div>
   );
 }

@@ -8,6 +8,7 @@ import { ThemeProvider } from "next-themes";
 import { HelmetProvider } from "react-helmet-async";
 import { AuthProvider } from "@/components/AuthProvider";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
+import { SubscriptionGuard } from "@/components/SubscriptionGuard";
 import { AdminRoute } from "@/components/AdminRoute";
 import { AppErrorBoundary } from "@/components/AppErrorBoundary";
 import Landing from "./pages/Landing";
@@ -52,11 +53,13 @@ const App = () => (
                 <Route path="/auth" element={<Auth />} />
                 <Route path="/reset-password" element={<ResetPassword />} />
                 <Route path="/checkout-success" element={<CheckoutSuccess />} />
+                <Route path="/checkout/success" element={<CheckoutSuccess />} />
+                <Route path="/pricing" element={<ChoosePlan />} />
                 <Route path="/choose-plan" element={<ProtectedRoute><ChoosePlan /></ProtectedRoute>} />
-                <Route path="/dashboard" element={<ProtectedRoute><Index /></ProtectedRoute>} />
-                <Route path="/people" element={<ProtectedRoute><People /></ProtectedRoute>} />
-                <Route path="/companies" element={<ProtectedRoute><Companies /></ProtectedRoute>} />
-                <Route path="/playground" element={<ProtectedRoute><DataPlayground /></ProtectedRoute>} />
+                <Route path="/dashboard" element={<ProtectedRoute><SubscriptionGuard><Index /></SubscriptionGuard></ProtectedRoute>} />
+                <Route path="/people" element={<ProtectedRoute><SubscriptionGuard><People /></SubscriptionGuard></ProtectedRoute>} />
+                <Route path="/companies" element={<ProtectedRoute><SubscriptionGuard><Companies /></SubscriptionGuard></ProtectedRoute>} />
+                <Route path="/playground" element={<ProtectedRoute><SubscriptionGuard><DataPlayground /></SubscriptionGuard></ProtectedRoute>} />
                 <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
                 <Route path="/billing" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
                 <Route path="/admin" element={<AdminRoute><Admin /></AdminRoute>} />

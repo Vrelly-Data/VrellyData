@@ -1,52 +1,45 @@
-import { useState, useEffect } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from './use-toast';
 
+// ── Core subscription data (from user_credits table) ──────────────────────
 
-export interface SubscriptionStatus {
-  subscribed: boolean;
-  tier: string;
-  credits: number;
-  subscription_end?: string;
+export function useSubscription() {
+  return useQuery({
+    queryKey: ['user-subscription'],
+    queryFn: async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return null;
+
+      const { data, error } = await supabase
+        .from('user_credits')
+        .select('subscription_status, plan, export_credits_total, export_credits_used, ai_credits_total, ai_credits_used, current_period_end')
+        .eq('user_id', user.id)
+        .single();
+
+      if (error) throw error;
+      return data;
+    },
+    refetchInterval: 60_000,
+  });
 }
 
-export const useSubscription = () => {
-  const [subscriptionStatus, setSubscriptionStatus] = useState<SubscriptionStatus>({
-    subscribed: false,
-    tier: 'free',
-    credits: 0,
-  });
-  const [loading, setLoading] = useState(true);
-  const { toast } = useToast();
+// ── Derived guard hook ────────────────────────────────────────────────────
 
-  const checkSubscription = async () => {
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
-        setSubscriptionStatus({ subscribed: false, tier: 'free', credits: 0 });
-        setLoading(false);
-        return;
-      }
+export function useRequireSubscription() {
+  const { data, isLoading } = useSubscription();
 
-      const { data, error } = await supabase.functions.invoke('check-subscription', {
-        headers: {
-          Authorization: `Bearer ${session.access_token}`,
-        },
-      });
-
-      if (error) {
-        console.error('Error checking subscription:', error);
-        // Silently fail — this is a background poll and errors (stale JWT, cold start, etc.)
-        // are transient and will auto-retry in 60 seconds.
-      } else if (data) {
-        setSubscriptionStatus(data);
-      }
-    } catch (error) {
-      console.error('Error in checkSubscription:', error);
-    } finally {
-      setLoading(false);
-    }
+  return {
+    isActive: data?.subscription_status === 'active',
+    isLoading,
+    plan: data?.plan ?? null,
   };
+}
+
+// ── Checkout / portal actions (used by Settings & ChoosePlan) ─────────────
+
+export function useSubscriptionActions() {
+  const { toast } = useToast();
 
   const createCheckoutSession = async (priceIdOrPlan: string, interval?: 'monthly' | 'annual') => {
     try {
@@ -60,16 +53,13 @@ export const useSubscription = () => {
         return;
       }
 
-      // Support both legacy (priceId) and new (plan + interval) formats
       const body = interval
         ? { plan: priceIdOrPlan, interval }
         : { priceId: priceIdOrPlan };
 
       const { data, error } = await supabase.functions.invoke('create-checkout', {
         body,
-        headers: {
-          Authorization: `Bearer ${session.access_token}`,
-        },
+        headers: { Authorization: `Bearer ${session.access_token}` },
       });
 
       if (error) {
@@ -83,11 +73,6 @@ export const useSubscription = () => {
       }
 
       if (data?.url) {
-        // In the Lovable preview the app runs inside a cross-origin iframe.
-        // window.open(url, '_top') is silently blocked there by the browser.
-        // Detect iframe context and fall back to _blank (new tab) so the
-        // redirect isn't swallowed. On the published site (no iframe) _top
-        // navigates the same tab, keeping the auth session intact.
         const inIframe = window.self !== window.top;
         if (inIframe) {
           window.open(data.url, '_blank');
@@ -118,9 +103,7 @@ export const useSubscription = () => {
       }
 
       const { data, error } = await supabase.functions.invoke('customer-portal', {
-        headers: {
-          Authorization: `Bearer ${session.access_token}`,
-        },
+        headers: { Authorization: `Bearer ${session.access_token}` },
       });
 
       if (error) {
@@ -146,20 +129,18 @@ export const useSubscription = () => {
     }
   };
 
-  useEffect(() => {
-    checkSubscription();
+  const checkSubscription = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return;
 
-    // Refresh subscription status every minute
-    const interval = setInterval(checkSubscription, 60000);
-
-    return () => clearInterval(interval);
-  }, []);
-
-  return {
-    subscriptionStatus,
-    loading,
-    checkSubscription,
-    createCheckoutSession,
-    openCustomerPortal,
+      await supabase.functions.invoke('check-subscription', {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+    } catch (error) {
+      console.error('Error in checkSubscription:', error);
+    }
   };
-};
+
+  return { createCheckoutSession, openCustomerPortal, checkSubscription };
+}
