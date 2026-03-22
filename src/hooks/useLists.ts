@@ -4,6 +4,32 @@ import { useAuthStore } from '@/stores/authStore';
 import { toast } from '@/hooks/use-toast';
 import type { List, ListItem, ListWithCount } from '@/types/lists';
 
+const PAGE_SIZE = 1000;
+
+async function fetchAllRows<T>(
+  query: () => ReturnType<ReturnType<typeof supabase.from>['select']>,
+  orderColumn: string,
+  ascending: boolean,
+): Promise<T[]> {
+  const allRows: T[] = [];
+  let from = 0;
+
+  while (true) {
+    const { data, error } = await (query() as any)
+      .order(orderColumn, { ascending })
+      .range(from, from + PAGE_SIZE - 1);
+
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+
+    allRows.push(...(data as T[]));
+    if (data.length < PAGE_SIZE) break;
+    from += PAGE_SIZE;
+  }
+
+  return allRows;
+}
+
 export function useLists(entityType: 'person' | 'company') {
   const { user } = useAuthStore();
 
@@ -113,12 +139,13 @@ export function useAddToList() {
       if (!user) throw new Error('User not authenticated');
 
       // Check for existing items to avoid duplicates
-      const { data: existingItems } = await supabase
-        .from('list_items')
-        .select('entity_external_id')
-        .eq('list_id', listId);
+      const existingItems = await fetchAllRows<{ entity_external_id: string }>(
+        () => supabase.from('list_items').select('entity_external_id').eq('list_id', listId),
+        'added_at',
+        false,
+      );
 
-      const existingIds = new Set(existingItems?.map(item => item.entity_external_id) || []);
+      const existingIds = new Set(existingItems.map(item => item.entity_external_id));
       
       const newRecords = records.filter(record => !existingIds.has(record.id));
 
@@ -164,14 +191,11 @@ export function useListItems(listId: string) {
   return useQuery({
     queryKey: ['list-items', listId],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from('list_items')
-        .select('*')
-        .eq('list_id', listId)
-        .order('added_at', { ascending: false });
-
-      if (error) throw error;
-      return data as ListItem[];
+      return fetchAllRows<ListItem>(
+        () => supabase.from('list_items').select('*').eq('list_id', listId),
+        'added_at',
+        false,
+      );
     },
     enabled: !!listId,
   });

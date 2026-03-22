@@ -32,19 +32,30 @@ export function useRecordsFromDatabase(entityType: EntityType) {
         return;
       }
 
-      // Load records from appropriate table
+      // Load records from appropriate table, paginating to bypass the 1000-row default
       const tableName = entityType === 'person' ? 'people_records' : 'company_records';
-      
-      const { data, error } = await supabase
-        .from(tableName)
-        .select('*')
-        .eq('team_id', membership.team_id)
-        .order('created_at', { ascending: false });
+      const PAGE_SIZE = 1000;
+      const allData: any[] = [];
+      let from = 0;
 
-      if (error) throw error;
+      while (true) {
+        const { data, error } = await supabase
+          .from(tableName)
+          .select('*')
+          .eq('team_id', membership.team_id)
+          .order('created_at', { ascending: false })
+          .range(from, from + PAGE_SIZE - 1);
+
+        if (error) throw error;
+        if (!data || data.length === 0) break;
+
+        allData.push(...data);
+        if (data.length < PAGE_SIZE) break;
+        from += PAGE_SIZE;
+      }
 
       // Extract entity_data from each record
-      const extractedRecords = (data?.map(record => record.entity_data as unknown as PersonEntity | CompanyEntity) || []);
+      const extractedRecords = (allData.map(record => record.entity_data as unknown as PersonEntity | CompanyEntity) || []);
       
       console.log(`[DATABASE LOAD] Loaded ${extractedRecords.length} ${entityType} records from database`);
       
