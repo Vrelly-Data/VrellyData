@@ -17,7 +17,7 @@ import { useAudienceAttributes } from '@/hooks/useAudienceAttributes';
 import { useAuthStore } from '@/stores/authStore';
 import { usePersistRecords } from '@/hooks/usePersistRecords';
 import { useCreateList, useAddToList } from '@/hooks/useLists';
-import { useSaveAudience } from '@/hooks/useSavedAudiences';
+import { useSaveAudience, type AudienceFilters } from '@/hooks/useSavedAudiences';
 import { useAudienceStore } from '@/stores/audienceStore';
 import { getDefaultFilterBuilderState } from '@/lib/filterConversion';
 import type { PersonEntity } from '@/types/audience';
@@ -40,19 +40,14 @@ interface Prospect {
   linkedin: string | null;
 }
 
-export interface AudienceFilters {
-  industries: string[];
-  isBtoB: boolean;
-  targetTitles: string[];
-  companyTypes: string[];
-  companySizes: string[];
-  locations: string[];
-}
+export type { AudienceFilters };
 
 interface BuildAudienceDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   initialFilters?: AudienceFilters | null;
+  savedAudienceId?: string | null;
+  savedPresetId?: string | null;
 }
 
 function BlurredText({ text, blur = true }: { text: string | null; blur?: boolean }) {
@@ -70,7 +65,7 @@ function BlurredText({ text, blur = true }: { text: string | null; blur?: boolea
 
 const dedup = (arr: string[]) => [...new Set(arr.filter(Boolean))];
 
-export function BuildAudienceDialog({ open, onOpenChange, initialFilters }: BuildAudienceDialogProps) {
+export function BuildAudienceDialog({ open, onOpenChange, initialFilters, savedAudienceId, savedPresetId }: BuildAudienceDialogProps) {
   const navigate = useNavigate();
   const [step, setStep] = useState<'form' | 'result'>('form');
   const [isGenerating, setIsGenerating] = useState(false);
@@ -83,6 +78,10 @@ export function BuildAudienceDialog({ open, onOpenChange, initialFilters }: Buil
   const [isSaving, setIsSaving] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
   const [isSearchSaved, setIsSearchSaved] = useState(false);
+
+  // Track IDs for upsert across re-saves within the same session
+  const [currentSavedId, setCurrentSavedId] = useState<string | null>(null);
+  const [currentPresetId, setCurrentPresetId] = useState<string | null>(null);
 
   const { suggestions } = useFreeDataSuggestions();
   const { attributes } = useAudienceAttributes();
@@ -101,7 +100,7 @@ export function BuildAudienceDialog({ open, onOpenChange, initialFilters }: Buil
   const [companySizes, setCompanySizes] = useState<string[]>([]);
   const [locations, setLocations] = useState<string[]>([]);
 
-  // Pre-populate filters when opening with initialFilters
+  // Pre-populate filters and IDs when opening with a saved audience
   useEffect(() => {
     if (open && initialFilters) {
       setIndustries(initialFilters.industries);
@@ -110,8 +109,10 @@ export function BuildAudienceDialog({ open, onOpenChange, initialFilters }: Buil
       setCompanyTypes(initialFilters.companyTypes);
       setCompanySizes(initialFilters.companySizes);
       setLocations(initialFilters.locations);
+      setCurrentSavedId(savedAudienceId ?? null);
+      setCurrentPresetId(savedPresetId ?? null);
     }
-  }, [open, initialFilters]);
+  }, [open, initialFilters, savedAudienceId, savedPresetId]);
 
   // Merged suggestions
   const industrySuggestions = dedup([...attributes.industries, ...suggestions.industries]);
@@ -227,11 +228,15 @@ export function BuildAudienceDialog({ open, onOpenChange, initialFilters }: Buil
   const handleSaveSearch = async () => {
     if (!audienceName.trim()) return;
     try {
-      await saveAudienceMutation.mutateAsync({
+      const result = await saveAudienceMutation.mutateAsync({
         name: audienceName.trim(),
         filters: { industries, isBtoB, targetTitles, companyTypes, companySizes, locations },
         result_count: totalFound,
+        existingId: currentSavedId,
+        existingPresetId: currentPresetId,
       });
+      setCurrentSavedId(result.id);
+      setCurrentPresetId(result.presetId ?? null);
       setIsSearchSaved(true);
       toast.success(`Search "${audienceName.trim()}" saved`);
     } catch (err: any) {
@@ -260,6 +265,8 @@ export function BuildAudienceDialog({ open, onOpenChange, initialFilters }: Buil
       setIsSaved(false);
       setIsSearchSaved(false);
       setAudienceName('');
+      setCurrentSavedId(null);
+      setCurrentPresetId(null);
     }, 300);
   };
 
@@ -488,31 +495,16 @@ export function BuildAudienceDialog({ open, onOpenChange, initialFilters }: Buil
                           <span>{prospects.length} contacts × 1 credit = <strong className="text-foreground">{creditCost} credits</strong></span>
                           <span>Balance: <strong className={hasEnough ? 'text-foreground' : 'text-destructive'}>{currentCredits.toLocaleString()}</strong></span>
                         </div>
-                        <div className="flex gap-2">
-                          <Button
-                            variant="outline"
-                            onClick={handleSaveSearch}
-                            disabled={saveAudienceMutation.isPending || isSearchSaved || !audienceName.trim()}
-                          >
-                            {saveAudienceMutation.isPending ? (
-                              <><Loader2 className="h-4 w-4 animate-spin mr-2" />Saving...</>
-                            ) : isSearchSaved ? (
-                              <><CheckCircle2 className="h-4 w-4 mr-2" />Search Saved</>
-                            ) : (
-                              <><Bookmark className="h-4 w-4 mr-2" />Save Search</>
-                            )}
-                          </Button>
-                          <Button
-                            onClick={handleSaveAudience}
-                            disabled={isSaving || !hasEnough || !audienceName.trim()}
-                          >
-                            {isSaving ? (
-                              <><Loader2 className="h-4 w-4 animate-spin mr-2" />Saving...</>
-                            ) : (
-                              <><Save className="h-4 w-4 mr-2" />Save Audience</>
-                            )}
-                          </Button>
-                        </div>
+                        <Button
+                          onClick={handleSaveAudience}
+                          disabled={isSaving || !hasEnough || !audienceName.trim()}
+                        >
+                          {isSaving ? (
+                            <><Loader2 className="h-4 w-4 animate-spin mr-2" />Saving...</>
+                          ) : (
+                            <><Save className="h-4 w-4 mr-2" />Save Audience</>
+                          )}
+                        </Button>
                       </div>
                       {!hasEnough && (
                         <p className="text-xs text-destructive">Not enough credits. You need {creditCost} but have {currentCredits}.</p>
@@ -523,11 +515,24 @@ export function BuildAudienceDialog({ open, onOpenChange, initialFilters }: Buil
               </Card>
             )}
 
-            <div className="flex justify-between pt-2">
-              <Button variant="outline" onClick={() => { setStep('form'); setIsSaved(false); }}>
+            <div className="flex justify-between items-center pt-2">
+              <Button variant="outline" onClick={() => { setStep('form'); setIsSaved(false); setIsSearchSaved(false); }}>
                 ← Edit Criteria
               </Button>
               <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  onClick={handleSaveSearch}
+                  disabled={saveAudienceMutation.isPending || isSearchSaved || !audienceName.trim()}
+                >
+                  {saveAudienceMutation.isPending ? (
+                    <><Loader2 className="h-4 w-4 animate-spin mr-2" />Saving...</>
+                  ) : isSearchSaved ? (
+                    <><CheckCircle2 className="h-4 w-4 mr-2" />Search Saved</>
+                  ) : (
+                    <><Bookmark className="h-4 w-4 mr-2" />Save Search</>
+                  )}
+                </Button>
                 <Button variant="outline" onClick={handleEditInBuilder}>
                   <ExternalLink className="h-4 w-4 mr-2" />
                   Edit in Builder

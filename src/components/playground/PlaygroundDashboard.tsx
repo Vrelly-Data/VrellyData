@@ -2,13 +2,13 @@ import { useState } from 'react';
 import { IntegrationSetupCard } from './IntegrationSetupCard';
 import { PlaygroundStatsGrid } from './PlaygroundStatsGrid';
 import { CampaignsTable } from './CampaignsTable';
-import { BuildAudienceDialog, type AudienceFilters } from './BuildAudienceDialog';
+import { BuildAudienceDialog } from './BuildAudienceDialog';
 import { CreateCopyDialog } from './CreateCopyDialog';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Sparkles, Target, Users, ExternalLink, Trash2 } from 'lucide-react';
-import { useSavedAudiences, useDeleteSavedAudience, type SavedAudience } from '@/hooks/useSavedAudiences';
+import { useSavedAudiences, useDeleteSavedAudience, type SavedAudience, type AudienceFilters } from '@/hooks/useSavedAudiences';
 import { formatDistanceToNow } from 'date-fns';
 import { toast } from 'sonner';
 
@@ -20,7 +20,7 @@ function AudienceCard({ audience, onOpen }: { audience: SavedAudience; onOpen: (
     e.stopPropagation();
     setDeleting(true);
     try {
-      await deleteMutation.mutateAsync(audience.id);
+      await deleteMutation.mutateAsync({ id: audience.id, presetId: audience.preset_id });
       toast.success('Audience deleted');
     } catch {
       toast.error('Failed to delete audience');
@@ -90,15 +90,21 @@ export function PlaygroundDashboard() {
   const [buildAudienceOpen, setBuildAudienceOpen] = useState(false);
   const [createCopyOpen, setCreateCopyOpen] = useState(false);
   const [loadedFilters, setLoadedFilters] = useState<AudienceFilters | null>(null);
+  const [loadedSavedId, setLoadedSavedId] = useState<string | null>(null);
+  const [loadedPresetId, setLoadedPresetId] = useState<string | null>(null);
   const { data: savedAudiences } = useSavedAudiences();
 
   const handleOpenSavedAudience = (audience: SavedAudience) => {
     setLoadedFilters(audience.filters);
+    setLoadedSavedId(audience.id);
+    setLoadedPresetId(audience.preset_id);
     setBuildAudienceOpen(true);
   };
 
   const handleOpenNew = () => {
     setLoadedFilters(null);
+    setLoadedSavedId(null);
+    setLoadedPresetId(null);
     setBuildAudienceOpen(true);
   };
 
@@ -182,6 +188,8 @@ export function PlaygroundDashboard() {
         open={buildAudienceOpen}
         onOpenChange={setBuildAudienceOpen}
         initialFilters={loadedFilters}
+        savedAudienceId={loadedSavedId}
+        savedPresetId={loadedPresetId}
       />
       <CreateCopyDialog open={createCopyOpen} onOpenChange={setCreateCopyOpen} />
     </div>
