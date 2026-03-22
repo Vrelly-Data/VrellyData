@@ -43,12 +43,6 @@ export function usePersistRecords() {
         const companies = extractCompaniesFromPeople(entities as PersonEntity[]);
         
         if (companies.length > 0) {
-          console.log('[AUTO-COMPANY EXTRACTION]', {
-            peopleCount: entities.length,
-            companiesExtracted: companies.length,
-            sampleCompany: companies[0],
-          });
-          
           const companyRecords = companies.map(company => ({
             team_id: membership.team_id,
             entity_external_id: company.id,
@@ -66,10 +60,6 @@ export function usePersistRecords() {
           if (companyError) {
             console.error('[AUTO-COMPANY EXTRACTION ERROR]', companyError);
             // Don't throw - people save succeeded, company extraction is bonus
-          } else {
-            console.log('[AUTO-COMPANY EXTRACTION SUCCESS]', {
-              savedCompanies: companies.length,
-            });
           }
         }
       }

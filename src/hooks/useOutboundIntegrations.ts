@@ -34,11 +34,8 @@ export function useOutboundIntegrations() {
 
         if (error) throw error;
         if (!campaigns?.length) {
-          console.log('No linked campaigns found for contact sync');
           return;
         }
-
-        console.log(`Starting contact sync for ${campaigns.length} linked campaigns`);
         const MAX_RETRIES = 3;
         const RETRY_DELAY = 2000;
         let successCount = 0;
@@ -61,7 +58,6 @@ export function useOutboundIntegrations() {
               } else {
                 success = true;
                 successCount++;
-                console.log(`Contact sync succeeded for campaign ${campaign.name}`);
               }
             } catch (err) {
               console.warn(`Contact sync error attempt ${attempt}/${MAX_RETRIES}:`, err);
@@ -151,8 +147,6 @@ export function useOutboundIntegrations() {
             
             if (availableError) {
               console.warn('fetch-available-campaigns error (continuing):', availableError);
-            } else {
-              console.log('fetch-available-campaigns result:', fetchResult);
             }
           } catch (err) {
             console.warn('fetch-available-campaigns error (continuing):', err);
@@ -237,7 +231,6 @@ export function useOutboundIntegrations() {
         if (availableError) {
           console.warn('fetch-available-campaigns failed (peopleCount may be 0):', availableError);
         } else {
-          console.log('fetch-available-campaigns result:', fetchResult);
           if (fetchResult?.autoLinked) {
             toast.info(`Auto-linked ${fetchResult.linkedCount} campaigns`);
           }

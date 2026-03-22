@@ -83,7 +83,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     if (profileError) {
       console.error('Error fetching profile:', profileError);
     } else if (profileData) {
-      console.log('Profile loaded successfully:', profileData.name);
       set({ profile: profileData as Profile });
     }
 
@@ -97,7 +96,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       console.error('Error fetching user roles:', rolesError);
       set({ profileLoading: false });
     } else if (rolesData) {
-      console.log('User roles loaded:', rolesData);
       set({ userRoles: rolesData as UserRole[], profileLoading: false });
     } else {
       set({ profileLoading: false });

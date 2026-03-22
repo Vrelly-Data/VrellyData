@@ -87,7 +87,6 @@ export async function generatePerformanceSnapshot(campaignId: string): Promise<v
     const hasLinkedIn = liMessagesSent > 0 || liConnectionsSent > 0;
 
     if (!hasEmail && !hasLinkedIn) {
-      console.log('Snapshot: no metrics for', campaign.name);
       return;
     }
 
@@ -201,7 +200,6 @@ export async function generatePerformanceSnapshot(campaignId: string): Promise<v
         });
     }
 
-    console.log(`Performance snapshot saved for: ${campaign.name}`);
   } catch (err) {
     console.error('Snapshot generation failed:', err);
   }

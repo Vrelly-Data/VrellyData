@@ -14,7 +14,6 @@ export function useRecordsFromDatabase(entityType: EntityType) {
       
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
-        console.log('No user found, skipping records load');
         setRecords([]);
         return;
       }
@@ -27,7 +26,6 @@ export function useRecordsFromDatabase(entityType: EntityType) {
         .single();
 
       if (!membership) {
-        console.log('No team membership found');
         setRecords([]);
         return;
       }
@@ -56,8 +54,6 @@ export function useRecordsFromDatabase(entityType: EntityType) {
 
       // Extract entity_data from each record
       const extractedRecords = (allData.map(record => record.entity_data as unknown as PersonEntity | CompanyEntity) || []);
-      
-      console.log(`[DATABASE LOAD] Loaded ${extractedRecords.length} ${entityType} records from database`);
       
       setRecords(extractedRecords);
     } catch (error) {
@@ -99,9 +95,7 @@ export function useRecordsFromDatabase(entityType: EntityType) {
 
       // Update local state to remove deleted records
       setRecords(prev => prev.filter(r => !entityIds.includes(r.id)));
-      
-      console.log(`[DATABASE DELETE] Deleted ${entityIds.length} ${entityType} records from database`);
-      
+
       return true;
     } catch (error) {
       console.error('Error deleting records:', error);

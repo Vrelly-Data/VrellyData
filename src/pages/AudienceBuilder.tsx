@@ -307,17 +307,6 @@ export default function AudienceBuilder() {
         action
       );
 
-      // Verification: Log first record to ensure full data is saved
-      if (deduplicationAnalysis.newRecords.length > 0) {
-        console.log('[UNLOCK VERIFICATION]', {
-          action,
-          totalRecords: deduplicationAnalysis.newRecords.length,
-          sampleRecord: deduplicationAnalysis.newRecords[0].data,
-          hasEmail: 'email' in deduplicationAnalysis.newRecords[0].data,
-          hasPhone: 'phone' in deduplicationAnalysis.newRecords[0].data,
-          saveSuccess: saveResult.success,
-        });
-      }
     }
     
     setShowUnlockDialog(false);
@@ -351,15 +340,6 @@ export default function AudienceBuilder() {
     
     switch (action) {
       case 'export':
-        // Verification: Log what we're about to export
-        console.log('[PRE-EXPORT VERIFICATION]', {
-          selectedCount: selectedRecords.size,
-          foundInResults: selectedData.length,
-          entityType: currentType,
-          allUnlocked: selectedData.every(r => 'isUnlocked' in r ? r.isUnlocked : false),
-          sampleRecord: selectedData[0],
-        });
-        
         if (currentType === 'person') {
           exportPeopleToCSV(selectedData as PersonEntity[]);
         } else {

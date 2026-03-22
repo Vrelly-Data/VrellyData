@@ -181,7 +181,7 @@ export function useLinkedInStatsUpload() {
         } else {
           // No matching linked campaign found - skip creating orphan rows
           // Log for debugging but don't create csv_import rows anymore
-          console.log(`No matching linked campaign found for: ${stat.campaignName} - skipping`);
+          // No matching linked campaign found - skipping
         }
       }
 

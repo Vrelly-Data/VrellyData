@@ -170,12 +170,6 @@ function downloadCSV(csvContent: string, filename: string): void {
  * Exports people data to CSV
  */
 export function exportPeopleToCSV(people: PersonEntity[]): void {
-  console.log('[CSV EXPORT]', {
-    totalRecords: people.length,
-    sampleRecord: people[0],
-    fieldsExported: PERSON_FIELD_MAP.length,
-  });
-  
   const csvContent = convertToCSV(people, PERSON_FIELD_MAP);
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
   const filename = `people-export-${timestamp}.csv`;
@@ -187,12 +181,6 @@ export function exportPeopleToCSV(people: PersonEntity[]): void {
  * Exports company data to CSV
  */
 export function exportCompaniesToCSV(companies: CompanyEntity[]): void {
-  console.log('[CSV EXPORT]', {
-    totalRecords: companies.length,
-    sampleRecord: companies[0],
-    fieldsExported: COMPANY_FIELD_MAP.length,
-  });
-  
   const csvContent = convertToCSV(companies, COMPANY_FIELD_MAP);
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
   const filename = `companies-export-${timestamp}.csv`;

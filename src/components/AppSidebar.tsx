@@ -1,4 +1,3 @@
-import { useEffect } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
   Sidebar,
@@ -28,11 +27,6 @@ export function AppSidebar() {
   const navigate = useNavigate();
   const isCollapsed = state === 'collapsed';
   const showAdminLink = userRoles.some(r => r.role === 'admin');
-
-  // Debug logging for role changes
-  useEffect(() => {
-    console.log('AppSidebar - userRoles changed:', userRoles, 'profileLoading:', profileLoading, 'showAdminLink:', showAdminLink);
-  }, [userRoles, profileLoading, showAdminLink]);
 
   return (
     <Sidebar collapsible="icon"  className={isCollapsed ? 'w-28' : 'w-60'}>

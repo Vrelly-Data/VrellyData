@@ -94,8 +94,6 @@ class AudienceLabClient {
     try {
       if (MOCK_MODE) {
         // Mock mode: Generate and filter mock data from stable base
-        console.log('[MOCK] Searching people with filters:', params.filterState);
-        
         // Simulate API delay
         await new Promise(resolve => setTimeout(resolve, 800));
         
@@ -136,10 +134,7 @@ class AudienceLabClient {
         };
       } else {
         // Real API mode - use /enrich endpoint
-        console.log('[AudienceLab API] Searching people with filters:', params.filterState);
-        
         const filters = convertFilterStateToAudienceLabFormat(params.filterState || getDefaultFilterBuilderState());
-        console.log('[AudienceLab API] Converted filters:', filters);
         
         const response = await supabase.functions.invoke('audiencelab-api', {
           body: {
@@ -163,8 +158,6 @@ class AudienceLabClient {
 
         const data = response.data?.result || [];
         const found = response.data?.found || 0;
-        
-        console.log('[AudienceLab API] Results received:', data.length, 'of', found);
 
         // Map API response to PersonEntity
         const entities = this.mapEnrichDataToPeople(data);
@@ -197,8 +190,6 @@ class AudienceLabClient {
     try {
       if (MOCK_MODE) {
         // Mock mode: Generate and filter mock data from stable base
-        console.log('[MOCK] Searching companies with filters:', params.filterState);
-        
         await new Promise(resolve => setTimeout(resolve, 800));
         
         // Initialize stable base dataset once
@@ -238,10 +229,7 @@ class AudienceLabClient {
         };
       } else {
         // Real API mode - use /enrich endpoint
-        console.log('[AudienceLab API] Searching companies with filters:', params.filterState);
-        
         const filters = convertFilterStateToAudienceLabFormat(params.filterState || getDefaultFilterBuilderState());
-        console.log('[AudienceLab API] Converted filters:', filters);
         
         const response = await supabase.functions.invoke('audiencelab-api', {
           body: {
@@ -271,8 +259,6 @@ class AudienceLabClient {
 
         const data = response.data?.result || [];
         const found = response.data?.found || 0;
-        
-        console.log('[AudienceLab API] Results received:', data.length, 'of', found);
 
         // Map API response to CompanyEntity
         const entities = this.mapEnrichDataToCompanies(data);
@@ -318,7 +304,6 @@ class AudienceLabClient {
   async getAttributes(attribute: string): Promise<string[]> {
     try {
       if (MOCK_MODE) {
-        console.log(`[MOCK] Getting ${attribute} attributes`);
         await new Promise(resolve => setTimeout(resolve, 200));
         return MOCK_ATTRIBUTES[attribute as keyof typeof MOCK_ATTRIBUTES] || [];
       } else {
@@ -364,7 +349,6 @@ class AudienceLabClient {
   async estimateSearchCost(filterState: FilterBuilderState, entityType: EntityType): Promise<{ estimatedResults: number; cost: number }> {
     try {
       if (MOCK_MODE) {
-        console.log('[MOCK] Estimating search cost');
         await new Promise(resolve => setTimeout(resolve, 500));
         
         const mockData = entityType === 'person' 

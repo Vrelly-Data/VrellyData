@@ -144,10 +144,6 @@ export function useFreeDataSearch() {
 
       const countParams = { ...sharedParams };
 
-      console.log('[FreeDataSearch] Calling split functions in parallel');
-
-      console.log('[DEBUG] resultsParams:', JSON.stringify(resultsParams));
-
       // Call BOTH functions in parallel with Promise.allSettled
       const [resultsResponse, countResponse] = await Promise.allSettled([
         supabase.rpc('search_prospects_results', resultsParams as any),
@@ -199,15 +195,6 @@ export function useFreeDataSearch() {
 
       const cappedTotal = Math.min(totalCount, TOTAL_DISPLAY_CAP);
       const totalPages = Math.ceil(cappedTotal / perPage);
-
-      console.log('[FreeDataSearch] Results:', {
-        entityType,
-        found: totalCount,
-        isEstimate,
-        returned: items.length,
-        page,
-        totalPages,
-      });
 
       return {
         items,

@@ -185,7 +185,7 @@ export function useEmailStatsUpload() {
             if (stat.campaignId) updatedCampaignIds.push(stat.campaignId);
           }
         } else {
-          console.log(`No matching linked campaign found for: ${stat.campaignName} - skipping`);
+          // No matching linked campaign found - skipping
         }
       }
 
