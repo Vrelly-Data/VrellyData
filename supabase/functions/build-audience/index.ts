@@ -97,7 +97,10 @@ Deno.serve(async (req) => {
     if (industries && industries.length > 0) searchParams.p_industries = industries;
     if (targetTitles && targetTitles.length > 0) searchParams.p_job_titles = targetTitles;
     if (companySizes && companySizes.length > 0) searchParams.p_company_size_ranges = companySizes;
-    if (locations && locations.length > 0) searchParams.p_countries = locations;
+    if (locations && locations.length > 0) {
+      searchParams.p_cities = locations;
+      searchParams.p_countries = locations;
+    }
 
     let prospects: any[] = [];
     let totalCount = 0;

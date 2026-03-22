@@ -310,7 +310,8 @@ export function BuildAudienceDialog({
     state.industries = industries;
     state.jobTitles = targetTitles;
     state.companySize = companySizes;
-    state.cities = locations;
+    state.personCity = locations;
+    state.keywords = companyTypes;
     setFilterBuilderState(state);
     handleClose();
     navigate('/dashboard');

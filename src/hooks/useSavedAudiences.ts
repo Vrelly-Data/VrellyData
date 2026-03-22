@@ -27,7 +27,8 @@ function toFilterBuilderState(filters: AudienceFilters): FilterBuilderState {
   state.industries = filters.industries;
   state.jobTitles = filters.targetTitles;
   state.companySize = filters.companySizes;
-  state.cities = filters.locations;
+  state.personCity = filters.locations;
+  state.keywords = filters.companyTypes;
   return state;
 }
 
