@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { BuildAudienceDialog } from './BuildAudienceDialog';
 import { ViewAudienceDialog } from './ViewAudienceDialog';
 import { useLists } from '@/hooks/useLists';
-import { Separator } from '@/components/ui/separator';
 import { useSyncedContactsPaged, fetchAllContactsForExport } from '@/hooks/useSyncedContactsPaged';
 import { useSyncedCampaigns } from '@/hooks/useSyncedCampaigns';
 import { useOutboundIntegrations } from '@/hooks/useOutboundIntegrations';
@@ -14,10 +13,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Progress } from '@/components/ui/progress';
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
-import { Loader2, Users, RefreshCw, Download, ExternalLink, Check, X, Target } from 'lucide-react';
+import { Loader2, Users, RefreshCw, Download, ExternalLink, Check, X, Target, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { PaginationControls } from '@/components/search/PaginationControls';
+import { useDeleteList } from '@/hooks/useLists';
+import { formatDistanceToNow } from 'date-fns';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 
 const statusColors: Record<string, string> = {
   active: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200',
@@ -45,8 +47,10 @@ export function PeopleTab() {
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
   const [buildAudienceOpen, setBuildAudienceOpen] = useState(false);
   const [selectedListId, setSelectedListId] = useState<string | null>(null);
-  
+  const [deleteListId, setDeleteListId] = useState<string | null>(null);
+
   const { data: savedLists } = useLists('person');
+  const deleteListMutation = useDeleteList();
   const { data: pagedData, isLoading: contactsLoading } = useSyncedContactsPaged({
     campaignId: selectedCampaignId,
     status: statusFilter,
@@ -227,17 +231,91 @@ export function PeopleTab() {
     );
   }
 
+  const handleDeleteList = async () => {
+    if (!deleteListId) return;
+    try {
+      await deleteListMutation.mutateAsync(deleteListId);
+    } catch {
+      // useDeleteList already shows error toast
+    } finally {
+      setDeleteListId(null);
+    }
+  };
+
+  const renderSavedAudiences = () => {
+    if (!savedLists || savedLists.length === 0) return null;
+    return (
+      <div className="space-y-3">
+        <div className="flex items-center gap-2">
+          <div className="h-px flex-1 bg-border" />
+          <span className="text-sm font-medium text-muted-foreground">Saved Audiences</span>
+          <div className="h-px flex-1 bg-border" />
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+          {savedLists.map((list) => (
+            <div
+              key={list.id}
+              className="group relative rounded-lg border border-border bg-card overflow-hidden cursor-pointer hover:shadow-md hover:border-primary/30 transition-all duration-200"
+              onClick={() => setSelectedListId(list.id)}
+            >
+              <div className="h-8 bg-gradient-to-r from-primary/20 to-primary/10 flex items-center px-3 gap-2">
+                <Users className="h-3.5 w-3.5 text-primary/70" />
+                <Target className="h-3 w-3 text-primary/50" />
+              </div>
+              <div className="p-3 space-y-1.5">
+                <p className="font-semibold text-sm leading-snug line-clamp-2">{list.name}</p>
+                <p className="text-xs text-muted-foreground">
+                  {list.item_count} contact{list.item_count !== 1 ? 's' : ''}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {formatDistanceToNow(new Date(list.created_at), { addSuffix: true })}
+                </p>
+              </div>
+              <div className="px-3 pb-3 flex gap-1.5">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="flex-1 h-7 text-xs gap-1"
+                  onClick={(e) => { e.stopPropagation(); setSelectedListId(list.id); }}
+                >
+                  <ExternalLink className="h-3 w-3" />
+                  Open
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                  onClick={(e) => { e.stopPropagation(); setDeleteListId(list.id); }}
+                  disabled={deleteListMutation.isPending}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
   if (totalCount === 0 && selectedCampaignId === 'all' && statusFilter === 'all') {
     return (
-      <>
-        <div className="flex flex-col items-center justify-center h-64 text-center">
+      <div className="space-y-6">
+        <div className="flex justify-end">
+          <Button onClick={() => setBuildAudienceOpen(true)}>
+            <Target className="h-4 w-4 mr-2" />
+            Build Audience with AI
+          </Button>
+        </div>
+
+        <div className="flex flex-col items-center justify-center h-64 text-center border-2 border-dashed rounded-lg">
           <Users className="h-12 w-12 text-muted-foreground mb-4" />
           <h2 className="text-xl font-semibold mb-2">No Contacts Synced</h2>
           <p className="text-muted-foreground max-w-md mb-4">
             Sync your campaigns to fetch contact details and engagement data.
           </p>
           {linkedCampaigns.length > 0 ? (
-            <Button 
+            <Button
               onClick={() => syncAllCampaignsMutation.mutate()}
               disabled={syncAllCampaignsMutation.isPending}
             >
@@ -251,8 +329,8 @@ export function PeopleTab() {
           ) : campaigns?.length ? (
             <div className="flex flex-col gap-2">
               <p className="text-sm text-muted-foreground">Select a campaign to sync its contacts:</p>
-              <Select 
-                onValueChange={(id) => syncContactsMutation.mutate(id)} 
+              <Select
+                onValueChange={(id) => syncContactsMutation.mutate(id)}
                 disabled={syncContactsMutation.isPending}
               >
                 <SelectTrigger className="w-64">
@@ -270,39 +348,24 @@ export function PeopleTab() {
               First sync your campaigns from the Playground tab.
             </p>
           )}
-          <div className="mt-4 pt-4 border-t w-full flex justify-center">
-            <Button onClick={() => setBuildAudienceOpen(true)}>
-              <Target className="h-4 w-4 mr-2" />
-              Build Audience with AI
-            </Button>
-          </div>
         </div>
 
-        {/* Saved Audiences */}
-        {savedLists && savedLists.length > 0 && (
-          <div className="space-y-3 mt-6">
-            <Separator />
-            <h3 className="text-sm font-medium text-muted-foreground">Saved Audiences</h3>
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-              {savedLists.map((list) => (
-                <Card
-                  key={list.id}
-                  className="cursor-pointer hover:border-primary/50 transition-colors"
-                  onClick={() => setSelectedListId(list.id)}
-                >
-                  <CardHeader className="p-4 pb-2">
-                    <CardTitle className="text-sm font-medium truncate">{list.name}</CardTitle>
-                  </CardHeader>
-                  <CardContent className="p-4 pt-0">
-                    <p className="text-xs text-muted-foreground">
-                      {list.item_count} contacts · {new Date(list.created_at).toLocaleDateString()}
-                    </p>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          </div>
-        )}
+        {renderSavedAudiences()}
+
+        <AlertDialog open={!!deleteListId} onOpenChange={(open) => !open && setDeleteListId(null)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete Audience</AlertDialogTitle>
+              <AlertDialogDescription>
+                Are you sure you want to delete this saved audience? This action cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={handleDeleteList}>Delete</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
 
         <BuildAudienceDialog open={buildAudienceOpen} onOpenChange={setBuildAudienceOpen} />
         {selectedListId && (
@@ -313,12 +376,19 @@ export function PeopleTab() {
             listName={savedLists?.find(l => l.id === selectedListId)?.name || 'Audience'}
           />
         )}
-      </>
+      </div>
     );
   }
 
   return (
     <div className="space-y-6">
+      <div className="flex justify-end">
+        <Button onClick={() => setBuildAudienceOpen(true)}>
+          <Target className="h-4 w-4 mr-2" />
+          Build Audience with AI
+        </Button>
+      </div>
+
       {/* Sync Progress */}
       {syncProgress && (
         <Card className="border-primary/20 bg-primary/5">
@@ -329,8 +399,8 @@ export function PeopleTab() {
                 <p className="text-sm font-medium">
                   Syncing campaign {syncProgress.current} of {syncProgress.total}: {syncProgress.campaignName}
                 </p>
-                <Progress 
-                  value={(syncProgress.current / syncProgress.total) * 100} 
+                <Progress
+                  value={(syncProgress.current / syncProgress.total) * 100}
                   className="mt-2 h-2"
                 />
               </div>
@@ -371,8 +441,8 @@ export function PeopleTab() {
 
         <div className="flex items-center gap-2">
           {linkedCampaigns.length > 0 && (
-            <Button 
-              variant="outline" 
+            <Button
+              variant="outline"
               size="sm"
               onClick={() => syncAllCampaignsMutation.mutate()}
               disabled={syncAllCampaignsMutation.isPending || syncContactsMutation.isPending}
@@ -386,8 +456,8 @@ export function PeopleTab() {
             </Button>
           )}
           {selectedCampaignId !== 'all' && (
-            <Button 
-              variant="outline" 
+            <Button
+              variant="outline"
               size="sm"
               onClick={() => syncContactsMutation.mutate(selectedCampaignId)}
               disabled={syncContactsMutation.isPending || syncAllCampaignsMutation.isPending}
@@ -407,10 +477,6 @@ export function PeopleTab() {
               <Download className="h-4 w-4 mr-2" />
             )}
             Export CSV
-          </Button>
-          <Button size="sm" onClick={() => setBuildAudienceOpen(true)}>
-            <Target className="h-4 w-4 mr-2" />
-            Build Audience with AI
           </Button>
         </div>
       </div>
@@ -568,31 +634,22 @@ export function PeopleTab() {
         </CardContent>
       </Card>
 
-      {/* Saved Audiences */}
-      {savedLists && savedLists.length > 0 && (
-        <div className="space-y-3">
-          <Separator />
-          <h3 className="text-sm font-medium text-muted-foreground">Saved Audiences</h3>
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-            {savedLists.map((list) => (
-              <Card
-                key={list.id}
-                className="cursor-pointer hover:border-primary/50 transition-colors"
-                onClick={() => setSelectedListId(list.id)}
-              >
-                <CardHeader className="p-4 pb-2">
-                  <CardTitle className="text-sm font-medium truncate">{list.name}</CardTitle>
-                </CardHeader>
-                <CardContent className="p-4 pt-0">
-                  <p className="text-xs text-muted-foreground">
-                    {list.item_count} contacts · {new Date(list.created_at).toLocaleDateString()}
-                  </p>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        </div>
-      )}
+      {renderSavedAudiences()}
+
+      <AlertDialog open={!!deleteListId} onOpenChange={(open) => !open && setDeleteListId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Audience</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete this saved audience? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDeleteList}>Delete</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <BuildAudienceDialog open={buildAudienceOpen} onOpenChange={setBuildAudienceOpen} />
       {selectedListId && (
