@@ -6,7 +6,7 @@ import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Loader2, Sparkles, Users, Lightbulb, Target, TrendingUp, Save, CheckCircle2, Bookmark, ExternalLink } from 'lucide-react';
+import { Loader2, Sparkles, Users, Lightbulb, Target, TrendingUp, Save, CheckCircle2, Bookmark, ExternalLink, Pencil } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { useCredit } from '@/lib/credits';
@@ -21,6 +21,8 @@ import { useSaveAudience, type AudienceFilters } from '@/hooks/useSavedAudiences
 import { useAudienceStore } from '@/stores/audienceStore';
 import { getDefaultFilterBuilderState } from '@/lib/filterConversion';
 import type { PersonEntity } from '@/types/audience';
+
+export type { AudienceFilters };
 
 interface AudienceInsights {
   icp_summary: string;
@@ -40,14 +42,14 @@ interface Prospect {
   linkedin: string | null;
 }
 
-export type { AudienceFilters };
-
 interface BuildAudienceDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   initialFilters?: AudienceFilters | null;
   savedAudienceId?: string | null;
   savedPresetId?: string | null;
+  savedInsights?: string | null;
+  savedName?: string | null;
 }
 
 function BlurredText({ text, blur = true }: { text: string | null; blur?: boolean }) {
@@ -65,9 +67,30 @@ function BlurredText({ text, blur = true }: { text: string | null; blur?: boolea
 
 const dedup = (arr: string[]) => [...new Set(arr.filter(Boolean))];
 
-export function BuildAudienceDialog({ open, onOpenChange, initialFilters, savedAudienceId, savedPresetId }: BuildAudienceDialogProps) {
+/** Serialize AudienceInsights to a single text string for storage */
+function insightsToText(insights: AudienceInsights): string {
+  const parts: string[] = [];
+  if (insights.icp_summary) parts.push(insights.icp_summary);
+  if (insights.key_insights?.length > 0) {
+    parts.push(insights.key_insights.map(i => `- ${i}`).join('\n'));
+  }
+  if (insights.recommended_approach) parts.push(insights.recommended_approach);
+  if (insights.audience_score) parts.push(`Audience Score: ${insights.audience_score}/100`);
+  return parts.join('\n\n');
+}
+
+export function BuildAudienceDialog({
+  open,
+  onOpenChange,
+  initialFilters,
+  savedAudienceId,
+  savedPresetId,
+  savedInsights,
+  savedName,
+}: BuildAudienceDialogProps) {
   const navigate = useNavigate();
-  const [step, setStep] = useState<'form' | 'result'>('form');
+  // 'saved' = viewing a saved audience, 'form' = editing criteria, 'result' = after AI search
+  const [step, setStep] = useState<'saved' | 'form' | 'result'>('form');
   const [isGenerating, setIsGenerating] = useState(false);
   const [insights, setInsights] = useState<AudienceInsights | null>(null);
   const [prospects, setProspects] = useState<Prospect[]>([]);
@@ -111,8 +134,13 @@ export function BuildAudienceDialog({ open, onOpenChange, initialFilters, savedA
       setLocations(initialFilters.locations);
       setCurrentSavedId(savedAudienceId ?? null);
       setCurrentPresetId(savedPresetId ?? null);
+      setAudienceName(savedName ?? '');
+      // If loading a saved audience, show the saved detail view
+      if (savedAudienceId) {
+        setStep('saved');
+      }
     }
-  }, [open, initialFilters, savedAudienceId, savedPresetId]);
+  }, [open, initialFilters, savedAudienceId, savedPresetId, savedInsights, savedName]);
 
   // Merged suggestions
   const industrySuggestions = dedup([...attributes.industries, ...suggestions.industries]);
@@ -148,7 +176,7 @@ export function BuildAudienceDialog({ open, onOpenChange, initialFilters, savedA
       setInsights(data.insights);
       setProspects(data.prospects || []);
       setTotalFound(data.totalFound || 0);
-      setAudienceName(defaultAudienceName);
+      if (!audienceName) setAudienceName(defaultAudienceName);
       setStep('result');
     } catch (err: any) {
       if (err.message === 'UPGRADE_REQUIRED') {
@@ -228,10 +256,12 @@ export function BuildAudienceDialog({ open, onOpenChange, initialFilters, savedA
   const handleSaveSearch = async () => {
     if (!audienceName.trim()) return;
     try {
+      const insightsText = insights ? insightsToText(insights) : null;
       const result = await saveAudienceMutation.mutateAsync({
         name: audienceName.trim(),
         filters: { industries, isBtoB, targetTitles, companyTypes, companySizes, locations },
         result_count: totalFound,
+        insights: insightsText,
         existingId: currentSavedId,
         existingPresetId: currentPresetId,
       });
@@ -273,22 +303,76 @@ export function BuildAudienceDialog({ open, onOpenChange, initialFilters, savedA
   const scoreColor = (score: number) =>
     score >= 80 ? 'text-green-600' : score >= 60 ? 'text-yellow-600' : 'text-red-500';
 
+  // Build filter summary pills for the saved view
+  const filterPills = [
+    ...industries.slice(0, 2),
+    ...targetTitles.slice(0, 2),
+    ...locations.slice(0, 2),
+    ...companySizes.slice(0, 1),
+    isBtoB ? 'B2B' : 'B2C',
+  ].filter(Boolean);
+
   return (
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Target className="h-5 w-5 text-primary" />
-            {step === 'form' ? 'Build Audience' : 'Your Audience'}
+            {step === 'saved' ? audienceName || 'Saved Audience' : step === 'form' ? 'Build Audience' : 'Your Audience'}
           </DialogTitle>
           <DialogDescription>
-            {step === 'form'
+            {step === 'saved'
+              ? 'View your saved audience details, edit criteria, or open in the full Audience Builder.'
+              : step === 'form'
               ? 'Define your ideal customer profile and we\'ll find matching prospects from our database with AI-powered insights.'
               : `Found ${totalFound.toLocaleString()} matching prospects. Showing up to 50 below.`}
           </DialogDescription>
         </DialogHeader>
 
-        {step === 'form' ? (
+        {step === 'saved' ? (
+          /* -------- Saved audience detail view -------- */
+          <div className="space-y-4 py-2">
+            {/* Filter summary */}
+            <div className="flex flex-wrap gap-1.5">
+              {filterPills.map((pill, i) => (
+                <Badge key={i} variant="secondary" className="text-xs">
+                  {pill}
+                </Badge>
+              ))}
+            </div>
+
+            {/* Saved insights */}
+            {savedInsights && (
+              <Card className="border-primary/20 bg-primary/5">
+                <CardHeader className="py-3">
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    <Lightbulb className="h-4 w-4 text-primary" />
+                    AI Insights
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="py-0 pb-3">
+                  <p className="text-sm whitespace-pre-line">{savedInsights}</p>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Actions */}
+            <div className="flex gap-3 pt-2">
+              <Button onClick={() => setStep('form')} className="flex-1">
+                <Pencil className="h-4 w-4 mr-2" />
+                Edit Criteria
+              </Button>
+              <Button variant="outline" onClick={handleEditInBuilder} className="flex-1">
+                <ExternalLink className="h-4 w-4 mr-2" />
+                Build in Audience Builder
+              </Button>
+            </div>
+            <div className="flex justify-end">
+              <Button variant="ghost" onClick={handleClose}>Close</Button>
+            </div>
+          </div>
+        ) : step === 'form' ? (
+          /* -------- Form / questionnaire step -------- */
           <div className="space-y-5 py-2">
             <div className="space-y-1.5">
               <Label>What Industry/Industries do you operate in?</Label>
@@ -371,6 +455,7 @@ export function BuildAudienceDialog({ open, onOpenChange, initialFilters, savedA
             </div>
           </div>
         ) : (
+          /* -------- Result step (after AI search) -------- */
           <div className="space-y-4 py-2">
             {/* AI Insights */}
             {insights && (
@@ -492,7 +577,7 @@ export function BuildAudienceDialog({ open, onOpenChange, initialFilters, savedA
                       </div>
                       <div className="flex items-center justify-between">
                         <div className="text-sm text-muted-foreground space-x-4">
-                          <span>{prospects.length} contacts × 1 credit = <strong className="text-foreground">{creditCost} credits</strong></span>
+                          <span>{prospects.length} contacts x 1 credit = <strong className="text-foreground">{creditCost} credits</strong></span>
                           <span>Balance: <strong className={hasEnough ? 'text-foreground' : 'text-destructive'}>{currentCredits.toLocaleString()}</strong></span>
                         </div>
                         <Button

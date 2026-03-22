@@ -92,12 +92,16 @@ export function PlaygroundDashboard() {
   const [loadedFilters, setLoadedFilters] = useState<AudienceFilters | null>(null);
   const [loadedSavedId, setLoadedSavedId] = useState<string | null>(null);
   const [loadedPresetId, setLoadedPresetId] = useState<string | null>(null);
+  const [loadedInsights, setLoadedInsights] = useState<string | null>(null);
+  const [loadedName, setLoadedName] = useState<string | null>(null);
   const { data: savedAudiences } = useSavedAudiences();
 
   const handleOpenSavedAudience = (audience: SavedAudience) => {
     setLoadedFilters(audience.filters);
     setLoadedSavedId(audience.id);
     setLoadedPresetId(audience.preset_id);
+    setLoadedInsights(audience.insights);
+    setLoadedName(audience.name);
     setBuildAudienceOpen(true);
   };
 
@@ -105,6 +109,8 @@ export function PlaygroundDashboard() {
     setLoadedFilters(null);
     setLoadedSavedId(null);
     setLoadedPresetId(null);
+    setLoadedInsights(null);
+    setLoadedName(null);
     setBuildAudienceOpen(true);
   };
 
@@ -190,6 +196,8 @@ export function PlaygroundDashboard() {
         initialFilters={loadedFilters}
         savedAudienceId={loadedSavedId}
         savedPresetId={loadedPresetId}
+        savedInsights={loadedInsights}
+        savedName={loadedName}
       />
       <CreateCopyDialog open={createCopyOpen} onOpenChange={setCreateCopyOpen} />
     </div>

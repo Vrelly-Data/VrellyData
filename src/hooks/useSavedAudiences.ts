@@ -17,6 +17,7 @@ export interface SavedAudience {
   filters: AudienceFilters;
   result_count: number | null;
   preset_id: string | null;
+  insights: string | null;
   created_at: string;
 }
 
@@ -50,7 +51,7 @@ export function useSavedAudiences() {
     queryFn: async (): Promise<SavedAudience[]> => {
       const { data, error } = await supabase
         .from('saved_audiences')
-        .select('id, name, filters, result_count, preset_id, created_at')
+        .select('id, name, filters, result_count, preset_id, insights, created_at')
         .order('created_at', { ascending: false });
 
       if (error) throw error;
@@ -67,12 +68,14 @@ export function useSaveAudience() {
       name,
       filters,
       result_count,
+      insights,
       existingId,
       existingPresetId,
     }: {
       name: string;
       filters: AudienceFilters;
       result_count: number | null;
+      insights?: string | null;
       existingId?: string | null;
       existingPresetId?: string | null;
     }) => {
@@ -81,25 +84,24 @@ export function useSaveAudience() {
       const teamId = await getTeamId();
 
       const filterBuilderState = toFilterBuilderState(filters);
+      const filtersJson = JSON.parse(JSON.stringify(filterBuilderState));
 
       // --- filter_presets: upsert ---
       let presetId = existingPresetId;
       if (presetId) {
-        await supabase
+        const { error: updateErr } = await supabase
           .from('filter_presets')
-          .update({
-            name,
-            filters: JSON.parse(JSON.stringify(filterBuilderState)),
-          })
+          .update({ name, filters: filtersJson })
           .eq('id', presetId);
+        if (updateErr) throw updateErr;
       } else {
         const { data: preset, error: presetErr } = await supabase
           .from('filter_presets')
           .insert({
             team_id: teamId,
-            type: 'person' as const,
+            type: 'person',
             name,
-            filters: JSON.parse(JSON.stringify(filterBuilderState)),
+            filters: filtersJson,
           })
           .select('id')
           .single();
@@ -109,14 +111,16 @@ export function useSaveAudience() {
       }
 
       // --- saved_audiences: upsert ---
+      const savedFilters = JSON.parse(JSON.stringify(filters));
       if (existingId) {
         const { error } = await supabase
           .from('saved_audiences')
           .update({
             name,
-            filters: JSON.parse(JSON.stringify(filters)),
+            filters: savedFilters,
             result_count,
             preset_id: presetId,
+            insights: insights ?? null,
           })
           .eq('id', existingId);
 
@@ -128,9 +132,10 @@ export function useSaveAudience() {
           .insert({
             user_id: user.id,
             name,
-            filters: JSON.parse(JSON.stringify(filters)),
+            filters: savedFilters,
             result_count,
             preset_id: presetId,
+            insights: insights ?? null,
           })
           .select('id')
           .single();
@@ -150,14 +155,12 @@ export function useDeleteSavedAudience() {
 
   return useMutation({
     mutationFn: async ({ id, presetId }: { id: string; presetId: string | null }) => {
-      // Delete from saved_audiences first
       const { error } = await supabase
         .from('saved_audiences')
         .delete()
         .eq('id', id);
       if (error) throw error;
 
-      // Also delete the linked filter_preset
       if (presetId) {
         await supabase
           .from('filter_presets')
