@@ -304,7 +304,7 @@ export function PeopleTab() {
         <div className="flex justify-end">
           <Button onClick={() => setBuildAudienceOpen(true)}>
             <Target className="h-4 w-4 mr-2" />
-            Build Audience with AI
+            Create New Audience
           </Button>
         </div>
 
@@ -385,7 +385,7 @@ export function PeopleTab() {
       <div className="flex justify-end">
         <Button onClick={() => setBuildAudienceOpen(true)}>
           <Target className="h-4 w-4 mr-2" />
-          Build Audience with AI
+          Create New Audience
         </Button>
       </div>
 

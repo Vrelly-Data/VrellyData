@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
-import { Loader2, Mail, Linkedin, MessageSquare, Phone, RefreshCw, Copy, FileText, Sparkles, ChevronDown, ChevronRight, Plus, ExternalLink, Trash2 } from 'lucide-react';
+import { Loader2, Mail, Linkedin, MessageSquare, Phone, RefreshCw, Copy, FileText, Sparkles, ChevronDown, ChevronRight, Target, ExternalLink, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { RevampResultDialog } from './RevampResultDialog';
 import { CreateCopyDialog } from './CreateCopyDialog';
@@ -276,7 +276,7 @@ export function CopyTab() {
     <div className="space-y-6">
       <div className="flex justify-end">
         <Button onClick={() => setCreateCopyOpen(true)}>
-          <Plus className="h-4 w-4 mr-2" />
+          <Target className="h-4 w-4 mr-2" />
           Create New Copy
         </Button>
       </div>
