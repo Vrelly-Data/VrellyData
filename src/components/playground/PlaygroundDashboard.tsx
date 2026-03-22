@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { IntegrationSetupCard } from './IntegrationSetupCard';
 import { PlaygroundStatsGrid } from './PlaygroundStatsGrid';
 import { CampaignsTable } from './CampaignsTable';
@@ -7,12 +8,14 @@ import { CreateCopyDialog } from './CreateCopyDialog';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Sparkles, Target, Users, ExternalLink, Trash2 } from 'lucide-react';
+import { Sparkles, Target, Users, ExternalLink, Trash2, Pencil } from 'lucide-react';
 import { useSavedAudiences, useDeleteSavedAudience, type SavedAudience, type AudienceFilters } from '@/hooks/useSavedAudiences';
+import { useAudienceStore } from '@/stores/audienceStore';
+import { getDefaultFilterBuilderState } from '@/lib/filterConversion';
 import { formatDistanceToNow } from 'date-fns';
 import { toast } from 'sonner';
 
-function AudienceCard({ audience, onOpen }: { audience: SavedAudience; onOpen: () => void }) {
+function AudienceCard({ audience, onOpen, onEditCriteria }: { audience: SavedAudience; onOpen: () => void; onEditCriteria: () => void }) {
   const [deleting, setDeleting] = useState(false);
   const deleteMutation = useDeleteSavedAudience();
 
@@ -74,6 +77,15 @@ function AudienceCard({ audience, onOpen }: { audience: SavedAudience; onOpen: (
         </Button>
         <Button
           size="sm"
+          variant="outline"
+          className="flex-1 h-7 text-xs gap-1"
+          onClick={(e) => { e.stopPropagation(); onEditCriteria(); }}
+        >
+          <Pencil className="h-3 w-3" />
+          Edit Criteria
+        </Button>
+        <Button
+          size="sm"
           variant="ghost"
           className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
           onClick={handleDelete}
@@ -87,6 +99,8 @@ function AudienceCard({ audience, onOpen }: { audience: SavedAudience; onOpen: (
 }
 
 export function PlaygroundDashboard() {
+  const navigate = useNavigate();
+  const { setFilterBuilderState } = useAudienceStore();
   const [buildAudienceOpen, setBuildAudienceOpen] = useState(false);
   const [createCopyOpen, setCreateCopyOpen] = useState(false);
   const [loadedFilters, setLoadedFilters] = useState<AudienceFilters | null>(null);
@@ -103,6 +117,16 @@ export function PlaygroundDashboard() {
     setLoadedInsights(audience.insights);
     setLoadedName(audience.name);
     setBuildAudienceOpen(true);
+  };
+
+  const handleEditCriteria = (audience: SavedAudience) => {
+    const state = getDefaultFilterBuilderState();
+    state.industries = audience.filters.industries;
+    state.jobTitles = audience.filters.targetTitles;
+    state.companySize = audience.filters.companySizes;
+    state.cities = audience.filters.locations;
+    setFilterBuilderState(state);
+    navigate('/dashboard');
   };
 
   const handleOpenNew = () => {
@@ -175,6 +199,7 @@ export function PlaygroundDashboard() {
                 key={audience.id}
                 audience={audience}
                 onOpen={() => handleOpenSavedAudience(audience)}
+                onEditCriteria={() => handleEditCriteria(audience)}
               />
             ))}
           </div>

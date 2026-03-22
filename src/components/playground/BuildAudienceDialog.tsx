@@ -6,7 +6,8 @@ import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Loader2, Sparkles, Users, Lightbulb, Target, TrendingUp, Save, CheckCircle2, Bookmark, ExternalLink, Pencil } from 'lucide-react';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
+import { Loader2, Sparkles, Users, Lightbulb, Target, TrendingUp, Save, CheckCircle2, Bookmark, ExternalLink, Pencil, AlertTriangle } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { useCredit } from '@/lib/credits';
@@ -101,6 +102,7 @@ export function BuildAudienceDialog({
   const [isSaving, setIsSaving] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
   const [isSearchSaved, setIsSearchSaved] = useState(false);
+  const [showSaveConfirm, setShowSaveConfirm] = useState(false);
 
   // Track IDs for upsert across re-saves within the same session
   const [currentSavedId, setCurrentSavedId] = useState<string | null>(null);
@@ -193,8 +195,13 @@ export function BuildAudienceDialog({
     }
   };
 
-  const handleSaveAudience = async () => {
+  const handleSaveAudienceClick = () => {
     if (!audienceName.trim() || prospects.length === 0) return;
+    setShowSaveConfirm(true);
+  };
+
+  const handleSaveAudienceConfirm = async () => {
+    setShowSaveConfirm(false);
     setIsSaving(true);
 
     try {
@@ -241,13 +248,37 @@ export function BuildAudienceDialog({
         })),
       });
 
+      // 4. Also save filters to Builder Saved Searches (filter_presets)
+      const currentFilters: AudienceFilters = { industries, isBtoB, targetTitles, companyTypes, companySizes, locations };
+      const insightsText = insights ? insightsToText(insights) : null;
+      try {
+        const result = await saveAudienceMutation.mutateAsync({
+          name: audienceName.trim(),
+          filters: currentFilters,
+          result_count: totalFound,
+          insights: insightsText,
+          existingId: currentSavedId,
+          existingPresetId: currentPresetId,
+        });
+        setCurrentSavedId(result.id);
+        setCurrentPresetId(result.presetId ?? null);
+      } catch {
+        // Non-critical: people list was saved successfully even if preset save fails
+      }
+
       // Refresh profile for updated credits
       await fetchProfile();
 
       setIsSaved(true);
       toast.success(`Saved ${prospects.length} contacts to "${audienceName.trim()}"`);
     } catch (err: any) {
-      toast.error(`Failed to save: ${err.message || 'Unknown error'}`);
+      if (err.message === 'UPGRADE_REQUIRED') {
+        toast.error('You need an active subscription to save audiences.');
+      } else if (err.message === 'OUT_OF_CREDITS') {
+        toast.error('You have run out of export credits for this period.');
+      } else {
+        toast.error(`Failed to save: ${err.message || 'Unknown error'}`);
+      }
     } finally {
       setIsSaving(false);
     }
@@ -294,6 +325,7 @@ export function BuildAudienceDialog({
       setTotalFound(0);
       setIsSaved(false);
       setIsSearchSaved(false);
+      setShowSaveConfirm(false);
       setAudienceName('');
       setCurrentSavedId(null);
       setCurrentPresetId(null);
@@ -581,7 +613,7 @@ export function BuildAudienceDialog({
                           <span>Balance: <strong className={hasEnough ? 'text-foreground' : 'text-destructive'}>{currentCredits.toLocaleString()}</strong></span>
                         </div>
                         <Button
-                          onClick={handleSaveAudience}
+                          onClick={handleSaveAudienceClick}
                           disabled={isSaving || !hasEnough || !audienceName.trim()}
                         >
                           {isSaving ? (
@@ -628,6 +660,46 @@ export function BuildAudienceDialog({
           </div>
         )}
       </DialogContent>
+
+      {/* Credit confirmation dialog */}
+      <AlertDialog open={showSaveConfirm} onOpenChange={setShowSaveConfirm}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <Users className="h-5 w-5 text-primary" />
+              Confirm Save Audience
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-3">
+                <p>You are about to save this audience to your People list.</p>
+                <div className="rounded-md border p-3 space-y-1.5 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">People to save</span>
+                    <span className="font-medium text-foreground">{prospects.length.toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Credits to deduct</span>
+                    <span className="font-medium text-foreground">{creditCost.toLocaleString()} credits</span>
+                  </div>
+                  <div className="border-t pt-1.5 flex justify-between">
+                    <span className="text-muted-foreground">Remaining balance</span>
+                    <span className={`font-medium ${hasEnough ? 'text-foreground' : 'text-destructive'}`}>
+                      {(currentCredits - creditCost).toLocaleString()} credits
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleSaveAudienceConfirm}>
+              <Save className="h-4 w-4 mr-2" />
+              Confirm & Save
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Dialog>
   );
 }

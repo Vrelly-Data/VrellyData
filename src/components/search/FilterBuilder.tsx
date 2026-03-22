@@ -8,6 +8,7 @@ import { useAudienceAttributes } from '@/hooks/useAudienceAttributes';
 import { useFreeDataSuggestions } from '@/hooks/useFreeDataSuggestions';
 import { FilterBuilderState, getDefaultFilterBuilderState } from '@/lib/filterConversion';
 import { EntityType } from '@/types/audience';
+import { useAudienceStore } from '@/stores/audienceStore';
 import { TagInput } from '@/components/ui/tag-input';
 import { MultiSelectDropdown } from '@/components/search/MultiSelectDropdown';
 import { FilterPresetsDropdown } from '@/components/search/FilterPresetsDropdown';
@@ -78,10 +79,24 @@ function DncSection({
 export function FilterBuilder({ entityType, onSearch }: FilterBuilderProps) {
   const { attributes, loading } = useAudienceAttributes();
   const { suggestions } = useFreeDataSuggestions();
-  
+  const { filterBuilderState: externalFilters, setFilterBuilderState: clearExternalFilters } = useAudienceStore();
+
   const getInitialFilterState = (): FilterBuilderState => getDefaultFilterBuilderState();
 
   const [filterState, setFilterState] = useState<FilterBuilderState>(getInitialFilterState());
+
+  // Pick up externally-set filters (e.g. from AI Audience Builder navigation)
+  useEffect(() => {
+    const defaults = getDefaultFilterBuilderState();
+    const hasValues = externalFilters.industries.length > 0 ||
+      externalFilters.jobTitles.length > 0 ||
+      externalFilters.companySize.length > 0 ||
+      externalFilters.cities.length > 0;
+    if (hasValues) {
+      setFilterState({ ...defaults, ...externalFilters });
+      clearExternalFilters(defaults);
+    }
+  }, [externalFilters]);
 
   const updateFilter = <K extends keyof FilterBuilderState>(
     key: K,
