@@ -1,11 +1,12 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Loader2, Sparkles, Users, Lightbulb, Target, TrendingUp, Save, CheckCircle2 } from 'lucide-react';
+import { Loader2, Sparkles, Users, Lightbulb, Target, TrendingUp, Save, CheckCircle2, Bookmark, ExternalLink } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { useCredit } from '@/lib/credits';
@@ -16,6 +17,9 @@ import { useAudienceAttributes } from '@/hooks/useAudienceAttributes';
 import { useAuthStore } from '@/stores/authStore';
 import { usePersistRecords } from '@/hooks/usePersistRecords';
 import { useCreateList, useAddToList } from '@/hooks/useLists';
+import { useSaveAudience } from '@/hooks/useSavedAudiences';
+import { useAudienceStore } from '@/stores/audienceStore';
+import { getDefaultFilterBuilderState } from '@/lib/filterConversion';
 import type { PersonEntity } from '@/types/audience';
 
 interface AudienceInsights {
@@ -36,9 +40,19 @@ interface Prospect {
   linkedin: string | null;
 }
 
+export interface AudienceFilters {
+  industries: string[];
+  isBtoB: boolean;
+  targetTitles: string[];
+  companyTypes: string[];
+  companySizes: string[];
+  locations: string[];
+}
+
 interface BuildAudienceDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  initialFilters?: AudienceFilters | null;
 }
 
 function BlurredText({ text, blur = true }: { text: string | null; blur?: boolean }) {
@@ -56,7 +70,8 @@ function BlurredText({ text, blur = true }: { text: string | null; blur?: boolea
 
 const dedup = (arr: string[]) => [...new Set(arr.filter(Boolean))];
 
-export function BuildAudienceDialog({ open, onOpenChange }: BuildAudienceDialogProps) {
+export function BuildAudienceDialog({ open, onOpenChange, initialFilters }: BuildAudienceDialogProps) {
+  const navigate = useNavigate();
   const [step, setStep] = useState<'form' | 'result'>('form');
   const [isGenerating, setIsGenerating] = useState(false);
   const [insights, setInsights] = useState<AudienceInsights | null>(null);
@@ -67,6 +82,7 @@ export function BuildAudienceDialog({ open, onOpenChange }: BuildAudienceDialogP
   const [audienceName, setAudienceName] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
+  const [isSearchSaved, setIsSearchSaved] = useState(false);
 
   const { suggestions } = useFreeDataSuggestions();
   const { attributes } = useAudienceAttributes();
@@ -74,6 +90,8 @@ export function BuildAudienceDialog({ open, onOpenChange }: BuildAudienceDialogP
   const { saveRecords } = usePersistRecords();
   const createList = useCreateList();
   const addToList = useAddToList();
+  const saveAudienceMutation = useSaveAudience();
+  const { setFilterBuilderState } = useAudienceStore();
 
   // Form state
   const [industries, setIndustries] = useState<string[]>([]);
@@ -82,6 +100,18 @@ export function BuildAudienceDialog({ open, onOpenChange }: BuildAudienceDialogP
   const [companyTypes, setCompanyTypes] = useState<string[]>([]);
   const [companySizes, setCompanySizes] = useState<string[]>([]);
   const [locations, setLocations] = useState<string[]>([]);
+
+  // Pre-populate filters when opening with initialFilters
+  useEffect(() => {
+    if (open && initialFilters) {
+      setIndustries(initialFilters.industries);
+      setIsBtoB(initialFilters.isBtoB);
+      setTargetTitles(initialFilters.targetTitles);
+      setCompanyTypes(initialFilters.companyTypes);
+      setCompanySizes(initialFilters.companySizes);
+      setLocations(initialFilters.locations);
+    }
+  }, [open, initialFilters]);
 
   // Merged suggestions
   const industrySuggestions = dedup([...attributes.industries, ...suggestions.industries]);
@@ -194,6 +224,32 @@ export function BuildAudienceDialog({ open, onOpenChange }: BuildAudienceDialogP
     }
   };
 
+  const handleSaveSearch = async () => {
+    if (!audienceName.trim()) return;
+    try {
+      await saveAudienceMutation.mutateAsync({
+        name: audienceName.trim(),
+        filters: { industries, isBtoB, targetTitles, companyTypes, companySizes, locations },
+        result_count: totalFound,
+      });
+      setIsSearchSaved(true);
+      toast.success(`Search "${audienceName.trim()}" saved`);
+    } catch (err: any) {
+      toast.error(`Failed to save search: ${err.message || 'Unknown error'}`);
+    }
+  };
+
+  const handleEditInBuilder = () => {
+    const state = getDefaultFilterBuilderState();
+    state.industries = industries;
+    state.jobTitles = targetTitles;
+    state.companySize = companySizes;
+    state.cities = locations;
+    setFilterBuilderState(state);
+    handleClose();
+    navigate('/dashboard');
+  };
+
   const handleClose = () => {
     onOpenChange(false);
     setTimeout(() => {
@@ -202,6 +258,7 @@ export function BuildAudienceDialog({ open, onOpenChange }: BuildAudienceDialogP
       setProspects([]);
       setTotalFound(0);
       setIsSaved(false);
+      setIsSearchSaved(false);
       setAudienceName('');
     }, 300);
   };
@@ -407,7 +464,7 @@ export function BuildAudienceDialog({ open, onOpenChange }: BuildAudienceDialogP
               </CardContent>
             </Card>
 
-            {/* Save Audience Section */}
+            {/* Save Section */}
             {prospects.length > 0 && (
               <Card className={isSaved ? 'border-green-500/30 bg-green-500/5' : ''}>
                 <CardContent className="py-4">
@@ -431,16 +488,31 @@ export function BuildAudienceDialog({ open, onOpenChange }: BuildAudienceDialogP
                           <span>{prospects.length} contacts × 1 credit = <strong className="text-foreground">{creditCost} credits</strong></span>
                           <span>Balance: <strong className={hasEnough ? 'text-foreground' : 'text-destructive'}>{currentCredits.toLocaleString()}</strong></span>
                         </div>
-                        <Button
-                          onClick={handleSaveAudience}
-                          disabled={isSaving || !hasEnough || !audienceName.trim()}
-                        >
-                          {isSaving ? (
-                            <><Loader2 className="h-4 w-4 animate-spin mr-2" />Saving...</>
-                          ) : (
-                            <><Save className="h-4 w-4 mr-2" />Save Audience</>
-                          )}
-                        </Button>
+                        <div className="flex gap-2">
+                          <Button
+                            variant="outline"
+                            onClick={handleSaveSearch}
+                            disabled={saveAudienceMutation.isPending || isSearchSaved || !audienceName.trim()}
+                          >
+                            {saveAudienceMutation.isPending ? (
+                              <><Loader2 className="h-4 w-4 animate-spin mr-2" />Saving...</>
+                            ) : isSearchSaved ? (
+                              <><CheckCircle2 className="h-4 w-4 mr-2" />Search Saved</>
+                            ) : (
+                              <><Bookmark className="h-4 w-4 mr-2" />Save Search</>
+                            )}
+                          </Button>
+                          <Button
+                            onClick={handleSaveAudience}
+                            disabled={isSaving || !hasEnough || !audienceName.trim()}
+                          >
+                            {isSaving ? (
+                              <><Loader2 className="h-4 w-4 animate-spin mr-2" />Saving...</>
+                            ) : (
+                              <><Save className="h-4 w-4 mr-2" />Save Audience</>
+                            )}
+                          </Button>
+                        </div>
                       </div>
                       {!hasEnough && (
                         <p className="text-xs text-destructive">Not enough credits. You need {creditCost} but have {currentCredits}.</p>
@@ -455,7 +527,13 @@ export function BuildAudienceDialog({ open, onOpenChange }: BuildAudienceDialogP
               <Button variant="outline" onClick={() => { setStep('form'); setIsSaved(false); }}>
                 ← Edit Criteria
               </Button>
-              <Button onClick={handleClose}>Done</Button>
+              <div className="flex gap-2">
+                <Button variant="outline" onClick={handleEditInBuilder}>
+                  <ExternalLink className="h-4 w-4 mr-2" />
+                  Edit in Builder
+                </Button>
+                <Button onClick={handleClose}>Done</Button>
+              </div>
             </div>
           </div>
         )}
