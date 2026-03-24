@@ -174,7 +174,7 @@ export function useFreeDataSearch() {
       // Process count (may fail gracefully)
       let totalCount = items.length; // fallback: at least what we got
       let isEstimate = true;
-
+      
       if (countResponse.status === 'fulfilled') {
         const { data, error } = countResponse.value;
         if (!error && data && (data as any[]).length > 0) {
@@ -191,34 +191,6 @@ export function useFreeDataSearch() {
         console.warn('Count query rejected (using fallback):', countResponse.reason);
         totalCount = items.length;
         isEstimate = true;
-      }
-
-      // Refine small estimates: if estimated count < 300, fetch exact count
-      if (isEstimate && totalCount > 0 && totalCount < 300) {
-        try {
-          const exactParams = { ...sharedParams, p_limit: 301, p_offset: 0 };
-          const { data: exactData, error: exactError } = await supabase.rpc(
-            'search_prospects_results', exactParams as any
-          );
-          if (!exactError && exactData) {
-            const exactRows = (exactData as any[]).length;
-            totalCount = exactRows;
-            isEstimate = false;
-            // Use the fresh data if we're on page 1
-            if (page === 1) {
-              const sliced = (exactData as any[]).slice(0, perPage);
-              items = sliced.map((record: any) => {
-                if (entityType === 'person') {
-                  return mapFreeDataToPerson(record) as T;
-                } else {
-                  return mapFreeDataToCompany(record) as T;
-                }
-              });
-            }
-          }
-        } catch {
-          // Keep the estimate if refinement fails
-        }
       }
 
       const cappedTotal = Math.min(totalCount, TOTAL_DISPLAY_CAP);
