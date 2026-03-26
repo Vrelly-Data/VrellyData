@@ -7,7 +7,7 @@ const corsHeaders = {
 
 // V3 API for sequences (includes teamId for workspace filtering)
 const REPLY_API_V3 = "https://api.reply.io/v3";
-// V1 API for fetching campaign stats (V3 doesn't include stats)
+// V1 API for campaigns list (includes inline stats per campaign)
 const REPLY_API_V1 = "https://api.reply.io/v1";
 
 // LinkedIn fields - preserved from CSV uploads, never overwritten by sync
@@ -43,20 +43,6 @@ interface ReplyioSequence {
   ownerId?: number;
   created?: string;
   isArchived?: boolean;
-}
-
-// V3 Statistics response
-interface ReplySequenceStats {
-  sequenceId: number;
-  sequenceName?: string;
-  deliveredContacts?: number;
-  repliedContacts?: number;
-  interestedContacts?: number;
-  notInterestedContacts?: number;
-  replyRate?: number;
-  deliveryRate?: number;
-  interestedRate?: number;
-  openRate?: number;
 }
 
 // V3 status is already a string, just lowercase it
@@ -160,107 +146,58 @@ async function fetchWithRetryV1(
   throw new Error(`Max retries exceeded for ${endpoint}`);
 }
 
-// Fetch sequence stats from V3 Statistics API
-async function fetchSequenceStats(
-  sequenceId: number, 
-  apiKey: string, 
-  teamId?: string
-): Promise<Record<string, number>> {
-  try {
-    const data = await fetchWithRetryV3(`/statistics/sequences/${sequenceId}`, apiKey, teamId) as ReplySequenceStats;
-    
-    return {
-      sent: data.deliveredContacts || 0,
-      delivered: data.deliveredContacts || 0,
-      replies: data.repliedContacts || 0,
-      replyRate: data.replyRate || 0,
-      deliveryRate: data.deliveryRate || 0,
-      interestedContacts: data.interestedContacts || 0,
-      notInterestedContacts: data.notInterestedContacts || 0,
-      openRate: data.openRate || 0,
-    };
-  } catch (err) {
-    console.warn(`Could not fetch V3 stats for sequence ${sequenceId}:`, err);
-    return {};
-  }
+// Extract stats from a V1 campaign list object (stats are inline in the list response)
+function extractStatsFromV1Campaign(campaign: Record<string, unknown>): Record<string, number> {
+  return {
+    sent: (campaign.deliveriesCount as number) || 0,
+    delivered: (campaign.deliveriesCount as number) || 0,
+    opens: (campaign.opensCount as number) || 0,
+    replies: (campaign.repliesCount as number) || 0,
+    bounces: (campaign.bouncesCount as number) || 0,
+    optedOut: (campaign.optOutsCount as number) || 0,
+    outOfOffice: (campaign.outOfOfficeCount as number) || 0,
+    peopleCount: (campaign.peopleCount as number) || 0,
+    peopleFinished: (campaign.peopleFinished as number) || 0,
+    peopleActive: (campaign.peopleActive as number) || 0,
+    peoplePaused: (campaign.peoplePaused as number) || 0,
+  };
 }
 
-// Fetch sequence report from V3 Reports API (different endpoint, may have different permissions)
-async function fetchSequenceReport(
-  sequenceId: number,
+// Fetch all campaigns from V1 list endpoint (paginated), returns a map keyed by campaign ID
+async function fetchAllCampaignsV1(
   apiKey: string,
-  teamId?: string
-): Promise<Record<string, number>> {
-  try {
-    const data = await fetchWithRetryV3(
-      `/reports/sequences/${sequenceId}`, 
-      apiKey, 
-      teamId
-    ) as Record<string, unknown>;
-    
-    // Reports API may use different field names
-    return {
-      sent: (data.delivered as number) || (data.sent as number) || (data.deliveredContacts as number) || 0,
-      delivered: (data.delivered as number) || (data.deliveredContacts as number) || 0,
-      replies: (data.replied as number) || (data.replies as number) || (data.repliedContacts as number) || 0,
-      opens: (data.opened as number) || (data.opens as number) || (data.openedContacts as number) || 0,
-      clicks: (data.clicked as number) || (data.clicks as number) || (data.clickedContacts as number) || 0,
-    };
-  } catch (err) {
-    console.warn(`Could not fetch V3 report for sequence ${sequenceId}:`, err);
-    return {};
-  }
-}
+  teamId?: string,
+  pageSize: number = 100
+): Promise<Map<number, Record<string, unknown>>> {
+  const campaignMap = new Map<number, Record<string, unknown>>();
+  let page = 1;
+  let hasMore = true;
 
-// Fetch campaign stats from V1 single campaign endpoint without team header
-// (Some accounts may not work with team-scoped requests)
-async function fetchCampaignStatsV1NoTeam(
-  campaignId: number,
-  apiKey: string
-): Promise<Record<string, number>> {
-  try {
-    // Try without team header - might work for non-agency accounts
-    const data = await fetchWithRetryV1(`/campaigns/${campaignId}`, apiKey);
-    const campaign = data as Record<string, unknown>;
-    
-    return {
-      sent: (campaign.peopleSent as number) || (campaign.peopleDelivered as number) || 0,
-      delivered: (campaign.peopleDelivered as number) || (campaign.peopleSent as number) || 0,
-      replies: (campaign.peopleReplied as number) || 0,
-      opens: (campaign.peopleOpened as number) || 0,
-      clicks: (campaign.peopleClicked as number) || 0,
-      bounces: (campaign.peopleBounced as number) || 0,
-    };
-  } catch (err) {
-    console.warn(`Could not fetch V1 stats (no team) for campaign ${campaignId}:`, err);
-    return {};
-  }
-}
+  while (hasMore) {
+    const data = await fetchWithRetryV1(`/campaigns?limit=${pageSize}&page=${page}`, apiKey, teamId);
+    const campaigns = (Array.isArray(data) ? data : []) as Record<string, unknown>[];
 
-// Fetch campaign stats from V1 single campaign endpoint (fallback when V3 fails)
-async function fetchCampaignStatsV1(
-  campaignId: number,
-  apiKey: string,
-  teamId?: string
-): Promise<Record<string, number>> {
-  try {
-    const data = await fetchWithRetryV1(`/campaigns/${campaignId}`, apiKey, teamId);
-    const campaign = data as Record<string, unknown>;
-    
-    // V1 campaign response includes aggregate stats directly
-    return {
-      sent: (campaign.peopleSent as number) || (campaign.peopleDelivered as number) || 0,
-      delivered: (campaign.peopleDelivered as number) || (campaign.peopleSent as number) || 0,
-      replies: (campaign.peopleReplied as number) || 0,
-      opens: (campaign.peopleOpened as number) || 0,
-      clicks: (campaign.peopleClicked as number) || 0,
-      bounces: (campaign.peopleBounced as number) || 0,
-      peopleFinished: (campaign.peopleFinished as number) || 0,
-    };
-  } catch (err) {
-    console.warn(`Could not fetch V1 stats for campaign ${campaignId}:`, err);
-    return {};
+    for (const c of campaigns) {
+      const id = c.id as number;
+      if (id) campaignMap.set(id, c);
+    }
+
+    console.log(`  V1 campaigns page ${page}: fetched ${campaigns.length}, total: ${campaignMap.size}`);
+
+    hasMore = campaigns.length === pageSize;
+    page++;
+
+    if (page > 100) {
+      console.warn(`Reached page limit (100) for V1 campaigns`);
+      break;
+    }
+
+    if (hasMore) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
   }
+
+  return campaignMap;
 }
 
 // Paginated fetch helper for V3 API
@@ -411,7 +348,17 @@ Deno.serve(async (req) => {
       throw new Error(`Failed to fetch sequences: ${errorMessage}`);
     }
 
-    // Process each sequence - fetch stats and sync contacts
+    // Fetch all campaigns from V1 list endpoint (stats are inline)
+    console.log(`Fetching V1 campaigns list for inline stats...`);
+    let v1CampaignMap = new Map<number, Record<string, unknown>>();
+    try {
+      v1CampaignMap = await fetchAllCampaignsV1(apiKey, replyTeamId || undefined);
+      console.log(`Fetched ${v1CampaignMap.size} campaigns from V1 list endpoint`);
+    } catch (err) {
+      console.warn(`Could not fetch V1 campaigns list, stats will be empty:`, err);
+    }
+
+    // Process each sequence - map inline stats and sync
     const syncedCampaignIds: { internal: string; external: string }[] = [];
 
     for (const sequence of sequences) {
@@ -465,29 +412,16 @@ Deno.serve(async (req) => {
           }
         }
 
-        // Fetch stats - multiple fallback layers
-        console.log(`  Fetching stats from V3 Statistics API...`);
-        let apiStats = await fetchSequenceStats(sequence.id, apiKey, replyTeamId || undefined);
-        
-        // Fallback 1: Try V3 Reports API
-        if (!apiStats.sent && !apiStats.replies) {
-          console.log(`  V3 stats empty, trying V3 Reports API...`);
-          apiStats = await fetchSequenceReport(sequence.id, apiKey, replyTeamId || undefined);
+        // Extract stats from V1 campaigns list (already fetched in bulk)
+        const v1Campaign = v1CampaignMap.get(sequence.id);
+        const apiStats = v1Campaign
+          ? extractStatsFromV1Campaign(v1Campaign)
+          : { sent: 0, delivered: 0, opens: 0, replies: 0, bounces: 0, optedOut: 0, outOfOffice: 0, peopleCount: 0, peopleFinished: 0, peopleActive: 0, peoplePaused: 0 };
+
+        if (!v1Campaign) {
+          console.warn(`  No V1 campaign data found for sequence ${sequence.id}, stats will be zero`);
         }
-        
-        // Fallback 2: Try V1 single campaign with team header
-        if (!apiStats.sent && !apiStats.replies) {
-          console.log(`  V3 reports empty, trying V1 /campaigns/${sequence.id}...`);
-          apiStats = await fetchCampaignStatsV1(sequence.id, apiKey, replyTeamId || undefined);
-        }
-        
-        // Fallback 3: Try V1 single campaign WITHOUT team header
-        if (!apiStats.sent && !apiStats.replies) {
-          console.log(`  V1 with team failed, trying V1 without team header...`);
-          apiStats = await fetchCampaignStatsV1NoTeam(sequence.id, apiKey);
-        }
-        
-        console.log(`  Final stats: sent=${apiStats.sent || 0}, replies=${apiStats.replies || 0}`);
+        console.log(`  Stats: sent=${apiStats.sent}, replies=${apiStats.replies}, opens=${apiStats.opens}`);
 
         // Extract existing values for fallback logic
         const existingPeopleCount = existingStats.peopleCount as number | undefined;
@@ -519,7 +453,9 @@ Deno.serve(async (req) => {
           delivered: finalDelivered,
           replies: finalReplies,
           // Keep peopleCount separate - it represents contacts enrolled, not emails sent
-          peopleCount: existingPeopleCount || 0,
+          peopleCount: apiStats.peopleCount || existingPeopleCount || 0,
+          // Preserve replyTeamId from V3 sequence data
+          replyTeamId: sequence.teamId || (existingStats.replyTeamId as number) || undefined,
         };
 
         // Update existing campaign or insert new one

@@ -19,14 +19,15 @@ import {
 } from '@/components/ui/select';
 import { useOutboundIntegrations } from '@/hooks/useOutboundIntegrations';
 import { supabase } from '@/integrations/supabase/client';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { Eye, EyeOff, Loader2, CheckCircle2, XCircle, Building2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 const PLATFORMS = [
-  { value: 'reply.io', label: 'Reply.io', icon: '📧' },
-  { value: 'smartlead', label: 'Smartlead', icon: '🎯' },
-  { value: 'instantly', label: 'Instantly.ai', icon: '⚡' },
-  { value: 'lemlist', label: 'Lemlist', icon: '🍋' },
+  { value: 'reply.io', label: 'Reply.io', icon: '📧', comingSoon: false },
+  { value: 'smartlead', label: 'Smartlead', icon: '🎯', comingSoon: true },
+  { value: 'instantly', label: 'Instantly.ai', icon: '⚡', comingSoon: true },
+  { value: 'lemlist', label: 'Lemlist', icon: '🍋', comingSoon: true },
 ];
 
 interface ReplyTeam {
@@ -221,14 +222,34 @@ export function AddIntegrationDialog({ open, onOpenChange }: AddIntegrationDialo
                   <SelectValue placeholder="Select a platform" />
                 </SelectTrigger>
                 <SelectContent>
-                  {PLATFORMS.map((p) => (
-                    <SelectItem key={p.value} value={p.value}>
-                      <span className="flex items-center gap-2">
-                        <span>{p.icon}</span>
-                        <span>{p.label}</span>
-                      </span>
-                    </SelectItem>
-                  ))}
+                  <TooltipProvider delayDuration={0}>
+                    {PLATFORMS.map((p) =>
+                      p.comingSoon ? (
+                        <Tooltip key={p.value}>
+                          <TooltipTrigger asChild>
+                            <div
+                              className="relative flex w-full cursor-not-allowed select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-sm outline-none opacity-50"
+                            >
+                              <span className="flex items-center gap-2">
+                                <span>{p.icon}</span>
+                                <span>{p.label}</span>
+                              </span>
+                            </div>
+                          </TooltipTrigger>
+                          <TooltipContent side="right">
+                            <p>Coming Soon</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      ) : (
+                        <SelectItem key={p.value} value={p.value}>
+                          <span className="flex items-center gap-2">
+                            <span>{p.icon}</span>
+                            <span>{p.label}</span>
+                          </span>
+                        </SelectItem>
+                      )
+                    )}
+                  </TooltipProvider>
                 </SelectContent>
               </Select>
             </div>

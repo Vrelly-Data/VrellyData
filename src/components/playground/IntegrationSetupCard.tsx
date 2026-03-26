@@ -299,7 +299,7 @@ export function IntegrationSetupCard() {
             <div className="text-center py-8 text-muted-foreground">
               <Plug className="h-10 w-10 mx-auto mb-3 opacity-50" />
               <p className="font-medium">No platforms connected</p>
-              <p className="text-sm mt-1">Connect Reply.io, Smartlead, or Instantly to get started</p>
+              <p className="text-sm mt-1">Connect Reply.io to get started</p>
             </div>
           ) : (
           <div className="divide-y">
