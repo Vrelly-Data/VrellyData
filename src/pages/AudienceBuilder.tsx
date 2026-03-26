@@ -96,11 +96,13 @@ export default function AudienceBuilder() {
   const [showSaveAudienceDialog, setShowSaveAudienceDialog] = useState(false);
   const [currentCreditsForSave, setCurrentCreditsForSave] = useState(0);
   const [previewMode, setPreviewMode] = useState<'expanded' | 'compact'>('expanded');
-  
+  const [hasSearched, setHasSearched] = useState(false);
+
   const { isEstimate, setIsEstimate } = useAudienceStore();
 
   const handleSearch = async (filterState: FilterBuilderState) => {
     setLoading(true);
+    setHasSearched(true);
     setSelectedRecords(new Set()); // Clear selection on new search
     setFilterState(filterState); // Store filter state for selection operations
     
@@ -131,18 +133,22 @@ export default function AudienceBuilder() {
       setIsEstimate(trueIsEstimate);
       setTotalPages(filterState.contactFilter === 'net_new' ? 1 : response.pagination.total_pages);
       
-      const displayTotal = filterState.contactFilter === 'net_new' 
-        ? filteredItems.length 
-        : response.totalEstimate;
+      const displayTotal = filterState.contactFilter === 'net_new'
+        ? filteredItems.length
+        : trueTotal;
 
       const formatTotal = (n: number) =>
         n >= TOTAL_DISPLAY_CAP ? `${TOTAL_DISPLAY_CAP.toLocaleString()}+` : n.toLocaleString();
 
-      const estimatePrefix = response.isEstimate ? '~' : '';
+      const estimatePrefix = trueIsEstimate ? '~' : '';
+      const entityLabel = currentType === 'person' ? 'people' : 'companies';
+      const suffix = filterState.contactFilter === 'net_new' ? ' (net new only)' : '';
 
       toast({
         title: 'Search complete',
-        description: `Found ${estimatePrefix}${formatTotal(displayTotal)} ${currentType === 'person' ? 'people' : 'companies'}${filterState.contactFilter === 'net_new' ? ' (net new only)' : ''}`,
+        description: displayTotal === 0
+          ? 'No results found'
+          : `Found ${estimatePrefix}${formatTotal(displayTotal)} ${entityLabel}${suffix}`,
       });
     } catch (error: any) {
       toast({
@@ -807,7 +813,7 @@ export default function AudienceBuilder() {
                   
                   {!loading && results.length === 0 && totalEstimate === 0 && (
                     <div className="flex items-center justify-center h-64 text-muted-foreground">
-                      Build your filters and click Search to find people
+                      {hasSearched ? 'No results found' : 'Build your filters and click Search to find people'}
                     </div>
                   )}
                 </div>
@@ -957,7 +963,7 @@ export default function AudienceBuilder() {
                   
                   {!loading && results.length === 0 && totalEstimate === 0 && (
                     <div className="flex items-center justify-center h-64 text-muted-foreground">
-                      Build your filters and click Search to find companies
+                      {hasSearched ? 'No results found' : 'Build your filters and click Search to find companies'}
                     </div>
                   )}
                 </div>
