@@ -36,6 +36,7 @@ import { useDeduplication } from '@/hooks/useDeduplication';
 import { useAuditLog } from '@/hooks/useAuditLog';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { PreviewTable } from '@/components/search/PreviewTable';
+import SearchLoadingAnimation from '@/components/search/SearchLoadingAnimation';
 import { supabase } from '@/integrations/supabase/client';
 import { useEffect } from 'react';
 
@@ -779,11 +780,7 @@ export default function AudienceBuilder() {
                     </Alert>
                   )}
 
-                  {loading && (
-                    <div className="flex items-center justify-center h-64">
-                      <div className="text-muted-foreground">Searching...</div>
-                    </div>
-                  )}
+                  {loading && <SearchLoadingAnimation />}
 
                   {!loading && results.length > 0 && (
                     <>
@@ -929,11 +926,7 @@ export default function AudienceBuilder() {
                     </Alert>
                   )}
 
-                  {loading && (
-                    <div className="flex items-center justify-center h-64">
-                      <div className="text-muted-foreground">Searching...</div>
-                    </div>
-                  )}
+                  {loading && <SearchLoadingAnimation />}
 
                   {!loading && results.length > 0 && (
                     <>
