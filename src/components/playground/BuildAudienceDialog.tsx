@@ -306,12 +306,18 @@ export function BuildAudienceDialog({
   };
 
   const handleEditInBuilder = () => {
+    const knownCountries = new Set([
+      'United States', 'United Kingdom', 'Canada', 'Australia',
+      'Germany', 'France', 'India', 'Singapore', 'Netherlands',
+    ]);
     const state = getDefaultFilterBuilderState();
     state.industries = industries;
     state.jobTitles = targetTitles;
     state.companySize = companySizes;
-    state.personCity = locations;
-    state.keywords = companyTypes;
+    state.personCity = locations.filter(l => !knownCountries.has(l));
+    state.personCountry = locations.filter(l => knownCountries.has(l));
+    // companyTypes (e.g. "Series A startups", "Enterprise") don't have a direct
+    // FilterBuilderState equivalent — they remain visible in the ICP summary only.
     setFilterBuilderState(state);
     handleClose();
     navigate('/dashboard');
@@ -358,7 +364,7 @@ export function BuildAudienceDialog({
               ? 'View your saved audience details, edit criteria, or open in the full Audience Builder.'
               : step === 'form'
               ? 'Define your ideal customer profile and we\'ll find matching prospects from our database with AI-powered insights.'
-              : `Found ${totalFound.toLocaleString()} matching prospects. Showing up to 50 below.`}
+              : `Found ${totalFound > prospects.length ? totalFound.toLocaleString() : `${prospects.length}+`} matching prospects. Showing up to 50 below.`}
           </DialogDescription>
         </DialogHeader>
 
