@@ -1,14 +1,24 @@
 import { serve } from 'https://deno.land/std@0.190.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': Deno.env.get('ALLOWED_ORIGIN') || 'https://vrelly.com',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
+const allowedOrigins = [
+  Deno.env.get('ALLOWED_ORIGIN') || 'https://vrelly.com',
+  'https://www.vrelly.com',
+];
 
-const jsonHeaders = { ...corsHeaders, 'Content-Type': 'application/json' };
+function getCorsHeaders(req: Request) {
+  const origin = req.headers.get('Origin') || '';
+  return {
+    'Access-Control-Allow-Origin': allowedOrigins.includes(origin) ? origin : allowedOrigins[0],
+    'Access-Control-Allow-Headers':
+      'authorization, x-client-info, apikey, content-type',
+  };
+}
 
 serve(async (req) => {
+  const corsHeaders = getCorsHeaders(req);
+  const jsonHeaders = { ...corsHeaders, 'Content-Type': 'application/json' };
+
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
   try {
