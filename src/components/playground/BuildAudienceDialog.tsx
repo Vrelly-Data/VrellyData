@@ -119,7 +119,6 @@ export function BuildAudienceDialog({
 
   // Form state
   const [industries, setIndustries] = useState<string[]>([]);
-  const [isBtoB, setIsBtoB] = useState(true);
   const [targetTitles, setTargetTitles] = useState<string[]>([]);
   const [companyTypes, setCompanyTypes] = useState<string[]>([]);
   const [companySizes, setCompanySizes] = useState<string[]>([]);
@@ -129,7 +128,6 @@ export function BuildAudienceDialog({
   useEffect(() => {
     if (open && initialFilters) {
       setIndustries(initialFilters.industries);
-      setIsBtoB(initialFilters.isBtoB);
       setTargetTitles(initialFilters.targetTitles);
       setCompanyTypes(initialFilters.companyTypes);
       setCompanySizes(initialFilters.companySizes);
@@ -169,7 +167,7 @@ export function BuildAudienceDialog({
       await useCredit('ai_generation', 1);
 
       const { data, error } = await supabase.functions.invoke('build-audience', {
-        body: { industries, isBtoB, targetTitles, companyTypes, companySizes, locations },
+        body: { industries, targetTitles, keywords: companyTypes, companySizes, locations },
       });
 
       if (error) throw error;
@@ -249,7 +247,7 @@ export function BuildAudienceDialog({
       });
 
       // 4. Also save filters to Builder Saved Searches (filter_presets)
-      const currentFilters: AudienceFilters = { industries, isBtoB, targetTitles, companyTypes, companySizes, locations };
+      const currentFilters: AudienceFilters = { industries, isBtoB: true, targetTitles, companyTypes, companySizes, locations };
       const insightsText = insights ? insightsToText(insights) : null;
       try {
         const result = await saveAudienceMutation.mutateAsync({
@@ -290,7 +288,7 @@ export function BuildAudienceDialog({
       const insightsText = insights ? insightsToText(insights) : null;
       const result = await saveAudienceMutation.mutateAsync({
         name: audienceName.trim(),
-        filters: { industries, isBtoB, targetTitles, companyTypes, companySizes, locations },
+        filters: { industries, isBtoB: true, targetTitles, companyTypes, companySizes, locations },
         result_count: totalFound,
         insights: insightsText,
         existingId: currentSavedId,
@@ -348,7 +346,6 @@ export function BuildAudienceDialog({
     ...targetTitles.slice(0, 2),
     ...locations.slice(0, 2),
     ...companySizes.slice(0, 1),
-    isBtoB ? 'B2B' : 'B2C',
   ].filter(Boolean);
 
   return (
@@ -424,26 +421,6 @@ export function BuildAudienceDialog({
             </div>
 
             <div className="space-y-1.5">
-              <Label>Is this B2B or B2C?</Label>
-              <div className="flex gap-3">
-                {(['B2B', 'B2C'] as const).map((option) => (
-                  <button
-                    key={option}
-                    type="button"
-                    onClick={() => setIsBtoB(option === 'B2B')}
-                    className={`px-4 py-2 rounded-md border text-sm font-medium transition-colors ${
-                      (option === 'B2B') === isBtoB
-                        ? 'bg-primary text-primary-foreground border-primary'
-                        : 'bg-background border-input hover:bg-muted'
-                    }`}
-                  >
-                    {option}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="space-y-1.5">
               <Label>Do you know the titles you typically sell to?</Label>
               <TagInput
                 value={targetTitles}
@@ -458,7 +435,7 @@ export function BuildAudienceDialog({
               <TagInput
                 value={companyTypes}
                 onChange={setCompanyTypes}
-                placeholder="e.g. Series A startups, Enterprise, SMBs — press Enter"
+                placeholder="e.g. biotech, sales SaaS, eCommerce — press Enter"
               />
             </div>
 
@@ -473,7 +450,7 @@ export function BuildAudienceDialog({
             </div>
 
             <div className="space-y-1.5">
-              <Label>Do you know where the companies you sell to are located?</Label>
+              <Label>Where are your target prospects located? (city or country)</Label>
               <TagInput
                 value={locations}
                 onChange={setLocations}

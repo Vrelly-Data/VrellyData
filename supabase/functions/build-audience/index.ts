@@ -65,6 +65,7 @@ Deno.serve(async (req) => {
       companyTypes,
       companySizes,
       locations,
+      keywords,
     } = await req.json();
 
     // Helper to normalise empty/undefined arrays to null (matches Builder behaviour)
@@ -137,7 +138,7 @@ Deno.serve(async (req) => {
       p_cities: arrayOrNull(cities),
       p_countries: arrayOrNull(countries),
       // All other RPC params explicitly null
-      p_keywords: null,
+      p_keywords: arrayOrNull(keywords),
       p_seniority_levels: null,
       p_gender: null,
       p_net_worth: null,
@@ -245,7 +246,7 @@ Targeting Criteria:
 - Industries: ${(industries || []).join(", ") || "Not specified"}
 - Sales motion: ${isBtoB ? "B2B" : "B2C"}
 - Target titles: ${(targetTitles || []).join(", ") || "Not specified"}
-- Target company types: ${(companyTypes || []).join(", ") || "Not specified"}
+- Target company types / keywords: ${(keywords || []).join(", ") || "Not specified"}
 - Company sizes: ${(companySizes || []).join(", ") || "Not specified"}
 - Locations: ${(locations || []).join(", ") || "Not specified"}
 - Matching prospects found in database: ${prospects.length}
