@@ -364,7 +364,7 @@ export function BuildAudienceDialog({
               ? 'View your saved audience details, edit criteria, or open in the full Audience Builder.'
               : step === 'form'
               ? 'Define your ideal customer profile and we\'ll find matching prospects from our database with AI-powered insights.'
-              : `Found ${totalFound > prospects.length ? totalFound.toLocaleString() : `${prospects.length}+`} matching prospects. Showing up to 50 below.`}
+              : `Found ${prospects.length === 50 ? '50+' : prospects.length.toLocaleString()} matching prospects.`}
           </DialogDescription>
         </DialogHeader>
 
