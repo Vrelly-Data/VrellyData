@@ -9,6 +9,8 @@ export interface AudienceFilters {
   companyTypes: string[];
   companySizes: string[];
   locations: string[];
+  cities?: string[];
+  countries?: string[];
 }
 
 export interface SavedAudience {
@@ -21,13 +23,26 @@ export interface SavedAudience {
   created_at: string;
 }
 
+const KNOWN_COUNTRIES = new Set([
+  'United States', 'United Kingdom', 'Canada', 'Australia',
+  'Germany', 'France', 'India', 'Singapore', 'Netherlands',
+]);
+
 /** Map simplified AI builder filters to full FilterBuilderState for filter_presets */
 function toFilterBuilderState(filters: AudienceFilters): FilterBuilderState {
   const state = getDefaultFilterBuilderState();
   state.industries = filters.industries;
   state.jobTitles = filters.targetTitles;
   state.companySize = filters.companySizes;
-  state.personCity = filters.locations;
+
+  // Prefer split fields; fall back to flat locations for old saved audiences
+  const cities = filters.cities ||
+    (filters.locations || []).filter(l => !KNOWN_COUNTRIES.has(l));
+  const countries = filters.countries ||
+    (filters.locations || []).filter(l => KNOWN_COUNTRIES.has(l));
+  state.personCity = cities;
+  state.personCountry = countries;
+
   state.keywords = filters.companyTypes;
   return state;
 }

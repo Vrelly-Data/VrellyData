@@ -68,6 +68,11 @@ function BlurredText({ text, blur = true }: { text: string | null; blur?: boolea
 
 const dedup = (arr: string[]) => [...new Set(arr.filter(Boolean))];
 
+const KNOWN_COUNTRIES = new Set([
+  'United States', 'United Kingdom', 'Canada', 'Australia',
+  'Germany', 'France', 'India', 'Singapore', 'Netherlands',
+]);
+
 /** Serialize AudienceInsights to a single text string for storage */
 function insightsToText(insights: AudienceInsights): string {
   const parts: string[] = [];
@@ -247,7 +252,16 @@ export function BuildAudienceDialog({
       });
 
       // 4. Also save filters to Builder Saved Searches (filter_presets)
-      const currentFilters: AudienceFilters = { industries, isBtoB: true, targetTitles, companyTypes, companySizes, locations };
+      const currentFilters: AudienceFilters = {
+        industries,
+        isBtoB: true,
+        targetTitles,
+        companyTypes,
+        companySizes,
+        locations,
+        cities: locations.filter(l => !KNOWN_COUNTRIES.has(l)),
+        countries: locations.filter(l => KNOWN_COUNTRIES.has(l)),
+      };
       const insightsText = insights ? insightsToText(insights) : null;
       try {
         const result = await saveAudienceMutation.mutateAsync({
@@ -288,7 +302,16 @@ export function BuildAudienceDialog({
       const insightsText = insights ? insightsToText(insights) : null;
       const result = await saveAudienceMutation.mutateAsync({
         name: audienceName.trim(),
-        filters: { industries, isBtoB: true, targetTitles, companyTypes, companySizes, locations },
+        filters: {
+          industries,
+          isBtoB: true,
+          targetTitles,
+          companyTypes,
+          companySizes,
+          locations,
+          cities: locations.filter(l => !KNOWN_COUNTRIES.has(l)),
+          countries: locations.filter(l => KNOWN_COUNTRIES.has(l)),
+        },
         result_count: totalFound,
         insights: insightsText,
         existingId: currentSavedId,
@@ -304,16 +327,12 @@ export function BuildAudienceDialog({
   };
 
   const handleEditInBuilder = () => {
-    const knownCountries = new Set([
-      'United States', 'United Kingdom', 'Canada', 'Australia',
-      'Germany', 'France', 'India', 'Singapore', 'Netherlands',
-    ]);
     const state = getDefaultFilterBuilderState();
     state.industries = industries;
     state.jobTitles = targetTitles;
     state.companySize = companySizes;
-    state.personCity = locations.filter(l => !knownCountries.has(l));
-    state.personCountry = locations.filter(l => knownCountries.has(l));
+    state.personCity = locations.filter(l => !KNOWN_COUNTRIES.has(l));
+    state.personCountry = locations.filter(l => KNOWN_COUNTRIES.has(l));
     // companyTypes (e.g. "Series A startups", "Enterprise") don't have a direct
     // FilterBuilderState equivalent — they remain visible in the ICP summary only.
     setFilterBuilderState(state);
