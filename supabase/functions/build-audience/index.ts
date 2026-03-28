@@ -67,6 +67,18 @@ Deno.serve(async (req) => {
       locations,
     } = await req.json();
 
+    // Helper to normalise empty/undefined arrays to null (matches Builder behaviour)
+    const arrayOrNull = (arr: string[] | undefined | null): string[] | null =>
+      (arr && arr.length > 0) ? arr : null;
+
+    // Split locations into cities vs countries so each hits the right RPC param
+    const knownCountries = new Set([
+      'United States', 'United Kingdom', 'Canada', 'Australia',
+      'Germany', 'France', 'India', 'Singapore', 'Netherlands',
+    ]);
+    const cities = (locations || []).filter((l: string) => !knownCountries.has(l));
+    const countries = (locations || []).filter((l: string) => knownCountries.has(l));
+
     // Pull relevant Sales KB context
     const { data: allResults } = await supabase
       .from("sales_knowledge")
@@ -113,19 +125,56 @@ Deno.serve(async (req) => {
 
     // Timeout protection is handled by Promise.race wrappers below
 
-    // Build params for the search_prospects functions
+    // Build params for the search_prospects functions — must pass every
+    // parameter the RPC expects, with null for unused filters (matches Builder).
     const searchParams: Record<string, any> = {
       p_limit: 50,
       p_offset: 0,
+      // Active filters from form inputs
+      p_industries: arrayOrNull(industries),
+      p_job_titles: arrayOrNull(targetTitles),
+      p_company_size_ranges: arrayOrNull(companySizes),
+      p_cities: arrayOrNull(cities),
+      p_countries: arrayOrNull(countries),
+      // All other RPC params explicitly null
+      p_keywords: null,
+      p_seniority_levels: null,
+      p_gender: null,
+      p_net_worth: null,
+      p_income: null,
+      p_departments: null,
+      p_company_revenue: null,
+      p_person_interests: null,
+      p_person_skills: null,
+      p_technologies: null,
+      p_has_personal_email: null,
+      p_has_business_email: null,
+      p_has_phone: null,
+      p_has_linkedin: null,
+      p_has_facebook: null,
+      p_has_twitter: null,
+      p_has_company_phone: null,
+      p_has_company_linkedin: null,
+      p_has_company_facebook: null,
+      p_has_company_twitter: null,
+      p_exclude_keywords: null,
+      p_exclude_job_titles: null,
+      p_exclude_industries: null,
+      p_exclude_cities: null,
+      p_exclude_countries: null,
+      p_exclude_technologies: null,
+      p_exclude_person_skills: null,
+      p_exclude_person_interests: null,
+      p_zip_code: null,
+      p_children: null,
+      p_homeowner: null,
+      p_married: null,
+      p_education: null,
+      p_age_min: null,
+      p_age_max: null,
+      p_company_names: null,
+      p_added_on_days_ago: null,
     };
-
-    if (industries && industries.length > 0) searchParams.p_industries = industries;
-    if (targetTitles && targetTitles.length > 0) searchParams.p_job_titles = targetTitles;
-    if (companySizes && companySizes.length > 0) searchParams.p_company_size_ranges = companySizes;
-    if (locations && locations.length > 0) {
-      searchParams.p_cities = locations;
-      searchParams.p_countries = locations;
-    }
 
     let prospects: any[] = [];
     let totalCount = 0;
