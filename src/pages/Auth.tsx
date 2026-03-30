@@ -8,7 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/hooks/use-toast';
-import { Loader2 } from 'lucide-react';
+import { Loader2, CheckCircle } from 'lucide-react';
 import vrellyLogo from '@/assets/vrelly-logo.png';
 
 export default function Auth() {
@@ -22,6 +22,7 @@ export default function Auth() {
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
   const [forgotPasswordLoading, setForgotPasswordLoading] = useState(false);
+  const [signupSuccessEmail, setSignupSuccessEmail] = useState<string | null>(null);
 
   useEffect(() => {
     // Prevent Google from indexing the auth page
@@ -61,9 +62,9 @@ export default function Auth() {
         description: error.message,
         variant: 'destructive',
       });
+    } else {
+      setSignupSuccessEmail(email);
     }
-    // Auto-confirm is enabled, so the user is immediately signed in.
-    // The useEffect watching `user` will redirect them automatically.
   };
 
   const handleSignIn = async (e: React.FormEvent) => {
@@ -140,12 +141,23 @@ export default function Auth() {
           </div>
         </CardHeader>
         <CardContent>
+          {signupSuccessEmail ? (
+            <div className="text-center space-y-4 py-6">
+              <div className="flex justify-center">
+                <CheckCircle className="h-12 w-12 text-green-500" />
+              </div>
+              <p className="text-xl font-semibold">Check your email</p>
+              <p className="text-muted-foreground">
+                We sent a confirmation link to <span className="font-medium text-foreground">{signupSuccessEmail}</span>. Click the link to activate your account and get started.
+              </p>
+            </div>
+          ) : (
           <Tabs defaultValue={defaultTab}>
             <TabsList className="grid w-full grid-cols-2">
               <TabsTrigger value="signin">Sign In</TabsTrigger>
               <TabsTrigger value="signup">Sign Up</TabsTrigger>
             </TabsList>
-            
+
             <TabsContent value="signin">
               <form onSubmit={handleSignIn} className="space-y-4">
                 <div className="space-y-2">
@@ -197,7 +209,7 @@ export default function Auth() {
                 </Button>
               </form>
             </TabsContent>
-            
+
             <TabsContent value="signup">
               <form onSubmit={handleSignUp} className="space-y-4">
                 <div className="space-y-2">
@@ -246,6 +258,7 @@ export default function Auth() {
               </form>
             </TabsContent>
           </Tabs>
+          )}
         </CardContent>
       </Card>
     </div>
