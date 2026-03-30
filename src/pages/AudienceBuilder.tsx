@@ -268,16 +268,19 @@ export default function AudienceBuilder() {
       }
       
       // Deduct credits ONLY for new records
-      const result = await deductCredits(creditsRequired);
+      const result = await deductCredits(creditsRequired, {
+        entityType: currentType as 'person' | 'company',
+        recordCount: deduplicationAnalysis.newRecords.length,
+      });
       if (!result.success) {
-        toast({ 
-          title: 'Error deducting credits', 
-          variant: 'destructive' 
+        toast({
+          title: 'Error deducting credits',
+          variant: 'destructive'
         });
         return;
       }
     }
-    
+
     // Mark ONLY new records as unlocked in unlocked_records table
     if (deduplicationAnalysis.newRecords.length > 0) {
       await markAsUnlocked(
@@ -533,7 +536,10 @@ export default function AudienceBuilder() {
       }
 
       // Deduct credits (1 credit per contact)
-      const result = await deductCredits(selectedItems.length, undefined);
+      const result = await deductCredits(selectedItems.length, {
+        entityType: currentType as 'person' | 'company',
+        recordCount: selectedItems.length,
+      });
       if (!result.success) {
         toast({
           title: 'Error deducting credits',

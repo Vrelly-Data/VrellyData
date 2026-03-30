@@ -3,11 +3,17 @@ import { useCredit } from '@/lib/credits';
 import { useCredits } from '@/hooks/useCredits';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from '@/hooks/use-toast';
+import { supabase } from '@/integrations/supabase/client';
 
 interface DeductResult {
   success: boolean;
   remainingCredits: number;
   error?: string;
+}
+
+interface DeductOptions {
+  entityType?: 'person' | 'company';
+  recordCount?: number;
 }
 
 export function useCreditCheck() {
@@ -28,14 +34,28 @@ export function useCreditCheck() {
     return getRemainingCredits() >= requiredCredits;
   };
 
-  const deductCredits = async (amount: number, _audienceId?: string): Promise<DeductResult> => {
+  const deductCredits = async (amount: number, options?: DeductOptions): Promise<DeductResult> => {
     setIsDeducting(true);
 
     try {
       await useCredit('export', amount);
 
-      // Refresh credits cache so UI updates
+      // Refresh credits cache so sidebar and other displays update
       queryClient.invalidateQueries({ queryKey: ['user-credits'] });
+
+      // Log the transaction so it appears in Settings > Recent Credit Usage
+      if (options?.entityType) {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          await supabase.from('credit_transactions').insert({
+            user_id: user.id,
+            entity_type: options.entityType,
+            credits_deducted: amount,
+            records_returned: options.recordCount ?? amount,
+          });
+          queryClient.invalidateQueries({ queryKey: ['credit-transactions'] });
+        }
+      }
 
       const remaining = Math.max(0, getRemainingCredits() - amount);
 

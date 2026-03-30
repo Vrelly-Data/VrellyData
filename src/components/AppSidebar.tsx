@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/sidebar';
 import { Home, Users, Building2, FlaskConical, Settings, LogOut, Shield } from 'lucide-react';
 import { useAuthStore } from '@/stores/authStore';
+import { useCredits } from '@/hooks/useCredits';
 import vrellyLogo from '@/assets/vrelly-logo.png';
 
 const navItems = [
@@ -24,9 +25,16 @@ const navItems = [
 export function AppSidebar() {
   const { state } = useSidebar();
   const { signOut, profile, userRoles, profileLoading } = useAuthStore();
+  const { data: credits } = useCredits();
   const navigate = useNavigate();
   const isCollapsed = state === 'collapsed';
   const showAdminLink = userRoles.some(r => r.role === 'admin');
+
+  const remainingCredits = credits
+    ? credits.plan === 'enterprise'
+      ? 100000 - (credits.enterprise_daily_exports ?? 0)
+      : (credits.export_credits_total ?? 0) - (credits.export_credits_used ?? 0)
+    : (profile?.credits ?? 0);
 
   return (
     <Sidebar collapsible="icon"  className={isCollapsed ? 'w-28' : 'w-60'}>
@@ -85,7 +93,7 @@ export function AppSidebar() {
                   <>
                     <div className="text-sm font-medium">{profile.name}</div>
                     <div className="text-xs text-muted-foreground">
-                      {(profile?.credits ?? 0).toLocaleString()} credits available
+                      {remainingCredits.toLocaleString()} credits available
                     </div>
                   </>
                 )}
