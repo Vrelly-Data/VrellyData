@@ -29,6 +29,7 @@ interface AuthState {
   session: Session | null;
   profile: Profile | null;
   userRoles: UserRole[];
+  isPlatformAdmin: boolean;
   loading: boolean;
   profileLoading: boolean;
   setUser: (user: User | null) => void;
@@ -47,6 +48,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   session: null,
   profile: null,
   userRoles: [],
+  isPlatformAdmin: false,
   loading: true,
   profileLoading: false,
   
@@ -59,7 +61,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   
   signOut: async () => {
     await supabase.auth.signOut();
-    set({ user: null, session: null, profile: null, userRoles: [], profileLoading: false });
+    set({ user: null, session: null, profile: null, userRoles: [], isPlatformAdmin: false, profileLoading: false });
   },
   
   fetchProfile: async (userId?: string) => {
@@ -67,7 +69,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const effectiveUserId = userId || user?.id;
     
     if (!effectiveUserId) {
-      set({ profile: null, userRoles: [], profileLoading: false });
+      set({ profile: null, userRoles: [], isPlatformAdmin: false, profileLoading: false });
       return;
     }
 
@@ -96,10 +98,17 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       console.error('Error fetching user roles:', rolesError);
       set({ profileLoading: false });
     } else if (rolesData) {
-      set({ userRoles: rolesData as UserRole[], profileLoading: false });
-    } else {
-      set({ profileLoading: false });
+      set({ userRoles: rolesData as UserRole[] });
     }
+
+    // Fetch platform admin status
+    const { data: profileRow } = await supabase
+      .from('profiles')
+      .select('is_platform_admin')
+      .eq('id', effectiveUserId)
+      .single();
+
+    set({ isPlatformAdmin: profileRow?.is_platform_admin ?? false, profileLoading: false });
   },
 
   isAdmin: (teamId?: string) => {
