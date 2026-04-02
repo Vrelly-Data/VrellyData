@@ -1,0 +1,108 @@
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { supabase } from '@/integrations/supabase/client';
+import { useRequireSubscription } from './useSubscription';
+
+// Cast to any until types are regenerated after migration is applied
+const db = supabase as any;
+
+export interface AgentConfig {
+  id: string;
+  user_id: string;
+  company_name: string;
+  company_url: string | null;
+  sender_name: string;
+  sender_title: string | null;
+  sender_linkedin: string | null;
+  sender_bio: string | null;
+  offer_description: string;
+  target_icp: string | null;
+  outcome_delivered: string | null;
+  desired_action: string | null;
+  saved_audience_id: string | null;
+  communication_style: string | null;
+  avoid_phrases: string[] | null;
+  sample_message: string | null;
+  reply_api_key: string | null;
+  managed_campaigns: string[] | null;
+  mode: string | null;
+  is_active: boolean | null;
+  onboarding_complete: boolean | null;
+  onboarding_step: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export function useAgentConfig() {
+  return useQuery<AgentConfig | null>({
+    queryKey: ['agent-config'],
+    queryFn: async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return null;
+
+      const { data, error } = await db
+        .from('agent_configs')
+        .select('*')
+        .eq('user_id', user.id)
+        .maybeSingle();
+
+      if (error) throw error;
+      return data as AgentConfig | null;
+    },
+  });
+}
+
+export function useAgentAccess() {
+  const { plan, isLoading } = useRequireSubscription();
+
+  return {
+    hasAccess: plan === 'agent',
+    isLoading,
+  };
+}
+
+export interface AgentConfigInput {
+  company_name: string;
+  company_url?: string;
+  sender_name: string;
+  sender_title?: string;
+  sender_linkedin?: string;
+  sender_bio?: string;
+  offer_description: string;
+  target_icp?: string;
+  outcome_delivered?: string;
+  desired_action?: string;
+  communication_style?: string;
+  avoid_phrases?: string[];
+  sample_message?: string;
+  reply_api_key?: string;
+  mode?: string;
+  is_active?: boolean;
+  onboarding_complete?: boolean;
+  onboarding_step?: number;
+}
+
+export function useUpsertAgentConfig() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (input: AgentConfigInput) => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('Not authenticated');
+
+      const { data, error } = await db
+        .from('agent_configs')
+        .upsert(
+          { user_id: user.id, ...input },
+          { onConflict: 'user_id' }
+        )
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['agent-config'] });
+    },
+  });
+}

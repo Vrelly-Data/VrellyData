@@ -14,6 +14,223 @@ export type Database = {
   }
   public: {
     Tables: {
+      agent_configs: {
+        Row: {
+          avoid_phrases: string[] | null
+          communication_style: string | null
+          company_name: string
+          company_url: string | null
+          created_at: string | null
+          desired_action: string | null
+          id: string
+          is_active: boolean | null
+          managed_campaigns: string[] | null
+          mode: string | null
+          offer_description: string
+          onboarding_complete: boolean | null
+          onboarding_step: number | null
+          outcome_delivered: string | null
+          reply_api_key: string | null
+          sample_message: string | null
+          saved_audience_id: string | null
+          sender_bio: string | null
+          sender_linkedin: string | null
+          sender_name: string
+          sender_title: string | null
+          target_icp: string | null
+          updated_at: string | null
+          user_id: string | null
+        }
+        Insert: {
+          avoid_phrases?: string[] | null
+          communication_style?: string | null
+          company_name: string
+          company_url?: string | null
+          created_at?: string | null
+          desired_action?: string | null
+          id?: string
+          is_active?: boolean | null
+          managed_campaigns?: string[] | null
+          mode?: string | null
+          offer_description: string
+          onboarding_complete?: boolean | null
+          onboarding_step?: number | null
+          outcome_delivered?: string | null
+          reply_api_key?: string | null
+          sample_message?: string | null
+          saved_audience_id?: string | null
+          sender_bio?: string | null
+          sender_linkedin?: string | null
+          sender_name: string
+          sender_title?: string | null
+          target_icp?: string | null
+          updated_at?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          avoid_phrases?: string[] | null
+          communication_style?: string | null
+          company_name?: string
+          company_url?: string | null
+          created_at?: string | null
+          desired_action?: string | null
+          id?: string
+          is_active?: boolean | null
+          managed_campaigns?: string[] | null
+          mode?: string | null
+          offer_description?: string
+          onboarding_complete?: boolean | null
+          onboarding_step?: number | null
+          outcome_delivered?: string | null
+          reply_api_key?: string | null
+          sample_message?: string | null
+          saved_audience_id?: string | null
+          sender_bio?: string | null
+          sender_linkedin?: string | null
+          sender_name?: string
+          sender_title?: string | null
+          target_icp?: string | null
+          updated_at?: string | null
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "agent_configs_saved_audience_id_fkey"
+            columns: ["saved_audience_id"]
+            isOneToOne: false
+            referencedRelation: "saved_audiences"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      agent_leads: {
+        Row: {
+          agent_config_id: string | null
+          agent_run_id: string | null
+          channel: string | null
+          company: string | null
+          created_at: string | null
+          draft_approved: boolean | null
+          draft_response: string | null
+          email: string | null
+          external_id: string | null
+          full_name: string | null
+          id: string
+          job_title: string | null
+          last_reply_at: string | null
+          last_reply_text: string | null
+          linkedin_url: string | null
+          notes: string | null
+          pipeline_stage: string | null
+          updated_at: string | null
+          user_id: string | null
+        }
+        Insert: {
+          agent_config_id?: string | null
+          agent_run_id?: string | null
+          channel?: string | null
+          company?: string | null
+          created_at?: string | null
+          draft_approved?: boolean | null
+          draft_response?: string | null
+          email?: string | null
+          external_id?: string | null
+          full_name?: string | null
+          id?: string
+          job_title?: string | null
+          last_reply_at?: string | null
+          last_reply_text?: string | null
+          linkedin_url?: string | null
+          notes?: string | null
+          pipeline_stage?: string | null
+          updated_at?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          agent_config_id?: string | null
+          agent_run_id?: string | null
+          channel?: string | null
+          company?: string | null
+          created_at?: string | null
+          draft_approved?: boolean | null
+          draft_response?: string | null
+          email?: string | null
+          external_id?: string | null
+          full_name?: string | null
+          id?: string
+          job_title?: string | null
+          last_reply_at?: string | null
+          last_reply_text?: string | null
+          linkedin_url?: string | null
+          notes?: string | null
+          pipeline_stage?: string | null
+          updated_at?: string | null
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "agent_leads_agent_config_id_fkey"
+            columns: ["agent_config_id"]
+            isOneToOne: false
+            referencedRelation: "agent_configs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "agent_leads_agent_run_id_fkey"
+            columns: ["agent_run_id"]
+            isOneToOne: false
+            referencedRelation: "agent_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      agent_runs: {
+        Row: {
+          agent_config_id: string | null
+          audience_size: number | null
+          completed_at: string | null
+          contacts_pushed: number | null
+          copy_variant: string | null
+          error_message: string | null
+          id: string
+          started_at: string | null
+          status: string | null
+          user_id: string | null
+        }
+        Insert: {
+          agent_config_id?: string | null
+          audience_size?: number | null
+          completed_at?: string | null
+          contacts_pushed?: number | null
+          copy_variant?: string | null
+          error_message?: string | null
+          id?: string
+          started_at?: string | null
+          status?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          agent_config_id?: string | null
+          audience_size?: number | null
+          completed_at?: string | null
+          contacts_pushed?: number | null
+          copy_variant?: string | null
+          error_message?: string | null
+          id?: string
+          started_at?: string | null
+          status?: string | null
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "agent_runs_agent_config_id_fkey"
+            columns: ["agent_config_id"]
+            isOneToOne: false
+            referencedRelation: "agent_configs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       api_keys: {
         Row: {
           created_at: string | null

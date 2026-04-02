@@ -29,6 +29,7 @@ import DataPlayground from "./pages/DataPlayground";
 import ResetPassword from "./pages/ResetPassword";
 import ChoosePlan from "./pages/ChoosePlan";
 import CheckoutSuccess from "./pages/CheckoutSuccess";
+import AgentPage from "./pages/Agent";
 
 const queryClient = new QueryClient();
 
@@ -62,6 +63,7 @@ const App = () => (
                 <Route path="/playground" element={<ProtectedRoute><SubscriptionGuard><DataPlayground /></SubscriptionGuard></ProtectedRoute>} />
                 <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
                 <Route path="/billing" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
+                <Route path="/agent" element={<ProtectedRoute><AgentPage /></ProtectedRoute>} />
                 <Route path="/admin" element={<AdminRoute><Admin /></AdminRoute>} />
                 {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
                 <Route path="*" element={<NotFound />} />
