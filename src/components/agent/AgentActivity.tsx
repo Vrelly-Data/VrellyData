@@ -26,7 +26,7 @@ const ACTIVITY_ICONS: Record<string, { icon: typeof MessageSquare; color: string
 };
 
 const TYPE_OPTIONS = [
-  { value: '', label: 'All Activity' },
+  { value: 'all', label: 'All Activity' },
   { value: 'reply_received', label: 'Replies Received' },
   { value: 'draft_created', label: 'Drafts Created' },
   { value: 'message_approved', label: 'Messages Approved' },
@@ -46,7 +46,7 @@ function getDefaultDateRange() {
 
 export function AgentActivity() {
   const defaults = getDefaultDateRange();
-  const [typeFilter, setTypeFilter] = useState('');
+  const [typeFilter, setTypeFilter] = useState('all');
   const [fromDate, setFromDate] = useState(defaults.from);
   const [toDate, setToDate] = useState(defaults.to);
   const [search, setSearch] = useState('');
@@ -54,7 +54,7 @@ export function AgentActivity() {
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
 
   const { data, isLoading } = useAgentActivity({
-    type: typeFilter || undefined,
+    type: typeFilter === 'all' ? undefined : typeFilter,
     from: fromDate ? new Date(fromDate).toISOString() : undefined,
     to: toDate ? new Date(toDate + 'T23:59:59').toISOString() : undefined,
     search: search || undefined,

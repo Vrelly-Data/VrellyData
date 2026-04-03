@@ -1,4 +1,3 @@
-import { useState, useEffect, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 
@@ -44,22 +43,12 @@ interface AgentInboxResponse {
 }
 
 async function fetchAgentInbox(view: 'inbox' | 'pipeline'): Promise<AgentInboxResponse> {
-  const { data: { session } } = await supabase.auth.getSession();
-  if (!session) throw new Error('Not authenticated');
-
-  const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/get-agent-inbox?view=${view}`;
-  const response = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${session.access_token}`,
-      'Content-Type': 'application/json',
-    },
+  const { data, error } = await supabase.functions.invoke('get-agent-inbox', {
+    headers: { 'x-view': view },
   });
 
-  if (!response.ok) {
-    throw new Error(`Failed to fetch agent inbox: ${response.status}`);
-  }
-
-  return response.json();
+  if (error) throw new Error(`Failed to fetch agent inbox: ${error.message}`);
+  return data;
 }
 
 export function useAgentInbox(view: 'inbox' | 'pipeline' = 'inbox') {
@@ -112,29 +101,19 @@ async function fetchAgentActivity(filters: ActivityFilters): Promise<{
   leads: AgentActivityItem[];
   counts: AgentCounts;
 }> {
-  const { data: { session } } = await supabase.auth.getSession();
-  if (!session) throw new Error('Not authenticated');
+  const headers: Record<string, string> = { 'x-view': 'activity' };
+  if (filters.type) headers['x-filter-type'] = filters.type;
+  if (filters.from) headers['x-filter-from'] = filters.from;
+  if (filters.to) headers['x-filter-to'] = filters.to;
+  if (filters.search) headers['x-filter-search'] = filters.search;
+  if (filters.limit) headers['x-filter-limit'] = filters.limit.toString();
 
-  const params = new URLSearchParams({ view: 'activity' });
-  if (filters.type) params.set('type', filters.type);
-  if (filters.from) params.set('from', filters.from);
-  if (filters.to) params.set('to', filters.to);
-  if (filters.search) params.set('search', filters.search);
-  if (filters.limit) params.set('limit', filters.limit.toString());
-
-  const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/get-agent-inbox?${params}`;
-  const response = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${session.access_token}`,
-      'Content-Type': 'application/json',
-    },
+  const { data, error } = await supabase.functions.invoke('get-agent-inbox', {
+    headers,
   });
 
-  if (!response.ok) {
-    throw new Error(`Failed to fetch agent activity: ${response.status}`);
-  }
-
-  return response.json();
+  if (error) throw new Error(`Failed to fetch agent activity: ${error.message}`);
+  return data;
 }
 
 export function useAgentActivity(filters: ActivityFilters = {}) {

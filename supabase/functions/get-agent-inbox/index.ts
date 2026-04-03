@@ -10,7 +10,7 @@ function getCorsHeaders(req: Request) {
   return {
     'Access-Control-Allow-Origin': allowedOrigins.includes(origin) ? origin : allowedOrigins[0],
     'Access-Control-Allow-Headers':
-      'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
+      'authorization, x-client-info, apikey, content-type, x-view, x-filter-type, x-filter-from, x-filter-to, x-filter-search, x-filter-limit, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
   };
 }
 
@@ -54,7 +54,7 @@ Deno.serve(async (req) => {
     );
 
     const url = new URL(req.url);
-    const view = url.searchParams.get('view') || 'inbox';
+    const view = req.headers.get('x-view') || url.searchParams.get('view') || 'inbox';
 
     // Build aggregate counts (used in all views)
     const { data: allLeads } = await supabase
@@ -120,12 +120,12 @@ Deno.serve(async (req) => {
     }
 
     if (view === 'activity') {
-      const type = url.searchParams.get('type');
-      const from = url.searchParams.get('from');
-      const to = url.searchParams.get('to');
-      const search = url.searchParams.get('search');
+      const type = req.headers.get('x-filter-type') || url.searchParams.get('type');
+      const from = req.headers.get('x-filter-from') || url.searchParams.get('from');
+      const to = req.headers.get('x-filter-to') || url.searchParams.get('to');
+      const search = req.headers.get('x-filter-search') || url.searchParams.get('search');
       const limit = Math.min(
-        parseInt(url.searchParams.get('limit') || '100', 10),
+        parseInt(req.headers.get('x-filter-limit') || url.searchParams.get('limit') || '100', 10),
         500
       );
 
