@@ -44,7 +44,7 @@ interface AgentInboxResponse {
 
 async function fetchAgentInbox(view: 'inbox' | 'pipeline'): Promise<AgentInboxResponse> {
   const { data, error } = await supabase.functions.invoke('get-agent-inbox', {
-    headers: { 'x-view': view },
+    body: { view },
   });
 
   if (error) throw new Error(`Failed to fetch agent inbox: ${error.message}`);
@@ -101,15 +101,15 @@ async function fetchAgentActivity(filters: ActivityFilters): Promise<{
   leads: AgentActivityItem[];
   counts: AgentCounts;
 }> {
-  const headers: Record<string, string> = { 'x-view': 'activity' };
-  if (filters.type) headers['x-filter-type'] = filters.type;
-  if (filters.from) headers['x-filter-from'] = filters.from;
-  if (filters.to) headers['x-filter-to'] = filters.to;
-  if (filters.search) headers['x-filter-search'] = filters.search;
-  if (filters.limit) headers['x-filter-limit'] = filters.limit.toString();
-
   const { data, error } = await supabase.functions.invoke('get-agent-inbox', {
-    headers,
+    body: {
+      view: 'activity',
+      ...(filters.type && { type: filters.type }),
+      ...(filters.from && { from: filters.from }),
+      ...(filters.to && { to: filters.to }),
+      ...(filters.search && { search: filters.search }),
+      ...(filters.limit && { limit: filters.limit }),
+    },
   });
 
   if (error) throw new Error(`Failed to fetch agent activity: ${error.message}`);
