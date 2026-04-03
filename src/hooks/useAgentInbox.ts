@@ -47,14 +47,6 @@ async function fetchAgentInbox(view: 'inbox' | 'pipeline'): Promise<AgentInboxRe
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) throw new Error('Not authenticated');
 
-  const res = await supabase.functions.invoke('get-agent-inbox', {
-    body: null,
-    headers: {},
-    method: 'GET',
-  });
-
-  // supabase.functions.invoke doesn't support query params well for GET,
-  // so we'll use fetch directly
   const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/get-agent-inbox?view=${view}`;
   const response = await fetch(url, {
     headers: {
