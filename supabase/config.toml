@@ -72,3 +72,9 @@ verify_jwt = false
 
 [functions.revamp-copy]
 verify_jwt = false
+
+[functions.get-agent-inbox]
+verify_jwt = false
+
+[functions.classify-reply]
+verify_jwt = false
