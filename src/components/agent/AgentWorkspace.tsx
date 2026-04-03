@@ -1,37 +1,27 @@
 import { useState } from 'react';
-import { LayoutDashboard, Inbox, Kanban, Rocket, Settings } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { LayoutDashboard, Inbox, Kanban, ActivitySquare, Settings } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
 import { AgentOverview } from './AgentOverview';
+import { AgentInbox } from './AgentInbox';
+import { AgentPipeline } from './AgentPipeline';
+import { AgentActivity } from './AgentActivity';
 import { AgentSettings } from './AgentSettings';
+import { useAgentInboxData } from '@/hooks/useAgentInbox';
 import { cn } from '@/lib/utils';
 
-type View = 'overview' | 'inbox' | 'pipeline' | 'campaigns' | 'settings';
+type View = 'overview' | 'inbox' | 'pipeline' | 'activity' | 'settings';
 
-const navItems: { key: View; label: string; icon: typeof LayoutDashboard; badge?: boolean }[] = [
+const navItems: { key: View; label: string; icon: typeof LayoutDashboard }[] = [
   { key: 'overview', label: 'Overview', icon: LayoutDashboard },
-  { key: 'inbox', label: 'Inbox', icon: Inbox, badge: true },
+  { key: 'inbox', label: 'Inbox', icon: Inbox },
   { key: 'pipeline', label: 'Pipeline', icon: Kanban },
-  { key: 'campaigns', label: 'Campaigns', icon: Rocket },
+  { key: 'activity', label: 'Activity', icon: ActivitySquare },
   { key: 'settings', label: 'Settings', icon: Settings },
 ];
 
-function ComingSoon({ title }: { title: string }) {
-  return (
-    <div className="flex-1 flex items-center justify-center p-8">
-      <Card className="max-w-md w-full">
-        <CardHeader>
-          <CardTitle>{title}</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p className="text-muted-foreground">Coming soon — this feature will be available in Phase 2.</p>
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
-
 export function AgentWorkspace() {
   const [activeView, setActiveView] = useState<View>('overview');
+  const { counts } = useAgentInboxData('inbox');
 
   return (
     <div className="flex h-full min-h-[calc(100vh-3rem)]">
@@ -49,7 +39,12 @@ export function AgentWorkspace() {
             )}
           >
             <item.icon className="h-4 w-4 shrink-0" />
-            <span>{item.label}</span>
+            <span className="flex-1">{item.label}</span>
+            {item.key === 'inbox' && counts.needs_attention > 0 && (
+              <Badge variant="destructive" className="h-5 min-w-[20px] px-1.5 text-[10px] font-bold">
+                {counts.needs_attention}
+              </Badge>
+            )}
           </button>
         ))}
       </div>
@@ -57,9 +52,9 @@ export function AgentWorkspace() {
       {/* Right content area */}
       <div className="flex-1 overflow-auto">
         {activeView === 'overview' && <AgentOverview />}
-        {activeView === 'inbox' && <ComingSoon title="Inbox" />}
-        {activeView === 'pipeline' && <ComingSoon title="Pipeline" />}
-        {activeView === 'campaigns' && <ComingSoon title="Campaigns" />}
+        {activeView === 'inbox' && <AgentInbox />}
+        {activeView === 'pipeline' && <AgentPipeline />}
+        {activeView === 'activity' && <AgentActivity />}
         {activeView === 'settings' && <AgentSettings />}
       </div>
     </div>

@@ -240,6 +240,199 @@ Deno.serve(async (req) => {
       }
     }
     
+    // ── Agent inbox routing ──────────────────────────────────
+    const isReplyEvent = ['replied', 'reply'].some(k =>
+      eventType.toLowerCase().includes(k)
+    );
+
+    if (isReplyEvent) {
+      // Find user for this integration
+      const { data: integrationUser } = await supabase
+        .from('outbound_integrations')
+        .select('user_id')
+        .eq('id', integrationId)
+        .single();
+
+      if (integrationUser) {
+        // Check for active agent
+        const { data: agentConfig } = await supabase
+          .from('agent_configs')
+          .select('*')
+          .eq('user_id', integrationUser.user_id)
+          .eq('is_active', true)
+          .single();
+
+        if (agentConfig) {
+          const channel =
+            eventType.toLowerCase().includes('linkedin')
+              ? 'linkedin' : 'email';
+
+          const replyText = event.replyText || event.text ||
+            event.message || event.body ||
+            event.data?.text || '';
+
+          const prospectFirstName = event.firstName ||
+            event.contact?.firstName || '';
+          const prospectLastName = event.lastName ||
+            event.contact?.lastName || '';
+          const fullName =
+            [prospectFirstName, prospectLastName]
+              .filter(Boolean).join(' ') ||
+            event.contact?.name || event.name || 'Unknown';
+
+          const prospectEmail = event.email ||
+            event.contact?.email || '';
+          const linkedinUrl = event.linkedinUrl ||
+            event.contact?.linkedinUrl || '';
+          const company = event.company ||
+            event.contact?.company || '';
+          const jobTitle = event.jobTitle ||
+            event.contact?.jobTitle || '';
+          const externalId = event.contactId?.toString() ||
+            event.id?.toString() || prospectEmail;
+
+          if (externalId) {
+            // Get existing lead to append thread
+            const { data: existingLead } = await supabase
+              .from('agent_leads')
+              .select('id, reply_thread')
+              .eq('user_id', integrationUser.user_id)
+              .eq('external_id', externalId)
+              .maybeSingle();
+
+            const existingThread =
+              existingLead?.reply_thread || [];
+            const updatedThread = [...(existingThread as any[]), {
+              role: 'prospect',
+              content: replyText,
+              timestamp: new Date().toISOString(),
+              channel
+            }];
+
+            // Upsert agent_leads
+            const { data: upsertedLead } = await supabase
+              .from('agent_leads')
+              .upsert({
+                user_id: integrationUser.user_id,
+                agent_config_id: agentConfig.id,
+                external_id: externalId,
+                full_name: fullName,
+                email: prospectEmail,
+                linkedin_url: linkedinUrl,
+                company,
+                job_title: jobTitle,
+                channel,
+                pipeline_stage: 'replied',
+                inbox_status: 'pending',
+                last_reply_at: new Date().toISOString(),
+                last_reply_text: replyText,
+                reply_thread: updatedThread
+              }, {
+                onConflict: 'user_id,external_id',
+                ignoreDuplicates: false
+              })
+              .select()
+              .single();
+
+            // Log activity
+            if (upsertedLead) {
+              await supabase.from('agent_activity').insert({
+                user_id: integrationUser.user_id,
+                agent_config_id: agentConfig.id,
+                lead_id: upsertedLead.id,
+                lead_name: fullName,
+                lead_company: company,
+                activity_type: 'reply_received',
+                description: `${channel === 'linkedin' ?
+                  'LinkedIn' : 'Email'} reply received from ${fullName}${company ? ' at ' + company : ''}`,
+                metadata: { channel, intent: 'pending' }
+              });
+            }
+
+            // Call classify-reply with 8s timeout
+            const classifyPromise = fetch(
+              `${Deno.env.get('SUPABASE_URL')}/functions/v1/classify-reply`,
+              {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'x-agent-key': Deno.env.get('AGENT_API_KEY') || ''
+                },
+                body: JSON.stringify({
+                  reply_text: replyText,
+                  thread_history: updatedThread,
+                  agent_context: {
+                    offer_description: agentConfig.offer_description,
+                    desired_action: agentConfig.desired_action,
+                    outcome_delivered: agentConfig.outcome_delivered,
+                    target_icp: agentConfig.target_icp,
+                    sender_name: agentConfig.sender_name,
+                    sender_title: agentConfig.sender_title,
+                    sender_bio: agentConfig.sender_bio,
+                    company_name: agentConfig.company_name,
+                    company_url: agentConfig.company_url,
+                    communication_style: agentConfig.communication_style,
+                    avoid_phrases: agentConfig.avoid_phrases || [],
+                    sample_message: agentConfig.sample_message || ''
+                  },
+                  channel,
+                  user_id: integrationUser.user_id
+                })
+              }
+            );
+
+            const timeoutPromise = new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('classify-reply timeout')), 8000)
+            );
+
+            try {
+              const classifyRes = await Promise.race([
+                classifyPromise, timeoutPromise
+              ]) as Response;
+
+              const classification = await classifyRes.json();
+
+              if (upsertedLead && classification.intent) {
+                await supabase
+                  .from('agent_leads')
+                  .update({
+                    intent: classification.intent,
+                    intent_confidence: classification.intent_confidence,
+                    draft_response: classification.suggested_response,
+                    pipeline_stage: classification.next_pipeline_stage,
+                    inbox_status: classification.should_auto_send
+                      ? 'sent' : 'draft_ready',
+                    auto_handled: classification.should_auto_send
+                  })
+                  .eq('id', upsertedLead.id);
+
+                // Log draft created activity
+                await supabase.from('agent_activity').insert({
+                  user_id: integrationUser.user_id,
+                  agent_config_id: agentConfig.id,
+                  lead_id: upsertedLead.id,
+                  lead_name: fullName,
+                  lead_company: company,
+                  activity_type: 'draft_created',
+                  description: `Draft response created for ${fullName} — classified as ${classification.intent} (${Math.round(classification.intent_confidence * 100)}% confidence)`,
+                  metadata: {
+                    intent: classification.intent,
+                    confidence: classification.intent_confidence,
+                    channel,
+                    auto_handled: classification.should_auto_send
+                  }
+                });
+              }
+            } catch (classifyErr) {
+              console.error('classify-reply failed:', classifyErr);
+              // Continue — webhook still succeeds
+            }
+          }
+        }
+      }
+    }
+    // ── End agent inbox routing ─────────────────────────────
+
     return new Response(JSON.stringify({ success: true }), {
       status: 200,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },

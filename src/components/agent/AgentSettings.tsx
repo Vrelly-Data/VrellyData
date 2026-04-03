@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAgentConfig, useUpsertAgentConfig, type AgentConfigInput } from '@/hooks/useAgent';
 import { supabase } from '@/integrations/supabase/client';
+import { useToast } from '@/hooks/use-toast';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -8,9 +9,9 @@ import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Separator } from '@/components/ui/separator';
+import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import { Loader2, CheckCircle2, Save } from 'lucide-react';
+import { Loader2, Save, CheckCircle2, Eye, EyeOff, Wifi, WifiOff } from 'lucide-react';
 
 const COMMUNICATION_STYLES = [
   { value: 'conversational', label: 'Conversational', description: 'Warm, natural, like a real person' },
@@ -29,7 +30,11 @@ const DESIRED_ACTIONS = [
 export function AgentSettings() {
   const { data: config, isLoading } = useAgentConfig();
   const upsertConfig = useUpsertAgentConfig();
+  const { toast } = useToast();
   const [hasExistingReplyKey, setHasExistingReplyKey] = useState(false);
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [testingConnection, setTestingConnection] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [formData, setFormData] = useState({
     company_name: '',
     company_url: '',
@@ -89,6 +94,24 @@ export function AgentSettings() {
   const update = (field: string, value: string | boolean) =>
     setFormData((prev) => ({ ...prev, [field]: value }));
 
+  const handleTestConnection = async () => {
+    setTestingConnection(true);
+    setConnectionStatus('idle');
+    try {
+      const { data, error } = await supabase.functions.invoke('validate-api-key', {
+        body: { apiKey: formData.reply_api_key, platform: 'reply_io' },
+      });
+      if (error || !data?.valid) {
+        setConnectionStatus('error');
+      } else {
+        setConnectionStatus('success');
+      }
+    } catch {
+      setConnectionStatus('error');
+    }
+    setTestingConnection(false);
+  };
+
   const handleSave = async () => {
     const input: AgentConfigInput = {
       company_name: formData.company_name,
@@ -112,6 +135,7 @@ export function AgentSettings() {
       onboarding_complete: true,
     };
     await upsertConfig.mutateAsync(input);
+    toast({ title: 'Settings saved', description: 'Your agent configuration has been updated.' });
   };
 
   if (isLoading) {
@@ -123,93 +147,86 @@ export function AgentSettings() {
   }
 
   return (
-    <div className="p-6 max-w-2xl space-y-8">
-      <div className="flex items-center justify-between">
-        <h2 className="text-2xl font-semibold">Agent Settings</h2>
-        <div className="flex items-center gap-3">
-          <span className="text-sm text-muted-foreground">{formData.is_active ? 'Active' : 'Paused'}</span>
-          <Switch
-            checked={formData.is_active}
-            onCheckedChange={(v) => update('is_active', v)}
-          />
-        </div>
-      </div>
+    <div className="p-6 max-w-2xl space-y-8 pb-24">
+      <h2 className="text-2xl font-semibold">Agent Settings</h2>
 
-      {/* Identity */}
+      {/* Section 1 — Agent Status */}
       <Card>
         <CardHeader>
-          <CardTitle>Identity</CardTitle>
+          <CardTitle>Agent Status</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-5">
+          <div className="flex items-center justify-between">
+            <div>
+              <Label>Active / Paused</Label>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {formData.is_active ? 'Your agent is running.' : 'Your agent is paused.'}
+              </p>
+            </div>
+            <Switch checked={formData.is_active} onCheckedChange={(v) => update('is_active', v)} />
+          </div>
+          <div>
+            <Label>Agent Mode</Label>
+            <div className="grid grid-cols-2 gap-3 mt-2">
+              <button
+                type="button"
+                onClick={() => update('mode', 'copilot')}
+                className={cn(
+                  'border rounded-lg p-4 text-left transition-colors',
+                  formData.mode === 'copilot'
+                    ? 'border-primary bg-primary/5 ring-2 ring-primary/20'
+                    : 'border-border hover:border-muted-foreground/40'
+                )}
+              >
+                <div className="font-medium text-sm">Co-pilot</div>
+                <div className="text-xs text-muted-foreground mt-1">
+                  Your agent drafts responses. You approve before anything sends.
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => update('mode', 'auto')}
+                className={cn(
+                  'border rounded-lg p-4 text-left transition-colors',
+                  formData.mode === 'auto'
+                    ? 'border-primary bg-primary/5 ring-2 ring-primary/20'
+                    : 'border-border hover:border-muted-foreground/40'
+                )}
+              >
+                <div className="font-medium text-sm">Auto</div>
+                <div className="text-xs text-muted-foreground mt-1">
+                  Your agent handles email replies automatically. LinkedIn always requires your approval.
+                </div>
+              </button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Section 2 — Sender Profile */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Sender Profile</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div>
-            <Label htmlFor="s_company_name">Company Name *</Label>
-            <Input id="s_company_name" value={formData.company_name} onChange={(e) => update('company_name', e.target.value)} />
-          </div>
-          <div>
-            <Label htmlFor="s_company_url">Company URL</Label>
-            <Input id="s_company_url" value={formData.company_url} onChange={(e) => update('company_url', e.target.value)} placeholder="https://yourcompany.com" />
-          </div>
-          <div>
-            <Label htmlFor="s_sender_name">Sender Full Name *</Label>
+            <Label htmlFor="s_sender_name">Full Name *</Label>
             <Input id="s_sender_name" value={formData.sender_name} onChange={(e) => update('sender_name', e.target.value)} />
           </div>
           <div>
-            <Label htmlFor="s_sender_title">Sender Job Title</Label>
+            <Label htmlFor="s_sender_title">Job Title</Label>
             <Input id="s_sender_title" value={formData.sender_title} onChange={(e) => update('sender_title', e.target.value)} />
           </div>
           <div>
-            <Label htmlFor="s_sender_linkedin">Sender LinkedIn URL</Label>
+            <Label htmlFor="s_sender_linkedin">LinkedIn URL</Label>
             <Input id="s_sender_linkedin" value={formData.sender_linkedin} onChange={(e) => update('sender_linkedin', e.target.value)} />
           </div>
           <div>
-            <Label htmlFor="s_sender_bio">Sender Bio</Label>
+            <Label htmlFor="s_sender_bio">Bio</Label>
             <Textarea id="s_sender_bio" value={formData.sender_bio} onChange={(e) => update('sender_bio', e.target.value)} rows={3} />
           </div>
-        </CardContent>
-      </Card>
-
-      {/* Offer */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Offer</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
           <div>
-            <Label htmlFor="s_offer">What do you sell? *</Label>
-            <Textarea id="s_offer" value={formData.offer_description} onChange={(e) => update('offer_description', e.target.value)} rows={3} />
-          </div>
-          <div>
-            <Label htmlFor="s_icp">Who is it for?</Label>
-            <Input id="s_icp" value={formData.target_icp} onChange={(e) => update('target_icp', e.target.value)} />
-          </div>
-          <div>
-            <Label htmlFor="s_outcome">What outcome do you deliver?</Label>
-            <Input id="s_outcome" value={formData.outcome_delivered} onChange={(e) => update('outcome_delivered', e.target.value)} />
-          </div>
-          <div>
-            <Label htmlFor="s_action">Desired action from prospects</Label>
-            <Select value={formData.desired_action} onValueChange={(v) => update('desired_action', v)}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {DESIRED_ACTIONS.map((action) => (
-                  <SelectItem key={action} value={action}>{action}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Tone & Persona */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Tone & Persona</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div>
-            <Label>Communication style</Label>
+            <Label>Communication Style</Label>
             <div className="grid grid-cols-2 gap-3 mt-2">
               {COMMUNICATION_STYLES.map((style) => (
                 <button
@@ -230,80 +247,123 @@ export function AgentSettings() {
             </div>
           </div>
           <div>
-            <Label htmlFor="s_avoid">Things to avoid</Label>
-            <Input id="s_avoid" value={formData.avoid_phrases} onChange={(e) => update('avoid_phrases', e.target.value)} />
+            <Label htmlFor="s_avoid">Things to Avoid</Label>
+            <Input id="s_avoid" value={formData.avoid_phrases} onChange={(e) => update('avoid_phrases', e.target.value)} placeholder="Comma-separated phrases to never use" />
           </div>
           <div>
-            <Label htmlFor="s_sample">Sample message</Label>
-            <Textarea id="s_sample" value={formData.sample_message} onChange={(e) => update('sample_message', e.target.value)} rows={4} />
+            <Label htmlFor="s_sample">Sample Message</Label>
+            <Textarea id="s_sample" value={formData.sample_message} onChange={(e) => update('sample_message', e.target.value)} rows={4} placeholder="Paste a message you've sent that got great replies." />
           </div>
         </CardContent>
       </Card>
 
-      {/* Connect */}
+      {/* Section 3 — Company Profile */}
       <Card>
         <CardHeader>
-          <CardTitle>Connections</CardTitle>
+          <CardTitle>Company Profile</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div>
-            <Label htmlFor="s_reply_key">Reply.io API Key</Label>
-            {hasExistingReplyKey && !formData.reply_api_key ? (
-              <div className="flex items-center gap-2 mt-1 text-sm text-green-600">
-                <CheckCircle2 className="h-4 w-4" />
-                Using your existing Reply.io connection
-              </div>
-            ) : (
-              <Input id="s_reply_key" value={formData.reply_api_key} onChange={(e) => update('reply_api_key', e.target.value)} type="password" />
-            )}
+            <Label htmlFor="s_company_name">Company Name *</Label>
+            <Input id="s_company_name" value={formData.company_name} onChange={(e) => update('company_name', e.target.value)} />
           </div>
-          <Separator />
           <div>
-            <Label>Agent mode</Label>
-            <div className="grid grid-cols-2 gap-3 mt-2">
-              <button
-                type="button"
-                onClick={() => update('mode', 'copilot')}
-                className={cn(
-                  'border rounded-lg p-5 text-left transition-colors',
-                  formData.mode === 'copilot'
-                    ? 'border-primary bg-primary/5 ring-2 ring-primary/20'
-                    : 'border-border hover:border-muted-foreground/40'
-                )}
-              >
-                <div className="font-medium">Co-pilot</div>
-                <div className="text-xs text-muted-foreground mt-1">
-                  Your agent drafts, you approve before anything sends.
-                </div>
-              </button>
-              <button
-                type="button"
-                onClick={() => update('mode', 'auto')}
-                className={cn(
-                  'border rounded-lg p-5 text-left transition-colors',
-                  formData.mode === 'auto'
-                    ? 'border-primary bg-primary/5 ring-2 ring-primary/20'
-                    : 'border-border hover:border-muted-foreground/40'
-                )}
-              >
-                <div className="font-medium">Auto</div>
-                <div className="text-xs text-muted-foreground mt-1">
-                  Your agent handles everything automatically.
-                </div>
-              </button>
-            </div>
+            <Label htmlFor="s_company_url">Company URL</Label>
+            <Input id="s_company_url" value={formData.company_url} onChange={(e) => update('company_url', e.target.value)} placeholder="https://yourcompany.com" />
+          </div>
+          <div>
+            <Label htmlFor="s_offer">What you sell *</Label>
+            <Textarea id="s_offer" value={formData.offer_description} onChange={(e) => update('offer_description', e.target.value)} rows={3} />
+          </div>
+          <div>
+            <Label htmlFor="s_icp">Who it's for</Label>
+            <Input id="s_icp" value={formData.target_icp} onChange={(e) => update('target_icp', e.target.value)} />
+          </div>
+          <div>
+            <Label htmlFor="s_outcome">Outcome you deliver</Label>
+            <Input id="s_outcome" value={formData.outcome_delivered} onChange={(e) => update('outcome_delivered', e.target.value)} />
+          </div>
+          <div>
+            <Label htmlFor="s_action">Desired prospect action</Label>
+            <Select value={formData.desired_action} onValueChange={(v) => update('desired_action', v)}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {DESIRED_ACTIONS.map((action) => (
+                  <SelectItem key={action} value={action}>{action}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         </CardContent>
       </Card>
 
-      <Button
-        onClick={handleSave}
-        disabled={upsertConfig.isPending || !formData.company_name || !formData.sender_name || !formData.offer_description}
-        className="gap-2"
-      >
-        <Save className="h-4 w-4" />
-        {upsertConfig.isPending ? 'Saving...' : 'Save Settings'}
-      </Button>
+      {/* Section 4 — Reply.io Connection */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Reply.io Connection</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {hasExistingReplyKey && !formData.reply_api_key ? (
+            <div className="flex items-center gap-2 text-sm text-green-600">
+              <CheckCircle2 className="h-4 w-4" />
+              Using your existing Reply.io connection
+            </div>
+          ) : (
+            <div>
+              <Label htmlFor="s_reply_key">API Key</Label>
+              <div className="flex items-center gap-2 mt-1">
+                <div className="relative flex-1">
+                  <Input
+                    id="s_reply_key"
+                    value={formData.reply_api_key}
+                    onChange={(e) => update('reply_api_key', e.target.value)}
+                    type={showApiKey ? 'text' : 'password'}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowApiKey(!showApiKey)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  >
+                    {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleTestConnection}
+                  disabled={testingConnection || !formData.reply_api_key}
+                >
+                  {testingConnection ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Test Connection'}
+                </Button>
+              </div>
+              {connectionStatus === 'success' && (
+                <div className="flex items-center gap-1.5 mt-2 text-sm text-green-600">
+                  <Wifi className="h-4 w-4" /> Connected
+                </div>
+              )}
+              {connectionStatus === 'error' && (
+                <div className="flex items-center gap-1.5 mt-2 text-sm text-red-600">
+                  <WifiOff className="h-4 w-4" /> Connection failed — check your API key
+                </div>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Sticky save button */}
+      <div className="fixed bottom-0 left-0 right-0 bg-background border-t p-4 flex justify-end z-10">
+        <Button
+          onClick={handleSave}
+          disabled={upsertConfig.isPending || !formData.company_name || !formData.sender_name || !formData.offer_description}
+          className="gap-2"
+        >
+          <Save className="h-4 w-4" />
+          {upsertConfig.isPending ? 'Saving...' : 'Save Settings'}
+        </Button>
+      </div>
     </div>
   );
 }

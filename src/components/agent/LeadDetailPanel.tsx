@@ -1,0 +1,290 @@
+import { useState } from 'react';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Textarea } from '@/components/ui/textarea';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { X, Linkedin, Mail } from 'lucide-react';
+import { cn } from '@/lib/utils';
+import { useUpdateAgentLead, useApproveDraft, type AgentLead } from '@/hooks/useAgentInbox';
+
+const PIPELINE_STAGES = [
+  'contacted', 'replied', 'engaged', 'meeting_booked', 'closed', 'dead',
+] as const;
+
+const INTENT_COLORS: Record<string, string> = {
+  interested: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400',
+  needs_more_info: 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400',
+  not_interested: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400',
+  out_of_office: 'bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-400',
+  bounce: 'bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-400',
+  referral: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400',
+  unknown: 'bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-400',
+};
+
+function formatRelativeTime(dateStr: string): string {
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d ago`;
+}
+
+interface LeadDetailPanelProps {
+  lead: AgentLead;
+  onClose: () => void;
+  showDraft?: boolean;
+}
+
+export function LeadDetailPanel({ lead, onClose, showDraft = true }: LeadDetailPanelProps) {
+  const updateLead = useUpdateAgentLead();
+  const approveDraft = useApproveDraft();
+  const [draftText, setDraftText] = useState(lead.draft_response || '');
+  const [notes, setNotes] = useState(lead.notes || '');
+  const [showConfirm, setShowConfirm] = useState(false);
+
+  const handleStageChange = (newStage: string) => {
+    if (newStage === lead.pipeline_stage) return;
+    updateLead.mutate({
+      leadId: lead.id,
+      updates: { pipeline_stage: newStage },
+      logStageChange: {
+        oldStage: lead.pipeline_stage,
+        newStage,
+        leadName: lead.full_name,
+        leadCompany: lead.company,
+      },
+    });
+  };
+
+  const handleApprove = () => {
+    approveDraft.mutate({
+      leadId: lead.id,
+      editedDraft: draftText !== lead.draft_response ? draftText : undefined,
+    });
+    setShowConfirm(false);
+  };
+
+  const handleDismiss = () => {
+    updateLead.mutate({
+      leadId: lead.id,
+      updates: { inbox_status: 'dismissed' },
+    });
+  };
+
+  const handleNotesSave = () => {
+    updateLead.mutate({
+      leadId: lead.id,
+      updates: { notes },
+    });
+  };
+
+  const thread = lead.reply_thread?.length > 0
+    ? lead.reply_thread
+    : lead.last_reply_text
+      ? [{ role: 'prospect', content: lead.last_reply_text, timestamp: lead.last_reply_at, channel: lead.channel }]
+      : [];
+
+  const confidenceColor =
+    lead.intent_confidence > 0.7 ? 'text-green-600' :
+    lead.intent_confidence > 0.4 ? 'text-amber-600' : 'text-red-600';
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* Header */}
+      <div className="p-4 border-b flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="font-semibold text-lg truncate">{lead.full_name}</h3>
+          {lead.company && (
+            <p className="text-sm text-muted-foreground">{lead.company}</p>
+          )}
+          {lead.job_title && (
+            <p className="text-xs text-muted-foreground">{lead.job_title}</p>
+          )}
+          <div className="flex items-center gap-2 mt-2 flex-wrap">
+            <Badge variant="outline" className={cn(
+              'text-xs',
+              lead.channel === 'linkedin'
+                ? 'border-blue-300 text-blue-700 dark:text-blue-400'
+                : 'border-green-300 text-green-700 dark:text-green-400'
+            )}>
+              {lead.channel === 'linkedin' ? (
+                <><Linkedin className="h-3 w-3 mr-1" /> LinkedIn</>
+              ) : (
+                <><Mail className="h-3 w-3 mr-1" /> Email</>
+              )}
+            </Badge>
+            {lead.intent && (
+              <Badge className={cn('text-xs', INTENT_COLORS[lead.intent] || INTENT_COLORS.unknown)}>
+                {lead.intent.replace(/_/g, ' ')}
+              </Badge>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <Select value={lead.pipeline_stage} onValueChange={handleStageChange}>
+            <SelectTrigger className="w-[150px] h-8 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {PIPELINE_STAGES.map((s) => (
+                <SelectItem key={s} value={s} className="text-xs">
+                  {s.replace(/_/g, ' ')}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button variant="ghost" size="icon" onClick={onClose} className="h-8 w-8">
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
+
+      {/* Scrollable content */}
+      <div className="flex-1 overflow-auto p-4 space-y-4">
+        {/* Conversation thread */}
+        {thread.length > 0 && (
+          <div className="space-y-3">
+            <h4 className="text-sm font-medium text-muted-foreground">Conversation</h4>
+            {thread.map((msg, i) => (
+              <div
+                key={i}
+                className={cn(
+                  'max-w-[85%] rounded-lg px-3 py-2 text-sm',
+                  msg.role === 'prospect'
+                    ? 'bg-muted mr-auto'
+                    : 'bg-blue-100 dark:bg-blue-900/30 ml-auto'
+                )}
+              >
+                <p className="whitespace-pre-wrap">{msg.content}</p>
+                {msg.timestamp && (
+                  <p className="text-[10px] text-muted-foreground mt-1">
+                    {formatRelativeTime(msg.timestamp)}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Draft response */}
+        {showDraft && lead.inbox_status === 'draft_ready' && (
+          <div className="space-y-2 border rounded-lg p-3">
+            <div className="flex items-center justify-between">
+              <h4 className="text-sm font-medium">Draft Response</h4>
+              {lead.intent_confidence > 0 && (
+                <span className={cn('text-xs font-medium', confidenceColor)}>
+                  {Math.round(lead.intent_confidence * 100)}% confident
+                </span>
+              )}
+            </div>
+            <Textarea
+              value={draftText}
+              onChange={(e) => setDraftText(e.target.value)}
+              onBlur={() => {
+                if (draftText !== lead.draft_response) {
+                  updateLead.mutate({
+                    leadId: lead.id,
+                    updates: { draft_response: draftText },
+                  });
+                }
+              }}
+              rows={4}
+              className="text-sm"
+            />
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                className="bg-amber-600 hover:bg-amber-700 text-white"
+                onClick={() => setShowConfirm(true)}
+                disabled={approveDraft.isPending}
+              >
+                {approveDraft.isPending ? 'Approving...' : 'Approve & Send'}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={handleDismiss}
+                disabled={updateLead.isPending}
+              >
+                Dismiss
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* Notes */}
+        <div className="space-y-2">
+          <h4 className="text-sm font-medium text-muted-foreground">Notes</h4>
+          <Textarea
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            onBlur={handleNotesSave}
+            placeholder="Add notes about this lead..."
+            rows={3}
+            className="text-sm"
+          />
+        </div>
+      </div>
+
+      {/* Confirmation dialog */}
+      <AlertDialog open={showConfirm} onOpenChange={setShowConfirm}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Approve Response</AlertDialogTitle>
+            <AlertDialogDescription>
+              {lead.channel === 'linkedin'
+                ? 'This will mark the response as approved. Send the message manually in Reply.io to complete delivery.'
+                : 'This will mark the response as approved for sending.'}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleApprove}>Confirm</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}
+
+// Reusable intent badge component
+export function IntentBadge({ intent }: { intent: string }) {
+  if (!intent) return null;
+  return (
+    <Badge className={cn('text-xs', INTENT_COLORS[intent] || INTENT_COLORS.unknown)}>
+      {intent.replace(/_/g, ' ')}
+    </Badge>
+  );
+}
+
+// Reusable channel badge
+export function ChannelBadge({ channel }: { channel: string }) {
+  return (
+    <Badge variant="outline" className={cn(
+      'text-xs',
+      channel === 'linkedin'
+        ? 'border-blue-300 text-blue-700 dark:text-blue-400'
+        : 'border-green-300 text-green-700 dark:text-green-400'
+    )}>
+      {channel === 'linkedin' ? (
+        <><Linkedin className="h-3 w-3 mr-1" /> LinkedIn</>
+      ) : (
+        <><Mail className="h-3 w-3 mr-1" /> Email</>
+      )}
+    </Badge>
+  );
+}
+
+export { formatRelativeTime };

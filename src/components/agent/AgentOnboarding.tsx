@@ -9,7 +9,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
-import { CheckCircle2, ArrowLeft, ArrowRight, Rocket } from 'lucide-react';
+import { CheckCircle2, ArrowLeft, ArrowRight, Rocket, Eye, EyeOff, Loader2, Wifi, WifiOff } from 'lucide-react';
 
 const COMMUNICATION_STYLES = [
   { value: 'conversational', label: 'Conversational', description: 'Warm, natural, like a real person' },
@@ -26,19 +26,23 @@ const DESIRED_ACTIONS = [
 ] as const;
 
 interface FormData {
-  company_name: string;
-  company_url: string;
+  // Sender profile
   sender_name: string;
   sender_title: string;
   sender_linkedin: string;
   sender_bio: string;
+  // Company profile
+  company_name: string;
+  company_url: string;
   offer_description: string;
   target_icp: string;
   outcome_delivered: string;
   desired_action: string;
+  // Communication
   communication_style: string;
   avoid_phrases: string;
   sample_message: string;
+  // Connection
   reply_api_key: string;
   mode: string;
 }
@@ -48,13 +52,16 @@ export function AgentOnboarding() {
   const upsertConfig = useUpsertAgentConfig();
   const [currentStep, setCurrentStep] = useState(1);
   const [hasExistingReplyKey, setHasExistingReplyKey] = useState(false);
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [testingConnection, setTestingConnection] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [formData, setFormData] = useState<FormData>({
-    company_name: '',
-    company_url: '',
     sender_name: '',
     sender_title: '',
     sender_linkedin: '',
     sender_bio: '',
+    company_name: '',
+    company_url: '',
     offer_description: '',
     target_icp: '',
     outcome_delivered: '',
@@ -87,12 +94,30 @@ export function AgentOnboarding() {
 
   const canProceed = () => {
     switch (currentStep) {
-      case 1: return formData.company_name.trim() !== '' && formData.sender_name.trim() !== '';
-      case 2: return formData.offer_description.trim() !== '';
+      case 1: return formData.sender_name.trim() !== '';
+      case 2: return formData.company_name.trim() !== '' && formData.offer_description.trim() !== '';
       case 3: return true;
       case 4: return true;
       default: return false;
     }
+  };
+
+  const handleTestConnection = async () => {
+    setTestingConnection(true);
+    setConnectionStatus('idle');
+    try {
+      const { data, error } = await supabase.functions.invoke('validate-api-key', {
+        body: { apiKey: formData.reply_api_key, platform: 'reply_io' },
+      });
+      if (error || !data?.valid) {
+        setConnectionStatus('error');
+      } else {
+        setConnectionStatus('success');
+      }
+    } catch {
+      setConnectionStatus('error');
+    }
+    setTestingConnection(false);
   };
 
   const handleLaunch = async () => {
@@ -123,6 +148,8 @@ export function AgentOnboarding() {
     navigate('/agent');
   };
 
+  const stepLabels = ['Sender Profile', 'Company Profile', 'Communication Style', 'Connect & Launch'];
+
   return (
     <div className="max-w-2xl mx-auto py-10 px-4">
       {/* Progress */}
@@ -145,35 +172,29 @@ export function AgentOnboarding() {
           </div>
         ))}
       </div>
-      <p className="text-sm text-muted-foreground mb-6">Step {currentStep} of 4</p>
+      <p className="text-sm text-muted-foreground mb-6">
+        Step {currentStep} of 4 — {stepLabels[currentStep - 1]}
+      </p>
 
-      {/* Step 1 — Identity */}
+      {/* Step 1 — Sender Profile */}
       {currentStep === 1 && (
         <div className="space-y-6">
-          <h2 className="text-2xl font-semibold">Set up your agent's identity</h2>
+          <h2 className="text-2xl font-semibold">Set up your sender profile</h2>
           <div className="space-y-4">
             <div>
-              <Label htmlFor="company_name">Company Name *</Label>
-              <Input id="company_name" value={formData.company_name} onChange={(e) => update('company_name', e.target.value)} />
-            </div>
-            <div>
-              <Label htmlFor="company_url">Company URL</Label>
-              <Input id="company_url" value={formData.company_url} onChange={(e) => update('company_url', e.target.value)} placeholder="https://yourcompany.com" />
-            </div>
-            <div>
-              <Label htmlFor="sender_name">Sender Full Name *</Label>
+              <Label htmlFor="sender_name">Full Name *</Label>
               <Input id="sender_name" value={formData.sender_name} onChange={(e) => update('sender_name', e.target.value)} />
             </div>
             <div>
-              <Label htmlFor="sender_title">Sender Job Title</Label>
+              <Label htmlFor="sender_title">Job Title</Label>
               <Input id="sender_title" value={formData.sender_title} onChange={(e) => update('sender_title', e.target.value)} />
             </div>
             <div>
-              <Label htmlFor="sender_linkedin">Sender LinkedIn URL</Label>
+              <Label htmlFor="sender_linkedin">LinkedIn URL</Label>
               <Input id="sender_linkedin" value={formData.sender_linkedin} onChange={(e) => update('sender_linkedin', e.target.value)} />
             </div>
             <div>
-              <Label htmlFor="sender_bio">Sender Bio</Label>
+              <Label htmlFor="sender_bio">Bio</Label>
               <Textarea
                 id="sender_bio"
                 value={formData.sender_bio}
@@ -187,11 +208,19 @@ export function AgentOnboarding() {
         </div>
       )}
 
-      {/* Step 2 — Offer */}
+      {/* Step 2 — Company Profile */}
       {currentStep === 2 && (
         <div className="space-y-6">
-          <h2 className="text-2xl font-semibold">What does your agent sell?</h2>
+          <h2 className="text-2xl font-semibold">Tell us about your company</h2>
           <div className="space-y-4">
+            <div>
+              <Label htmlFor="company_name">Company Name *</Label>
+              <Input id="company_name" value={formData.company_name} onChange={(e) => update('company_name', e.target.value)} />
+            </div>
+            <div>
+              <Label htmlFor="company_url">Company URL</Label>
+              <Input id="company_url" value={formData.company_url} onChange={(e) => update('company_url', e.target.value)} placeholder="https://yourcompany.com" />
+            </div>
             <div>
               <Label htmlFor="offer_description">What do you sell? *</Label>
               <Textarea
@@ -212,7 +241,7 @@ export function AgentOnboarding() {
               />
             </div>
             <div>
-              <Label htmlFor="outcome_delivered">What outcome do you deliver?</Label>
+              <Label htmlFor="outcome_delivered">Outcome you deliver</Label>
               <Input
                 id="outcome_delivered"
                 value={formData.outcome_delivered}
@@ -221,7 +250,7 @@ export function AgentOnboarding() {
               />
             </div>
             <div>
-              <Label htmlFor="desired_action">Desired action from prospects</Label>
+              <Label htmlFor="desired_action">Desired prospect action</Label>
               <Select value={formData.desired_action} onValueChange={(v) => update('desired_action', v)}>
                 <SelectTrigger>
                   <SelectValue />
@@ -237,13 +266,13 @@ export function AgentOnboarding() {
         </div>
       )}
 
-      {/* Step 3 — Tone & Persona */}
+      {/* Step 3 — Communication Style */}
       {currentStep === 3 && (
         <div className="space-y-6">
           <h2 className="text-2xl font-semibold">How should your agent communicate?</h2>
           <div className="space-y-4">
             <div>
-              <Label>Communication style</Label>
+              <Label>Communication Style</Label>
               <div className="grid grid-cols-2 gap-3 mt-2">
                 {COMMUNICATION_STYLES.map((style) => (
                   <button
@@ -279,9 +308,10 @@ export function AgentOnboarding() {
                 value={formData.sample_message}
                 onChange={(e) => update('sample_message', e.target.value)}
                 rows={4}
+                placeholder="Paste a message you've sent that got great replies."
               />
               <p className="text-xs text-muted-foreground mt-1">
-                Paste a message you've sent that got great replies. This is the highest-impact thing you can give your agent.
+                This is the highest-impact thing you can give your agent — it learns your voice from this.
               </p>
             </div>
           </div>
@@ -302,19 +332,48 @@ export function AgentOnboarding() {
                 </div>
               ) : (
                 <>
-                  <Input
-                    id="reply_api_key"
-                    value={formData.reply_api_key}
-                    onChange={(e) => update('reply_api_key', e.target.value)}
-                    type="password"
-                  />
+                  <div className="flex items-center gap-2 mt-1">
+                    <div className="relative flex-1">
+                      <Input
+                        id="reply_api_key"
+                        value={formData.reply_api_key}
+                        onChange={(e) => update('reply_api_key', e.target.value)}
+                        type={showApiKey ? 'text' : 'password'}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowApiKey(!showApiKey)}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      >
+                        {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleTestConnection}
+                      disabled={testingConnection || !formData.reply_api_key}
+                    >
+                      {testingConnection ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Test'}
+                    </Button>
+                  </div>
+                  {connectionStatus === 'success' && (
+                    <div className="flex items-center gap-1.5 mt-2 text-sm text-green-600">
+                      <Wifi className="h-4 w-4" /> Connected
+                    </div>
+                  )}
+                  {connectionStatus === 'error' && (
+                    <div className="flex items-center gap-1.5 mt-2 text-sm text-red-600">
+                      <WifiOff className="h-4 w-4" /> Connection failed — check your API key
+                    </div>
+                  )}
                   <p className="text-xs text-muted-foreground mt-1">Find this in Reply.io &rarr; Settings &rarr; API</p>
                 </>
               )}
             </div>
 
             <div>
-              <Label>Agent mode</Label>
+              <Label>Agent Mode</Label>
               <div className="grid grid-cols-2 gap-3 mt-2">
                 <button
                   type="button"
@@ -382,7 +441,7 @@ export function AgentOnboarding() {
             className="bg-amber-600 hover:bg-amber-700 text-white"
           >
             <Rocket className="h-4 w-4 mr-2" />
-            {upsertConfig.isPending ? 'Launching...' : 'Launch Agent \u2726'}
+            {upsertConfig.isPending ? 'Launching...' : 'Launch Agent'}
           </Button>
         )}
       </div>

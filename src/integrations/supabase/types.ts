@@ -14,9 +14,64 @@ export type Database = {
   }
   public: {
     Tables: {
+      agent_activity: {
+        Row: {
+          activity_type: string
+          agent_config_id: string | null
+          created_at: string | null
+          description: string
+          id: string
+          lead_company: string | null
+          lead_id: string | null
+          lead_name: string | null
+          metadata: Json | null
+          user_id: string | null
+        }
+        Insert: {
+          activity_type: string
+          agent_config_id?: string | null
+          created_at?: string | null
+          description: string
+          id?: string
+          lead_company?: string | null
+          lead_id?: string | null
+          lead_name?: string | null
+          metadata?: Json | null
+          user_id?: string | null
+        }
+        Update: {
+          activity_type?: string
+          agent_config_id?: string | null
+          created_at?: string | null
+          description?: string
+          id?: string
+          lead_company?: string | null
+          lead_id?: string | null
+          lead_name?: string | null
+          metadata?: Json | null
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "agent_activity_agent_config_id_fkey"
+            columns: ["agent_config_id"]
+            isOneToOne: false
+            referencedRelation: "agent_configs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "agent_activity_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "agent_leads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       agent_configs: {
         Row: {
           avoid_phrases: string[] | null
+          campaign_rules: Json | null
           communication_style: string | null
           company_name: string
           company_url: string | null
@@ -31,6 +86,7 @@ export type Database = {
           onboarding_step: number | null
           outcome_delivered: string | null
           reply_api_key: string | null
+          reply_io_connected: boolean | null
           sample_message: string | null
           saved_audience_id: string | null
           sender_bio: string | null
@@ -43,6 +99,7 @@ export type Database = {
         }
         Insert: {
           avoid_phrases?: string[] | null
+          campaign_rules?: Json | null
           communication_style?: string | null
           company_name: string
           company_url?: string | null
@@ -57,6 +114,7 @@ export type Database = {
           onboarding_step?: number | null
           outcome_delivered?: string | null
           reply_api_key?: string | null
+          reply_io_connected?: boolean | null
           sample_message?: string | null
           saved_audience_id?: string | null
           sender_bio?: string | null
@@ -69,6 +127,7 @@ export type Database = {
         }
         Update: {
           avoid_phrases?: string[] | null
+          campaign_rules?: Json | null
           communication_style?: string | null
           company_name?: string
           company_url?: string | null
@@ -83,6 +142,7 @@ export type Database = {
           onboarding_step?: number | null
           outcome_delivered?: string | null
           reply_api_key?: string | null
+          reply_io_connected?: boolean | null
           sample_message?: string | null
           saved_audience_id?: string | null
           sender_bio?: string | null
@@ -107,6 +167,7 @@ export type Database = {
         Row: {
           agent_config_id: string | null
           agent_run_id: string | null
+          auto_handled: boolean | null
           channel: string | null
           company: string | null
           created_at: string | null
@@ -116,18 +177,23 @@ export type Database = {
           external_id: string | null
           full_name: string | null
           id: string
+          inbox_status: string | null
+          intent: string | null
+          intent_confidence: number | null
           job_title: string | null
           last_reply_at: string | null
           last_reply_text: string | null
           linkedin_url: string | null
           notes: string | null
           pipeline_stage: string | null
+          reply_thread: Json | null
           updated_at: string | null
           user_id: string | null
         }
         Insert: {
           agent_config_id?: string | null
           agent_run_id?: string | null
+          auto_handled?: boolean | null
           channel?: string | null
           company?: string | null
           created_at?: string | null
@@ -137,18 +203,23 @@ export type Database = {
           external_id?: string | null
           full_name?: string | null
           id?: string
+          inbox_status?: string | null
+          intent?: string | null
+          intent_confidence?: number | null
           job_title?: string | null
           last_reply_at?: string | null
           last_reply_text?: string | null
           linkedin_url?: string | null
           notes?: string | null
           pipeline_stage?: string | null
+          reply_thread?: Json | null
           updated_at?: string | null
           user_id?: string | null
         }
         Update: {
           agent_config_id?: string | null
           agent_run_id?: string | null
+          auto_handled?: boolean | null
           channel?: string | null
           company?: string | null
           created_at?: string | null
@@ -158,12 +229,16 @@ export type Database = {
           external_id?: string | null
           full_name?: string | null
           id?: string
+          inbox_status?: string | null
+          intent?: string | null
+          intent_confidence?: number | null
           job_title?: string | null
           last_reply_at?: string | null
           last_reply_text?: string | null
           linkedin_url?: string | null
           notes?: string | null
           pipeline_stage?: string | null
+          reply_thread?: Json | null
           updated_at?: string | null
           user_id?: string | null
         }
