@@ -52,12 +52,17 @@ export function AgentSettings() {
 
       const { data, error } = await (supabase as any)
         .from('synced_campaigns')
-        .select("name, stats->>'linkedinReplies' as linkedin_replies, stats->>'replies' as email_replies, stats->>'peopleCount' as total_people")
+        .select('name, stats, team_id')
         .eq('team_id', intRow.team_id)
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      return data ?? [];
+      return (data ?? []).map((c: any) => ({
+        name: c.name,
+        total_people: c.stats?.peopleCount ?? 0,
+        linkedin_replies: c.stats?.linkedinReplies ?? 0,
+        email_replies: c.stats?.replies ?? 0,
+      }));
     },
   });
 
