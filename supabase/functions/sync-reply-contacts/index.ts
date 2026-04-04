@@ -689,6 +689,169 @@ Deno.serve(async (req) => {
     console.log(`Contacts sync complete: ${contactsSynced} synced, ${contactsFailed} failed`);
     console.log(`Campaign stats updated: sent=${engagementStats.deliveredCount}, replies=${engagementStats.repliesCount}`);
 
+    // --- Agent Leads Population Block ---
+    // Populate agent_leads for replied contacts so the Agent inbox
+    // gets data from both webhooks AND manual syncs.
+    let agentLeadsCreated = 0;
+    try {
+      // 1. Find the user_id for this integration
+      const { data: integrationOwner } = await serviceClient
+        .from("outbound_integrations")
+        .select("created_by")
+        .eq("id", integrationId)
+        .single();
+
+      if (integrationOwner?.created_by) {
+        const userId = integrationOwner.created_by;
+
+        // 2. Check if this user has an active agent config
+        const { data: agentConfig } = await serviceClient
+          .from("agent_configs")
+          .select("*")
+          .eq("user_id", userId)
+          .eq("is_active", true)
+          .limit(1)
+          .maybeSingle();
+
+        if (agentConfig) {
+          console.log(`Active agent config found (${agentConfig.id}) for user ${userId}, populating agent_leads`);
+
+          // 3. Find all synced_contacts for this integration where the contact has replied
+          const { data: repliedContacts } = await serviceClient
+            .from("synced_contacts")
+            .select("*")
+            .eq("team_id", teamId)
+            .or("engagement_data->>replied.eq.true,status.eq.replied");
+
+          if (repliedContacts && repliedContacts.length > 0) {
+            console.log(`Found ${repliedContacts.length} replied contacts to upsert into agent_leads`);
+
+            const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+
+            for (const sc of repliedContacts) {
+              try {
+                // 4. Extract fields from synced_contacts
+                const fullName = [sc.first_name, sc.last_name].filter(Boolean).join(" ") || "Unknown";
+                const email = sc.email || "";
+                const linkedinUrl = sc.linkedin_url || null;
+                const company = sc.company || null;
+                const jobTitle = sc.job_title || null;
+                const externalId = sc.external_contact_id || sc.email;
+
+                // Determine channel from engagement_data
+                const engData = (sc.engagement_data as Record<string, unknown>) || {};
+                const linkedinReplies = Number(engData.linkedinReplies) || 0;
+                const channel = linkedinReplies > 0 ? "linkedin" : "email";
+
+                const lastReplyAt = (engData.repliedAt as string) || sc.updated_at || new Date().toISOString();
+                const lastReplyText = ""; // Not available from sync, only from webhooks
+
+                // Upsert into agent_leads — only update if inbox_status is still 'pending'
+                // Don't overwrite existing draft_response or intent if already classified
+                const { data: upsertedLead, status: upsertStatus } = await serviceClient
+                  .from("agent_leads")
+                  .upsert(
+                    {
+                      user_id: agentConfig.user_id,
+                      agent_config_id: agentConfig.id,
+                      external_id: externalId,
+                      full_name: fullName,
+                      email,
+                      linkedin_url: linkedinUrl,
+                      company,
+                      job_title: jobTitle,
+                      channel,
+                      pipeline_stage: "replied",
+                      inbox_status: "pending",
+                      last_reply_at: lastReplyAt,
+                      last_reply_text: lastReplyText,
+                    },
+                    {
+                      onConflict: "user_id,external_id",
+                      ignoreDuplicates: false,
+                    }
+                  )
+                  .select()
+                  .single();
+
+                // 5. Log agent_activity only for newly created rows (HTTP 201)
+                if (upsertedLead && upsertStatus === 201) {
+                  agentLeadsCreated++;
+                  await serviceClient.from("agent_activity").insert({
+                    user_id: agentConfig.user_id,
+                    agent_config_id: agentConfig.id,
+                    lead_id: upsertedLead.id,
+                    lead_name: fullName,
+                    lead_company: company,
+                    activity_type: "reply_received",
+                    description: `Reply synced from Data Playground for ${fullName}${company ? " at " + company : ""}`,
+                    metadata: { channel, source: "playground_sync" },
+                  });
+                }
+
+                // 6. Classify reply if draft_response is empty and last_reply_text is not empty
+                if (
+                  upsertedLead &&
+                  !upsertedLead.draft_response &&
+                  upsertedLead.last_reply_text
+                ) {
+                  try {
+                    const classifyController = new AbortController();
+                    const classifyTimeout = setTimeout(() => classifyController.abort(), 5000);
+
+                    await fetch(`${supabaseUrl}/functions/v1/classify-reply`, {
+                      method: "POST",
+                      headers: {
+                        "Content-Type": "application/json",
+                        "x-agent-key": Deno.env.get("AGENT_API_KEY") || "",
+                      },
+                      signal: classifyController.signal,
+                      body: JSON.stringify({
+                        reply_text: upsertedLead.last_reply_text,
+                        agent_context: {
+                          offer_description: agentConfig.offer_description,
+                          desired_action: agentConfig.desired_action,
+                          outcome_delivered: agentConfig.outcome_delivered,
+                          target_icp: agentConfig.target_icp,
+                          sender_name: agentConfig.sender_name,
+                          sender_title: agentConfig.sender_title,
+                          sender_bio: agentConfig.sender_bio,
+                          company_name: agentConfig.company_name,
+                          company_url: agentConfig.company_url,
+                          communication_style: agentConfig.communication_style,
+                          avoid_phrases: agentConfig.avoid_phrases || [],
+                          sample_message: agentConfig.sample_message || "",
+                        },
+                        channel,
+                        user_id: agentConfig.user_id,
+                      }),
+                    });
+
+                    clearTimeout(classifyTimeout);
+                  } catch (classifyErr) {
+                    // Timeout or failure — continue without classification
+                    console.warn(`classify-reply failed for ${externalId}:`, classifyErr);
+                  }
+                }
+              } catch (contactErr) {
+                console.warn(`Failed to upsert agent_lead for contact ${sc.email}:`, contactErr);
+              }
+            }
+
+            console.log(`Agent leads: ${agentLeadsCreated} new leads created from ${repliedContacts.length} replied contacts`);
+          } else {
+            console.log("No replied contacts found for agent_leads population");
+          }
+        } else {
+          console.log("No active agent config found, skipping agent_leads population");
+        }
+      }
+    } catch (agentLeadsErr) {
+      // 7. Don't affect the existing sync response if anything fails
+      console.error("Agent leads population failed (non-fatal):", agentLeadsErr);
+    }
+    // --- End Agent Leads Population Block ---
+
     return new Response(
       JSON.stringify({
         success: true,
@@ -709,6 +872,7 @@ Deno.serve(async (req) => {
           delivered: engagementStats.deliveredCount,
           replies: engagementStats.repliesCount,
         },
+        agentLeadsCreated,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
