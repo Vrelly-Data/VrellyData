@@ -81,6 +81,39 @@ export interface AgentConfigInput {
   onboarding_step?: number;
 }
 
+export interface ReplyIntegration {
+  id: string;
+  platform: string;
+  name: string;
+  sync_status: string | null;
+  reply_team_id: string | null;
+  last_synced_at: string | null;
+}
+
+export function useReplyIntegration() {
+  return useQuery<{ integration: ReplyIntegration | null; hasIntegration: boolean }>({
+    queryKey: ['reply-integration'],
+    queryFn: async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.user) return { integration: null, hasIntegration: false };
+
+      const { data, error } = await db
+        .from('outbound_integrations')
+        .select('id, platform, name, sync_status, reply_team_id, last_synced_at')
+        .eq('created_by', session.user.id)
+        .eq('platform', 'reply.io')
+        .eq('is_active', true)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (error) throw error;
+      const integration = data as ReplyIntegration | null;
+      return { integration, hasIntegration: !!integration };
+    },
+  });
+}
+
 export function useUpsertAgentConfig() {
   const queryClient = useQueryClient();
 

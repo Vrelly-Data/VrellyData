@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useAgentConfig, useUpsertAgentConfig, type AgentConfigInput } from '@/hooks/useAgent';
+import { useAgentConfig, useUpsertAgentConfig, useReplyIntegration, type AgentConfigInput } from '@/hooks/useAgent';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { Button } from '@/components/ui/button';
@@ -11,7 +11,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import { Loader2, Save, CheckCircle2, Eye, EyeOff, Wifi, WifiOff } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { Loader2, Save, CheckCircle2, Eye, EyeOff, Wifi, WifiOff, ExternalLink, AlertTriangle } from 'lucide-react';
 
 const COMMUNICATION_STYLES = [
   { value: 'conversational', label: 'Conversational', description: 'Warm, natural, like a real person' },
@@ -31,7 +32,35 @@ export function AgentSettings() {
   const { data: config, isLoading } = useAgentConfig();
   const upsertConfig = useUpsertAgentConfig();
   const { toast } = useToast();
-  const [hasExistingReplyKey, setHasExistingReplyKey] = useState(false);
+  const { data: replyData } = useReplyIntegration();
+  const hasIntegration = replyData?.hasIntegration ?? false;
+  const integration = replyData?.integration ?? null;
+
+  const { data: campaigns } = useQuery<any[]>({
+    queryKey: ['synced-campaigns', integration?.reply_team_id],
+    enabled: !!integration?.reply_team_id,
+    queryFn: async () => {
+      const { data: intRow } = await (supabase as any)
+        .from('outbound_integrations')
+        .select('team_id')
+        .eq('created_by', (await supabase.auth.getSession()).data.session?.user?.id)
+        .eq('platform', 'reply.io')
+        .limit(1)
+        .maybeSingle();
+
+      if (!intRow?.team_id) return [];
+
+      const { data, error } = await (supabase as any)
+        .from('synced_campaigns')
+        .select("name, stats->>'linkedinReplies' as linkedin_replies, stats->>'replies' as email_replies, stats->>'peopleCount' as total_people")
+        .eq('team_id', intRow.team_id)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      return data ?? [];
+    },
+  });
+
   const [showApiKey, setShowApiKey] = useState(false);
   const [testingConnection, setTestingConnection] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'idle' | 'success' | 'error'>('idle');
@@ -76,20 +105,6 @@ export function AgentSettings() {
       });
     }
   }, [config]);
-
-  useEffect(() => {
-    (async () => {
-      const { data } = await supabase
-        .from('outbound_integrations')
-        .select('id, platform')
-        .eq('platform', 'reply_io')
-        .eq('is_active', true)
-        .limit(1);
-      if (data && data.length > 0) {
-        setHasExistingReplyKey(true);
-      }
-    })();
-  }, []);
 
   const update = (field: string, value: string | boolean) =>
     setFormData((prev) => ({ ...prev, [field]: value }));
@@ -305,49 +320,74 @@ export function AgentSettings() {
           <CardTitle>Reply.io Connection</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          {hasExistingReplyKey && !formData.reply_api_key ? (
-            <div className="flex items-center gap-2 text-sm text-green-600">
-              <CheckCircle2 className="h-4 w-4" />
-              Using your existing Reply.io connection
+          {hasIntegration ? (
+            <div className="space-y-3">
+              <Badge className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200 hover:bg-green-100">
+                <CheckCircle2 className="h-3 w-3 mr-1" />
+                Reply.io Connected via Data Playground
+              </Badge>
+              {integration && (
+                <div className="text-sm text-muted-foreground space-y-1">
+                  {integration.reply_team_id && <div>Team ID: {integration.reply_team_id}</div>}
+                  {integration.last_synced_at && (
+                    <div>Last synced: {new Date(integration.last_synced_at).toLocaleDateString()}</div>
+                  )}
+                </div>
+              )}
+              <a
+                href="/playground"
+                className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+              >
+                Manage in Data Playground <ExternalLink className="h-3 w-3" />
+              </a>
             </div>
           ) : (
-            <div>
-              <Label htmlFor="s_reply_key">API Key</Label>
-              <div className="flex items-center gap-2 mt-1">
-                <div className="relative flex-1">
-                  <Input
-                    id="s_reply_key"
-                    value={formData.reply_api_key}
-                    onChange={(e) => update('reply_api_key', e.target.value)}
-                    type={showApiKey ? 'text' : 'password'}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowApiKey(!showApiKey)}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                  >
-                    {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </button>
+            <div className="space-y-3">
+              <Badge variant="outline" className="bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950 dark:text-amber-200 dark:border-amber-800">
+                <AlertTriangle className="h-3 w-3 mr-1" />
+                Reply.io Not Connected
+              </Badge>
+              <p className="text-sm text-muted-foreground">
+                Connect Reply.io in your Data Playground to activate your agent.
+              </p>
+              <Button variant="outline" size="sm" asChild>
+                <a href="/playground">
+                  Go to Data Playground <ExternalLink className="h-3 w-3 ml-1" />
+                </a>
+              </Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Monitored Campaigns */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Monitored Campaigns</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {campaigns && campaigns.length > 0 ? (
+            <div className="space-y-3">
+              {campaigns.map((c: any, i: number) => (
+                <div key={i} className="flex items-center justify-between py-2 border-b last:border-0">
+                  <span className="font-medium text-sm">{c.name}</span>
+                  <div className="flex gap-4 text-xs text-muted-foreground">
+                    <span>{c.total_people ?? 0} people</span>
+                    <span>{c.linkedin_replies ?? 0} LinkedIn</span>
+                    <span>{c.email_replies ?? 0} email</span>
+                  </div>
                 </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleTestConnection}
-                  disabled={testingConnection || !formData.reply_api_key}
-                >
-                  {testingConnection ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Test Connection'}
-                </Button>
-              </div>
-              {connectionStatus === 'success' && (
-                <div className="flex items-center gap-1.5 mt-2 text-sm text-green-600">
-                  <Wifi className="h-4 w-4" /> Connected
-                </div>
-              )}
-              {connectionStatus === 'error' && (
-                <div className="flex items-center gap-1.5 mt-2 text-sm text-red-600">
-                  <WifiOff className="h-4 w-4" /> Connection failed — check your API key
-                </div>
-              )}
+              ))}
+            </div>
+          ) : (
+            <div className="text-sm text-muted-foreground space-y-2">
+              <p>Sync your campaigns in the Data Playground to see them here.</p>
+              <a
+                href="/playground"
+                className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+              >
+                Go to Data Playground <ExternalLink className="h-3 w-3" />
+              </a>
             </div>
           )}
         </CardContent>

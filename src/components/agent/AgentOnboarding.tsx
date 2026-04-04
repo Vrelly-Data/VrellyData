@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useUpsertAgentConfig, type AgentConfigInput } from '@/hooks/useAgent';
+import { useUpsertAgentConfig, useReplyIntegration, type AgentConfigInput } from '@/hooks/useAgent';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -9,7 +9,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
-import { CheckCircle2, ArrowLeft, ArrowRight, Rocket, Eye, EyeOff, Loader2, Wifi, WifiOff } from 'lucide-react';
+import { CheckCircle2, ArrowLeft, ArrowRight, Rocket, Eye, EyeOff, Loader2, Wifi, WifiOff, ExternalLink, AlertCircle } from 'lucide-react';
 
 const COMMUNICATION_STYLES = [
   { value: 'conversational', label: 'Conversational', description: 'Warm, natural, like a real person' },
@@ -50,8 +50,10 @@ interface FormData {
 export function AgentOnboarding() {
   const navigate = useNavigate();
   const upsertConfig = useUpsertAgentConfig();
+  const { data: replyData, isLoading: replyLoading } = useReplyIntegration();
+  const hasIntegration = replyData?.hasIntegration ?? false;
+  const integration = replyData?.integration ?? null;
   const [currentStep, setCurrentStep] = useState(1);
-  const [hasExistingReplyKey, setHasExistingReplyKey] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
   const [testingConnection, setTestingConnection] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'idle' | 'success' | 'error'>('idle');
@@ -72,22 +74,6 @@ export function AgentOnboarding() {
     reply_api_key: '',
     mode: 'copilot',
   });
-
-  useEffect(() => {
-    (async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-      const { data } = await supabase
-        .from('outbound_integrations')
-        .select('id, platform')
-        .eq('platform', 'reply_io')
-        .eq('is_active', true)
-        .limit(1);
-      if (data && data.length > 0) {
-        setHasExistingReplyKey(true);
-      }
-    })();
-  }, []);
 
   const update = (field: keyof FormData, value: string) =>
     setFormData((prev) => ({ ...prev, [field]: value }));
@@ -323,15 +309,56 @@ export function AgentOnboarding() {
         <div className="space-y-6">
           <h2 className="text-2xl font-semibold">Connect your tools and go live</h2>
           <div className="space-y-4">
-            <div>
-              <Label htmlFor="reply_api_key">Reply.io API Key</Label>
-              {hasExistingReplyKey ? (
-                <div className="flex items-center gap-2 mt-1 text-sm text-green-600">
-                  <CheckCircle2 className="h-4 w-4" />
-                  Using your existing Reply.io connection
-                </div>
-              ) : (
-                <>
+            {replyLoading ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" /> Checking Reply.io connection...
+              </div>
+            ) : hasIntegration ? (
+              <Card className="border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-950/30">
+                <CardContent className="pt-4 space-y-3">
+                  <div className="flex items-center gap-2 text-green-700 dark:text-green-400 font-medium">
+                    <CheckCircle2 className="h-5 w-5" />
+                    Reply.io Connected
+                  </div>
+                  <p className="text-sm text-green-700 dark:text-green-300">
+                    Your Data Playground connection is being used automatically. No additional setup needed.
+                  </p>
+                  {integration && (
+                    <div className="text-xs text-green-600 dark:text-green-400 space-y-1">
+                      {integration.name && <div>Connection: {integration.name}</div>}
+                      {integration.last_synced_at && (
+                        <div>Last synced: {new Date(integration.last_synced_at).toLocaleDateString()}</div>
+                      )}
+                    </div>
+                  )}
+                  <a
+                    href="/playground"
+                    className="inline-flex items-center gap-1 text-sm text-green-700 dark:text-green-400 hover:underline"
+                  >
+                    Manage connection <ExternalLink className="h-3 w-3" />
+                  </a>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="space-y-4">
+                <Card className="border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/30">
+                  <CardContent className="pt-4 space-y-3">
+                    <div className="flex items-center gap-2 text-blue-700 dark:text-blue-300 font-medium text-sm">
+                      <AlertCircle className="h-4 w-4" />
+                      Connect Reply.io in the Data Playground first to enable your agent.
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => navigate('/playground')}
+                      className="text-blue-700 border-blue-300 hover:bg-blue-100 dark:text-blue-300 dark:border-blue-700 dark:hover:bg-blue-900"
+                    >
+                      Go to Data Playground <ArrowRight className="h-3 w-3 ml-1" />
+                    </Button>
+                  </CardContent>
+                </Card>
+                <div>
+                  <Label htmlFor="reply_api_key" className="text-muted-foreground">Or enter your API key manually</Label>
                   <div className="flex items-center gap-2 mt-1">
                     <div className="relative flex-1">
                       <Input
@@ -367,10 +394,9 @@ export function AgentOnboarding() {
                       <WifiOff className="h-4 w-4" /> Connection failed — check your API key
                     </div>
                   )}
-                  <p className="text-xs text-muted-foreground mt-1">Find this in Reply.io &rarr; Settings &rarr; API</p>
-                </>
-              )}
-            </div>
+                </div>
+              </div>
+            )}
 
             <div>
               <Label>Agent Mode</Label>
@@ -435,14 +461,21 @@ export function AgentOnboarding() {
             <ArrowRight className="h-4 w-4 ml-2" />
           </Button>
         ) : (
-          <Button
-            onClick={handleLaunch}
-            disabled={upsertConfig.isPending}
-            className="bg-amber-600 hover:bg-amber-700 text-white"
-          >
-            <Rocket className="h-4 w-4 mr-2" />
-            {upsertConfig.isPending ? 'Launching...' : 'Launch Agent'}
-          </Button>
+          <div className="relative group">
+            <Button
+              onClick={handleLaunch}
+              disabled={upsertConfig.isPending || (!hasIntegration && !formData.reply_api_key)}
+              className="bg-amber-600 hover:bg-amber-700 text-white"
+            >
+              <Rocket className="h-4 w-4 mr-2" />
+              {upsertConfig.isPending ? 'Launching...' : 'Launch Agent'}
+            </Button>
+            {!hasIntegration && !formData.reply_api_key && (
+              <div className="absolute bottom-full mb-2 right-0 bg-popover text-popover-foreground text-xs rounded-md px-3 py-1.5 shadow-md border whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">
+                Connect Reply.io first
+              </div>
+            )}
+          </div>
         )}
       </div>
     </div>
