@@ -10,7 +10,7 @@ function getCorsHeaders(req: Request) {
   return {
     "Access-Control-Allow-Origin": allowedOrigins.includes(origin) ? origin : allowedOrigins[0],
     "Access-Control-Allow-Headers":
-      "authorization, x-client-info, apikey, content-type",
+      "authorization, x-client-info, apikey, content-type, x-agent-key",
   };
 }
 
@@ -287,11 +287,28 @@ Deno.serve(async (req) => {
     const body = await req.json();
     integrationId = body.integrationId;
 
-    const supabase = createClient(
-      Deno.env.get("SUPABASE_URL") ?? "",
-      Deno.env.get("SUPABASE_ANON_KEY") ?? "",
-      { global: { headers: { Authorization: authHeader } } }
-    );
+    // Check for internal service-role call via x-agent-key
+    const agentKey = req.headers.get("x-agent-key");
+    const expectedAgentKey = Deno.env.get("AGENT_API_KEY");
+    const isInternalCall = !!(agentKey && expectedAgentKey && agentKey === expectedAgentKey);
+
+    let supabase;
+    if (isInternalCall) {
+      // Internal call from auto-sync: use service role client (bypasses RLS)
+      const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+      supabase = createClient(
+        Deno.env.get("SUPABASE_URL") ?? "",
+        serviceRoleKey,
+      );
+      console.log("Using service role client (internal auto-sync call)");
+    } else {
+      // Frontend call: use user JWT (RLS enforced)
+      supabase = createClient(
+        Deno.env.get("SUPABASE_URL") ?? "",
+        Deno.env.get("SUPABASE_ANON_KEY") ?? "",
+        { global: { headers: { Authorization: authHeader } } }
+      );
+    }
 
     if (!integrationId) {
       throw new Error("Missing integrationId");
@@ -582,11 +599,20 @@ Deno.serve(async (req) => {
 
     if (integrationId && authHeader) {
       try {
-        const supabase = createClient(
-          Deno.env.get("SUPABASE_URL") ?? "",
-          Deno.env.get("SUPABASE_ANON_KEY") ?? "",
-          { global: { headers: { Authorization: authHeader } } }
-        );
+        const agentKeyErr = req.headers.get("x-agent-key");
+        const expectedKeyErr = Deno.env.get("AGENT_API_KEY");
+        const isInternalErr = !!(agentKeyErr && expectedKeyErr && agentKeyErr === expectedKeyErr);
+
+        const supabase = isInternalErr
+          ? createClient(
+              Deno.env.get("SUPABASE_URL") ?? "",
+              Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
+            )
+          : createClient(
+              Deno.env.get("SUPABASE_URL") ?? "",
+              Deno.env.get("SUPABASE_ANON_KEY") ?? "",
+              { global: { headers: { Authorization: authHeader } } }
+            );
 
         await supabase
           .from("outbound_integrations")

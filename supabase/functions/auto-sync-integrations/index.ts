@@ -60,8 +60,9 @@ Deno.serve(async (req) => {
     console.log(`Found ${integrations.length} active integrations`);
 
     // Use service role key as Authorization header for sub-function calls
-    // (service role key is a valid JWT that bypasses RLS)
+    // x-agent-key tells the sub-functions to use service role client (bypass RLS)
     const authHeader = `Bearer ${serviceRoleKey}`;
+    const agentApiKey = Deno.env.get("AGENT_API_KEY") ?? "";
 
     // 2. Process each integration
     for (const integration of integrations) {
@@ -76,6 +77,7 @@ Deno.serve(async (req) => {
             headers: {
               "Content-Type": "application/json",
               "Authorization": authHeader,
+              "x-agent-key": agentApiKey,
             },
             body: JSON.stringify({ integrationId: integration.id }),
           }
@@ -115,6 +117,7 @@ Deno.serve(async (req) => {
                     headers: {
                       "Content-Type": "application/json",
                       "Authorization": authHeader,
+                      "x-agent-key": agentApiKey,
                     },
                     body: JSON.stringify({
                       integrationId: integration.id,

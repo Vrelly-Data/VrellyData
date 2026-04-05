@@ -10,7 +10,7 @@ function getCorsHeaders(req: Request) {
   return {
     "Access-Control-Allow-Origin": allowedOrigins.includes(origin) ? origin : allowedOrigins[0],
     "Access-Control-Allow-Headers":
-      "authorization, x-client-info, apikey, content-type",
+      "authorization, x-client-info, apikey, content-type, x-agent-key",
   };
 }
 
@@ -510,15 +510,30 @@ Deno.serve(async (req) => {
       throw new Error("Missing campaignId or integrationId");
     }
 
-    // Use user's auth to validate access
-    const userClient = createClient(
-      Deno.env.get("SUPABASE_URL") ?? "",
-      Deno.env.get("SUPABASE_ANON_KEY") ?? "",
-      { global: { headers: { Authorization: authHeader } } }
-    );
+    // Check for internal service-role call via x-agent-key
+    const agentKey = req.headers.get("x-agent-key");
+    const expectedAgentKey = Deno.env.get("AGENT_API_KEY");
+    const isInternalCall = !!(agentKey && expectedAgentKey && agentKey === expectedAgentKey);
 
-    // Fetch the integration (validates user has access via RLS)
-    const { data: integration, error: integrationError } = await userClient
+    let queryClient;
+    if (isInternalCall) {
+      // Internal call from auto-sync: use service role client (bypasses RLS)
+      queryClient = createClient(
+        Deno.env.get("SUPABASE_URL") ?? "",
+        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
+      );
+      console.log("Using service role client (internal auto-sync call)");
+    } else {
+      // Frontend call: use user JWT (RLS enforced)
+      queryClient = createClient(
+        Deno.env.get("SUPABASE_URL") ?? "",
+        Deno.env.get("SUPABASE_ANON_KEY") ?? "",
+        { global: { headers: { Authorization: authHeader } } }
+      );
+    }
+
+    // Fetch the integration (RLS enforced for frontend calls, bypassed for internal)
+    const { data: integration, error: integrationError } = await queryClient
       .from("outbound_integrations")
       .select("id, team_id, api_key_encrypted, reply_team_id")
       .eq("id", integrationId)
@@ -529,7 +544,7 @@ Deno.serve(async (req) => {
     }
 
     // Fetch the campaign
-    const { data: campaign, error: campaignError } = await userClient
+    const { data: campaign, error: campaignError } = await queryClient
       .from("synced_campaigns")
       .select("id, external_campaign_id, team_id")
       .eq("id", campaignId)
