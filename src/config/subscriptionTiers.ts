@@ -53,24 +53,24 @@ export type SubscriptionTier = keyof typeof SUBSCRIPTION_TIERS;
 
 // Stripe Price IDs for each tier — monthly
 export const PRICE_IDS = {
-  starter: 'price_1SPYhwRvAXonKS41WFHowijk',
-  professional: 'price_1SPYjHRvAXonKS41B0eriTUC',
-  enterprise: 'price_1SPYjTRvAXonKS41RdJr9r7I',
-  agent: 'AGENT_MONTHLY_PRICE_ID',  // placeholder
+  starter: 'price_1TJMK2K2suFUahyv6qI9xgH8',
+  professional: 'price_1TJMK3K2suFUahyvFqnoDpn5',
+  enterprise: 'price_1TJMK3K2suFUahyvlHEyW7oc',
+  agent: 'price_1TJMK4K2suFUahyvNqIdkFjZ',
 } as const;
 
-// Stripe Price IDs — annual (populated after running scripts/create-annual-prices.mjs)
+// Stripe Price IDs — annual
 export const ANNUAL_PRICE_IDS = {
-  starter: 'price_1T9TqvRvAXonKS41LFgEf983',
-  professional: 'price_1T9TqwRvAXonKS41vRpnp2xU',
-  enterprise: 'price_1T9TqwRvAXonKS41G4SCT11j',
-  agent: 'AGENT_ANNUAL_PRICE_ID',   // placeholder
+  starter: 'price_1TJMK3K2suFUahyvjsbF0EFL',
+  professional: 'price_1TJMK3K2suFUahyv6HUBovHt',
+  enterprise: 'price_1TJMK4K2suFUahyvESiFTK02',
+  agent: 'price_1TJMK4K2suFUahyvq3MH04v3',
 } as const;
 
 // Stripe Product IDs for tier mapping
 export const PRODUCT_IDS = {
-  starter: 'prod_TMHGcnFjx5n8DZ',
-  professional: 'prod_TMHHjUdtt2Xbdl',
-  enterprise: 'prod_TMHItV1NP0yBYU',
-  agent: 'AGENT_PRODUCT_ID',        // placeholder
+  starter: 'prod_UHwCqq9qzRM8qR',
+  professional: 'prod_UHwCnBo0FKSl54',
+  enterprise: 'prod_UHwCQ4tS4rX9fx',
+  agent: 'prod_UHwCt3x8a3cLlt',
 } as const;
