@@ -170,6 +170,23 @@ export function useOutboundIntegrations() {
 
             toast.success('Campaigns synced - contacts syncing in background...');
           }
+
+          // Step 3: Auto-register Reply.io webhooks
+          try {
+            const { data: webhookResult } = await supabase
+              .functions.invoke('setup-reply-webhook', {
+                body: { integrationId: data.id },
+              });
+
+            if (webhookResult?.success) {
+              console.log('Webhooks registered successfully');
+            } else {
+              console.warn('Webhook registration failed:', webhookResult?.error);
+              // Don't show error to user — webhooks are optional, sync still works
+            }
+          } catch (err) {
+            console.warn('Webhook setup error (non-fatal):', err);
+          }
         } catch (err) {
           console.error('Auto-sync error:', err);
         }
