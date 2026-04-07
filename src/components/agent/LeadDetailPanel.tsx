@@ -13,9 +13,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { X, Linkedin, Mail } from 'lucide-react';
+import { X, Linkedin, Mail, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useUpdateAgentLead, useApproveDraft, type AgentLead } from '@/hooks/useAgentInbox';
+import { supabase } from '@/integrations/supabase/client';
+import { useToast } from '@/hooks/use-toast';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 const PIPELINE_STAGES = [
   'contacted', 'replied', 'engaged', 'meeting_booked', 'closed', 'dead',
@@ -47,9 +50,30 @@ interface LeadDetailPanelProps {
   showDraft?: boolean;
 }
 
+function useSendAgentReply() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ leadId, draftResponse, intent }: { leadId: string; draftResponse: string; intent: string }) => {
+      const { data, error } = await supabase.functions.invoke('send-agent-reply', {
+        body: { leadId, draftResponse, intent },
+      });
+      if (error) throw new Error(error.message || 'Failed to send reply');
+      if (data?.error) throw new Error(data.error);
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['agent-inbox'] });
+      queryClient.invalidateQueries({ queryKey: ['agent-activity'] });
+    },
+  });
+}
+
 export function LeadDetailPanel({ lead, onClose, showDraft = true }: LeadDetailPanelProps) {
   const updateLead = useUpdateAgentLead();
   const approveDraft = useApproveDraft();
+  const sendReply = useSendAgentReply();
+  const { toast } = useToast();
   const [draftText, setDraftText] = useState(lead.draft_response || '');
   const [notes, setNotes] = useState(lead.notes || '');
   const [showConfirm, setShowConfirm] = useState(false);
@@ -69,11 +93,31 @@ export function LeadDetailPanel({ lead, onClose, showDraft = true }: LeadDetailP
   };
 
   const handleApprove = () => {
-    approveDraft.mutate({
-      leadId: lead.id,
-      editedDraft: draftText !== lead.draft_response ? draftText : undefined,
-    });
     setShowConfirm(false);
+    sendReply.mutate(
+      {
+        leadId: lead.id,
+        draftResponse: draftText,
+        intent: lead.intent,
+      },
+      {
+        onSuccess: () => {
+          toast({ title: 'Reply sent via Reply.io \u2713' });
+        },
+        onError: (err: any) => {
+          const msg = err?.message || 'Failed to send reply';
+          if (msg.includes('No campaign mapped')) {
+            toast({
+              title: 'Campaign not configured',
+              description: 'Set up Campaign Rules in Agent Settings to enable sending.',
+              variant: 'destructive',
+            });
+          } else {
+            toast({ title: 'Error', description: msg, variant: 'destructive' });
+          }
+        },
+      }
+    );
   };
 
   const handleDismiss = () => {
@@ -208,9 +252,13 @@ export function LeadDetailPanel({ lead, onClose, showDraft = true }: LeadDetailP
                 size="sm"
                 className="bg-amber-600 hover:bg-amber-700 text-white"
                 onClick={() => setShowConfirm(true)}
-                disabled={approveDraft.isPending}
+                disabled={sendReply.isPending}
               >
-                {approveDraft.isPending ? 'Approving...' : 'Approve & Send'}
+                {sendReply.isPending ? (
+                  <><Loader2 className="h-3 w-3 animate-spin mr-1" /> Sending...</>
+                ) : (
+                  'Approve & Send'
+                )}
               </Button>
               <Button
                 size="sm"
@@ -245,8 +293,8 @@ export function LeadDetailPanel({ lead, onClose, showDraft = true }: LeadDetailP
             <AlertDialogTitle>Approve Response</AlertDialogTitle>
             <AlertDialogDescription>
               {lead.channel === 'linkedin'
-                ? 'This will mark the response as approved. Send the message manually in Reply.io to complete delivery.'
-                : 'This will mark the response as approved for sending.'}
+                ? 'This will send the message via your Reply.io LinkedIn campaign. Make sure you have a campaign mapped for this intent in Settings.'
+                : 'This will send via your Reply.io email campaign.'}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

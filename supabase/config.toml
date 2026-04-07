@@ -81,3 +81,6 @@ verify_jwt = false
 
 [functions.auto-sync-integrations]
 verify_jwt = false
+
+[functions.send-agent-reply]
+verify_jwt = false

@@ -66,6 +66,32 @@ export function AgentSettings() {
     },
   });
 
+  // Campaign rules campaigns (with id + external_campaign_id)
+  const { data: ruleCampaigns } = useQuery<any[]>({
+    queryKey: ['rule-campaigns', integration?.reply_team_id],
+    enabled: !!integration?.reply_team_id,
+    queryFn: async () => {
+      const { data: intRow } = await (supabase as any)
+        .from('outbound_integrations')
+        .select('team_id')
+        .eq('created_by', (await supabase.auth.getSession()).data.session?.user?.id)
+        .eq('platform', 'reply.io')
+        .limit(1)
+        .maybeSingle();
+
+      if (!intRow?.team_id) return [];
+
+      const { data, error } = await (supabase as any)
+        .from('synced_campaigns')
+        .select('id, name, external_campaign_id')
+        .eq('team_id', intRow.team_id)
+        .order('name', { ascending: true });
+
+      if (error) throw error;
+      return data ?? [];
+    },
+  });
+
   const [showApiKey, setShowApiKey] = useState(false);
   const [testingConnection, setTestingConnection] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'idle' | 'success' | 'error'>('idle');
@@ -86,6 +112,7 @@ export function AgentSettings() {
     reply_api_key: '',
     mode: 'copilot',
     is_active: false,
+    campaign_rules: {} as Record<string, string>,
   });
 
   useEffect(() => {
@@ -107,6 +134,7 @@ export function AgentSettings() {
         reply_api_key: config.reply_api_key ?? '',
         mode: config.mode ?? 'copilot',
         is_active: config.is_active ?? false,
+        campaign_rules: (config as any).campaign_rules ?? {},
       });
     }
   }, [config]);
@@ -153,7 +181,8 @@ export function AgentSettings() {
       mode: formData.mode,
       is_active: formData.is_active,
       onboarding_complete: true,
-    };
+      campaign_rules: formData.campaign_rules,
+    } as any;
     await upsertConfig.mutateAsync(input);
     toast({ title: 'Settings saved', description: 'Your agent configuration has been updated.' });
   };
@@ -395,6 +424,69 @@ export function AgentSettings() {
               </a>
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      {/* Section 5 — Campaign Rules */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Campaign Rules</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-xs text-muted-foreground">
+            Each campaign should have a LinkedIn message step using {'{{message}}'} as the message body. Vrelly will automatically populate this with the agent's drafted response.
+          </p>
+          <div className="border rounded-lg overflow-hidden">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b bg-muted/50">
+                  <th className="text-left p-3 font-medium">Intent</th>
+                  <th className="text-left p-3 font-medium">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[
+                  { label: 'Interested', key: 'interested' },
+                  { label: 'Needs more info', key: 'needs_more_info' },
+                  { label: 'Out of office', key: 'out_of_office' },
+                ].map((row) => (
+                  <tr key={row.key} className="border-b last:border-0">
+                    <td className="p-3">{row.label}</td>
+                    <td className="p-3">
+                      <Select
+                        value={formData.campaign_rules[row.key] || ''}
+                        onValueChange={(v) =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            campaign_rules: { ...prev.campaign_rules, [row.key]: v },
+                          }))
+                        }
+                      >
+                        <SelectTrigger className="w-full h-8 text-xs">
+                          <SelectValue placeholder="Select a campaign..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {(ruleCampaigns ?? []).map((c: any) => (
+                            <SelectItem key={c.id} value={c.external_campaign_id} className="text-xs">
+                              {c.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </td>
+                  </tr>
+                ))}
+                <tr className="border-b last:border-0">
+                  <td className="p-3">Not interested</td>
+                  <td className="p-3 text-xs text-muted-foreground">Mark as dead</td>
+                </tr>
+                <tr className="border-b last:border-0">
+                  <td className="p-3">Meeting booked</td>
+                  <td className="p-3 text-xs text-muted-foreground">Remove from sequences</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </CardContent>
       </Card>
 
