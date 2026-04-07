@@ -14,16 +14,27 @@ export interface LinkedInStatsRow {
   campaignId?: string;
 }
 
+export interface LinkedInRepliedContact {
+  contactId: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  linkedinUrl: string;
+  actionDate: string;
+  sequence: string;
+}
+
 export interface UploadLinkedInStatsParams {
   stats: LinkedInStatsRow[];
   mode: 'replace' | 'add';
+  repliedContacts?: LinkedInRepliedContact[];
 }
 
 export function useLinkedInStatsUpload() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ stats, mode }: UploadLinkedInStatsParams) => {
+    mutationFn: async ({ stats, mode, repliedContacts }: UploadLinkedInStatsParams) => {
       if (stats.length === 0) {
         throw new Error('No campaigns to import');
       }
@@ -182,6 +193,108 @@ export function useLinkedInStatsUpload() {
           // No matching linked campaign found - skip creating orphan rows
           // Log for debugging but don't create csv_import rows anymore
           // No matching linked campaign found - skipping
+        }
+      }
+
+      // Extract replied contacts into agent_leads (non-blocking)
+      if (repliedContacts && repliedContacts.length > 0) {
+        try {
+          const { data: sessionData } = await supabase.auth.getSession();
+          const currentUserId = sessionData?.session?.user?.id;
+
+          if (currentUserId) {
+            // Check if user has an active agent config
+            const { data: agentConfig } = await supabase
+              .from('agent_configs')
+              .select('id')
+              .eq('user_id', currentUserId)
+              .eq('is_active', true)
+              .limit(1)
+              .maybeSingle();
+
+            if (agentConfig) {
+              for (const contact of repliedContacts) {
+                try {
+                  const fullName = [contact.firstName, contact.lastName].filter(Boolean).join(' ') || 'Unknown';
+                  // Try to extract company from email domain
+                  let company = '';
+                  if (contact.email && contact.email.includes('@')) {
+                    const domain = contact.email.split('@')[1];
+                    if (domain && !['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'aol.com', 'icloud.com', 'mail.com', 'protonmail.com'].includes(domain.toLowerCase())) {
+                      company = domain.split('.')[0];
+                      company = company.charAt(0).toUpperCase() + company.slice(1);
+                    }
+                  }
+
+                  // Parse action date
+                  let lastReplyAt: string | null = null;
+                  if (contact.actionDate) {
+                    const parsed = new Date(contact.actionDate);
+                    if (!isNaN(parsed.getTime())) {
+                      lastReplyAt = parsed.toISOString();
+                    }
+                  }
+
+                  // Try insert first; on conflict, update only if still pending
+                  const { error: insertErr } = await supabase
+                    .from('agent_leads')
+                    .insert({
+                      user_id: currentUserId,
+                      agent_config_id: agentConfig.id,
+                      external_id: contact.contactId,
+                      full_name: fullName,
+                      email: contact.email || null,
+                      linkedin_url: contact.linkedinUrl || null,
+                      company: company || null,
+                      channel: 'linkedin',
+                      pipeline_stage: 'replied',
+                      inbox_status: 'pending',
+                      last_reply_at: lastReplyAt,
+                      last_reply_text: '',
+                    });
+
+                  if (insertErr && insertErr.code === '23505') {
+                    // Duplicate — update only if inbox_status is still 'pending'
+                    await supabase
+                      .from('agent_leads')
+                      .update({
+                        full_name: fullName,
+                        email: contact.email || null,
+                        linkedin_url: contact.linkedinUrl || null,
+                        company: company || null,
+                        channel: 'linkedin',
+                        pipeline_stage: 'replied',
+                        last_reply_at: lastReplyAt,
+                        last_reply_text: '',
+                      })
+                      .eq('user_id', currentUserId)
+                      .eq('external_id', contact.contactId)
+                      .eq('inbox_status', 'pending');
+                  }
+
+                  // Insert agent_activity record
+                  await supabase
+                    .from('agent_activity')
+                    .insert({
+                      agent_config_id: agentConfig.id,
+                      activity_type: 'reply_received',
+                      description: `LinkedIn reply synced from CSV for ${fullName}`,
+                      metadata: {
+                        channel: 'linkedin',
+                        source: 'linkedin_csv_upload',
+                        sequence: contact.sequence,
+                      },
+                    });
+                } catch (contactErr) {
+                  // Never break the existing upload flow
+                  console.warn('Failed to insert agent_lead for contact:', contact.contactId, contactErr);
+                }
+              }
+            }
+          }
+        } catch (agentErr) {
+          // Never break the existing upload flow
+          console.warn('Agent leads extraction failed (non-fatal):', agentErr);
         }
       }
 
