@@ -268,7 +268,7 @@ export function PlaygroundStatsGrid() {
           title="Total Replies"
           value={stats?.totalReplies.toLocaleString() ?? 0}
           icon={<MessageSquare className="h-5 w-5 text-primary" />}
-          description="Positive responses"
+          description="Total responses"
           popoverContent={repliesTooltipContent}
         />
         <StatCard
