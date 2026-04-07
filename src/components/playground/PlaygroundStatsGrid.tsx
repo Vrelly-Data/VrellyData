@@ -110,8 +110,9 @@ export function PlaygroundStatsGrid() {
     ? ((linkedinConnectionsAccepted / linkedinConnectionsSent) * 100).toFixed(1)
     : null;
 
-  const linkedinReplyRate = linkedinMessagesSent > 0
-    ? ((linkedinReplies / linkedinMessagesSent) * 100).toFixed(1)
+  const linkedinTotalSent = linkedinMessagesSent + linkedinConnectionsSent;
+  const linkedinReplyRate = linkedinTotalSent > 0
+    ? ((linkedinReplies / linkedinTotalSent) * 100).toFixed(1)
     : null;
 
   const emailReplyRate = emailsDelivered > 0
