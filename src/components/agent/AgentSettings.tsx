@@ -37,8 +37,8 @@ export function AgentSettings() {
   const integration = replyData?.integration ?? null;
 
   const { data: campaigns } = useQuery<any[]>({
-    queryKey: ['synced-campaigns', integration?.reply_team_id],
-    enabled: !!integration?.reply_team_id,
+    queryKey: ['synced-campaigns'],
+    enabled: true,
     queryFn: async () => {
       const { data: intRow } = await (supabase as any)
         .from('outbound_integrations')
@@ -68,8 +68,8 @@ export function AgentSettings() {
 
   // Campaign rules campaigns (with id + external_campaign_id)
   const { data: ruleCampaigns } = useQuery<any[]>({
-    queryKey: ['rule-campaigns', integration?.reply_team_id],
-    enabled: !!integration?.reply_team_id,
+    queryKey: ['rule-campaigns'],
+    enabled: true,
     queryFn: async () => {
       const { data: intRow } = await (supabase as any)
         .from('outbound_integrations')
