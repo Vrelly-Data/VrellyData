@@ -83,6 +83,113 @@ Deno.serve(async (req) => {
       .in('category', templateCategories)
       .eq('is_active', true);
 
+    // --- Campaign Intelligence fetches ---
+    // Get team_id for this user
+    let teamId: string | null = null;
+    try {
+      const { data: intRow } = await supabase
+        .from('outbound_integrations')
+        .select('team_id')
+        .eq('created_by', user_id)
+        .eq('platform', 'reply.io')
+        .eq('is_active', true)
+        .limit(1)
+        .maybeSingle();
+      teamId = intRow?.team_id ?? null;
+    } catch (e) {
+      console.error('Failed to fetch team_id:', e);
+    }
+
+    // 1. Best performing sequences
+    let sequences: any[] = [];
+    if (teamId) {
+      try {
+        const { data } = await supabase
+          .from('synced_sequences')
+          .select('title, content, step_number, sequence_name')
+          .eq('team_id', teamId)
+          .order('created_at', { ascending: false })
+          .limit(10);
+        sequences = (data ?? []).slice(0, 3);
+      } catch (e) {
+        console.error('Failed to fetch sequences:', e);
+      }
+    }
+
+    // 2. Campaign performance stats (top 5 by replies, only those with replies > 0)
+    let topCampaigns: any[] = [];
+    if (teamId) {
+      try {
+        const { data } = await supabase
+          .from('synced_campaigns')
+          .select('name, stats')
+          .eq('team_id', teamId)
+          .not('stats', 'is', null)
+          .order('created_at', { ascending: false });
+        topCampaigns = (data ?? [])
+          .filter((c: any) => (c.stats?.replies ?? 0) > 0)
+          .sort((a: any, b: any) => (b.stats?.replies ?? 0) - (a.stats?.replies ?? 0))
+          .slice(0, 3);
+      } catch (e) {
+        console.error('Failed to fetch campaigns:', e);
+      }
+    }
+
+    // 3. Best performing copy templates
+    let copyTemplates: any[] = [];
+    if (teamId) {
+      try {
+        const { data } = await supabase
+          .from('copy_templates')
+          .select('subject, body, channel, performance_data')
+          .eq('team_id', teamId)
+          .order('created_at', { ascending: false })
+          .limit(3);
+        copyTemplates = data ?? [];
+      } catch (e) {
+        console.error('Failed to fetch copy templates:', e);
+      }
+    }
+
+    // Build campaign intelligence section
+    let campaignIntelligence = '';
+    if (topCampaigns.length > 0 || sequences.length > 0 || copyTemplates.length > 0) {
+      const campaignLines = topCampaigns.map((c: any) => {
+        const replies = c.stats?.replies ?? 0;
+        const linkedinReplies = c.stats?.linkedinReplies ?? 0;
+        const people = c.stats?.peopleCount ?? 0;
+        const replyRate = people > 0 ? ((replies / people) * 100).toFixed(1) : '0.0';
+        return `Campaign: ${c.name}\nReplies: ${replies}\nLinkedIn Replies: ${linkedinReplies}\nPeople: ${people}\nReply Rate: ${replyRate}%`;
+      }).join('\n\n');
+
+      const sequenceLines = sequences.map((s: any) => {
+        const content = (s.content || '').slice(0, 300);
+        return `Sequence: ${s.sequence_name} - Step ${s.step_number}\n${s.title}\n${content}`;
+      }).join('\n\n');
+
+      const copyLines = copyTemplates.map((t: any) => {
+        const body = (t.body || '').slice(0, 300);
+        return `Channel: ${t.channel}\nSubject: ${t.subject || '(none)'}\n${body}`;
+      }).join('\n\n');
+
+      campaignIntelligence = `\n\n## Campaign Intelligence
+This data comes from the sender's actual outbound campaigns. Use it to understand what messaging is working and inform your response.
+
+### Top Performing Campaigns
+${campaignLines || 'No campaign data available.'}
+
+### Active Sequences & Templates
+${sequenceLines || 'No sequence data available.'}
+
+### Previously Generated Copy
+${copyLines || 'No copy templates available.'}
+
+Use this campaign data to:
+1. Match the tone and style of messages that got replies
+2. Reference similar value props that worked
+3. Keep responses consistent with the sender's established voice across campaigns`;
+    }
+
     // Format knowledge entries
     const guidelinesText = (guidelines || [])
       .map((g: { title: string; content: string }) => `### ${g.title}\n${g.content}`)
@@ -115,6 +222,7 @@ ${guidelinesText || 'No specific guidelines configured yet.'}
 
 ## Relevant Templates & Frameworks
 ${templatesText || 'No templates available.'}
+${campaignIntelligence}
 
 ## About ${sender_name}
 ${sender_bio || 'No bio provided.'}
