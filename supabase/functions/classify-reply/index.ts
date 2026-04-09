@@ -1,5 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import Anthropic from 'https://esm.sh/@anthropic-ai/sdk@0.39.0';
+
+console.log('classify-reply starting');
 
 const allowedOrigins = [
   'https://vrelly.com',
@@ -15,12 +16,12 @@ function getCorsHeaders(req: Request) {
 }
 
 const SAFE_FALLBACK = {
-  intent: 'unknown' as const,
+  intent: 'unknown',
   intent_confidence: 0,
   suggested_response: '',
   should_auto_send: false,
   reasoning: 'Classification failed - needs manual review',
-  next_pipeline_stage: 'replied' as const,
+  next_pipeline_stage: 'replied',
 };
 
 Deno.serve(async (req) => {
@@ -31,6 +32,9 @@ Deno.serve(async (req) => {
   }
 
   try {
+    const t0 = Date.now();
+    console.log('[classify-reply] request received');
+
     // Auth: x-agent-key header
     const agentKey = req.headers.get('x-agent-key');
     const expectedKey = Deno.env.get('AGENT_API_KEY');
@@ -41,6 +45,8 @@ Deno.serve(async (req) => {
       });
     }
 
+    console.log(`[classify-reply] auth passed +${Date.now() - t0}ms`);
+
     const body = await req.json();
     const {
       reply_text,
@@ -48,6 +54,7 @@ Deno.serve(async (req) => {
       agent_context,
       channel,
       user_id,
+      lead_id,
     } = body;
 
     if (!reply_text || !agent_context || !channel || !user_id) {
@@ -82,6 +89,8 @@ Deno.serve(async (req) => {
       .select('title, content')
       .in('category', templateCategories)
       .eq('is_active', true);
+
+    console.log(`[classify-reply] sales_knowledge fetched +${Date.now() - t0}ms`);
 
     // --- Campaign Intelligence fetches ---
     // Get team_id for this user
@@ -190,6 +199,8 @@ Use this campaign data to:
 3. Keep responses consistent with the sender's established voice across campaigns`;
     }
 
+    console.log(`[classify-reply] campaign data fetched +${Date.now() - t0}ms (teamId=${teamId}, campaigns=${topCampaigns.length}, sequences=${sequences.length}, templates=${copyTemplates.length})`);
+
     // Format knowledge entries
     const guidelinesText = (guidelines || [])
       .map((g: { title: string; content: string }) => `### ${g.title}\n${g.content}`)
@@ -265,17 +276,37 @@ Analyze this reply and respond as instructed.`;
       });
     }
 
-    const anthropic = new Anthropic({ apiKey: anthropicApiKey });
+    console.log(`[classify-reply] calling Anthropic API +${Date.now() - t0}ms`);
 
-    const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 1000,
-      system: systemPrompt,
-      messages: [{ role: 'user', content: userMessage }],
+    const anthropicRes = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': anthropicApiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1000,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: userMessage }],
+      }),
     });
 
+    console.log(`[classify-reply] Anthropic responded ${anthropicRes.status} +${Date.now() - t0}ms`);
+
+    if (!anthropicRes.ok) {
+      console.error('Anthropic API error:', anthropicRes.status, await anthropicRes.text());
+      return new Response(JSON.stringify(SAFE_FALLBACK), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    const response = await anthropicRes.json();
+
     // Extract text from response
-    const textBlock = response.content.find((b: { type: string }) => b.type === 'text');
+    const textBlock = response.content?.find((b: { type: string }) => b.type === 'text');
     if (!textBlock || textBlock.type !== 'text') {
       console.error('No text in Claude response');
       return new Response(JSON.stringify(SAFE_FALLBACK), {
@@ -286,6 +317,41 @@ Analyze this reply and respond as instructed.`;
 
     // Parse response JSON
     const classification = JSON.parse(textBlock.text);
+
+    // Write classification back to agent_leads
+    if (lead_id && classification.intent) {
+      try {
+        await supabase
+          .from('agent_leads')
+          .update({
+            intent: classification.intent,
+            intent_confidence: classification.intent_confidence,
+            draft_response: classification.suggested_response,
+            pipeline_stage: classification.next_pipeline_stage,
+            inbox_status: classification.should_auto_send ? 'sent' : 'draft_ready',
+            auto_handled: classification.should_auto_send,
+          })
+          .eq('id', lead_id);
+
+        // Log draft created activity
+        await supabase.from('agent_activity').insert({
+          user_id,
+          lead_id,
+          activity_type: 'draft_created',
+          description: `Draft response created — classified as ${classification.intent} (${Math.round(classification.intent_confidence * 100)}% confidence)`,
+          metadata: {
+            intent: classification.intent,
+            confidence: classification.intent_confidence,
+            channel,
+            auto_handled: classification.should_auto_send,
+          },
+        });
+
+        console.log(`[classify-reply] wrote classification to agent_leads ${lead_id} +${Date.now() - t0}ms`);
+      } catch (writeErr) {
+        console.error('[classify-reply] failed to write to agent_leads:', writeErr);
+      }
+    }
 
     return new Response(JSON.stringify(classification), {
       status: 200,

@@ -167,29 +167,36 @@ Deno.serve(async (req) => {
 
     // ── Agent inbox routing ──────────────────────────────────
     const isReplyEvent = eventType === 'email_replied' || eventType === 'linkedin_message_replied';
+    console.log(`[inbox-routing] isReplyEvent=${isReplyEvent} eventType=${eventType} created_by=${integration.created_by}`);
 
     if (isReplyEvent && integration.created_by) {
       const agentUserId = integration.created_by;
+      console.log(`[inbox-routing] agentUserId=${agentUserId}`);
 
       // Check for active agent
-      const { data: agentConfig } = await supabase
+      const { data: agentConfig, error: agentConfigError } = await supabase
         .from('agent_configs')
         .select('*')
         .eq('user_id', agentUserId)
         .eq('is_active', true)
         .single();
 
+      console.log(`[inbox-routing] agentConfig=${agentConfig ? 'found (id=' + agentConfig.id + ')' : 'null'} error=${agentConfigError?.message || 'none'}`);
+
       if (agentConfig) {
         const externalId = contactId || contactEmail;
+        console.log(`[inbox-routing] externalId=${externalId} contactId=${contactId} contactEmail=${contactEmail}`);
 
         if (externalId) {
           // Get existing lead to append thread
-          const { data: existingLead } = await supabase
+          const { data: existingLead, error: existingLeadError } = await supabase
             .from('agent_leads')
             .select('id, reply_thread')
             .eq('user_id', agentUserId)
             .eq('external_id', externalId)
             .maybeSingle();
+
+          console.log(`[inbox-routing] existingLead=${existingLead ? 'found (id=' + existingLead.id + ')' : 'null'} error=${existingLeadError?.message || 'none'}`);
 
           const existingThread = existingLead?.reply_thread || [];
           const updatedThread = [...(existingThread as any[]), {
@@ -200,7 +207,8 @@ Deno.serve(async (req) => {
           }];
 
           // Upsert agent_leads
-          const { data: upsertedLead } = await supabase
+          console.log(`[inbox-routing] upserting agent_leads for externalId=${externalId}`);
+          const { data: upsertedLead, error: upsertError } = await supabase
             .from('agent_leads')
             .upsert({
               user_id: agentUserId,
@@ -224,9 +232,11 @@ Deno.serve(async (req) => {
             .select()
             .single();
 
+          console.log(`[inbox-routing] upsertedLead=${upsertedLead ? 'ok (id=' + upsertedLead.id + ')' : 'null'} error=${upsertError?.message || 'none'}`);
+
           // Log activity
           if (upsertedLead) {
-            await supabase.from('agent_activity').insert({
+            const { error: activityError } = await supabase.from('agent_activity').insert({
               user_id: agentUserId,
               agent_config_id: agentConfig.id,
               lead_id: upsertedLead.id,
@@ -236,10 +246,12 @@ Deno.serve(async (req) => {
               description: `${channel === 'linkedin' ? 'LinkedIn' : 'Email'} reply received from ${fullName || 'Unknown'}${company ? ' at ' + company : ''}`,
               metadata: { channel, intent: 'pending' },
             });
+            console.log(`[inbox-routing] activity insert error=${activityError?.message || 'none'}`);
           }
 
-          // Call classify-reply with 8s timeout
-          const classifyPromise = fetch(
+          // Fire-and-forget: classify-reply runs independently and updates agent_leads when done
+          console.log(`[inbox-routing] firing classify-reply for lead_id=${upsertedLead?.id}`);
+          fetch(
             `${supabaseUrl}/functions/v1/classify-reply`,
             {
               method: 'POST',
@@ -250,6 +262,7 @@ Deno.serve(async (req) => {
               body: JSON.stringify({
                 reply_text: replyText,
                 thread_history: updatedThread,
+                lead_id: upsertedLead?.id,
                 agent_context: {
                   offer_description: agentConfig.offer_description,
                   desired_action: agentConfig.desired_action,
@@ -268,53 +281,9 @@ Deno.serve(async (req) => {
                 user_id: agentUserId,
               }),
             }
-          );
+          ).catch((err) => console.error('[inbox-routing] classify-reply fire-and-forget error:', err));
 
-          const timeoutPromise = new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('classify-reply timeout')), 8000)
-          );
-
-          try {
-            const classifyRes = await Promise.race([
-              classifyPromise, timeoutPromise,
-            ]) as Response;
-
-            const classification = await classifyRes.json();
-
-            if (upsertedLead && classification.intent) {
-              await supabase
-                .from('agent_leads')
-                .update({
-                  intent: classification.intent,
-                  intent_confidence: classification.intent_confidence,
-                  draft_response: classification.suggested_response,
-                  pipeline_stage: classification.next_pipeline_stage,
-                  inbox_status: classification.should_auto_send ? 'sent' : 'draft_ready',
-                  auto_handled: classification.should_auto_send,
-                })
-                .eq('id', upsertedLead.id);
-
-              // Log draft created activity
-              await supabase.from('agent_activity').insert({
-                user_id: agentUserId,
-                agent_config_id: agentConfig.id,
-                lead_id: upsertedLead.id,
-                lead_name: fullName || 'Unknown',
-                lead_company: company,
-                activity_type: 'draft_created',
-                description: `Draft response created for ${fullName || 'Unknown'} — classified as ${classification.intent} (${Math.round(classification.intent_confidence * 100)}% confidence)`,
-                metadata: {
-                  intent: classification.intent,
-                  confidence: classification.intent_confidence,
-                  channel,
-                  auto_handled: classification.should_auto_send,
-                },
-              });
-            }
-          } catch (classifyErr) {
-            console.error('classify-reply failed:', classifyErr);
-            // Continue — webhook still succeeds
-          }
+          console.log('[inbox-routing] done, returning success');
         }
       }
     }
