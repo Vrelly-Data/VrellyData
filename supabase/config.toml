@@ -84,3 +84,6 @@ verify_jwt = false
 
 [functions.send-agent-reply]
 verify_jwt = false
+
+[functions.poll-reply-inbox]
+verify_jwt = false
