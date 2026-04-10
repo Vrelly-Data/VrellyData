@@ -161,6 +161,7 @@ Deno.serve(async (req) => {
           url: webhookUrl,
           payload: {
             includeEmailUrl: false,
+            includeEmailText: true,
             includeProspectCustomFields: true,
           },
         }),
