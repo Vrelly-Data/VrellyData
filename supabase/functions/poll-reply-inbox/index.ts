@@ -209,35 +209,6 @@ Deno.serve(async (req) => {
                   metadata: { channel, intent: 'pending', source: 'poll' },
                 });
 
-                // Fire-and-forget classify-reply
-                fetch(`${supabaseUrl}/functions/v1/classify-reply`, {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    'x-agent-key': Deno.env.get('AGENT_API_KEY') || '',
-                  },
-                  body: JSON.stringify({
-                    reply_text: '',
-                    thread_history: [],
-                    lead_id: upsertedLead.id,
-                    agent_context: {
-                      offer_description: agentConfig.offer_description,
-                      desired_action: agentConfig.desired_action,
-                      outcome_delivered: agentConfig.outcome_delivered,
-                      target_icp: agentConfig.target_icp,
-                      sender_name: agentConfig.sender_name,
-                      sender_title: agentConfig.sender_title,
-                      sender_bio: agentConfig.sender_bio,
-                      company_name: agentConfig.company_name,
-                      company_url: agentConfig.company_url,
-                      communication_style: agentConfig.communication_style,
-                      avoid_phrases: agentConfig.avoid_phrases || [],
-                      sample_message: agentConfig.sample_message || '',
-                    },
-                    channel,
-                    user_id: userId,
-                  }),
-                }).catch((err) => console.error('[poll-reply-inbox] classify-reply error:', err));
               }
             } catch (personErr) {
               console.error(`[poll-reply-inbox] Error processing person ${person.id}:`, personErr);

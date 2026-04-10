@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { useAgentConfig, useUpsertAgentConfig } from '@/hooks/useAgent';
 import { useAgentInboxData, type AgentCounts } from '@/hooks/useAgentInbox';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -27,7 +28,12 @@ const STAGE_LABELS: Record<string, string> = {
 export function AgentOverview() {
   const { data: config, isLoading: configLoading } = useAgentConfig();
   const upsertConfig = useUpsertAgentConfig();
-  const { counts, isLoading: inboxLoading } = useAgentInboxData('inbox');
+  const { counts, isLoading: inboxLoading, refetch } = useAgentInboxData('inbox');
+
+  // Always fetch fresh data when Overview mounts
+  useEffect(() => {
+    refetch();
+  }, [refetch]);
 
   const isLoading = configLoading || inboxLoading;
 

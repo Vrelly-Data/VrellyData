@@ -56,6 +56,8 @@ export function useAgentInbox(view: 'inbox' | 'pipeline' = 'inbox') {
     queryKey: ['agent-inbox', view],
     queryFn: () => fetchAgentInbox(view),
     refetchInterval: 30000, // Poll every 30 seconds
+    staleTime: 0,
+    refetchOnWindowFocus: true,
   });
 }
 
