@@ -209,6 +209,56 @@ Deno.serve(async (req) => {
                   metadata: { channel, intent: 'pending', source: 'poll' },
                 });
 
+                // Backfill reply text from Reply.io email activities
+                try {
+                  const activitiesRes = await fetch(
+                    `https://api.reply.io/v1/people/${externalId}/emailactivities`,
+                    { headers: { 'X-Api-Key': apiKey } },
+                  );
+
+                  if (activitiesRes.ok) {
+                    const activitiesData = await activitiesRes.json();
+                    const activities = Array.isArray(activitiesData) ? activitiesData : activitiesData.emailActivities || [];
+
+                    // Build thread from all reply activities, sorted chronologically
+                    const replyActivities = activities
+                      .filter((a: any) => a.type === 'reply' || a.type === 'incoming' || a.direction === 'incoming')
+                      .sort((a: any, b: any) => new Date(a.date || a.createdAt || 0).getTime() - new Date(b.date || b.createdAt || 0).getTime());
+
+                    if (replyActivities.length > 0) {
+                      const latestReply = replyActivities[replyActivities.length - 1];
+                      const replyText = latestReply.body || latestReply.text || latestReply.message || '';
+
+                      // Build thread history from all activities (sent + received)
+                      const threadMessages = activities
+                        .filter((a: any) => a.body || a.text || a.message)
+                        .sort((a: any, b: any) => new Date(a.date || a.createdAt || 0).getTime() - new Date(b.date || b.createdAt || 0).getTime())
+                        .map((a: any) => ({
+                          role: (a.type === 'reply' || a.type === 'incoming' || a.direction === 'incoming') ? 'prospect' : 'sender',
+                          content: a.body || a.text || a.message || '',
+                          timestamp: a.date || a.createdAt || new Date().toISOString(),
+                          channel,
+                        }));
+
+                      if (replyText) {
+                        await supabase
+                          .from('agent_leads')
+                          .update({
+                            last_reply_text: replyText,
+                            reply_thread: threadMessages.length > 0 ? threadMessages : undefined,
+                          })
+                          .eq('id', upsertedLead.id);
+
+                        console.log(`[poll-reply-inbox] Backfilled reply text for ${externalId} (${replyText.length} chars, ${threadMessages.length} messages)`);
+                      }
+                    }
+                  } else {
+                    console.log(`[poll-reply-inbox] Email activities API returned ${activitiesRes.status} for ${externalId}`);
+                  }
+                } catch (activityErr) {
+                  console.error(`[poll-reply-inbox] Failed to fetch email activities for ${externalId}:`, activityErr);
+                }
+
               }
             } catch (personErr) {
               console.error(`[poll-reply-inbox] Error processing person ${person.id}:`, personErr);

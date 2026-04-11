@@ -127,7 +127,13 @@ export function AgentOverview() {
                   </span>
                 </div>
               </div>
-              <p className="text-xs text-muted-foreground mt-2">Next run: Monday at 6:00 AM</p>
+              <p className="text-xs text-muted-foreground mt-2">Next run: {(() => {
+                const now = new Date();
+                const day = now.getUTCDay();
+                const daysUntilMon = day === 0 ? 1 : day === 1 && now.getUTCHours() < 7 ? 0 : 8 - day;
+                const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + daysUntilMon, 7, 0, 0));
+                return `Mon ${next.toLocaleString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })} at 7:00 AM UTC`;
+              })()}</p>
             </div>
             <Button
               variant="outline"

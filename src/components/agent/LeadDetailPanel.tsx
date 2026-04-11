@@ -15,7 +15,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { X, Linkedin, Mail, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { useUpdateAgentLead, useApproveDraft, type AgentLead } from '@/hooks/useAgentInbox';
+import { useUpdateAgentLead, useApproveDraft, useLiveLead, type AgentLead } from '@/hooks/useAgentInbox';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -48,6 +48,7 @@ interface LeadDetailPanelProps {
   lead: AgentLead;
   onClose: () => void;
   showDraft?: boolean;
+  classifying?: boolean;
 }
 
 function useSendAgentReply() {
@@ -69,13 +70,23 @@ function useSendAgentReply() {
   });
 }
 
-export function LeadDetailPanel({ lead, onClose, showDraft = true }: LeadDetailPanelProps) {
+export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, classifying = false }: LeadDetailPanelProps) {
+  const { data: liveLead } = useLiveLead(initialLead.id);
+  const lead = liveLead ?? initialLead;
+
   const updateLead = useUpdateAgentLead();
   const approveDraft = useApproveDraft();
   const sendReply = useSendAgentReply();
   const { toast } = useToast();
   const [draftText, setDraftText] = useState(lead.draft_response || '');
   const [notes, setNotes] = useState(lead.notes || '');
+
+  // Sync draft text when live data brings in a new draft
+  const [lastSyncedDraft, setLastSyncedDraft] = useState(lead.draft_response || '');
+  if (lead.draft_response && lead.draft_response !== lastSyncedDraft) {
+    setDraftText(lead.draft_response);
+    setLastSyncedDraft(lead.draft_response);
+  }
   const [showConfirm, setShowConfirm] = useState(false);
 
   const handleStageChange = (newStage: string) => {
@@ -219,6 +230,17 @@ export function LeadDetailPanel({ lead, onClose, showDraft = true }: LeadDetailP
                 )}
               </div>
             ))}
+          </div>
+        )}
+
+        {/* Classifying spinner */}
+        {classifying && !lead.draft_response && (
+          <div className="flex items-center gap-3 border rounded-lg p-4">
+            <Loader2 className="h-5 w-5 animate-spin text-amber-600" />
+            <div>
+              <p className="text-sm font-medium">Classifying reply...</p>
+              <p className="text-xs text-muted-foreground">Analyzing intent and drafting a response</p>
+            </div>
           </div>
         )}
 

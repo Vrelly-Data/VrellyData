@@ -35,10 +35,35 @@ Deno.serve(async (req) => {
     const t0 = Date.now();
     console.log('[classify-reply] request received');
 
-    // Auth: x-agent-key header
+    // Auth: x-agent-key (service-level) OR Authorization JWT (frontend)
     const agentKey = req.headers.get('x-agent-key');
     const expectedKey = Deno.env.get('AGENT_API_KEY');
-    if (!expectedKey || agentKey !== expectedKey) {
+    const authHeader = req.headers.get('Authorization');
+
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+
+    let authUserId: string | null = null;
+
+    if (agentKey && expectedKey && agentKey === expectedKey) {
+      // Service-level auth — user_id comes from body
+      authUserId = null;
+    } else if (authHeader?.startsWith('Bearer ')) {
+      // JWT auth — verify and extract user_id
+      const authClient = createClient(
+        supabaseUrl,
+        Deno.env.get('SUPABASE_ANON_KEY')!,
+        { global: { headers: { Authorization: authHeader } } }
+      );
+      const { data: { user }, error: authError } = await authClient.auth.getUser();
+      if (authError || !user) {
+        return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+          status: 401,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      authUserId = user.id;
+    } else {
       return new Response(JSON.stringify({ error: 'Unauthorized' }), {
         status: 401,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -53,9 +78,12 @@ Deno.serve(async (req) => {
       thread_history,
       agent_context,
       channel,
-      user_id,
+      user_id: bodyUserId,
       lead_id,
     } = body;
+
+    // JWT auth overrides any user_id in body; service-level uses body user_id
+    const user_id = authUserId || bodyUserId;
 
     if (!reply_text || !agent_context || !channel || !user_id) {
       return new Response(JSON.stringify({ error: 'Missing required fields' }), {
@@ -65,8 +93,6 @@ Deno.serve(async (req) => {
     }
 
     // Create Supabase client with service role key
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
     // Fetch all sales_knowledge entries where category = 'sales_guideline'

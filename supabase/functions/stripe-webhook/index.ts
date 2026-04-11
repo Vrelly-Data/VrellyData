@@ -6,6 +6,7 @@ const PLAN_CREDITS: Record<string, { export_credits: number; ai_credits: number 
   starter:      { export_credits: 10000,  ai_credits: 50   },
   professional: { export_credits: 25000,  ai_credits: 250  },
   enterprise:   { export_credits: 999999, ai_credits: 1250 }, // 999999 = internal "unlimited" flag
+  agent:        { export_credits: 999999, ai_credits: 999999 },
 };
 
 // Map Stripe Product IDs to tiers (backward compatibility)
@@ -13,6 +14,7 @@ const TIER_CONFIG: Record<string, string> = {
   'prod_TMHGcnFjx5n8DZ': 'starter',
   'prod_TMHHjUdtt2Xbdl': 'professional',
   'prod_TMHItV1NP0yBYU': 'enterprise',
+  'prod_UHwCt3x8a3cLlt': 'agent',
 };
 
 // Map Stripe price IDs to plan names
@@ -24,6 +26,8 @@ function getPlanFromPriceId(priceId: string): string | null {
     [Deno.env.get('STRIPE_PRICE_PROFESSIONAL_ANNUAL') || '']:  'professional',
     [Deno.env.get('STRIPE_PRICE_ENTERPRISE_MONTHLY') || '']:   'enterprise',
     [Deno.env.get('STRIPE_PRICE_ENTERPRISE_ANNUAL') || '']:    'enterprise',
+    'price_1TJMK4K2suFUahyvNqIdkFjZ': 'agent',
+    'price_1TJMK4K2suFUahyvq3MH04v3': 'agent',
   };
   return map[priceId] ?? null;
 }
@@ -33,6 +37,7 @@ function getBillingInterval(priceId: string): string {
     Deno.env.get('STRIPE_PRICE_STARTER_ANNUAL'),
     Deno.env.get('STRIPE_PRICE_PROFESSIONAL_ANNUAL'),
     Deno.env.get('STRIPE_PRICE_ENTERPRISE_ANNUAL'),
+    'price_1TJMK4K2suFUahyvq3MH04v3',
   ];
   return annualIds.includes(priceId) ? 'annual' : 'monthly';
 }

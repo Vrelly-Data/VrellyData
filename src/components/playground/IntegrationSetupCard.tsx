@@ -21,6 +21,7 @@ function formatElapsedTime(seconds: number): string {
 
 const platformIcons: Record<string, string> = {
   'reply.io': '📧',
+  'heyreach': '🤝',
   'smartlead': '🎯',
   'instantly': '⚡',
   'lemlist': '🍋',
@@ -65,6 +66,7 @@ function IntegrationRow({ integration, onToggle, onDelete, onSync, onEdit, onRes
   // Access reply_team_id from extended integration type
   const replyTeamId = (integration as OutboundIntegration & { reply_team_id?: string }).reply_team_id;
   const isReplyIo = integration.platform.toLowerCase() === 'reply.io';
+  const isHeyReach = integration.platform.toLowerCase() === 'heyreach';
   
   // Check if sync is stuck (syncing for more than 5 minutes)
   const isStuck = integration.sync_status === 'syncing' && integration.updated_at && 
@@ -85,6 +87,11 @@ function IntegrationRow({ integration, onToggle, onDelete, onSync, onEdit, onRes
                 Team: {replyTeamId}
               </Badge>
             )}
+            {isHeyReach && (
+              <Badge className="text-xs bg-teal-100 text-teal-800 dark:bg-teal-900/30 dark:text-teal-400 hover:bg-teal-100">
+                HR
+              </Badge>
+            )}
           </div>
           <p className="text-xs text-muted-foreground capitalize">
             {integration.platform}
@@ -92,8 +99,8 @@ function IntegrationRow({ integration, onToggle, onDelete, onSync, onEdit, onRes
               <> · Last synced {formatDistanceToNow(new Date(integration.last_synced_at), { addSuffix: true })}</>
             )}
           </p>
-          {/* Workspace info for Reply.io */}
-          {isReplyIo && (
+          {/* Workspace info for Reply.io only */}
+          {isReplyIo && !isHeyReach && (
             <p className="text-xs text-muted-foreground mt-0.5">
               {replyTeamId 
                 ? `Workspace: ${replyTeamId}` 
@@ -299,7 +306,7 @@ export function IntegrationSetupCard() {
             <div className="text-center py-8 text-muted-foreground">
               <Plug className="h-10 w-10 mx-auto mb-3 opacity-50" />
               <p className="font-medium">No platforms connected</p>
-              <p className="text-sm mt-1">Connect Reply.io to get started</p>
+              <p className="text-sm mt-1">Connect Reply.io or HeyReach to get started</p>
             </div>
           ) : (
           <div className="divide-y">

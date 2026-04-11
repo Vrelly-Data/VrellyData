@@ -1,14 +1,34 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Loader2, CheckCircle, Linkedin, Mail } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { useAgentInboxData, type AgentLead } from '@/hooks/useAgentInbox';
+import { useAgentInboxData, useClassifyLead, type AgentLead } from '@/hooks/useAgentInbox';
+import { useAgentConfig } from '@/hooks/useAgent';
 import { LeadDetailPanel, IntentBadge, ChannelBadge, formatRelativeTime } from './LeadDetailPanel';
 
 export function AgentInbox() {
   const { leads, counts, isLoading } = useAgentInboxData('inbox');
+  const { data: agentConfig } = useAgentConfig();
+  const classifyLead = useClassifyLead();
   const [selectedLead, setSelectedLead] = useState<AgentLead | null>(null);
+  const [classifyingLeadId, setClassifyingLeadId] = useState<string | null>(null);
   const [tab, setTab] = useState<'attention' | 'auto'>('attention');
+
+  const handleSelectLead = useCallback((lead: AgentLead) => {
+    setSelectedLead(lead);
+
+    // Trigger classification if lead has no intent and no draft
+    const needsClassification = !lead.intent && !lead.draft_response;
+    if (needsClassification && agentConfig && !classifyLead.isPending) {
+      setClassifyingLeadId(lead.id);
+      classifyLead.mutate(
+        { lead, agentConfig },
+        {
+          onSettled: () => setClassifyingLeadId(null),
+        },
+      );
+    }
+  }, [agentConfig, classifyLead]);
 
   if (isLoading) {
     return (
@@ -90,7 +110,7 @@ export function AgentInbox() {
             displayLeads.map((lead) => (
               <button
                 key={lead.id}
-                onClick={() => setSelectedLead(lead)}
+                onClick={() => handleSelectLead(lead)}
                 className={cn(
                   'w-full text-left px-4 py-3 border-b transition-colors hover:bg-muted/50',
                   selectedLead?.id === lead.id && 'bg-muted'
@@ -147,6 +167,7 @@ export function AgentInbox() {
             lead={selectedLead}
             onClose={() => setSelectedLead(null)}
             showDraft
+            classifying={classifyingLeadId === selectedLead.id}
           />
         </div>
       )}

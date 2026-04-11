@@ -126,6 +126,87 @@ export function useAgentActivity(filters: ActivityFilters = {}) {
   });
 }
 
+// Live single-lead query (polls every 5s while leadId is set)
+export function useLiveLead(leadId: string | null) {
+  return useQuery<AgentLead | null>({
+    queryKey: ['agent-lead', leadId],
+    queryFn: async () => {
+      if (!leadId) return null;
+      const { data, error } = await db
+        .from('agent_leads')
+        .select('*')
+        .eq('id', leadId)
+        .single();
+      if (error) throw error;
+      return data as AgentLead;
+    },
+    enabled: !!leadId,
+    refetchInterval: 5000,
+    staleTime: 0,
+  });
+}
+
+// Classify a lead via the classify-reply edge function (JWT auth)
+export function useClassifyLead() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({
+      lead,
+      agentConfig,
+    }: {
+      lead: AgentLead;
+      agentConfig: {
+        offer_description: string;
+        desired_action: string | null;
+        outcome_delivered: string | null;
+        target_icp: string | null;
+        sender_name: string;
+        sender_title: string | null;
+        sender_bio: string | null;
+        company_name: string;
+        company_url: string | null;
+        communication_style: string | null;
+        avoid_phrases: string[] | null;
+        sample_message: string | null;
+      };
+    }) => {
+      const replyText = lead.last_reply_text
+        || lead.reply_thread?.find((m) => m.role === 'prospect')?.content
+        || '';
+      const { data, error } = await supabase.functions.invoke('classify-reply', {
+        body: {
+          reply_text: replyText || 'No reply text available',
+          thread_history: lead.reply_thread || [],
+          lead_id: lead.id,
+          agent_context: {
+            offer_description: agentConfig.offer_description,
+            desired_action: agentConfig.desired_action,
+            outcome_delivered: agentConfig.outcome_delivered,
+            target_icp: agentConfig.target_icp,
+            sender_name: agentConfig.sender_name,
+            sender_title: agentConfig.sender_title,
+            sender_bio: agentConfig.sender_bio,
+            company_name: agentConfig.company_name,
+            company_url: agentConfig.company_url,
+            communication_style: agentConfig.communication_style,
+            avoid_phrases: agentConfig.avoid_phrases || [],
+            sample_message: agentConfig.sample_message || '',
+          },
+          channel: lead.channel,
+        },
+      });
+      if (error) throw new Error(error.message || 'Classification failed');
+      return data;
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['agent-lead', variables.lead.id] });
+      queryClient.invalidateQueries({ queryKey: ['agent-inbox'] });
+      queryClient.invalidateQueries({ queryKey: ['agent-activity'] });
+    },
+  });
+}
+
 // Update lead mutation
 export function useUpdateAgentLead() {
   const queryClient = useQueryClient();
