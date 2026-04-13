@@ -75,7 +75,7 @@ Deno.serve(async (req) => {
     // Fetch integration to verify it exists and get webhook secret
     const { data: integration, error: integrationError } = await supabase
       .from('outbound_integrations')
-      .select('id, team_id, is_active, webhook_secret')
+      .select('id, team_id, is_active, webhook_secret, created_by')
       .eq('id', integrationId)
       .single();
     
@@ -137,16 +137,20 @@ Deno.serve(async (req) => {
       event_data: event,
     });
     
-    // Process event based on type - update campaign stats
+    // Look up internal campaign record
+    let campaign: { id: string; stats: Record<string, number> | null } | null = null;
     if (campaignId) {
-      const { data: campaign } = await supabase
+      const { data } = await supabase
         .from('synced_campaigns')
         .select('id, stats')
         .eq('external_campaign_id', campaignId.toString())
         .eq('team_id', integration.team_id)
         .single();
-      
-      if (campaign) {
+      campaign = data;
+    }
+
+    // Process event based on type - update campaign stats
+    if (campaign) {
         const stats = (campaign.stats || {}) as Record<string, number>;
         
         // Normalize event type to snake_case for consistent handling
@@ -191,14 +195,13 @@ Deno.serve(async (req) => {
           .from('synced_campaigns')
           .update({ stats, updated_at: new Date().toISOString() })
           .eq('id', campaign.id);
-      }
     }
-    
+
     // Update contact engagement data if we have an email
     if (contactEmail && campaignId) {
       const { data: contact } = await supabase
         .from('synced_contacts')
-        .select('id, engagement_data')
+        .select('id, engagement_data, first_name, last_name, external_contact_id')
         .eq('email', contactEmail)
         .eq('team_id', integration.team_id)
         .maybeSingle();
@@ -215,10 +218,19 @@ Deno.serve(async (req) => {
             engagement.opened = true;
             engagement.lastOpened = new Date().toISOString();
             break;
-          case 'email_replied':
+          case 'email_replied': {
             engagement.replied = true;
             engagement.repliedAt = new Date().toISOString();
+            // Reply.io sends email body when includeEmailText is enabled on the webhook
+            const replyBody = event.emailTextBody || event.email_text_body ||
+                              event.emailHtmlBody || event.email_html_body ||
+                              event.body || event.text || event.message ||
+                              event.data?.emailTextBody || event.data?.body;
+            if (replyBody) {
+              engagement.lastReplyText = replyBody;
+            }
             break;
+          }
           case 'link_clicked':
             engagement.clicked = true;
             engagement.lastClicked = new Date().toISOString();
@@ -231,15 +243,53 @@ Deno.serve(async (req) => {
         
         await supabase
           .from('synced_contacts')
-          .update({ 
-            engagement_data: engagement, 
+          .update({
+            engagement_data: engagement,
             updated_at: new Date().toISOString(),
             status: normalizedType === 'email_replied' ? 'replied' : undefined,
           })
           .eq('id', contact.id);
+
+        // Upsert into agent_leads when we have a reply with text
+        if (normalizedType === 'email_replied' && engagement.lastReplyText && integration.created_by) {
+          const externalId = contact.external_contact_id ||
+            event.contactId || event.contact?.id || event.data?.contactId || contactEmail;
+
+          supabase
+            .from('agent_leads')
+            .upsert({
+              user_id: integration.created_by,
+              external_id: String(externalId),
+              full_name: [contact.first_name, contact.last_name].filter(Boolean).join(' ') || null,
+              email: contactEmail,
+              last_reply_text: engagement.lastReplyText as string,
+              inbox_status: 'pending',
+              channel: 'email',
+            }, { onConflict: 'user_id,external_id' })
+            .then(({ error: leadsErr }) => {
+              if (leadsErr) console.error('agent_leads upsert error:', leadsErr);
+              else console.log(`Upserted agent_lead for ${contactEmail}`);
+            });
+
+          // Fire-and-forget: trigger full sync so agent_leads stays consistent
+          if (campaign) {
+            fetch(`${supabaseUrl}/functions/v1/sync-reply-contacts`, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${supabaseServiceKey}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                campaignId: campaign.id,
+                integrationId,
+                userId: integration.created_by,
+              }),
+            }).catch(err => console.error('sync-reply-contacts fire-and-forget error:', err));
+          }
+        }
       }
     }
-    
+
     return new Response(JSON.stringify({ success: true }), {
       status: 200,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },

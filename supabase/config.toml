@@ -72,3 +72,9 @@ verify_jwt = false
 
 [functions.revamp-copy]
 verify_jwt = false
+
+[functions.send-heyreach-message]
+verify_jwt = false
+
+[functions.add-to-heyreach-campaign]
+verify_jwt = false

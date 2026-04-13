@@ -504,7 +504,7 @@ Deno.serve(async (req) => {
     }
 
     const body = await req.json();
-    const { campaignId, integrationId } = body;
+    const { campaignId, integrationId, userId: bodyUserId } = body;
 
     if (!campaignId || !integrationId) {
       throw new Error("Missing campaignId or integrationId");
@@ -544,6 +544,17 @@ Deno.serve(async (req) => {
       Deno.env.get("SUPABASE_URL") ?? "",
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
     );
+
+    // Get the user's ID for agent_leads — prefer auth token, fall back to body param
+    // (webhook invocations use service role key and pass userId explicitly)
+    let userId = bodyUserId;
+    if (!userId) {
+      const { data: { user }, error: userError } = await userClient.auth.getUser();
+      if (userError || !user) {
+        throw new Error("Unable to resolve authenticated user");
+      }
+      userId = user.id;
+    }
 
     const apiKey = integration.api_key_encrypted;
     const teamId = integration.team_id;
@@ -643,6 +654,43 @@ Deno.serve(async (req) => {
       } catch (err) {
         console.error(`Error in batch ${batchNumber}:`, err);
         contactsFailed += batch.length;
+      }
+    }
+
+    // Upsert replied contacts with reply text into agent_leads
+    const { data: repliedContacts } = await serviceClient
+      .from("synced_contacts")
+      .select("external_contact_id, first_name, last_name, email, engagement_data")
+      .eq("campaign_id", campaignId)
+      .eq("status", "replied")
+      .not("engagement_data->lastReplyText", "is", null);
+
+    if (repliedContacts && repliedContacts.length > 0) {
+      const agentLeadRows = repliedContacts
+        .filter((c) => c.external_contact_id && c.engagement_data?.lastReplyText)
+        .map((c) => ({
+          user_id: userId,
+          external_id: c.external_contact_id!,
+          full_name: [c.first_name, c.last_name].filter(Boolean).join(" ") || null,
+          email: c.email,
+          last_reply_text: c.engagement_data.lastReplyText,
+          inbox_status: "pending",
+          channel: "email",
+        }));
+
+      if (agentLeadRows.length > 0) {
+        const { error: leadsError } = await serviceClient
+          .from("agent_leads")
+          .upsert(agentLeadRows, {
+            onConflict: "user_id,external_id",
+            ignoreDuplicates: false,
+          });
+
+        if (leadsError) {
+          console.error("agent_leads upsert error:", leadsError);
+        } else {
+          console.log(`Upserted ${agentLeadRows.length} agent_leads`);
+        }
       }
     }
 
