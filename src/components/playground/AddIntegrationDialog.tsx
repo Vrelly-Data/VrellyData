@@ -25,6 +25,7 @@ import { toast } from 'sonner';
 
 const PLATFORMS = [
   { value: 'reply.io', label: 'Reply.io', icon: '📧', comingSoon: false },
+  { value: 'heyreach', label: 'HeyReach', icon: '🤝', comingSoon: false },
   { value: 'smartlead', label: 'Smartlead', icon: '🎯', comingSoon: true },
   { value: 'instantly', label: 'Instantly.ai', icon: '⚡', comingSoon: true },
   { value: 'lemlist', label: 'Lemlist', icon: '🍋', comingSoon: true },

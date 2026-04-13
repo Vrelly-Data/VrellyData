@@ -34,6 +34,10 @@ const PRICE_MAP: Record<string, Record<string, string>> = {
     monthly: Deno.env.get('STRIPE_PRICE_ENTERPRISE_MONTHLY')!,
     annual: Deno.env.get('STRIPE_PRICE_ENTERPRISE_ANNUAL')!,
   },
+  agent: {
+    monthly: 'price_1TJMK4K2suFUahyvNqIdkFjZ',
+    annual: 'price_1TJMK4K2suFUahyvq3MH04v3',
+  },
 };
 
 serve(async (req) => {

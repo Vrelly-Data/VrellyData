@@ -78,3 +78,24 @@ verify_jwt = false
 
 [functions.add-to-heyreach-campaign]
 verify_jwt = false
+
+[functions.get-agent-inbox]
+verify_jwt = false
+
+[functions.classify-reply]
+verify_jwt = false
+
+[functions.auto-sync-integrations]
+verify_jwt = false
+
+[functions.send-agent-reply]
+verify_jwt = false
+
+[functions.poll-reply-inbox]
+verify_jwt = false
+
+[functions.sync-heyreach-campaigns]
+verify_jwt = false
+
+[functions.poll-heyreach-inbox]
+verify_jwt = false

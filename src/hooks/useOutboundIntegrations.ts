@@ -138,40 +138,90 @@ export function useOutboundIntegrations() {
       toast.success('Integration added - syncing campaigns...');
 
       if (data?.id) {
-        try {
-          // Step 1: Fetch available campaigns with AUTO-LINK enabled for first sync
+        const platform = (data as any).platform?.toLowerCase() || '';
+
+        if (platform === 'heyreach') {
+          // HeyReach sync chain
           try {
-            const { data: fetchResult, error: availableError } = await supabase.functions.invoke('fetch-available-campaigns', {
-              body: { integrationId: data.id, autoLinkOnFirstSync: true },
+            // Step 1: Sync HeyReach campaigns
+            const { error } = await supabase.functions.invoke('sync-heyreach-campaigns', {
+              body: { integrationId: data.id },
             });
-            
-            if (availableError) {
-              console.warn('fetch-available-campaigns error (continuing):', availableError);
+
+            if (error) {
+              console.error('HeyReach campaign sync failed:', error);
+              toast.error('Campaign sync failed - you can try again manually');
+            } else {
+              queryClient.invalidateQueries({ queryKey: ['outbound-integrations'] });
+              queryClient.invalidateQueries({ queryKey: ['playground-stats'] });
+              queryClient.invalidateQueries({ queryKey: ['synced-campaigns'] });
+              toast.success('HeyReach campaigns synced');
+            }
+
+            // Step 2: Poll HeyReach inbox for replies
+            try {
+              await supabase.functions.invoke('poll-heyreach-inbox', {
+                body: { integrationId: data.id },
+              });
+            } catch (err) {
+              console.warn('HeyReach inbox poll error (non-fatal):', err);
             }
           } catch (err) {
-            console.warn('fetch-available-campaigns error (continuing):', err);
+            console.error('HeyReach auto-sync error:', err);
           }
+        } else {
+          // Reply.io sync chain (default)
+          try {
+            // Step 1: Fetch available campaigns with AUTO-LINK enabled for first sync
+            try {
+              const { data: fetchResult, error: availableError } = await supabase.functions.invoke('fetch-available-campaigns', {
+                body: { integrationId: data.id, autoLinkOnFirstSync: true },
+              });
 
-          // Step 2: Run main sync (preserves the linked status we just set)
-          const { error } = await supabase.functions.invoke('sync-reply-campaigns', {
-            body: { integrationId: data.id },
-          });
+              if (availableError) {
+                console.warn('fetch-available-campaigns error (continuing):', availableError);
+              }
+            } catch (err) {
+              console.warn('fetch-available-campaigns error (continuing):', err);
+            }
 
-          if (error) {
-            console.error('Auto-sync failed:', error);
-            toast.error('Sync failed - you can try again manually');
-          } else {
-            queryClient.invalidateQueries({ queryKey: ['outbound-integrations'] });
-            queryClient.invalidateQueries({ queryKey: ['playground-stats'] });
-            queryClient.invalidateQueries({ queryKey: ['synced-campaigns'] });
+            // Step 2: Run main sync (preserves the linked status we just set)
+            const { error } = await supabase.functions.invoke('sync-reply-campaigns', {
+              body: { integrationId: data.id },
+            });
 
-            // Start background contact sync for linked campaigns
-            startContactsSync(data.id);
+            if (error) {
+              console.error('Auto-sync failed:', error);
+              toast.error('Sync failed - you can try again manually');
+            } else {
+              queryClient.invalidateQueries({ queryKey: ['outbound-integrations'] });
+              queryClient.invalidateQueries({ queryKey: ['playground-stats'] });
+              queryClient.invalidateQueries({ queryKey: ['synced-campaigns'] });
 
-            toast.success('Campaigns synced - contacts syncing in background...');
+              // Start background contact sync for linked campaigns
+              startContactsSync(data.id);
+
+              toast.success('Campaigns synced - contacts syncing in background...');
+            }
+
+            // Step 3: Auto-register Reply.io webhooks
+            try {
+              const { data: webhookResult } = await supabase
+                .functions.invoke('setup-reply-webhook', {
+                  body: { integrationId: data.id },
+                });
+
+              if (webhookResult?.success) {
+                console.log('Webhooks registered successfully');
+              } else {
+                console.warn('Webhook registration failed:', webhookResult?.error);
+              }
+            } catch (err) {
+              console.warn('Webhook setup error (non-fatal):', err);
+            }
+          } catch (err) {
+            console.error('Auto-sync error:', err);
           }
-        } catch (err) {
-          console.error('Auto-sync error:', err);
         }
       }
     },
@@ -218,12 +268,27 @@ export function useOutboundIntegrations() {
   const syncIntegration = useMutation({
     mutationFn: async (integrationId: string) => {
       // Optimistically update status
-      queryClient.setQueryData(['outbound-integrations'], (old: OutboundIntegration[] | undefined) => 
+      queryClient.setQueryData(['outbound-integrations'], (old: OutboundIntegration[] | undefined) =>
         old?.map(i => i.id === integrationId ? { ...i, sync_status: 'syncing' } : i)
       );
 
+      // Look up platform for this integration
+      const current = (queryClient.getQueryData(['outbound-integrations']) as OutboundIntegration[] | undefined)
+        ?.find(i => i.id === integrationId);
+      const platform = current?.platform?.toLowerCase() || '';
+
+      if (platform === 'heyreach') {
+        // HeyReach sync
+        const { data, error } = await supabase.functions.invoke('sync-heyreach-campaigns', {
+          body: { integrationId },
+        });
+
+        if (error) throw error;
+        return data;
+      }
+
+      // Reply.io sync (default)
       // Step 1: Call fetch-available-campaigns FIRST with auto-link enabled
-      // This populates peopleCount AND auto-links campaigns on first sync
       try {
         const { data: fetchResult, error: availableError } = await supabase.functions.invoke('fetch-available-campaigns', {
           body: { integrationId, autoLinkOnFirstSync: true },
@@ -252,10 +317,17 @@ export function useOutboundIntegrations() {
       queryClient.invalidateQueries({ queryKey: ['synced-campaigns'] });
       queryClient.invalidateQueries({ queryKey: ['playground-stats'] });
 
-      // Start background contact sync for linked campaigns
-      startContactsSync(integrationId);
+      const current = (queryClient.getQueryData(['outbound-integrations']) as OutboundIntegration[] | undefined)
+        ?.find(i => i.id === integrationId);
+      const platform = current?.platform?.toLowerCase() || '';
 
-      toast.success(`Synced ${data.campaigns} campaigns - syncing contacts...`);
+      if (platform !== 'heyreach') {
+        // Start background contact sync for linked campaigns (Reply.io only)
+        startContactsSync(integrationId);
+      }
+
+      const count = data?.campaigns ?? 'unknown';
+      toast.success(`Synced ${count} campaigns${platform !== 'heyreach' ? ' - syncing contacts...' : ''}`);
     },
     onError: (error) => {
       queryClient.invalidateQueries({ queryKey: ['outbound-integrations'] });

@@ -1,0 +1,2753 @@
+export type Json =
+  | string
+  | number
+  | boolean
+  | null
+  | { [key: string]: Json | undefined }
+  | Json[]
+
+export type Database = {
+  // Allows to automatically instantiate createClient with right options
+  // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
+  __InternalSupabase: {
+    PostgrestVersion: "14.1"
+  }
+  public: {
+    Tables: {
+      agent_activity: {
+        Row: {
+          activity_type: string
+          agent_config_id: string | null
+          created_at: string | null
+          description: string
+          id: string
+          lead_company: string | null
+          lead_id: string | null
+          lead_name: string | null
+          metadata: Json | null
+          user_id: string | null
+        }
+        Insert: {
+          activity_type: string
+          agent_config_id?: string | null
+          created_at?: string | null
+          description: string
+          id?: string
+          lead_company?: string | null
+          lead_id?: string | null
+          lead_name?: string | null
+          metadata?: Json | null
+          user_id?: string | null
+        }
+        Update: {
+          activity_type?: string
+          agent_config_id?: string | null
+          created_at?: string | null
+          description?: string
+          id?: string
+          lead_company?: string | null
+          lead_id?: string | null
+          lead_name?: string | null
+          metadata?: Json | null
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "agent_activity_agent_config_id_fkey"
+            columns: ["agent_config_id"]
+            isOneToOne: false
+            referencedRelation: "agent_configs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "agent_activity_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "agent_leads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      agent_configs: {
+        Row: {
+          avoid_phrases: string[] | null
+          campaign_rules: Json | null
+          communication_style: string | null
+          company_name: string
+          company_url: string | null
+          created_at: string | null
+          desired_action: string | null
+          id: string
+          is_active: boolean | null
+          managed_campaigns: string[] | null
+          mode: string | null
+          offer_description: string
+          onboarding_complete: boolean | null
+          onboarding_step: number | null
+          outcome_delivered: string | null
+          reply_api_key: string | null
+          reply_io_connected: boolean | null
+          sample_message: string | null
+          saved_audience_id: string | null
+          sender_bio: string | null
+          sender_linkedin: string | null
+          sender_name: string
+          sender_title: string | null
+          target_icp: string | null
+          updated_at: string | null
+          user_id: string | null
+        }
+        Insert: {
+          avoid_phrases?: string[] | null
+          campaign_rules?: Json | null
+          communication_style?: string | null
+          company_name: string
+          company_url?: string | null
+          created_at?: string | null
+          desired_action?: string | null
+          id?: string
+          is_active?: boolean | null
+          managed_campaigns?: string[] | null
+          mode?: string | null
+          offer_description: string
+          onboarding_complete?: boolean | null
+          onboarding_step?: number | null
+          outcome_delivered?: string | null
+          reply_api_key?: string | null
+          reply_io_connected?: boolean | null
+          sample_message?: string | null
+          saved_audience_id?: string | null
+          sender_bio?: string | null
+          sender_linkedin?: string | null
+          sender_name: string
+          sender_title?: string | null
+          target_icp?: string | null
+          updated_at?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          avoid_phrases?: string[] | null
+          campaign_rules?: Json | null
+          communication_style?: string | null
+          company_name?: string
+          company_url?: string | null
+          created_at?: string | null
+          desired_action?: string | null
+          id?: string
+          is_active?: boolean | null
+          managed_campaigns?: string[] | null
+          mode?: string | null
+          offer_description?: string
+          onboarding_complete?: boolean | null
+          onboarding_step?: number | null
+          outcome_delivered?: string | null
+          reply_api_key?: string | null
+          reply_io_connected?: boolean | null
+          sample_message?: string | null
+          saved_audience_id?: string | null
+          sender_bio?: string | null
+          sender_linkedin?: string | null
+          sender_name?: string
+          sender_title?: string | null
+          target_icp?: string | null
+          updated_at?: string | null
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "agent_configs_saved_audience_id_fkey"
+            columns: ["saved_audience_id"]
+            isOneToOne: false
+            referencedRelation: "saved_audiences"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      agent_leads: {
+        Row: {
+          agent_config_id: string | null
+          agent_run_id: string | null
+          auto_handled: boolean | null
+          channel: string | null
+          company: string | null
+          created_at: string | null
+          draft_approved: boolean | null
+          draft_response: string | null
+          email: string | null
+          external_id: string | null
+          full_name: string | null
+          id: string
+          inbox_status: string | null
+          intent: string | null
+          intent_confidence: number | null
+          job_title: string | null
+          last_reply_at: string | null
+          last_reply_text: string | null
+          linkedin_url: string | null
+          notes: string | null
+          pipeline_stage: string | null
+          reply_thread: Json | null
+          updated_at: string | null
+          user_id: string | null
+        }
+        Insert: {
+          agent_config_id?: string | null
+          agent_run_id?: string | null
+          auto_handled?: boolean | null
+          channel?: string | null
+          company?: string | null
+          created_at?: string | null
+          draft_approved?: boolean | null
+          draft_response?: string | null
+          email?: string | null
+          external_id?: string | null
+          full_name?: string | null
+          id?: string
+          inbox_status?: string | null
+          intent?: string | null
+          intent_confidence?: number | null
+          job_title?: string | null
+          last_reply_at?: string | null
+          last_reply_text?: string | null
+          linkedin_url?: string | null
+          notes?: string | null
+          pipeline_stage?: string | null
+          reply_thread?: Json | null
+          updated_at?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          agent_config_id?: string | null
+          agent_run_id?: string | null
+          auto_handled?: boolean | null
+          channel?: string | null
+          company?: string | null
+          created_at?: string | null
+          draft_approved?: boolean | null
+          draft_response?: string | null
+          email?: string | null
+          external_id?: string | null
+          full_name?: string | null
+          id?: string
+          inbox_status?: string | null
+          intent?: string | null
+          intent_confidence?: number | null
+          job_title?: string | null
+          last_reply_at?: string | null
+          last_reply_text?: string | null
+          linkedin_url?: string | null
+          notes?: string | null
+          pipeline_stage?: string | null
+          reply_thread?: Json | null
+          updated_at?: string | null
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "agent_leads_agent_config_id_fkey"
+            columns: ["agent_config_id"]
+            isOneToOne: false
+            referencedRelation: "agent_configs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "agent_leads_agent_run_id_fkey"
+            columns: ["agent_run_id"]
+            isOneToOne: false
+            referencedRelation: "agent_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      agent_runs: {
+        Row: {
+          agent_config_id: string | null
+          audience_size: number | null
+          completed_at: string | null
+          contacts_pushed: number | null
+          copy_variant: string | null
+          error_message: string | null
+          id: string
+          started_at: string | null
+          status: string | null
+          user_id: string | null
+        }
+        Insert: {
+          agent_config_id?: string | null
+          audience_size?: number | null
+          completed_at?: string | null
+          contacts_pushed?: number | null
+          copy_variant?: string | null
+          error_message?: string | null
+          id?: string
+          started_at?: string | null
+          status?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          agent_config_id?: string | null
+          audience_size?: number | null
+          completed_at?: string | null
+          contacts_pushed?: number | null
+          copy_variant?: string | null
+          error_message?: string | null
+          id?: string
+          started_at?: string | null
+          status?: string | null
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "agent_runs_agent_config_id_fkey"
+            columns: ["agent_config_id"]
+            isOneToOne: false
+            referencedRelation: "agent_configs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      api_keys: {
+        Row: {
+          created_at: string | null
+          id: string
+          is_active: boolean | null
+          key_hash: string
+          last_used_at: string | null
+          name: string
+          team_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          id?: string
+          is_active?: boolean | null
+          key_hash: string
+          last_used_at?: string | null
+          name: string
+          team_id: string
+        }
+        Update: {
+          created_at?: string | null
+          id?: string
+          is_active?: boolean | null
+          key_hash?: string
+          last_used_at?: string | null
+          name?: string
+          team_id?: string
+        }
+        Relationships: []
+      }
+      audiences: {
+        Row: {
+          created_at: string
+          created_by: string
+          filters: Json
+          id: string
+          name: string
+          result_count: number | null
+          team_id: string
+          type: Database["public"]["Enums"]["entity_type"]
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          created_by: string
+          filters?: Json
+          id?: string
+          name: string
+          result_count?: number | null
+          team_id: string
+          type: Database["public"]["Enums"]["entity_type"]
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string
+          filters?: Json
+          id?: string
+          name?: string
+          result_count?: number | null
+          team_id?: string
+          type?: Database["public"]["Enums"]["entity_type"]
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "audiences_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "audiences_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      audit_log: {
+        Row: {
+          action: string
+          created_at: string
+          entity_count: number | null
+          entity_type: string | null
+          id: string
+          ip_address: string | null
+          metadata: Json | null
+          team_id: string
+          user_agent: string | null
+          user_id: string
+        }
+        Insert: {
+          action: string
+          created_at?: string
+          entity_count?: number | null
+          entity_type?: string | null
+          id?: string
+          ip_address?: string | null
+          metadata?: Json | null
+          team_id: string
+          user_agent?: string | null
+          user_id: string
+        }
+        Update: {
+          action?: string
+          created_at?: string
+          entity_count?: number | null
+          entity_type?: string | null
+          id?: string
+          ip_address?: string | null
+          metadata?: Json | null
+          team_id?: string
+          user_agent?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "audit_log_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      blog_posts: {
+        Row: {
+          author_avatar_url: string | null
+          author_name: string | null
+          canonical_url: string | null
+          category: string | null
+          content: string
+          cover_image_url: string | null
+          created_at: string | null
+          excerpt: string | null
+          id: string
+          meta_description: string | null
+          meta_keywords: string[] | null
+          meta_title: string | null
+          published_at: string | null
+          reading_time_minutes: number | null
+          slug: string
+          status: string | null
+          tags: string[] | null
+          title: string
+          updated_at: string | null
+        }
+        Insert: {
+          author_avatar_url?: string | null
+          author_name?: string | null
+          canonical_url?: string | null
+          category?: string | null
+          content: string
+          cover_image_url?: string | null
+          created_at?: string | null
+          excerpt?: string | null
+          id?: string
+          meta_description?: string | null
+          meta_keywords?: string[] | null
+          meta_title?: string | null
+          published_at?: string | null
+          reading_time_minutes?: number | null
+          slug: string
+          status?: string | null
+          tags?: string[] | null
+          title: string
+          updated_at?: string | null
+        }
+        Update: {
+          author_avatar_url?: string | null
+          author_name?: string | null
+          canonical_url?: string | null
+          category?: string | null
+          content?: string
+          cover_image_url?: string | null
+          created_at?: string | null
+          excerpt?: string | null
+          id?: string
+          meta_description?: string | null
+          meta_keywords?: string[] | null
+          meta_title?: string | null
+          published_at?: string | null
+          reading_time_minutes?: number | null
+          slug?: string
+          status?: string | null
+          tags?: string[] | null
+          title?: string
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
+      campaigns: {
+        Row: {
+          created_at: string | null
+          description: string | null
+          id: string
+          is_active: boolean | null
+          name: string
+          team_id: string
+          updated_at: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          description?: string | null
+          id?: string
+          is_active?: boolean | null
+          name: string
+          team_id: string
+          updated_at?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          description?: string | null
+          id?: string
+          is_active?: boolean | null
+          name?: string
+          team_id?: string
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
+      company_records: {
+        Row: {
+          created_at: string | null
+          entity_data: Json
+          entity_external_id: string
+          id: string
+          source: string
+          team_id: string
+          updated_at: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          entity_data: Json
+          entity_external_id: string
+          id?: string
+          source: string
+          team_id: string
+          updated_at?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          entity_data?: Json
+          entity_external_id?: string
+          id?: string
+          source?: string
+          team_id?: string
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
+      copy_templates: {
+        Row: {
+          body_html: string | null
+          body_text: string | null
+          created_at: string
+          created_by: string
+          id: string
+          is_favorite: boolean | null
+          name: string
+          remix_prompt: string | null
+          source_sequence_id: string | null
+          subject: string | null
+          tags: string[] | null
+          team_id: string
+          updated_at: string
+        }
+        Insert: {
+          body_html?: string | null
+          body_text?: string | null
+          created_at?: string
+          created_by: string
+          id?: string
+          is_favorite?: boolean | null
+          name: string
+          remix_prompt?: string | null
+          source_sequence_id?: string | null
+          subject?: string | null
+          tags?: string[] | null
+          team_id: string
+          updated_at?: string
+        }
+        Update: {
+          body_html?: string | null
+          body_text?: string | null
+          created_at?: string
+          created_by?: string
+          id?: string
+          is_favorite?: boolean | null
+          name?: string
+          remix_prompt?: string | null
+          source_sequence_id?: string | null
+          subject?: string | null
+          tags?: string[] | null
+          team_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "copy_templates_source_sequence_id_fkey"
+            columns: ["source_sequence_id"]
+            isOneToOne: false
+            referencedRelation: "synced_sequences"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "copy_templates_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      credit_transactions: {
+        Row: {
+          audience_id: string | null
+          created_at: string
+          credits_deducted: number
+          entity_type: string
+          id: string
+          records_returned: number
+          user_id: string
+        }
+        Insert: {
+          audience_id?: string | null
+          created_at?: string
+          credits_deducted?: number
+          entity_type: string
+          id?: string
+          records_returned?: number
+          user_id: string
+        }
+        Update: {
+          audience_id?: string | null
+          created_at?: string
+          credits_deducted?: number
+          entity_type?: string
+          id?: string
+          records_returned?: number
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "credit_transactions_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      data_source_templates: {
+        Row: {
+          column_mappings: Json
+          created_at: string | null
+          created_by: string
+          description: string | null
+          entity_type: Database["public"]["Enums"]["entity_type"]
+          id: string
+          name: string
+          updated_at: string | null
+        }
+        Insert: {
+          column_mappings?: Json
+          created_at?: string | null
+          created_by: string
+          description?: string | null
+          entity_type: Database["public"]["Enums"]["entity_type"]
+          id?: string
+          name: string
+          updated_at?: string | null
+        }
+        Update: {
+          column_mappings?: Json
+          created_at?: string | null
+          created_by?: string
+          description?: string | null
+          entity_type?: Database["public"]["Enums"]["entity_type"]
+          id?: string
+          name?: string
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
+      export_jobs: {
+        Row: {
+          audience_id: string
+          completed_at: string | null
+          created_at: string
+          file_path: string | null
+          format: Database["public"]["Enums"]["export_format"]
+          id: string
+          status: Database["public"]["Enums"]["export_status"]
+          team_id: string
+        }
+        Insert: {
+          audience_id: string
+          completed_at?: string | null
+          created_at?: string
+          file_path?: string | null
+          format?: Database["public"]["Enums"]["export_format"]
+          id?: string
+          status?: Database["public"]["Enums"]["export_status"]
+          team_id: string
+        }
+        Update: {
+          audience_id?: string
+          completed_at?: string | null
+          created_at?: string
+          file_path?: string | null
+          format?: Database["public"]["Enums"]["export_format"]
+          id?: string
+          status?: Database["public"]["Enums"]["export_status"]
+          team_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "export_jobs_audience_id_fkey"
+            columns: ["audience_id"]
+            isOneToOne: false
+            referencedRelation: "audiences"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "export_jobs_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      external_campaigns: {
+        Row: {
+          campaign_id: string
+          campaign_name: string
+          created_at: string | null
+          field_mappings: Json | null
+          id: string
+          last_synced_at: string | null
+          project_id: string
+        }
+        Insert: {
+          campaign_id: string
+          campaign_name: string
+          created_at?: string | null
+          field_mappings?: Json | null
+          id?: string
+          last_synced_at?: string | null
+          project_id: string
+        }
+        Update: {
+          campaign_id?: string
+          campaign_name?: string
+          created_at?: string | null
+          field_mappings?: Json | null
+          id?: string
+          last_synced_at?: string | null
+          project_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "external_campaigns_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "external_projects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "external_campaigns_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "external_projects_safe"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      external_projects: {
+        Row: {
+          api_endpoint: string
+          api_key_encrypted: string
+          created_at: string | null
+          id: string
+          is_active: boolean | null
+          name: string
+          team_id: string
+          updated_at: string | null
+        }
+        Insert: {
+          api_endpoint: string
+          api_key_encrypted: string
+          created_at?: string | null
+          id?: string
+          is_active?: boolean | null
+          name: string
+          team_id: string
+          updated_at?: string | null
+        }
+        Update: {
+          api_endpoint?: string
+          api_key_encrypted?: string
+          created_at?: string | null
+          id?: string
+          is_active?: boolean | null
+          name?: string
+          team_id?: string
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
+      filter_counts: {
+        Row: {
+          field_name: string
+          field_value: string
+          record_count: number
+          updated_at: string | null
+        }
+        Insert: {
+          field_name: string
+          field_value: string
+          record_count: number
+          updated_at?: string | null
+        }
+        Update: {
+          field_name?: string
+          field_value?: string
+          record_count?: number
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
+      filter_presets: {
+        Row: {
+          created_at: string
+          filters: Json
+          id: string
+          name: string
+          team_id: string
+          type: Database["public"]["Enums"]["entity_type"]
+        }
+        Insert: {
+          created_at?: string
+          filters?: Json
+          id?: string
+          name: string
+          team_id: string
+          type: Database["public"]["Enums"]["entity_type"]
+        }
+        Update: {
+          created_at?: string
+          filters?: Json
+          id?: string
+          name?: string
+          team_id?: string
+          type?: Database["public"]["Enums"]["entity_type"]
+        }
+        Relationships: [
+          {
+            foreignKeyName: "filter_presets_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      free_data: {
+        Row: {
+          created_at: string | null
+          entity_data: Json
+          entity_external_id: string
+          entity_type: Database["public"]["Enums"]["entity_type"]
+          id: string
+          source_template_id: string | null
+          uploaded_by: string
+        }
+        Insert: {
+          created_at?: string | null
+          entity_data: Json
+          entity_external_id: string
+          entity_type: Database["public"]["Enums"]["entity_type"]
+          id?: string
+          source_template_id?: string | null
+          uploaded_by: string
+        }
+        Update: {
+          created_at?: string | null
+          entity_data?: Json
+          entity_external_id?: string
+          entity_type?: Database["public"]["Enums"]["entity_type"]
+          id?: string
+          source_template_id?: string | null
+          uploaded_by?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "free_data_source_template_id_fkey"
+            columns: ["source_template_id"]
+            isOneToOne: false
+            referencedRelation: "data_source_templates"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      list_items: {
+        Row: {
+          added_at: string
+          added_by: string
+          entity_data: Json
+          entity_external_id: string
+          id: string
+          list_id: string
+        }
+        Insert: {
+          added_at?: string
+          added_by: string
+          entity_data: Json
+          entity_external_id: string
+          id?: string
+          list_id: string
+        }
+        Update: {
+          added_at?: string
+          added_by?: string
+          entity_data?: Json
+          entity_external_id?: string
+          id?: string
+          list_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "list_items_list_id_fkey"
+            columns: ["list_id"]
+            isOneToOne: false
+            referencedRelation: "lists"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      lists: {
+        Row: {
+          created_at: string
+          created_by: string
+          description: string | null
+          entity_type: Database["public"]["Enums"]["entity_type"]
+          id: string
+          name: string
+          team_id: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          created_by: string
+          description?: string | null
+          entity_type: Database["public"]["Enums"]["entity_type"]
+          id?: string
+          name: string
+          team_id: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string
+          description?: string | null
+          entity_type?: Database["public"]["Enums"]["entity_type"]
+          id?: string
+          name?: string
+          team_id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      outbound_integrations: {
+        Row: {
+          api_key_encrypted: string
+          created_at: string
+          created_by: string
+          id: string
+          is_active: boolean
+          last_synced_at: string | null
+          links_initialized: boolean
+          name: string
+          platform: string
+          reply_team_id: string | null
+          sync_error: string | null
+          sync_status: string | null
+          team_id: string
+          updated_at: string
+          webhook_secret: string | null
+          webhook_status: string | null
+          webhook_subscription_id: string | null
+        }
+        Insert: {
+          api_key_encrypted: string
+          created_at?: string
+          created_by: string
+          id?: string
+          is_active?: boolean
+          last_synced_at?: string | null
+          links_initialized?: boolean
+          name: string
+          platform: string
+          reply_team_id?: string | null
+          sync_error?: string | null
+          sync_status?: string | null
+          team_id: string
+          updated_at?: string
+          webhook_secret?: string | null
+          webhook_status?: string | null
+          webhook_subscription_id?: string | null
+        }
+        Update: {
+          api_key_encrypted?: string
+          created_at?: string
+          created_by?: string
+          id?: string
+          is_active?: boolean
+          last_synced_at?: string | null
+          links_initialized?: boolean
+          name?: string
+          platform?: string
+          reply_team_id?: string | null
+          sync_error?: string | null
+          sync_status?: string | null
+          team_id?: string
+          updated_at?: string
+          webhook_secret?: string | null
+          webhook_status?: string | null
+          webhook_subscription_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "outbound_integrations_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      people_records: {
+        Row: {
+          created_at: string | null
+          entity_data: Json
+          entity_external_id: string
+          id: string
+          source: string
+          team_id: string
+          updated_at: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          entity_data: Json
+          entity_external_id: string
+          id?: string
+          source: string
+          team_id: string
+          updated_at?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          entity_data?: Json
+          entity_external_id?: string
+          id?: string
+          source?: string
+          team_id?: string
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
+      profiles: {
+        Row: {
+          billing_period_end: string | null
+          billing_period_start: string | null
+          cancel_at: string | null
+          cancel_at_period_end: boolean | null
+          created_at: string
+          credits: number
+          credits_used_this_month: number | null
+          credits_used_today: number
+          id: string
+          is_platform_admin: boolean
+          last_credit_reset_date: string | null
+          monthly_credit_limit: number | null
+          name: string | null
+          plan: string | null
+          stripe_customer_id: string | null
+          stripe_subscription_id: string | null
+          subscription_status: string | null
+          subscription_tier: string | null
+          updated_at: string
+        }
+        Insert: {
+          billing_period_end?: string | null
+          billing_period_start?: string | null
+          cancel_at?: string | null
+          cancel_at_period_end?: boolean | null
+          created_at?: string
+          credits?: number
+          credits_used_this_month?: number | null
+          credits_used_today?: number
+          id: string
+          is_platform_admin?: boolean
+          last_credit_reset_date?: string | null
+          monthly_credit_limit?: number | null
+          name?: string | null
+          plan?: string | null
+          stripe_customer_id?: string | null
+          stripe_subscription_id?: string | null
+          subscription_status?: string | null
+          subscription_tier?: string | null
+          updated_at?: string
+        }
+        Update: {
+          billing_period_end?: string | null
+          billing_period_start?: string | null
+          cancel_at?: string | null
+          cancel_at_period_end?: boolean | null
+          created_at?: string
+          credits?: number
+          credits_used_this_month?: number | null
+          credits_used_today?: number
+          id?: string
+          is_platform_admin?: boolean
+          last_credit_reset_date?: string | null
+          monthly_credit_limit?: number | null
+          name?: string | null
+          plan?: string | null
+          stripe_customer_id?: string | null
+          stripe_subscription_id?: string | null
+          subscription_status?: string | null
+          subscription_tier?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      prospects: {
+        Row: {
+          address: string | null
+          age_range: string | null
+          business_email: string | null
+          children: string | null
+          city: string | null
+          company_address: string | null
+          company_city: string | null
+          company_country: string | null
+          company_description: string | null
+          company_domain: string | null
+          company_facebook_url: string | null
+          company_industry: string | null
+          company_linkedin: string | null
+          company_naics: string | null
+          company_name: string | null
+          company_phone: string | null
+          company_revenue: string | null
+          company_sic: string | null
+          company_size: string | null
+          company_size_range: string | null
+          company_state: string | null
+          company_twitter_url: string | null
+          company_zip: string | null
+          country: string | null
+          created_at: string | null
+          department: string | null
+          education_history: string | null
+          facebook_url: string | null
+          first_name: string | null
+          full_name: string | null
+          gender: string | null
+          homeowner: string | null
+          id: string
+          income_range: string | null
+          interests: string | null
+          job_title: string | null
+          keywords: string | null
+          last_name: string | null
+          latest_funding: string | null
+          linkedin_url: string | null
+          married: string | null
+          net_worth: string | null
+          personal_email: string | null
+          phone: string | null
+          seniority: string | null
+          skills: string | null
+          source: string
+          source_uuid: string | null
+          state: string | null
+          subsidiary_of: string | null
+          technologies: string | null
+          total_funding: string | null
+          twitter_url: string | null
+          zip_code: string | null
+        }
+        Insert: {
+          address?: string | null
+          age_range?: string | null
+          business_email?: string | null
+          children?: string | null
+          city?: string | null
+          company_address?: string | null
+          company_city?: string | null
+          company_country?: string | null
+          company_description?: string | null
+          company_domain?: string | null
+          company_facebook_url?: string | null
+          company_industry?: string | null
+          company_linkedin?: string | null
+          company_naics?: string | null
+          company_name?: string | null
+          company_phone?: string | null
+          company_revenue?: string | null
+          company_sic?: string | null
+          company_size?: string | null
+          company_size_range?: string | null
+          company_state?: string | null
+          company_twitter_url?: string | null
+          company_zip?: string | null
+          country?: string | null
+          created_at?: string | null
+          department?: string | null
+          education_history?: string | null
+          facebook_url?: string | null
+          first_name?: string | null
+          full_name?: string | null
+          gender?: string | null
+          homeowner?: string | null
+          id?: string
+          income_range?: string | null
+          interests?: string | null
+          job_title?: string | null
+          keywords?: string | null
+          last_name?: string | null
+          latest_funding?: string | null
+          linkedin_url?: string | null
+          married?: string | null
+          net_worth?: string | null
+          personal_email?: string | null
+          phone?: string | null
+          seniority?: string | null
+          skills?: string | null
+          source: string
+          source_uuid?: string | null
+          state?: string | null
+          subsidiary_of?: string | null
+          technologies?: string | null
+          total_funding?: string | null
+          twitter_url?: string | null
+          zip_code?: string | null
+        }
+        Update: {
+          address?: string | null
+          age_range?: string | null
+          business_email?: string | null
+          children?: string | null
+          city?: string | null
+          company_address?: string | null
+          company_city?: string | null
+          company_country?: string | null
+          company_description?: string | null
+          company_domain?: string | null
+          company_facebook_url?: string | null
+          company_industry?: string | null
+          company_linkedin?: string | null
+          company_naics?: string | null
+          company_name?: string | null
+          company_phone?: string | null
+          company_revenue?: string | null
+          company_sic?: string | null
+          company_size?: string | null
+          company_size_range?: string | null
+          company_state?: string | null
+          company_twitter_url?: string | null
+          company_zip?: string | null
+          country?: string | null
+          created_at?: string | null
+          department?: string | null
+          education_history?: string | null
+          facebook_url?: string | null
+          first_name?: string | null
+          full_name?: string | null
+          gender?: string | null
+          homeowner?: string | null
+          id?: string
+          income_range?: string | null
+          interests?: string | null
+          job_title?: string | null
+          keywords?: string | null
+          last_name?: string | null
+          latest_funding?: string | null
+          linkedin_url?: string | null
+          married?: string | null
+          net_worth?: string | null
+          personal_email?: string | null
+          phone?: string | null
+          seniority?: string | null
+          skills?: string | null
+          source?: string
+          source_uuid?: string | null
+          state?: string | null
+          subsidiary_of?: string | null
+          technologies?: string | null
+          total_funding?: string | null
+          twitter_url?: string | null
+          zip_code?: string | null
+        }
+        Relationships: []
+      }
+      received_contacts: {
+        Row: {
+          campaign_id: string | null
+          contact_data: Json
+          created_at: string | null
+          id: string
+          source_project: string
+          status: string | null
+          team_id: string
+        }
+        Insert: {
+          campaign_id?: string | null
+          contact_data: Json
+          created_at?: string | null
+          id?: string
+          source_project: string
+          status?: string | null
+          team_id: string
+        }
+        Update: {
+          campaign_id?: string | null
+          contact_data?: Json
+          created_at?: string | null
+          id?: string
+          source_project?: string
+          status?: string | null
+          team_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "received_contacts_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "campaigns"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      resource_api_keys: {
+        Row: {
+          created_at: string
+          id: string
+          is_active: boolean
+          key_hash: string
+          last_used_at: string | null
+          name: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          key_hash: string
+          last_used_at?: string | null
+          name: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          key_hash?: string
+          last_used_at?: string | null
+          name?: string
+        }
+        Relationships: []
+      }
+      resources: {
+        Row: {
+          author: string | null
+          content_markdown: string
+          cover_image_url: string | null
+          created_at: string
+          excerpt: string | null
+          id: string
+          is_published: boolean
+          meta_description: string | null
+          published_at: string | null
+          slug: string
+          tags: string[] | null
+          title: string
+          updated_at: string
+        }
+        Insert: {
+          author?: string | null
+          content_markdown?: string
+          cover_image_url?: string | null
+          created_at?: string
+          excerpt?: string | null
+          id?: string
+          is_published?: boolean
+          meta_description?: string | null
+          published_at?: string | null
+          slug: string
+          tags?: string[] | null
+          title: string
+          updated_at?: string
+        }
+        Update: {
+          author?: string | null
+          content_markdown?: string
+          cover_image_url?: string | null
+          created_at?: string
+          excerpt?: string | null
+          id?: string
+          is_published?: boolean
+          meta_description?: string | null
+          published_at?: string | null
+          slug?: string
+          tags?: string[] | null
+          title?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      sales_knowledge: {
+        Row: {
+          category: string
+          channel: string | null
+          content: string
+          created_at: string
+          created_by: string | null
+          funnel_stage: string | null
+          id: string
+          industry: string | null
+          is_active: boolean
+          metrics: Json | null
+          persona: string | null
+          source_campaign: string | null
+          tags: string[] | null
+          title: string
+          updated_at: string
+        }
+        Insert: {
+          category: string
+          channel?: string | null
+          content: string
+          created_at?: string
+          created_by?: string | null
+          funnel_stage?: string | null
+          id?: string
+          industry?: string | null
+          is_active?: boolean
+          metrics?: Json | null
+          persona?: string | null
+          source_campaign?: string | null
+          tags?: string[] | null
+          title: string
+          updated_at?: string
+        }
+        Update: {
+          category?: string
+          channel?: string | null
+          content?: string
+          created_at?: string
+          created_by?: string | null
+          funnel_stage?: string | null
+          id?: string
+          industry?: string | null
+          is_active?: boolean
+          metrics?: Json | null
+          persona?: string | null
+          source_campaign?: string | null
+          tags?: string[] | null
+          title?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      saved_audiences: {
+        Row: {
+          created_at: string | null
+          filters: Json
+          id: string
+          insights: string | null
+          name: string
+          preset_id: string | null
+          result_count: number | null
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          filters: Json
+          id?: string
+          insights?: string | null
+          name: string
+          preset_id?: string | null
+          result_count?: number | null
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          filters?: Json
+          id?: string
+          insights?: string | null
+          name?: string
+          preset_id?: string | null
+          result_count?: number | null
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "saved_audiences_preset_id_fkey"
+            columns: ["preset_id"]
+            isOneToOne: false
+            referencedRelation: "filter_presets"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      suppression_lists: {
+        Row: {
+          created_at: string
+          id: string
+          reason: string | null
+          team_id: string
+          type: Database["public"]["Enums"]["suppression_type"]
+          value: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          reason?: string | null
+          team_id: string
+          type: Database["public"]["Enums"]["suppression_type"]
+          value: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          reason?: string | null
+          team_id?: string
+          type?: Database["public"]["Enums"]["suppression_type"]
+          value?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "suppression_lists_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      synced_campaigns: {
+        Row: {
+          created_at: string
+          external_campaign_id: string
+          id: string
+          integration_id: string | null
+          is_linked: boolean
+          name: string
+          raw_data: Json | null
+          stats: Json | null
+          status: string | null
+          team_id: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          external_campaign_id: string
+          id?: string
+          integration_id?: string | null
+          is_linked?: boolean
+          name: string
+          raw_data?: Json | null
+          stats?: Json | null
+          status?: string | null
+          team_id: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          external_campaign_id?: string
+          id?: string
+          integration_id?: string | null
+          is_linked?: boolean
+          name?: string
+          raw_data?: Json | null
+          stats?: Json | null
+          status?: string | null
+          team_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "synced_campaigns_integration_id_fkey"
+            columns: ["integration_id"]
+            isOneToOne: false
+            referencedRelation: "outbound_integrations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "synced_campaigns_integration_id_fkey"
+            columns: ["integration_id"]
+            isOneToOne: false
+            referencedRelation: "outbound_integrations_safe"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "synced_campaigns_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      synced_contacts: {
+        Row: {
+          added_at: string | null
+          campaign_id: string
+          city: string | null
+          company: string | null
+          company_size: string | null
+          country: string | null
+          created_at: string
+          custom_fields: Json | null
+          email: string
+          engagement_data: Json | null
+          external_contact_id: string | null
+          first_name: string | null
+          id: string
+          industry: string | null
+          job_title: string | null
+          last_name: string | null
+          linkedin_url: string | null
+          phone: string | null
+          raw_data: Json | null
+          state: string | null
+          status: string | null
+          team_id: string
+          updated_at: string
+        }
+        Insert: {
+          added_at?: string | null
+          campaign_id: string
+          city?: string | null
+          company?: string | null
+          company_size?: string | null
+          country?: string | null
+          created_at?: string
+          custom_fields?: Json | null
+          email: string
+          engagement_data?: Json | null
+          external_contact_id?: string | null
+          first_name?: string | null
+          id?: string
+          industry?: string | null
+          job_title?: string | null
+          last_name?: string | null
+          linkedin_url?: string | null
+          phone?: string | null
+          raw_data?: Json | null
+          state?: string | null
+          status?: string | null
+          team_id: string
+          updated_at?: string
+        }
+        Update: {
+          added_at?: string | null
+          campaign_id?: string
+          city?: string | null
+          company?: string | null
+          company_size?: string | null
+          country?: string | null
+          created_at?: string
+          custom_fields?: Json | null
+          email?: string
+          engagement_data?: Json | null
+          external_contact_id?: string | null
+          first_name?: string | null
+          id?: string
+          industry?: string | null
+          job_title?: string | null
+          last_name?: string | null
+          linkedin_url?: string | null
+          phone?: string | null
+          raw_data?: Json | null
+          state?: string | null
+          status?: string | null
+          team_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "synced_contacts_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "synced_campaigns"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "synced_contacts_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      synced_sequences: {
+        Row: {
+          body_html: string | null
+          body_text: string | null
+          campaign_id: string
+          created_at: string
+          delay_days: number | null
+          external_sequence_id: string | null
+          id: string
+          raw_data: Json | null
+          stats: Json | null
+          step_number: number
+          step_type: string | null
+          subject: string | null
+          team_id: string
+          updated_at: string
+        }
+        Insert: {
+          body_html?: string | null
+          body_text?: string | null
+          campaign_id: string
+          created_at?: string
+          delay_days?: number | null
+          external_sequence_id?: string | null
+          id?: string
+          raw_data?: Json | null
+          stats?: Json | null
+          step_number: number
+          step_type?: string | null
+          subject?: string | null
+          team_id: string
+          updated_at?: string
+        }
+        Update: {
+          body_html?: string | null
+          body_text?: string | null
+          campaign_id?: string
+          created_at?: string
+          delay_days?: number | null
+          external_sequence_id?: string | null
+          id?: string
+          raw_data?: Json | null
+          stats?: Json | null
+          step_number?: number
+          step_type?: string | null
+          subject?: string | null
+          team_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "synced_sequences_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "synced_campaigns"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "synced_sequences_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      team_memberships: {
+        Row: {
+          created_at: string
+          id: string
+          role: Database["public"]["Enums"]["user_role"]
+          team_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          role?: Database["public"]["Enums"]["user_role"]
+          team_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          role?: Database["public"]["Enums"]["user_role"]
+          team_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "team_memberships_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "team_memberships_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      teams: {
+        Row: {
+          created_at: string
+          id: string
+          name: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          name: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          name?: string
+        }
+        Relationships: []
+      }
+      unlock_events: {
+        Row: {
+          audience_id: string | null
+          cost: number
+          created_at: string
+          entity_external_id: string
+          entity_type: Database["public"]["Enums"]["entity_type"]
+          id: string
+          payload: Json
+          user_id: string
+        }
+        Insert: {
+          audience_id?: string | null
+          cost: number
+          created_at?: string
+          entity_external_id: string
+          entity_type: Database["public"]["Enums"]["entity_type"]
+          id?: string
+          payload?: Json
+          user_id: string
+        }
+        Update: {
+          audience_id?: string | null
+          cost?: number
+          created_at?: string
+          entity_external_id?: string
+          entity_type?: Database["public"]["Enums"]["entity_type"]
+          id?: string
+          payload?: Json
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "unlock_events_audience_id_fkey"
+            columns: ["audience_id"]
+            isOneToOne: false
+            referencedRelation: "audiences"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "unlock_events_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      unlocked_records: {
+        Row: {
+          entity_data: Json
+          entity_external_id: string
+          entity_type: Database["public"]["Enums"]["entity_type"]
+          id: string
+          team_id: string
+          unlocked_at: string | null
+          user_id: string
+        }
+        Insert: {
+          entity_data: Json
+          entity_external_id: string
+          entity_type: Database["public"]["Enums"]["entity_type"]
+          id?: string
+          team_id: string
+          unlocked_at?: string | null
+          user_id: string
+        }
+        Update: {
+          entity_data?: Json
+          entity_external_id?: string
+          entity_type?: Database["public"]["Enums"]["entity_type"]
+          id?: string
+          team_id?: string
+          unlocked_at?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      user_credits: {
+        Row: {
+          ai_credits_reset_at: string | null
+          ai_credits_total: number
+          ai_credits_used: number
+          billing_interval: string | null
+          created_at: string | null
+          current_period_end: string | null
+          enterprise_daily_exports: number
+          enterprise_daily_reset_at: string | null
+          export_credits_reset_at: string | null
+          export_credits_total: number
+          export_credits_used: number
+          id: string
+          plan: string
+          stripe_customer_id: string | null
+          stripe_subscription_id: string | null
+          subscription_status: string | null
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          ai_credits_reset_at?: string | null
+          ai_credits_total?: number
+          ai_credits_used?: number
+          billing_interval?: string | null
+          created_at?: string | null
+          current_period_end?: string | null
+          enterprise_daily_exports?: number
+          enterprise_daily_reset_at?: string | null
+          export_credits_reset_at?: string | null
+          export_credits_total?: number
+          export_credits_used?: number
+          id?: string
+          plan?: string
+          stripe_customer_id?: string | null
+          stripe_subscription_id?: string | null
+          subscription_status?: string | null
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          ai_credits_reset_at?: string | null
+          ai_credits_total?: number
+          ai_credits_used?: number
+          billing_interval?: string | null
+          created_at?: string | null
+          current_period_end?: string | null
+          enterprise_daily_exports?: number
+          enterprise_daily_reset_at?: string | null
+          export_credits_reset_at?: string | null
+          export_credits_total?: number
+          export_credits_used?: number
+          id?: string
+          plan?: string
+          stripe_customer_id?: string | null
+          stripe_subscription_id?: string | null
+          subscription_status?: string | null
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      user_roles: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          id: string
+          role: Database["public"]["Enums"]["app_role"]
+          team_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          role?: Database["public"]["Enums"]["app_role"]
+          team_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          role?: Database["public"]["Enums"]["app_role"]
+          team_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_roles_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      webhook_events: {
+        Row: {
+          campaign_external_id: string | null
+          contact_email: string | null
+          created_at: string
+          event_data: Json | null
+          event_type: string
+          id: string
+          integration_id: string
+          team_id: string
+        }
+        Insert: {
+          campaign_external_id?: string | null
+          contact_email?: string | null
+          created_at?: string
+          event_data?: Json | null
+          event_type: string
+          id?: string
+          integration_id: string
+          team_id: string
+        }
+        Update: {
+          campaign_external_id?: string | null
+          contact_email?: string | null
+          created_at?: string
+          event_data?: Json | null
+          event_type?: string
+          id?: string
+          integration_id?: string
+          team_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "webhook_events_integration_id_fkey"
+            columns: ["integration_id"]
+            isOneToOne: false
+            referencedRelation: "outbound_integrations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "webhook_events_integration_id_fkey"
+            columns: ["integration_id"]
+            isOneToOne: false
+            referencedRelation: "outbound_integrations_safe"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      webhooks: {
+        Row: {
+          created_at: string
+          event_types: string[]
+          id: string
+          is_active: boolean
+          secret: string
+          team_id: string
+          url: string
+        }
+        Insert: {
+          created_at?: string
+          event_types?: string[]
+          id?: string
+          is_active?: boolean
+          secret: string
+          team_id: string
+          url: string
+        }
+        Update: {
+          created_at?: string
+          event_types?: string[]
+          id?: string
+          is_active?: boolean
+          secret?: string
+          team_id?: string
+          url?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "webhooks_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+    }
+    Views: {
+      external_projects_safe: {
+        Row: {
+          api_endpoint: string | null
+          created_at: string | null
+          id: string | null
+          is_active: boolean | null
+          name: string | null
+          team_id: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          api_endpoint?: string | null
+          created_at?: string | null
+          id?: string | null
+          is_active?: boolean | null
+          name?: string | null
+          team_id?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          api_endpoint?: string | null
+          created_at?: string | null
+          id?: string | null
+          is_active?: boolean | null
+          name?: string | null
+          team_id?: string | null
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
+      mv_filter_suggestions: {
+        Row: {
+          industries: Json | null
+          interests: Json | null
+          skills: Json | null
+          technologies: Json | null
+        }
+        Relationships: []
+      }
+      outbound_integrations_safe: {
+        Row: {
+          created_at: string | null
+          created_by: string | null
+          id: string | null
+          is_active: boolean | null
+          last_synced_at: string | null
+          links_initialized: boolean | null
+          name: string | null
+          platform: string | null
+          reply_team_id: string | null
+          sync_error: string | null
+          sync_status: string | null
+          team_id: string | null
+          updated_at: string | null
+          webhook_status: string | null
+          webhook_subscription_id: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          created_by?: string | null
+          id?: string | null
+          is_active?: boolean | null
+          last_synced_at?: string | null
+          links_initialized?: boolean | null
+          name?: string | null
+          platform?: string | null
+          reply_team_id?: string | null
+          sync_error?: string | null
+          sync_status?: string | null
+          team_id?: string | null
+          updated_at?: string | null
+          webhook_status?: string | null
+          webhook_subscription_id?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          created_by?: string | null
+          id?: string | null
+          is_active?: boolean | null
+          last_synced_at?: string | null
+          links_initialized?: boolean | null
+          name?: string | null
+          platform?: string | null
+          reply_team_id?: string | null
+          sync_error?: string | null
+          sync_status?: string | null
+          team_id?: string | null
+          updated_at?: string | null
+          webhook_status?: string | null
+          webhook_subscription_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "outbound_integrations_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+    }
+    Functions: {
+      batch_normalize_company_size: { Args: never; Returns: number }
+      deduct_credits: {
+        Args: { p_amount: number; p_user_id: string }
+        Returns: Json
+      }
+      get_all_profiles_admin: {
+        Args: never
+        Returns: {
+          created_at: string
+          credits: number
+          id: string
+          is_admin: boolean
+          name: string
+          plan: string
+          subscription_status: string
+          subscription_tier: string
+        }[]
+      }
+      get_campaign_leaderboard: {
+        Args: { p_limit?: number }
+        Returns: {
+          completion_rate: number
+          contacts: number
+          messages_sent: number
+          rank: number
+          replies: number
+          reply_rate: number
+        }[]
+      }
+      get_filter_counts: {
+        Args: { p_field: string; p_limit?: number; p_search?: string }
+        Returns: {
+          count: number
+          value: string
+        }[]
+      }
+      get_filter_options: {
+        Args: { p_field: string; p_limit?: number }
+        Returns: {
+          count: number
+          value: string
+        }[]
+      }
+      get_filter_suggestions: { Args: never; Returns: Json }
+      get_user_team_id: { Args: { _user_id: string }; Returns: string }
+      has_active_subscription: { Args: { user_uuid: string }; Returns: boolean }
+      has_role: {
+        Args: {
+          _role: Database["public"]["Enums"]["app_role"]
+          _team_id: string
+          _user_id: string
+        }
+        Returns: boolean
+      }
+      is_global_admin: { Args: { _user_id: string }; Returns: boolean }
+      log_audit_event: {
+        Args: {
+          _action: string
+          _entity_count?: number
+          _entity_type?: string
+          _metadata?: Json
+        }
+        Returns: string
+      }
+      normalize_country: { Args: { country_input: string }; Returns: string }
+      parse_employee_count_upper: {
+        Args: { size_str: string }
+        Returns: number
+      }
+      parse_revenue_to_numeric: {
+        Args: { revenue_str: string }
+        Returns: number
+      }
+      refresh_filter_counts: { Args: never; Returns: undefined }
+      refresh_filter_suggestions: { Args: never; Returns: undefined }
+      reset_daily_credits_if_needed: {
+        Args: { p_user_id: string }
+        Returns: undefined
+      }
+      reset_monthly_credits: { Args: never; Returns: undefined }
+      search_free_data_builder: {
+        Args: {
+          p_cities?: string[]
+          p_company_revenue?: string[]
+          p_company_size_ranges?: string[]
+          p_countries?: string[]
+          p_departments?: string[]
+          p_entity_type?: Database["public"]["Enums"]["entity_type"]
+          p_exclude_cities?: string[]
+          p_exclude_countries?: string[]
+          p_exclude_industries?: string[]
+          p_exclude_job_titles?: string[]
+          p_exclude_keywords?: string[]
+          p_exclude_person_interests?: string[]
+          p_exclude_person_skills?: string[]
+          p_exclude_technologies?: string[]
+          p_gender?: string[]
+          p_has_business_email?: boolean
+          p_has_company_facebook?: boolean
+          p_has_company_linkedin?: boolean
+          p_has_company_phone?: boolean
+          p_has_company_twitter?: boolean
+          p_has_email?: boolean
+          p_has_facebook?: boolean
+          p_has_linkedin?: boolean
+          p_has_personal_email?: boolean
+          p_has_phone?: boolean
+          p_has_twitter?: boolean
+          p_income?: string[]
+          p_industries?: string[]
+          p_job_titles?: string[]
+          p_keywords?: string[]
+          p_limit?: number
+          p_net_worth?: string[]
+          p_offset?: number
+          p_person_interests?: string[]
+          p_person_skills?: string[]
+          p_seniority_levels?: string[]
+          p_technologies?: string[]
+        }
+        Returns: {
+          entity_data: Json
+          entity_external_id: string
+          total_count: number
+        }[]
+      }
+      search_free_data_count: {
+        Args: {
+          p_cities?: string[]
+          p_company_revenue?: string[]
+          p_company_size_ranges?: string[]
+          p_countries?: string[]
+          p_departments?: string[]
+          p_entity_type?: Database["public"]["Enums"]["entity_type"]
+          p_exclude_cities?: string[]
+          p_exclude_countries?: string[]
+          p_exclude_industries?: string[]
+          p_exclude_job_titles?: string[]
+          p_exclude_keywords?: string[]
+          p_exclude_person_interests?: string[]
+          p_exclude_person_skills?: string[]
+          p_exclude_technologies?: string[]
+          p_gender?: string[]
+          p_has_business_email?: boolean
+          p_has_company_facebook?: boolean
+          p_has_company_linkedin?: boolean
+          p_has_company_phone?: boolean
+          p_has_company_twitter?: boolean
+          p_has_email?: boolean
+          p_has_facebook?: boolean
+          p_has_linkedin?: boolean
+          p_has_personal_email?: boolean
+          p_has_phone?: boolean
+          p_has_twitter?: boolean
+          p_income?: string[]
+          p_industries?: string[]
+          p_job_titles?: string[]
+          p_keywords?: string[]
+          p_net_worth?: string[]
+          p_person_interests?: string[]
+          p_person_skills?: string[]
+          p_seniority_levels?: string[]
+          p_technologies?: string[]
+        }
+        Returns: {
+          is_estimate: boolean
+          total_count: number
+        }[]
+      }
+      search_free_data_results: {
+        Args: {
+          p_cities?: string[]
+          p_company_revenue?: string[]
+          p_company_size_ranges?: string[]
+          p_countries?: string[]
+          p_departments?: string[]
+          p_entity_type?: Database["public"]["Enums"]["entity_type"]
+          p_exclude_cities?: string[]
+          p_exclude_countries?: string[]
+          p_exclude_industries?: string[]
+          p_exclude_job_titles?: string[]
+          p_exclude_keywords?: string[]
+          p_exclude_person_interests?: string[]
+          p_exclude_person_skills?: string[]
+          p_exclude_technologies?: string[]
+          p_gender?: string[]
+          p_has_business_email?: boolean
+          p_has_company_facebook?: boolean
+          p_has_company_linkedin?: boolean
+          p_has_company_phone?: boolean
+          p_has_company_twitter?: boolean
+          p_has_email?: boolean
+          p_has_facebook?: boolean
+          p_has_linkedin?: boolean
+          p_has_personal_email?: boolean
+          p_has_phone?: boolean
+          p_has_twitter?: boolean
+          p_income?: string[]
+          p_industries?: string[]
+          p_job_titles?: string[]
+          p_keywords?: string[]
+          p_limit?: number
+          p_net_worth?: string[]
+          p_offset?: number
+          p_person_interests?: string[]
+          p_person_skills?: string[]
+          p_seniority_levels?: string[]
+          p_technologies?: string[]
+        }
+        Returns: {
+          entity_data: Json
+          entity_external_id: string
+        }[]
+      }
+      search_prospects_count: {
+        Args: {
+          p_added_on_days_ago?: number
+          p_age_max?: number
+          p_age_min?: number
+          p_children?: string[]
+          p_cities?: string[]
+          p_company_names?: string[]
+          p_company_revenue?: string[]
+          p_company_size_ranges?: string[]
+          p_countries?: string[]
+          p_departments?: string[]
+          p_education?: string[]
+          p_exclude_cities?: string[]
+          p_exclude_countries?: string[]
+          p_exclude_industries?: string[]
+          p_exclude_job_titles?: string[]
+          p_exclude_keywords?: string[]
+          p_exclude_person_interests?: string[]
+          p_exclude_person_skills?: string[]
+          p_exclude_technologies?: string[]
+          p_gender?: string[]
+          p_has_business_email?: boolean
+          p_has_company_facebook?: boolean
+          p_has_company_linkedin?: boolean
+          p_has_company_phone?: boolean
+          p_has_company_twitter?: boolean
+          p_has_facebook?: boolean
+          p_has_linkedin?: boolean
+          p_has_personal_email?: boolean
+          p_has_phone?: boolean
+          p_has_twitter?: boolean
+          p_homeowner?: boolean
+          p_income?: string[]
+          p_industries?: string[]
+          p_job_titles?: string[]
+          p_keywords?: string[]
+          p_married?: boolean
+          p_net_worth?: string[]
+          p_person_interests?: string[]
+          p_person_skills?: string[]
+          p_seniority_levels?: string[]
+          p_technologies?: string[]
+          p_zip_code?: string
+        }
+        Returns: {
+          is_estimate: boolean
+          total_count: number
+        }[]
+      }
+      search_prospects_results: {
+        Args: {
+          p_added_on_days_ago?: number
+          p_age_max?: number
+          p_age_min?: number
+          p_children?: string[]
+          p_cities?: string[]
+          p_company_names?: string[]
+          p_company_revenue?: string[]
+          p_company_size_ranges?: string[]
+          p_countries?: string[]
+          p_departments?: string[]
+          p_education?: string[]
+          p_exclude_cities?: string[]
+          p_exclude_countries?: string[]
+          p_exclude_industries?: string[]
+          p_exclude_job_titles?: string[]
+          p_exclude_keywords?: string[]
+          p_exclude_person_interests?: string[]
+          p_exclude_person_skills?: string[]
+          p_exclude_technologies?: string[]
+          p_gender?: string[]
+          p_has_business_email?: boolean
+          p_has_company_facebook?: boolean
+          p_has_company_linkedin?: boolean
+          p_has_company_phone?: boolean
+          p_has_company_twitter?: boolean
+          p_has_facebook?: boolean
+          p_has_linkedin?: boolean
+          p_has_personal_email?: boolean
+          p_has_phone?: boolean
+          p_has_twitter?: boolean
+          p_homeowner?: boolean
+          p_income?: string[]
+          p_industries?: string[]
+          p_job_titles?: string[]
+          p_keywords?: string[]
+          p_limit?: number
+          p_married?: boolean
+          p_net_worth?: string[]
+          p_offset?: number
+          p_person_interests?: string[]
+          p_person_skills?: string[]
+          p_seniority_levels?: string[]
+          p_technologies?: string[]
+          p_zip_code?: string
+        }
+        Returns: {
+          address: string | null
+          age_range: string | null
+          business_email: string | null
+          children: string | null
+          city: string | null
+          company_address: string | null
+          company_city: string | null
+          company_country: string | null
+          company_description: string | null
+          company_domain: string | null
+          company_facebook_url: string | null
+          company_industry: string | null
+          company_linkedin: string | null
+          company_naics: string | null
+          company_name: string | null
+          company_phone: string | null
+          company_revenue: string | null
+          company_sic: string | null
+          company_size: string | null
+          company_size_range: string | null
+          company_state: string | null
+          company_twitter_url: string | null
+          company_zip: string | null
+          country: string | null
+          created_at: string | null
+          department: string | null
+          education_history: string | null
+          facebook_url: string | null
+          first_name: string | null
+          full_name: string | null
+          gender: string | null
+          homeowner: string | null
+          id: string
+          income_range: string | null
+          interests: string | null
+          job_title: string | null
+          keywords: string | null
+          last_name: string | null
+          latest_funding: string | null
+          linkedin_url: string | null
+          married: string | null
+          net_worth: string | null
+          personal_email: string | null
+          phone: string | null
+          seniority: string | null
+          skills: string | null
+          source: string
+          source_uuid: string | null
+          state: string | null
+          subsidiary_of: string | null
+          technologies: string | null
+          total_funding: string | null
+          twitter_url: string | null
+          zip_code: string | null
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "prospects"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
+      show_limit: { Args: never; Returns: number }
+      show_trgm: { Args: { "": string }; Returns: string[] }
+      title_matches_seniority:
+        | {
+            Args: {
+              p_seniority: string[]
+              p_seniority_field: string
+              p_title: string
+            }
+            Returns: boolean
+          }
+        | {
+            Args: {
+              p_seniority: string[]
+              p_seniority_field?: string
+              p_title: string
+            }
+            Returns: boolean
+          }
+      update_credits_for_testing: {
+        Args: { p_new_credits: number; p_user_id: string }
+        Returns: undefined
+      }
+    }
+    Enums: {
+      app_role: "admin" | "member"
+      entity_type: "person" | "company"
+      export_format: "csv" | "json"
+      export_status: "pending" | "running" | "done" | "failed"
+      suppression_type: "email" | "domain" | "company_id" | "person_id"
+      user_role: "admin" | "member"
+    }
+    CompositeTypes: {
+      [_ in never]: never
+    }
+  }
+}
+
+type DatabaseWithoutInternals = Omit<Database, "__InternalSupabase">
+
+type DefaultSchema = DatabaseWithoutInternals[Extract<keyof Database, "public">]
+
+export type Tables<
+  DefaultSchemaTableNameOrOptions extends
+    | keyof (DefaultSchema["Tables"] & DefaultSchema["Views"])
+    | { schema: keyof DatabaseWithoutInternals },
+  TableName extends DefaultSchemaTableNameOrOptions extends {
+    schema: keyof DatabaseWithoutInternals
+  }
+    ? keyof (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
+        DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])
+    : never = never,
+> = DefaultSchemaTableNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals
+}
+  ? (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
+      DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])[TableName] extends {
+      Row: infer R
+    }
+    ? R
+    : never
+  : DefaultSchemaTableNameOrOptions extends keyof (DefaultSchema["Tables"] &
+        DefaultSchema["Views"])
+    ? (DefaultSchema["Tables"] &
+        DefaultSchema["Views"])[DefaultSchemaTableNameOrOptions] extends {
+        Row: infer R
+      }
+      ? R
+      : never
+    : never
+
+export type TablesInsert<
+  DefaultSchemaTableNameOrOptions extends
+    | keyof DefaultSchema["Tables"]
+    | { schema: keyof DatabaseWithoutInternals },
+  TableName extends DefaultSchemaTableNameOrOptions extends {
+    schema: keyof DatabaseWithoutInternals
+  }
+    ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
+    : never = never,
+> = DefaultSchemaTableNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals
+}
+  ? DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"][TableName] extends {
+      Insert: infer I
+    }
+    ? I
+    : never
+  : DefaultSchemaTableNameOrOptions extends keyof DefaultSchema["Tables"]
+    ? DefaultSchema["Tables"][DefaultSchemaTableNameOrOptions] extends {
+        Insert: infer I
+      }
+      ? I
+      : never
+    : never
+
+export type TablesUpdate<
+  DefaultSchemaTableNameOrOptions extends
+    | keyof DefaultSchema["Tables"]
+    | { schema: keyof DatabaseWithoutInternals },
+  TableName extends DefaultSchemaTableNameOrOptions extends {
+    schema: keyof DatabaseWithoutInternals
+  }
+    ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
+    : never = never,
+> = DefaultSchemaTableNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals
+}
+  ? DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"][TableName] extends {
+      Update: infer U
+    }
+    ? U
+    : never
+  : DefaultSchemaTableNameOrOptions extends keyof DefaultSchema["Tables"]
+    ? DefaultSchema["Tables"][DefaultSchemaTableNameOrOptions] extends {
+        Update: infer U
+      }
+      ? U
+      : never
+    : never
+
+export type Enums<
+  DefaultSchemaEnumNameOrOptions extends
+    | keyof DefaultSchema["Enums"]
+    | { schema: keyof DatabaseWithoutInternals },
+  EnumName extends DefaultSchemaEnumNameOrOptions extends {
+    schema: keyof DatabaseWithoutInternals
+  }
+    ? keyof DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"]
+    : never = never,
+> = DefaultSchemaEnumNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals
+}
+  ? DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"][EnumName]
+  : DefaultSchemaEnumNameOrOptions extends keyof DefaultSchema["Enums"]
+    ? DefaultSchema["Enums"][DefaultSchemaEnumNameOrOptions]
+    : never
+
+export type CompositeTypes<
+  PublicCompositeTypeNameOrOptions extends
+    | keyof DefaultSchema["CompositeTypes"]
+    | { schema: keyof DatabaseWithoutInternals },
+  CompositeTypeName extends PublicCompositeTypeNameOrOptions extends {
+    schema: keyof DatabaseWithoutInternals
+  }
+    ? keyof DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"]
+    : never = never,
+> = PublicCompositeTypeNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals
+}
+  ? DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"][CompositeTypeName]
+  : PublicCompositeTypeNameOrOptions extends keyof DefaultSchema["CompositeTypes"]
+    ? DefaultSchema["CompositeTypes"][PublicCompositeTypeNameOrOptions]
+    : never
+
+export const Constants = {
+  public: {
+    Enums: {
+      app_role: ["admin", "member"],
+      entity_type: ["person", "company"],
+      export_format: ["csv", "json"],
+      export_status: ["pending", "running", "done", "failed"],
+      suppression_type: ["email", "domain", "company_id", "person_id"],
+      user_role: ["admin", "member"],
+    },
+  },
+} as const

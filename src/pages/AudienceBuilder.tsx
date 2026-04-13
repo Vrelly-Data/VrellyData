@@ -102,6 +102,55 @@ export default function AudienceBuilder() {
   const { isEstimate, setIsEstimate } = useAudienceStore();
 
   const handleSearch = async (filterState: FilterBuilderState) => {
+    // Check if the only active filters are "has_" type (prospectData) filters
+    const hasNonProspectFilter =
+      filterState.jobTitles.length > 0 ||
+      filterState.seniority.length > 0 ||
+      filterState.industries.length > 0 ||
+      filterState.cities.length > 0 ||
+      filterState.personCity.length > 0 ||
+      filterState.personCountry.length > 0 ||
+      filterState.companyCity.length > 0 ||
+      filterState.companyCountry.length > 0 ||
+      filterState.keywords.length > 0 ||
+      filterState.companySize.length > 0 ||
+      filterState.companyRevenue.length > 0 ||
+      filterState.department.length > 0 ||
+      filterState.gender !== null ||
+      filterState.netWorth.length > 0 ||
+      filterState.income.length > 0 ||
+      filterState.personInterests.length > 0 ||
+      filterState.personSkills.length > 0 ||
+      filterState.technologies.length > 0 ||
+      filterState.excludeKeywords.length > 0 ||
+      filterState.excludeJobTitles.length > 0 ||
+      filterState.excludePersonCity.length > 0 ||
+      filterState.excludePersonCountry.length > 0 ||
+      filterState.excludePersonInterests.length > 0 ||
+      filterState.excludePersonSkills.length > 0 ||
+      filterState.excludeIndustries.length > 0 ||
+      filterState.excludeTechnologies.length > 0 ||
+      filterState.excludeCompanyCity.length > 0 ||
+      filterState.excludeCompanyCountry.length > 0 ||
+      filterState.zipCode !== null ||
+      filterState.children !== null ||
+      filterState.homeowner !== null ||
+      filterState.married !== null ||
+      filterState.education.length > 0 ||
+      filterState.ageMin !== null ||
+      filterState.ageMax !== null ||
+      filterState.company.length > 0 ||
+      filterState.addedOnDaysAgo !== null;
+
+    if (filterState.prospectData.length > 0 && !hasNonProspectFilter) {
+      toast({
+        title: 'More filters needed',
+        description: 'Add at least one filter (job title, industry, location, etc.) to search by contact data type.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
     setLoading(true);
     setHasSearched(true);
     setSelectedRecords(new Set()); // Clear selection on new search

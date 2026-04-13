@@ -1,17 +1,26 @@
 import { Coins } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import { useAuthStore } from '@/stores/authStore';
-import { SUBSCRIPTION_TIERS } from '@/config/subscriptionTiers';
+import { useCredits } from '@/hooks/useCredits';
 
 export function CreditDisplay() {
-  const { profile, profileLoading } = useAuthStore();
-  
-  const credits = profile?.credits ?? 0;
-  const tier = (profile?.subscription_tier || 'starter') as keyof typeof SUBSCRIPTION_TIERS;
-  const tierConfig = SUBSCRIPTION_TIERS[tier] || SUBSCRIPTION_TIERS.starter;
-  const maxCredits = tierConfig.credits;
-  const percentRemaining = maxCredits > 0 ? (credits / maxCredits) * 100 : 0;
+  const { data: credits, isLoading } = useCredits();
+
+  const isEnterprise = credits?.plan === 'enterprise';
+
+  const remainingCredits = credits
+    ? isEnterprise
+      ? 100000 - (credits.enterprise_daily_exports ?? 0)
+      : (credits.export_credits_total ?? 0) - (credits.export_credits_used ?? 0)
+    : 0;
+
+  const maxCredits = credits
+    ? isEnterprise
+      ? 100000
+      : (credits.export_credits_total ?? 0)
+    : 0;
+
+  const percentRemaining = maxCredits > 0 ? (remainingCredits / maxCredits) * 100 : 0;
 
   const colorClass = cn(
     'transition-colors',
@@ -20,7 +29,7 @@ export function CreditDisplay() {
     'text-red-600'
   );
 
-  if (profileLoading) {
+  if (isLoading) {
     return (
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
         <Coins className="h-4 w-4 animate-pulse" />
@@ -36,7 +45,7 @@ export function CreditDisplay() {
           <div className="flex items-center gap-2 text-sm cursor-help">
             <Coins className={cn('h-4 w-4', colorClass)} />
             <span className={cn('font-semibold', colorClass)}>
-              {credits.toLocaleString()} credits
+              {isEnterprise ? 'Unlimited' : remainingCredits.toLocaleString()} credits
             </span>
           </div>
         </TooltipTrigger>
@@ -44,10 +53,12 @@ export function CreditDisplay() {
           <div className="space-y-1">
             <p className="font-medium">Credits Remaining</p>
             <p className="text-sm text-muted-foreground">
-              {credits.toLocaleString()} of {maxCredits.toLocaleString()} credits
+              {isEnterprise
+                ? 'Unlimited (enterprise)'
+                : `${remainingCredits.toLocaleString()} of ${maxCredits.toLocaleString()} credits`}
             </p>
             <p className="text-xs text-muted-foreground capitalize">
-              {tier} plan
+              {credits?.plan ?? 'starter'} plan
             </p>
           </div>
         </TooltipContent>

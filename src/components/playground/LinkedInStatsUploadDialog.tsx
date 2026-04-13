@@ -29,7 +29,7 @@ import {
 } from '@/components/ui/select';
 import { Upload, FileSpreadsheet, Check, Plus, Loader2, Linkedin } from 'lucide-react';
 import { useSyncedCampaigns, findMatchingCampaign } from '@/hooks/useSyncedCampaigns';
-import { useLinkedInStatsUpload, LinkedInStatsRow } from '@/hooks/useLinkedInStatsUpload';
+import { useLinkedInStatsUpload, LinkedInStatsRow, LinkedInRepliedContact } from '@/hooks/useLinkedInStatsUpload';
 
 interface LinkedInStatsUploadDialogProps {
   open: boolean;
@@ -47,32 +47,38 @@ const LI_REPLIES_ALIASES = ['li replies', 'linkedin replies', 'replies', 'linked
 // Column aliases for action-based format
 const ACTION_COLUMN_ALIASES = ['action', 'activity', 'step', 'action type'];
 
-// Person identifier aliases for deduplication
+// Person identifier aliases for deduplication (Contact Id preferred)
 const PERSON_IDENTIFIER_ALIASES = [
+  'contact id', 'contactid', 'contact_id',
   'email', 'contact email', 'person email', 'recipient email',
   'contact', 'person', 'recipient', 'name', 'contact name'
 ];
+
+// Column aliases for extracting replied contact details
+const CONTACT_ID_COL_ALIASES = ['contact id', 'contactid', 'contact_id'];
+const CONTACT_FIRST_NAME_COL_ALIASES = ['contact first name', 'first name', 'firstname'];
+const CONTACT_LAST_NAME_COL_ALIASES = ['contact last name', 'last name', 'lastname'];
+const CONTACT_EMAIL_COL_ALIASES = ['contact email', 'email', 'e-mail'];
+const CONTACT_LINKEDIN_COL_ALIASES = ['contact linkedin url', 'linkedin url', 'contact linkedin'];
+const ACTION_DATE_COL_ALIASES = ['action date', 'date', 'activity date'];
 
 // Action value to metric mapping
 type LinkedInMetric = 'linkedinMessagesSent' | 'linkedinConnectionsSent' | 'linkedinReplies' | 'linkedinConnectionsAccepted';
 
 const ACTION_MAPPINGS: Record<string, LinkedInMetric> = {
-  // Replies
-  'replied auto connection note': 'linkedinReplies',
-  'replied auto connection': 'linkedinReplies',
+  // Replies — only actual message replies from prospects
   'replied auto message': 'linkedinReplies',
   'replied message': 'linkedinReplies',
-  
+
   // Connection Acceptances
   'accepted auto connection': 'linkedinConnectionsAccepted',
   'accepted connection': 'linkedinConnectionsAccepted',
-  
-  // Connection Requests Sent
-  'sent auto connection note': 'linkedinConnectionsSent',
+
+  // Connection Requests Sent (NOT "sent auto connection note" — that's a note on the request, not a separate connection)
   'sent auto connection': 'linkedinConnectionsSent',
   'sent connection request': 'linkedinConnectionsSent',
-  
-  // Messages Sent
+
+  // Messages Sent (NOT "sent auto connection note" — that's a connection note, not a message)
   'sent auto message': 'linkedinMessagesSent',
   'sent message': 'linkedinMessagesSent',
 };
@@ -115,9 +121,9 @@ function getMetricForAction(action: string): LinkedInMetric | null {
   }
   
   // Partial matching fallback for variations
-  if (normalized.includes('replied') && normalized.includes('connection')) {
-    return 'linkedinReplies';
-  }
+  // "note" actions are connection request notes, not separate metrics
+  if (normalized.includes('note')) return null;
+
   if (normalized.includes('replied') && normalized.includes('message')) {
     return 'linkedinReplies';
   }
@@ -174,6 +180,7 @@ export function LinkedInStatsUploadDialog({ open, onOpenChange }: LinkedInStatsU
   const [error, setError] = useState<string | null>(null);
   const [detectedActions, setDetectedActions] = useState<string[]>([]);
   const [unrecognizedActions, setUnrecognizedActions] = useState<string[]>([]);
+  const [repliedContacts, setRepliedContacts] = useState<LinkedInRepliedContact[]>([]);
 
   // Fetch ALL campaigns (not just linked) for better matching during CSV upload
   const { data: campaigns = [] } = useSyncedCampaigns(false);
@@ -186,6 +193,7 @@ export function LinkedInStatsUploadDialog({ open, onOpenChange }: LinkedInStatsU
     setMode('replace');
     setDetectedActions([]);
     setUnrecognizedActions([]);
+    setRepliedContacts([]);
   }, []);
 
   const handleOpenChange = useCallback((newOpen: boolean) => {
@@ -226,6 +234,17 @@ export function LinkedInStatsUploadDialog({ open, onOpenChange }: LinkedInStatsU
           
           // Find person identifier column for deduplication
           const personCol = findMatchingColumn(headers, PERSON_IDENTIFIER_ALIASES);
+
+          // Detect contact detail columns for replied contacts extraction
+          const contactIdCol = findMatchingColumn(headers, CONTACT_ID_COL_ALIASES);
+          const contactFirstNameCol = findMatchingColumn(headers, CONTACT_FIRST_NAME_COL_ALIASES);
+          const contactLastNameCol = findMatchingColumn(headers, CONTACT_LAST_NAME_COL_ALIASES);
+          const contactEmailCol = findMatchingColumn(headers, CONTACT_EMAIL_COL_ALIASES);
+          const contactLinkedinCol = findMatchingColumn(headers, CONTACT_LINKEDIN_COL_ALIASES);
+          const actionDateCol = findMatchingColumn(headers, ACTION_DATE_COL_ALIASES);
+
+          const collectedRepliedContacts: LinkedInRepliedContact[] = [];
+          const seenRepliedContactIds = new Set<string>();
           let rowIndex = 0;
 
           for (const row of results.data as Record<string, unknown>[]) {
@@ -252,6 +271,23 @@ export function LinkedInStatsUploadDialog({ open, onOpenChange }: LinkedInStatsU
               // Add to Set - automatically deduplicates by person
               existing[metric].add(personId);
               campaignTracking.set(campaignName, existing);
+
+              // Collect replied contacts for agent_leads extraction
+              if (metric === 'linkedinReplies') {
+                const cId = contactIdCol ? String(row[contactIdCol] || '').trim() : personId;
+                if (cId && !seenRepliedContactIds.has(cId)) {
+                  seenRepliedContactIds.add(cId);
+                  collectedRepliedContacts.push({
+                    contactId: cId,
+                    firstName: contactFirstNameCol ? String(row[contactFirstNameCol] || '').trim() : '',
+                    lastName: contactLastNameCol ? String(row[contactLastNameCol] || '').trim() : '',
+                    email: contactEmailCol ? String(row[contactEmailCol] || '').trim() : '',
+                    linkedinUrl: contactLinkedinCol ? String(row[contactLinkedinCol] || '').trim() : '',
+                    actionDate: actionDateCol ? String(row[actionDateCol] || '').trim() : '',
+                    sequence: campaignName,
+                  });
+                }
+              }
             } else {
               unrecognizedSet.add(action.toLowerCase());
             }
@@ -259,6 +295,7 @@ export function LinkedInStatsUploadDialog({ open, onOpenChange }: LinkedInStatsU
           
           setDetectedActions(Array.from(detectedSet).sort());
           setUnrecognizedActions(Array.from(unrecognizedSet).sort());
+          setRepliedContacts(collectedRepliedContacts);
 
           // Convert Map to array, using Set sizes for counts
           stats = Array.from(campaignTracking.entries()).map(([campaignName, tracking]) => {
@@ -332,12 +369,12 @@ export function LinkedInStatsUploadDialog({ open, onOpenChange }: LinkedInStatsU
   const handleImport = useCallback(async () => {
     setStep('importing');
     try {
-      await uploadMutation.mutateAsync({ stats: parsedStats, mode });
+      await uploadMutation.mutateAsync({ stats: parsedStats, mode, repliedContacts });
       handleOpenChange(false);
     } catch {
       setStep('preview');
     }
-  }, [parsedStats, mode, uploadMutation, handleOpenChange]);
+  }, [parsedStats, mode, repliedContacts, uploadMutation, handleOpenChange]);
 
   const matchedCount = parsedStats.filter(s => s.matched).length;
   const unmatchedCount = parsedStats.length - matchedCount;

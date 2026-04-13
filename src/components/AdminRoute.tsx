@@ -4,7 +4,7 @@ import { useAuthStore } from '@/stores/authStore';
 import { Loader2 } from 'lucide-react';
 
 export function AdminRoute({ children }: { children: React.ReactNode }) {
-  const { user, loading, isAdmin, userRoles } = useAuthStore();
+  const { user, loading, isPlatformAdmin } = useAuthStore();
   const navigate = useNavigate();
   const [checking, setChecking] = useState(true);
   const [hasAccess, setHasAccess] = useState(false);
@@ -18,18 +18,17 @@ export function AdminRoute({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      // Check if user is admin (without team context for global admin)
-      const adminAccess = isAdmin();
-      setHasAccess(adminAccess);
+      // Check if user is a platform admin (from profiles.is_platform_admin)
+      setHasAccess(isPlatformAdmin);
       setChecking(false);
 
-      if (!adminAccess) {
+      if (!isPlatformAdmin) {
         navigate('/');
       }
     };
 
     checkAccess();
-  }, [user, loading, navigate, isAdmin, userRoles]);
+  }, [user, loading, navigate, isPlatformAdmin]);
 
   if (loading || checking) {
     return (
