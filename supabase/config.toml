@@ -94,6 +94,9 @@ verify_jwt = false
 [functions.poll-reply-inbox]
 verify_jwt = false
 
+[functions.heyreach-webhook]
+verify_jwt = false
+
 [functions.sync-heyreach-campaigns]
 verify_jwt = false
 

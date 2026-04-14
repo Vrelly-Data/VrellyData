@@ -61,9 +61,9 @@ const App = () => (
                 <Route path="/people" element={<ProtectedRoute><SubscriptionGuard><People /></SubscriptionGuard></ProtectedRoute>} />
                 <Route path="/companies" element={<ProtectedRoute><SubscriptionGuard><Companies /></SubscriptionGuard></ProtectedRoute>} />
                 <Route path="/playground" element={<ProtectedRoute><SubscriptionGuard><DataPlayground /></SubscriptionGuard></ProtectedRoute>} />
+                <Route path="/agent" element={<ProtectedRoute><AgentPage /></ProtectedRoute>} />
                 <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
                 <Route path="/billing" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
-                <Route path="/agent" element={<ProtectedRoute><AgentPage /></ProtectedRoute>} />
                 <Route path="/admin" element={<AdminRoute><Admin /></AdminRoute>} />
                 {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
                 <Route path="*" element={<NotFound />} />

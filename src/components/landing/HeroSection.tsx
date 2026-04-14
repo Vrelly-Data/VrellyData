@@ -1,41 +1,8 @@
 import { Button } from '@/components/ui/button';
 import { useNavigate } from 'react-router-dom';
-import { ArrowRight, Sparkles } from 'lucide-react';
-import vrellyLogo from '@/assets/vrelly-logo.png';
-import { useEffect, useState } from 'react';
+import { ArrowRight } from 'lucide-react';
 
-const particles = Array.from({ length: 30 }, (_, i) => ({
-  id: i,
-  left: `${Math.random() * 100}%`,
-  top: `${Math.random() * 100}%`,
-  size: Math.random() * 4 + 2,
-  delay: Math.random() * 5,
-  duration: Math.random() * 3 + 3,
-}));
-
-const AnimatedCounter = ({ target, label }: { target: number; label: string }) => {
-  const [count, setCount] = useState(0);
-  useEffect(() => {
-    let frame: number;
-    const duration = 2000;
-    const start = performance.now();
-    const animate = (now: number) => {
-      const elapsed = now - start;
-      const progress = Math.min(elapsed / duration, 1);
-      setCount(Math.floor(progress * target));
-      if (progress < 1) frame = requestAnimationFrame(animate);
-    };
-    frame = requestAnimationFrame(animate);
-    return () => cancelAnimationFrame(frame);
-  }, [target]);
-  return (
-    <div className="flex items-center gap-2">
-      <div className="w-2 h-2 rounded-full bg-primary animate-pulse-glow" />
-      <span className="font-semibold text-foreground">{count.toLocaleString()}+</span>
-      <span>{label}</span>
-    </div>
-  );
-};
+const logoNames = ['Acme Corp', 'Meridian', 'NovaTech', 'Pipeflow', 'RevenueOS', 'Catalyze'];
 
 export const HeroSection = () => {
   const navigate = useNavigate();
@@ -45,66 +12,43 @@ export const HeroSection = () => {
   };
 
   return (
-    <section className="relative min-h-screen flex items-center justify-center overflow-hidden bg-gradient-to-br from-background via-background to-primary/5">
-      {/* Grid */}
-      <div className="absolute inset-0 bg-[linear-gradient(rgba(59,130,246,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(59,130,246,0.03)_1px,transparent_1px)] bg-[size:64px_64px]" />
+    <section className="relative min-h-screen flex items-center justify-center overflow-hidden bg-gradient-to-b from-[#0f1729] via-[#132044] to-[#1a2d5a]">
+      {/* Subtle grid */}
+      <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.03)_1px,transparent_1px)] bg-[size:64px_64px]" />
       {/* Glowing orbs */}
-      <div className="absolute top-1/4 left-1/4 w-[500px] h-[500px] bg-primary/5 rounded-full blur-3xl animate-pulse pointer-events-none" style={{ animationDuration: '4s' }} />
-      <div className="absolute bottom-1/4 right-1/4 w-[400px] h-[400px] bg-blue-500/5 rounded-full blur-3xl animate-pulse pointer-events-none" style={{ animationDuration: '6s', animationDelay: '2s' }} />
-      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-primary/3 rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute top-1/3 left-1/4 w-[500px] h-[500px] bg-[#2563eb]/10 rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute bottom-1/4 right-1/4 w-[400px] h-[400px] bg-[#2563eb]/8 rounded-full blur-3xl pointer-events-none" />
 
-      {/* Floating particles */}
-      {particles.map((p) => (
-        <div
-          key={p.id}
-          className="absolute rounded-full bg-primary/20 animate-float"
-          style={{
-            left: p.left,
-            top: p.top,
-            width: p.size,
-            height: p.size,
-            animationDelay: `${p.delay}s`,
-            animationDuration: `${p.duration}s`,
-          }}
-        />
-      ))}
-
-      {/* Gradient orbs */}
-      <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-primary/20 rounded-full blur-3xl animate-pulse" />
-      <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-primary/10 rounded-full blur-3xl animate-pulse delay-1000" />
-
-      <div className="relative z-10 max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 text-center pt-20">
-        <div className="flex justify-center mb-0">
-          <img src={vrellyLogo} alt="Vrelly - AI Sales Intelligence" className="h-80 md:h-96 animate-fade-in" />
+      <div className="relative z-10 max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 text-center pt-24 pb-20">
+        {/* Badge */}
+        <div className="inline-flex items-center gap-2 px-5 py-2 rounded-full bg-[#2563eb]/15 border border-[#2563eb]/30 text-[#60a5fa] text-sm font-medium mb-10 opacity-0 animate-fade-up" style={{ animationDelay: '0.1s' }}>
+          <div className="w-2 h-2 rounded-full bg-[#60a5fa] animate-pulse" />
+          AI Sales Agent Platform
         </div>
 
-        <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary/10 border border-primary/20 text-primary text-sm mb-8 animate-fade-up" style={{ animationDelay: '0.2s' }}>
-          <Sparkles className="w-4 h-4" />
-          <span>AI-Powered Sales Intelligence Platform</span>
-        </div>
-
-        <h1 className="text-4xl md:text-6xl lg:text-7xl font-bold tracking-tight mb-6">
-          <span className="inline-block opacity-0 animate-fade-up" style={{ animationDelay: '0.3s' }}>
-            <span className="text-foreground">Your Sales Data.</span>
+        {/* H1 */}
+        <h1 className="text-5xl md:text-6xl lg:text-7xl font-extrabold tracking-tight text-white mb-8 leading-[1.1]">
+          <span className="opacity-0 animate-fade-up inline-block" style={{ animationDelay: '0.2s' }}>
+            Your AI Agent.
           </span>
           <br />
-          <span className="inline-block opacity-0 animate-fade-up" style={{ animationDelay: '0.5s' }}>
-            <span className="bg-gradient-to-r from-primary to-primary/60 bg-clip-text text-transparent">
-              Your Competitive Edge.
-            </span>
+          <span className="opacity-0 animate-fade-up inline-block" style={{ animationDelay: '0.4s' }}>
+            Trained on Your Best Campaigns.
           </span>
         </h1>
 
-        <p className="text-lg md:text-xl text-muted-foreground max-w-3xl mx-auto mb-10 opacity-0 animate-fade-up" style={{ animationDelay: '0.9s' }}>
-          Enriched prospect data at scale. AI-powered sales intelligence from your real campaign data.
-          1-click AI sales agents trained on your performance.
+        {/* Subtitle */}
+        <p className="text-lg md:text-xl text-slate-300 max-w-3xl mx-auto mb-12 leading-relaxed opacity-0 animate-fade-up" style={{ animationDelay: '0.6s' }}>
+          Connect HeyReach or Smartlead. Vrelly learns what's working, handles replies,
+          and books more meetings — powered by your real campaign data.
         </p>
 
-        <div className="flex flex-col sm:flex-row items-center justify-center gap-4 opacity-0 animate-fade-up" style={{ animationDelay: '1.1s' }}>
+        {/* CTAs */}
+        <div className="flex flex-col sm:flex-row items-center justify-center gap-4 opacity-0 animate-fade-up" style={{ animationDelay: '0.8s' }}>
           <Button
             size="lg"
             onClick={() => navigate('/auth?tab=signup')}
-            className="text-base px-8 py-6 bg-primary hover:bg-primary/90 shadow-lg shadow-primary/25"
+            className="text-base px-8 py-6 bg-[#2563eb] hover:bg-[#2563eb]/90 text-white shadow-lg shadow-[#2563eb]/25"
           >
             Get Started
             <ArrowRight className="ml-2 w-5 h-5" />
@@ -112,17 +56,25 @@ export const HeroSection = () => {
           <Button
             size="lg"
             variant="outline"
-            onClick={() => scrollToSection('pricing')}
-            className="text-base px-8 py-6"
+            onClick={() => scrollToSection('how-it-works')}
+            className="text-base px-8 py-6 border-white/20 text-white hover:bg-white/10 hover:border-white/30"
           >
-            View Pricing
+            See How It Works
           </Button>
         </div>
 
-        <div className="mt-16 flex flex-wrap items-center justify-center gap-8 text-sm text-muted-foreground opacity-0 animate-fade-up" style={{ animationDelay: '1.3s' }}>
-          <AnimatedCounter target={100000000} label="prospects" />
-          <AnimatedCounter target={1000000} label="outbound campaigns analyzed" />
-          <AnimatedCounter target={1000} label="sales skills implemented" />
+        {/* Logo bar */}
+        <div className="mt-20 opacity-0 animate-fade-up" style={{ animationDelay: '1s' }}>
+          <p className="text-sm text-slate-500 mb-6 uppercase tracking-widest font-medium">
+            Trusted by B2B sales teams
+          </p>
+          <div className="flex flex-wrap items-center justify-center gap-x-10 gap-y-4">
+            {logoNames.map((name) => (
+              <span key={name} className="text-slate-500/60 text-lg font-semibold tracking-wide">
+                {name}
+              </span>
+            ))}
+          </div>
         </div>
       </div>
     </section>

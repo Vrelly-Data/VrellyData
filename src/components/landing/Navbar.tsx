@@ -15,7 +15,7 @@ export const Navbar = () => {
   };
 
   return (
-    <nav className="fixed top-0 left-0 right-0 z-50 backdrop-blur-xl bg-background/80 border-b border-border/50">
+    <nav className="fixed top-0 left-0 right-0 z-50 backdrop-blur-xl bg-[#0f1729]/90 border-b border-white/10">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16">
           <img
@@ -25,17 +25,17 @@ export const Navbar = () => {
             onClick={() => navigate('/')}
           />
 
-          <div className="hidden md:flex items-center gap-6 text-sm text-muted-foreground">
-            <button onClick={() => scrollToSection('features')} className="hover:text-foreground transition-colors">
+          <div className="hidden md:flex items-center gap-6 text-sm text-slate-300">
+            <button onClick={() => scrollToSection('features')} className="hover:text-white transition-colors">
               Features
             </button>
-            <button onClick={() => scrollToSection('how-it-works')} className="hover:text-foreground transition-colors">
+            <button onClick={() => scrollToSection('how-it-works')} className="hover:text-white transition-colors">
               How It Works
             </button>
-            <button onClick={() => scrollToSection('pricing')} className="hover:text-foreground transition-colors">
+            <button onClick={() => scrollToSection('pricing')} className="hover:text-white transition-colors">
               Pricing
             </button>
-            <button onClick={() => navigate('/comparisons')} className="hover:text-foreground transition-colors">
+            <button onClick={() => navigate('/comparisons')} className="hover:text-white transition-colors">
               Compare
             </button>
           </div>
@@ -44,15 +44,22 @@ export const Navbar = () => {
             <Button
               variant="ghost"
               onClick={() => navigate('/auth')}
-              className="text-sm"
+              className="text-sm text-slate-300 hover:text-white hover:bg-white/10"
             >
               Log In
             </Button>
             <Button
               onClick={() => navigate('/auth?tab=signup')}
-              className="text-sm bg-primary hover:bg-primary/90"
+              className="text-sm bg-[#2563eb] hover:bg-[#2563eb]/90 text-white"
             >
               Get Started
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => scrollToSection('how-it-works')}
+              className="text-sm border-white/20 text-slate-300 hover:text-white hover:bg-white/10 hover:border-white/30"
+            >
+              See Demo
             </Button>
           </div>
         </div>
