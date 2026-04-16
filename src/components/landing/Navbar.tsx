@@ -57,7 +57,7 @@ export const Navbar = () => {
             <Button
               variant="outline"
               onClick={() => scrollToSection('how-it-works')}
-              className="text-sm border-white/20 text-white hover:bg-white/10 hover:border-white/30"
+              className="text-sm border-white/20 bg-transparent !text-white hover:bg-white/10 hover:border-white/30"
             >
               See Demo
             </Button>
