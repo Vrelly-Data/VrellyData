@@ -71,7 +71,7 @@ export const HeroSection = () => {
           <Button
             size="lg"
             onClick={() => navigate('/auth?tab=signup')}
-            className="text-base px-8 py-6 bg-[#2563eb] hover:bg-[#2563eb]/90 text-white shadow-lg shadow-[#2563eb]/25"
+            className="text-base px-8 py-6 bg-[#2563eb] hover:bg-[#2563eb]/90 !text-white shadow-lg shadow-[#2563eb]/25"
           >
             Get Started
             <ArrowRight className="ml-2 w-5 h-5" />
@@ -80,7 +80,7 @@ export const HeroSection = () => {
             size="lg"
             variant="outline"
             onClick={() => scrollToSection('how-it-works')}
-            className="text-base px-8 py-6 border-white/20 text-white hover:bg-white/10 hover:border-white/30"
+            className="text-base px-8 py-6 border-white/20 bg-transparent !text-white hover:bg-white/10 hover:border-white/30"
           >
             See How It Works
           </Button>
@@ -91,12 +91,14 @@ export const HeroSection = () => {
           <p className="text-sm text-slate-500 mb-6 uppercase tracking-widest font-medium">
             Trusted by B2B sales teams
           </p>
-          <div className="flex flex-wrap items-center justify-center gap-x-8 gap-y-4">
-            {logoNames.map((name) => (
-              <span key={name} className="text-slate-500/60 text-lg font-semibold tracking-wide">
-                {name}
-              </span>
-            ))}
+          <div className="overflow-hidden [mask-image:linear-gradient(to_right,transparent,black_10%,black_90%,transparent)]">
+            <div className="flex items-center gap-x-12 animate-scroll-left w-max">
+              {[...logoNames, ...logoNames].map((name, i) => (
+                <span key={`${name}-${i}`} className="text-slate-500/60 text-lg font-semibold tracking-wide shrink-0">
+                  {name}
+                </span>
+              ))}
+            </div>
           </div>
         </div>
       </div>
