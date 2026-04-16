@@ -31,7 +31,7 @@ export const SignUpSection = () => {
             onClick={() => navigate('/auth?tab=signup')}
             className="text-base px-8 py-6 bg-white text-[#2563eb] hover:bg-white/90 font-semibold shadow-lg"
           >
-            Get Started Free
+            Get Started
             <ArrowRight className="ml-2 w-5 h-5" />
           </Button>
           <Button
