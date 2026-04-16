@@ -113,7 +113,7 @@ export const HeroSection = () => {
                   key={`${logo.name}-${i}`}
                   src={logo.src}
                   alt={logo.name}
-                  className="h-8 shrink-0 grayscale opacity-60"
+                  className="h-8 shrink-0 object-contain brightness-0 invert opacity-60"
                 />
               ))}
             </div>
