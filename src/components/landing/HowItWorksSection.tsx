@@ -6,19 +6,19 @@ const steps = [
     number: '01',
     icon: RefreshCw,
     title: 'Connect',
-    description: 'Sync your outbound tools in one click. We capture every campaign, sequence, and result automatically.',
+    description: 'We Set Up your Outbound and Inbound Agent. We sync every campaign, sequence, and result.',
   },
   {
     number: '02',
     icon: BarChart3,
     title: 'Analyze',
-    description: 'Your data is scored, benchmarked against 4M+ prospect records, and cross-referenced with our proprietary sales repository.',
+    description: 'Your data is synced and scored, and benchmarked and cross-referenced against our proprietary sales repository.',
   },
   {
     number: '03',
     icon: Rocket,
     title: 'Act',
-    description: 'Your AI agent handles replies, writes follow-ups, and enrolls leads in campaigns — on autopilot or with your approval.',
+    description: 'Your AI agent handles initial outbound messages, replies, writes follow-ups, on co pilot with your dedicated account manager. Your agent learns from real results.',
   },
 ];
 
