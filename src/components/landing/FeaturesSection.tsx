@@ -4,20 +4,20 @@ import { useScrollAnimation } from '@/hooks/useScrollAnimation';
 const features = [
   {
     icon: Database,
-    title: '4M+ Verified Prospects',
+    title: '100M+ Verified Prospects',
     description: 'Filter by job title, seniority, industry, location, and company size. Export contacts instantly with triple-verified emails and direct dials.',
     link: '/people',
   },
   {
     icon: Sparkles,
-    title: 'AI Copy Builder',
-    description: 'Rewrites your outreach using your top-performing sequences and our sales repository. Not generic templates — copy that sounds like your best rep.',
+    title: 'Data Playground',
+    description: 'Sync your data to get insights into your campaign copy and audience, plus a birds eye view of outbound activity.',
     link: '/playground',
   },
   {
     icon: Bot,
     title: 'AI Sales Agent',
-    description: 'Classifies every reply, drafts the perfect response, and enrolls leads in follow-up campaigns. Co-pilot or full autopilot — your choice.',
+    description: 'Builds your outbound campaigns, adds target prospects, manages responses and follow ups.',
     link: '/agent',
   },
 ];
@@ -30,7 +30,7 @@ export const FeaturesSection = () => {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8" ref={ref}>
         <div className={`text-center mb-20 transition-all duration-700 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'}`}>
           <h2 className="text-4xl md:text-5xl font-extrabold text-slate-900 mb-4">
-            Everything Your Sales Team Needs. Nothing It Doesn't.
+            Everything You Need For Real Leads Right Now
           </h2>
         </div>
 
