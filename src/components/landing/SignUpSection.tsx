@@ -38,7 +38,7 @@ export const SignUpSection = () => {
             size="lg"
             variant="outline"
             onClick={() => scrollToSection('how-it-works')}
-            className="text-base px-8 py-6 border-white/30 text-white hover:bg-white/10 hover:border-white/50"
+            className="text-base px-8 py-6 border-white/30 bg-transparent !text-white hover:bg-white/10 hover:border-white/50"
           >
             See Demo
           </Button>
