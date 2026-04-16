@@ -1,11 +1,27 @@
+import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { useNavigate } from 'react-router-dom';
 import { ArrowRight } from 'lucide-react';
 
-const logoNames = ['Acme Corp', 'Meridian', 'NovaTech', 'Pipeflow', 'RevenueOS', 'Catalyze'];
+const logoNames = ['Luminaries AI', 'Alphascend', 'Axiom', 'Oodles', 'Transform', 'CodeComet', 'Four Rooms', 'Big Brain'];
+
+const rotatingWords = ['Outbound', 'Inbound'];
 
 export const HeroSection = () => {
   const navigate = useNavigate();
+  const [wordIndex, setWordIndex] = useState(0);
+  const [fading, setFading] = useState(false);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setFading(true);
+      setTimeout(() => {
+        setWordIndex((prev) => (prev + 1) % rotatingWords.length);
+        setFading(false);
+      }, 300);
+    }, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   const scrollToSection = (id: string) => {
     document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' });
@@ -29,18 +45,25 @@ export const HeroSection = () => {
         {/* H1 */}
         <h1 className="text-5xl md:text-6xl lg:text-7xl font-extrabold tracking-tight text-white mb-8 leading-[1.1]">
           <span className="opacity-0 animate-fade-up inline-block" style={{ animationDelay: '0.2s' }}>
-            Your AI Agent.
+            Your AI{' '}
+            <span
+              className="inline-block min-w-[280px] md:min-w-[340px] lg:min-w-[400px] transition-opacity duration-300"
+              style={{ opacity: fading ? 0 : 1 }}
+            >
+              {rotatingWords[wordIndex]}
+            </span>{' '}
+            Agent.
           </span>
           <br />
           <span className="opacity-0 animate-fade-up inline-block" style={{ animationDelay: '0.4s' }}>
-            Trained on Your Best Campaigns.
+            Trained on Your Data.
           </span>
         </h1>
 
         {/* Subtitle */}
         <p className="text-lg md:text-xl text-slate-300 max-w-3xl mx-auto mb-12 leading-relaxed opacity-0 animate-fade-up" style={{ animationDelay: '0.6s' }}>
-          Connect HeyReach or Smartlead. Vrelly learns what's working, handles replies,
-          and books more meetings — powered by your real campaign data.
+          Launch your outbound and inbound agent that operates like a human. Vrelly learns
+          what's working, handles replies, and books more meetings — powered by your real campaign data.
         </p>
 
         {/* CTAs */}
@@ -68,7 +91,7 @@ export const HeroSection = () => {
           <p className="text-sm text-slate-500 mb-6 uppercase tracking-widest font-medium">
             Trusted by B2B sales teams
           </p>
-          <div className="flex flex-wrap items-center justify-center gap-x-10 gap-y-4">
+          <div className="flex flex-wrap items-center justify-center gap-x-8 gap-y-4">
             {logoNames.map((name) => (
               <span key={name} className="text-slate-500/60 text-lg font-semibold tracking-wide">
                 {name}
