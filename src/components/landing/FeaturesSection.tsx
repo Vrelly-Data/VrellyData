@@ -6,19 +6,19 @@ const features = [
     icon: Database,
     title: '100M+ Verified Prospects',
     description: 'Filter by job title, seniority, industry, location, and company size. Export contacts instantly with triple-verified emails and direct dials.',
-    link: '/people',
+    link: '/features#prospects',
   },
   {
     icon: Sparkles,
     title: 'Data Playground',
     description: 'Sync your data to get insights into your campaign copy and audience, plus a birds eye view of outbound activity.',
-    link: '/playground',
+    link: '/features#playground',
   },
   {
     icon: Bot,
     title: 'AI Sales Agent',
     description: 'Builds your outbound campaigns, adds target prospects, manages responses and follow ups.',
-    link: '/agent',
+    link: '/features#agent',
   },
 ];
 

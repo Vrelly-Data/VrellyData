@@ -15,6 +15,7 @@ import Landing from "./pages/Landing";
 import Resources from "./pages/Resources";
 import ResourceArticle from "./pages/ResourceArticle";
 import Comparisons from "./pages/Comparisons";
+import Features from "./pages/Features";
 import Index from "./pages/Index";
 import Auth from "./pages/Auth";
 import Agents from "./pages/Agents";
@@ -48,6 +49,7 @@ const App = () => (
                 <Route path="/resources" element={<Resources />} />
                 <Route path="/resources/:slug" element={<ResourceArticle />} />
                 <Route path="/comparisons" element={<Comparisons />} />
+                <Route path="/features" element={<Features />} />
                 <Route path="/agents" element={<Agents />} />
                 <Route path="/terms" element={<Terms />} />
                 <Route path="/privacy" element={<Privacy />} />
