@@ -1,5 +1,6 @@
+import { useState } from 'react';
 import { useScrollAnimation } from '@/hooks/useScrollAnimation';
-import { Quote } from 'lucide-react';
+import { Quote, ChevronLeft, ChevronRight } from 'lucide-react';
 
 const testimonials = [
   {
@@ -21,6 +22,14 @@ const testimonials = [
 
 export const AIAgentsSection = () => {
   const { ref, isVisible } = useScrollAnimation();
+  const [currentIndex, setCurrentIndex] = useState(0);
+
+  const prev = () =>
+    setCurrentIndex((i) => (i - 1 + testimonials.length) % testimonials.length);
+  const next = () =>
+    setCurrentIndex((i) => (i + 1) % testimonials.length);
+
+  const t = testimonials[currentIndex];
 
   return (
     <section ref={ref} className="py-28 bg-white">
@@ -31,24 +40,39 @@ export const AIAgentsSection = () => {
           </h2>
         </div>
 
-        <div className={`overflow-hidden [mask-image:linear-gradient(to_right,transparent,black_5%,black_95%,transparent)] transition-all duration-700 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`} style={{ transitionDelay: '300ms' }}>
-          <div className="flex gap-8 animate-scroll-left w-max">
-            {[...testimonials, ...testimonials].map((t, i) => (
-              <div
-                key={`${t.name}-${i}`}
-                className="shrink-0 w-[400px] bg-[#f8fafc] rounded-2xl p-8 border border-slate-200"
-              >
-                <Quote className="w-8 h-8 text-[#2563eb]/20 mb-4" />
-                <blockquote className="text-base text-slate-700 leading-relaxed font-medium mb-6">
-                  "{t.quote}"
-                </blockquote>
-                <div>
-                  <div className="text-sm font-bold text-slate-900">{t.name}</div>
-                  <div className="text-sm text-slate-500">{t.title}</div>
-                </div>
-              </div>
-            ))}
+        <div
+          className={`relative max-w-3xl mx-auto transition-all duration-700 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`}
+          style={{ transitionDelay: '300ms' }}
+        >
+          <button
+            onClick={prev}
+            aria-label="Previous testimonial"
+            className="absolute left-2 md:-left-16 top-1/2 -translate-y-1/2 w-12 h-12 rounded-full bg-white border border-slate-200 hover:border-slate-300 flex items-center justify-center text-slate-600 hover:text-slate-900 shadow-sm transition-colors z-10"
+          >
+            <ChevronLeft className="w-5 h-5" />
+          </button>
+
+          <div
+            key={currentIndex}
+            className="bg-[#f8fafc] rounded-2xl p-8 md:p-12 border border-slate-200 animate-fade-in"
+          >
+            <Quote className="w-10 h-10 text-[#2563eb]/20 mb-4" />
+            <blockquote className="text-lg md:text-xl text-slate-700 leading-relaxed font-medium mb-6">
+              "{t.quote}"
+            </blockquote>
+            <div>
+              <div className="text-base font-bold text-slate-900">{t.name}</div>
+              <div className="text-sm text-slate-500">{t.title}</div>
+            </div>
           </div>
+
+          <button
+            onClick={next}
+            aria-label="Next testimonial"
+            className="absolute right-2 md:-right-16 top-1/2 -translate-y-1/2 w-12 h-12 rounded-full bg-white border border-slate-200 hover:border-slate-300 flex items-center justify-center text-slate-600 hover:text-slate-900 shadow-sm transition-colors z-10"
+          >
+            <ChevronRight className="w-5 h-5" />
+          </button>
         </div>
       </div>
     </section>
