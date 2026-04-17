@@ -21,10 +21,6 @@ export const HeroSection = () => {
     return () => clearInterval(interval);
   }, []);
 
-  const scrollToSection = (id: string) => {
-    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' });
-  };
-
   return (
     <section className="relative min-h-screen flex items-center justify-center overflow-hidden bg-gradient-to-b from-[#0f1729] via-[#132044] to-[#1a2d5a]">
       {/* Subtle grid */}
@@ -77,7 +73,7 @@ export const HeroSection = () => {
           <Button
             size="lg"
             variant="outline"
-            onClick={() => scrollToSection('how-it-works')}
+            onClick={() => navigate('/demo')}
             className="text-base px-8 py-6 border-white/20 bg-transparent !text-white hover:bg-white/10 hover:border-white/30"
           >
             See How It Works

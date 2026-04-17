@@ -7,10 +7,6 @@ export const SignUpSection = () => {
   const navigate = useNavigate();
   const { ref, isVisible } = useScrollAnimation();
 
-  const scrollToSection = (id: string) => {
-    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' });
-  };
-
   return (
     <section ref={ref} className="py-24 bg-[#2563eb] relative overflow-hidden">
       {/* Subtle pattern */}
@@ -37,7 +33,7 @@ export const SignUpSection = () => {
           <Button
             size="lg"
             variant="outline"
-            onClick={() => scrollToSection('how-it-works')}
+            onClick={() => navigate('/demo')}
             className="text-base px-8 py-6 border-white/30 bg-transparent !text-white hover:bg-white/10 hover:border-white/50"
           >
             See Demo
