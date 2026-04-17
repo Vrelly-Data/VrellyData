@@ -104,10 +104,7 @@ export const HeroSection = () => {
       </div>
 
       {/* Logo bar — full-width, outside max-w-5xl container */}
-      <div className="absolute bottom-20 left-0 right-0 z-10 opacity-0 animate-fade-up" style={{ animationDelay: '1s' }}>
-        <p className="text-sm text-slate-500 mb-6 uppercase tracking-widest font-medium text-center">
-          Trusted by B2B sales teams
-        </p>
+      <div className="absolute bottom-8 left-0 right-0 z-10 opacity-0 animate-fade-up" style={{ animationDelay: '1s' }}>
         <div className="overflow-hidden [mask-image:linear-gradient(to_right,transparent,black_5%,black_95%,transparent)]">
           <div className="flex items-center gap-x-16 animate-scroll-left-debug w-max">
             {[...logos, ...logos, ...logos].map((logo, i) => (
@@ -115,7 +112,7 @@ export const HeroSection = () => {
                 key={`${logo.name}-${i}`}
                 src={logo.src}
                 alt={logo.name}
-                className="h-48 shrink-0 object-contain brightness-125"
+                className="h-64 shrink-0 object-contain brightness-125"
               />
             ))}
           </div>
