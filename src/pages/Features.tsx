@@ -20,6 +20,8 @@ const pillars = [
       'Filter across 20+ firmographic and role attributes',
       'Continuously refreshed, never stale',
     ],
+    screenshot: '/screenshots/audience-builder.png',
+    screenshotAlt: 'Audience Builder Interface',
   },
   {
     id: 'playground',
@@ -34,6 +36,8 @@ const pillars = [
       'Campaign-level attribution across channels',
       'One-click exports for your team',
     ],
+    screenshot: '/screenshots/data-playground.png',
+    screenshotAlt: 'Data Playground Interface',
   },
   {
     id: 'agent',
@@ -48,6 +52,8 @@ const pillars = [
       'Learns from your closed-won history to prioritize prospects',
       'Full activity log — you always know what the agent did and why',
     ],
+    screenshot: '/screenshots/agent-overview.png',
+    screenshotAlt: 'Agent Overview Interface',
   },
 ];
 
@@ -141,12 +147,12 @@ const Features = () => {
                 </ul>
               </div>
 
-              {/* Visual placeholder — product screenshot goes here next iteration */}
-              <div className="relative aspect-[4/3] rounded-2xl bg-gradient-to-br from-slate-100 to-slate-200 border border-slate-200 flex items-center justify-center overflow-hidden">
-                <pillar.icon className="w-32 h-32 text-[#2563eb]/20" />
-                <div className="absolute bottom-4 right-4 text-xs text-slate-400 uppercase tracking-widest">
-                  Preview
-                </div>
+              <div className="relative overflow-hidden rounded-2xl shadow-xl hover:shadow-2xl transition-all duration-300 hover:scale-[1.02]">
+                <img
+                  src={pillar.screenshot}
+                  alt={pillar.screenshotAlt}
+                  className="w-full h-auto"
+                />
               </div>
             </div>
           </div>
