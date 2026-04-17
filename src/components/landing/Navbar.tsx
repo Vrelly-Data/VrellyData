@@ -49,15 +49,8 @@ export const Navbar = () => {
               Log In
             </Button>
             <Button
-              onClick={() => navigate('/auth?tab=signup')}
-              className="text-sm bg-[#2563eb] hover:bg-[#2563eb]/90 text-white"
-            >
-              Get Started
-            </Button>
-            <Button
-              variant="outline"
               onClick={() => navigate('/demo')}
-              className="text-sm border-white/20 bg-transparent !text-white hover:bg-white/10 hover:border-white/30"
+              className="text-sm bg-[#2563eb] hover:bg-[#2563eb]/90 text-white"
             >
               See Demo
             </Button>
