@@ -93,12 +93,12 @@ export const HeroSection = () => {
             Trusted by B2B Sales Teams
           </p>
           <div className="flex justify-center items-center gap-16 px-8">
-            <img src="/logos/codecomet.png" alt="CodeComet" className="h-24 object-contain opacity-70" />
-            <img src="/logos/axiom.png" alt="Axiom" className="h-24 object-contain opacity-70" />
-            <img src="/logos/pestshare.png" alt="PestShare" className="h-24 object-contain opacity-70" />
-            <img src="/logos/alphascend.png" alt="Alphascend" className="h-24 object-contain opacity-70" />
-            <img src="/logos/avania.png" alt="Avania" className="h-24 object-contain opacity-70" />
-            <img src="/logos/big-brain.png" alt="Big Brain" className="h-24 object-contain opacity-70" />
+            <img src="/logos/codecomet.png" alt="CodeComet" className="h-32 object-contain opacity-70" />
+            <img src="/logos/axiom.png" alt="Axiom" className="h-32 object-contain opacity-70" />
+            <img src="/logos/pestshare.png" alt="PestShare" className="h-32 object-contain opacity-70" />
+            <img src="/logos/alphascend.png" alt="Alphascend" className="h-32 object-contain opacity-70" />
+            <img src="/logos/avania.png" alt="Avania" className="h-32 object-contain opacity-70" />
+            <img src="/logos/big-brain.png" alt="Big Brain" className="h-32 object-contain opacity-70" />
           </div>
         </div>
       </div>
