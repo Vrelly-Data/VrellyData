@@ -3,23 +3,6 @@ import { Button } from '@/components/ui/button';
 import { useNavigate } from 'react-router-dom';
 import { ArrowRight } from 'lucide-react';
 
-const logos = [
-  { name: 'CodeComet', src: '/logos/codecomet.png' },
-  { name: 'Four Rooms', src: '/logos/four-rooms.png' },
-  { name: 'Oodles', src: '/logos/oodles.png' },
-  { name: 'Big Brain', src: '/logos/big-brain.png' },
-  { name: 'Axiom', src: '/logos/axiom.png' },
-  { name: 'Alphascend', src: '/logos/alphascend.png' },
-  { name: 'Transform', src: '/logos/transform.png' },
-  { name: 'Avania', src: '/logos/avania.png' },
-  { name: 'SourceCo', src: '/logos/sourceco.png' },
-  { name: 'TopTalentHQ', src: '/logos/toptalenthq.png' },
-  { name: 'FiiT', src: '/logos/fiit.png' },
-  { name: 'Chex.AI', src: '/logos/chex-ai.png' },
-  { name: 'QuoteWerks', src: '/logos/quotewerks.png' },
-  { name: 'PestShare', src: '/logos/pestshare.png' },
-];
-
 const rotatingWords = ['Outbound', 'Inbound'];
 
 export const HeroSection = () => {
@@ -103,19 +86,17 @@ export const HeroSection = () => {
 
       </div>
 
-      {/* Proven infinite logo scroll */}
+      {/* Static logos - hardcoded, no complications */}
       <div className="absolute bottom-12 left-0 right-0 z-10 opacity-0 animate-fade-up" style={{ animationDelay: '1s' }}>
-        <div className="logos">
-          <div className="logos-slide">
-            {logos.map((logo) => (
-              <img
-                key={logo.name}
-                src={logo.src}
-                alt={logo.name}
-                className="h-64"
-              />
-            ))}
-          </div>
+        <div className="flex justify-center items-center gap-8 flex-wrap px-8">
+          <img src="/logos/codecomet.png" alt="CodeComet" className="h-16 object-contain opacity-70" />
+          <img src="/logos/four-rooms.png" alt="Four Rooms" className="h-16 object-contain opacity-70" />
+          <img src="/logos/oodles.png" alt="Oodles" className="h-16 object-contain opacity-70" />
+          <img src="/logos/big-brain.png" alt="Big Brain" className="h-16 object-contain opacity-70" />
+          <img src="/logos/axiom.png" alt="Axiom" className="h-16 object-contain opacity-70" />
+          <img src="/logos/alphascend.png" alt="Alphascend" className="h-16 object-contain opacity-70" />
+          <img src="/logos/transform.png" alt="Transform" className="h-16 object-contain opacity-70" />
+          <img src="/logos/avania.png" alt="Avania" className="h-16 object-contain opacity-70" />
         </div>
       </div>
     </section>
