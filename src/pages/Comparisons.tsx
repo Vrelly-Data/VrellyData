@@ -142,6 +142,10 @@ const Comparisons = () => {
   const { ref: ctaRef, isVisible: ctaVisible } = useScrollAnimation(0.1);
   const { ref: blogRef, isVisible: blogVisible } = useScrollAnimation(0.1);
 
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, []);
+
   // Cycle through data provider competitors only when on the "data" tab
   useEffect(() => {
     if (tab !== 'data') return;
@@ -225,7 +229,7 @@ const Comparisons = () => {
                 : 'text-muted-foreground hover:text-foreground'
             }`}
           >
-            Copy AI
+            AI
           </button>
         </div>
       </div>
