@@ -108,13 +108,9 @@ export default {
           "0%": { transform: "translateX(0)" },
           "100%": { transform: "translateX(-50%)" },
         },
-        "scroll-left-third": {
-          "0%": { transform: "translateX(0)" },
-          "100%": { transform: "translateX(-33.3333%)" },
-        },
-        "scroll-left-quarter": {
-          "0%": { transform: "translateX(0)" },
-          "100%": { transform: "translateX(-25%)" },
+        "scroll": {
+          "0%": { transform: "translateX(0%)" },
+          "100%": { transform: "translateX(-50%)" },
         },
       },
       animation: {
@@ -129,8 +125,7 @@ export default {
         "pulse-glow": "pulse-glow 2s ease-in-out infinite",
         "line-grow": "line-grow 1s ease-out forwards",
         "scroll-left": "scroll-left 25s linear infinite",
-        "scroll-left-slow": "scroll-left 40s linear infinite",
-        "scroll-left-debug": "scroll-left-quarter 60s linear infinite",
+        "scroll": "scroll 30s linear infinite",
       },
     },
   },

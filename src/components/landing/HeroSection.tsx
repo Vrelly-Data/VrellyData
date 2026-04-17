@@ -103,11 +103,11 @@ export const HeroSection = () => {
 
       </div>
 
-      {/* Logo bar — full-width, outside max-w-5xl container */}
+      {/* Logo bar — simplified */}
       <div className="absolute bottom-4 left-0 right-0 z-10 opacity-0 animate-fade-up" style={{ animationDelay: '1s' }}>
-        <div className="overflow-hidden [mask-image:linear-gradient(to_right,transparent,black_1%,black_99%,transparent)]">
-          <div className="flex items-center gap-x-8 animate-scroll-left-debug w-max">
-            {[...logos, ...logos, ...logos, ...logos].map((logo, i) => (
+        <div className="overflow-hidden">
+          <div className="flex items-center gap-x-8 animate-scroll w-max">
+            {[...logos, ...logos].map((logo, i) => (
               <img
                 key={`${logo.name}-${i}`}
                 src={logo.src}
