@@ -115,7 +115,7 @@ export const HeroSection = () => {
                 key={`${logo.name}-${i}`}
                 src={logo.src}
                 alt={logo.name}
-                className="h-24 shrink-0 object-contain brightness-125"
+                className="h-32 shrink-0 object-contain brightness-125"
               />
             ))}
           </div>
