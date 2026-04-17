@@ -121,6 +121,7 @@ export default {
         "pulse-glow": "pulse-glow 2s ease-in-out infinite",
         "line-grow": "line-grow 1s ease-out forwards",
         "scroll-left": "scroll-left 25s linear infinite",
+        "scroll-left-slow": "scroll-left 40s linear infinite",
       },
     },
   },

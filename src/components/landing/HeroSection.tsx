@@ -107,13 +107,13 @@ export const HeroSection = () => {
             Trusted by B2B sales teams
           </p>
           <div className="overflow-hidden [mask-image:linear-gradient(to_right,transparent,black_10%,black_90%,transparent)]">
-            <div className="flex items-center gap-x-12 animate-scroll-left w-max">
+            <div className="flex items-center gap-x-20 animate-scroll-left-slow w-max">
               {[...logos, ...logos].map((logo, i) => (
                 <img
                   key={`${logo.name}-${i}`}
                   src={logo.src}
                   alt={logo.name}
-                  className="h-8 shrink-0 object-contain brightness-0 invert opacity-60"
+                  className="h-8 shrink-0 object-contain mix-blend-screen opacity-70"
                 />
               ))}
             </div>
