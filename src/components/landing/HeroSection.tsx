@@ -107,14 +107,18 @@ export const HeroSection = () => {
             Trusted by B2B sales teams
           </p>
           <div className="overflow-hidden [mask-image:linear-gradient(to_right,transparent,black_10%,black_90%,transparent)]">
-            <div className="flex items-center gap-x-20 animate-scroll-left-slow w-max">
+            <div className="flex items-center gap-x-10 animate-scroll-left-slow w-max">
               {[...logos, ...logos].map((logo, i) => (
-                <img
+                <div
                   key={`${logo.name}-${i}`}
-                  src={logo.src}
-                  alt={logo.name}
-                  className="h-8 shrink-0 object-contain mix-blend-screen opacity-70"
-                />
+                  className="shrink-0 flex items-center justify-center rounded-lg bg-white/10 px-5 py-2"
+                >
+                  <img
+                    src={logo.src}
+                    alt={logo.name}
+                    className="h-7 object-contain"
+                  />
+                </div>
               ))}
             </div>
           </div>
