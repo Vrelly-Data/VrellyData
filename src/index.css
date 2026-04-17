@@ -106,12 +106,29 @@ All colors MUST be HSL.
     background-size: 200% 200%;
     animation: gradient-shift 3s ease infinite;
   }
-  .animate-scroll-css {
-    animation: scroll-css 30s linear infinite;
-  }
 }
 
-@keyframes scroll-css {
-  0% { transform: translateX(0); }
-  100% { transform: translateX(-50%); }
+.logos {
+  overflow: hidden;
+  white-space: nowrap;
+  position: relative;
+}
+
+.logos-slide {
+  display: inline-block;
+  animation: 35s slide infinite linear;
+}
+
+.logos-slide img {
+  height: 256px;
+  margin: 0 40px;
+}
+
+@keyframes slide {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(-100%);
+  }
 }
