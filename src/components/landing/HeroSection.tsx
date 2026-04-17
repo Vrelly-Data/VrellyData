@@ -111,16 +111,12 @@ export const HeroSection = () => {
         <div className="overflow-hidden [mask-image:linear-gradient(to_right,transparent,black_5%,black_95%,transparent)] border border-red-500/40">
           <div className="flex items-center gap-x-10 animate-scroll-left-debug w-max bg-yellow-500/5">
             {[...logos, ...logos, ...logos].map((logo, i) => (
-              <div
+              <img
                 key={`${logo.name}-${i}`}
-                className="shrink-0 flex items-center justify-center rounded-lg bg-white/10 px-5 py-2"
-              >
-                <img
-                  src={logo.src}
-                  alt={logo.name}
-                  className="h-7 object-contain"
-                />
-              </div>
+                src={logo.src}
+                alt={logo.name}
+                className="h-16 shrink-0 object-contain brightness-125"
+              />
             ))}
           </div>
         </div>
