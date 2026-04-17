@@ -108,6 +108,10 @@ export default {
           "0%": { transform: "translateX(0)" },
           "100%": { transform: "translateX(-50%)" },
         },
+        "scroll-left-third": {
+          "0%": { transform: "translateX(0)" },
+          "100%": { transform: "translateX(-33.3333%)" },
+        },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
@@ -122,6 +126,7 @@ export default {
         "line-grow": "line-grow 1s ease-out forwards",
         "scroll-left": "scroll-left 25s linear infinite",
         "scroll-left-slow": "scroll-left 40s linear infinite",
+        "scroll-left-debug": "scroll-left-third 80s linear infinite",
       },
     },
   },

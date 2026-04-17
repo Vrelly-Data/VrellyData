@@ -108,9 +108,9 @@ export const HeroSection = () => {
         <p className="text-sm text-slate-500 mb-6 uppercase tracking-widest font-medium text-center">
           Trusted by B2B sales teams
         </p>
-        <div className="overflow-hidden [mask-image:linear-gradient(to_right,transparent,black_5%,black_95%,transparent)]">
-          <div className="flex items-center gap-x-10 animate-scroll-left-slow w-max">
-            {[...logos, ...logos].map((logo, i) => (
+        <div className="overflow-hidden [mask-image:linear-gradient(to_right,transparent,black_5%,black_95%,transparent)] border border-red-500/40">
+          <div className="flex items-center gap-x-10 animate-scroll-left-debug w-max bg-yellow-500/5">
+            {[...logos, ...logos, ...logos].map((logo, i) => (
               <div
                 key={`${logo.name}-${i}`}
                 className="shrink-0 flex items-center justify-center rounded-lg bg-white/10 px-5 py-2"
