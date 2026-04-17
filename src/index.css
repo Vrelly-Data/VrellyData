@@ -106,4 +106,12 @@ All colors MUST be HSL.
     background-size: 200% 200%;
     animation: gradient-shift 3s ease infinite;
   }
+  .animate-scroll-css {
+    animation: scroll-css 30s linear infinite;
+  }
+}
+
+@keyframes scroll-css {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
 }

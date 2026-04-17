@@ -103,16 +103,16 @@ export const HeroSection = () => {
 
       </div>
 
-      {/* Logo bar — simplified */}
+      {/* Logo bar - pure CSS infinite scroll */}
       <div className="absolute bottom-4 left-0 right-0 z-10 opacity-0 animate-fade-up" style={{ animationDelay: '1s' }}>
-        <div className="overflow-hidden">
-          <div className="flex items-center gap-x-8 animate-scroll w-max">
+        <div className="overflow-hidden whitespace-nowrap">
+          <div className="inline-flex animate-scroll-css">
             {[...logos, ...logos].map((logo, i) => (
               <img
                 key={`${logo.name}-${i}`}
                 src={logo.src}
                 alt={logo.name}
-                className="h-64 shrink-0 object-contain brightness-125"
+                className="h-64 mx-8 flex-shrink-0 object-contain brightness-125"
               />
             ))}
           </div>
