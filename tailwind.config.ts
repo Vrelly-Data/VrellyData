@@ -126,7 +126,7 @@ export default {
         "line-grow": "line-grow 1s ease-out forwards",
         "scroll-left": "scroll-left 25s linear infinite",
         "scroll-left-slow": "scroll-left 40s linear infinite",
-        "scroll-left-debug": "scroll-left-third 80s linear infinite",
+        "scroll-left-debug": "scroll-left-third 120s linear infinite",
       },
     },
   },
