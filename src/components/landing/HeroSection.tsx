@@ -86,23 +86,25 @@ export const HeroSection = () => {
 
       </div>
 
-      {/* Static logos - all 14 hardcoded */}
+      {/* Infinite carousel - 14 logos, 3x size, single line */}
       <div className="absolute bottom-12 left-0 right-0 z-10 opacity-0 animate-fade-up" style={{ animationDelay: '1s' }}>
-        <div className="flex justify-center items-center gap-8 flex-wrap px-8">
-          <img src="/logos/codecomet.png" alt="CodeComet" className="h-16 object-contain opacity-70" />
-          <img src="/logos/four-rooms.png" alt="Four Rooms" className="h-16 object-contain opacity-70" />
-          <img src="/logos/oodles.png" alt="Oodles" className="h-16 object-contain opacity-70" />
-          <img src="/logos/big-brain.png" alt="Big Brain" className="h-16 object-contain opacity-70" />
-          <img src="/logos/axiom.png" alt="Axiom" className="h-16 object-contain opacity-70" />
-          <img src="/logos/alphascend.png" alt="Alphascend" className="h-16 object-contain opacity-70" />
-          <img src="/logos/transform.png" alt="Transform" className="h-16 object-contain opacity-70" />
-          <img src="/logos/avania.png" alt="Avania" className="h-16 object-contain opacity-70" />
-          <img src="/logos/sourceco.png" alt="SourceCo" className="h-16 object-contain opacity-70" />
-          <img src="/logos/toptalenthq.png" alt="TopTalentHQ" className="h-16 object-contain opacity-70" />
-          <img src="/logos/fiit.png" alt="FiiT" className="h-16 object-contain opacity-70" />
-          <img src="/logos/chex-ai.png" alt="ChexAI" className="h-16 object-contain opacity-70" />
-          <img src="/logos/quotewerks.png" alt="QuoteWerks" className="h-16 object-contain opacity-70" />
-          <img src="/logos/pestshare.png" alt="PestShare" className="h-16 object-contain opacity-70" />
+        <div className="overflow-hidden whitespace-nowrap">
+          <div className="inline-flex animate-infinite-logos">
+            <img src="/logos/codecomet.png" alt="CodeComet" className="h-48 mx-12 flex-shrink-0" />
+            <img src="/logos/four-rooms.png" alt="Four Rooms" className="h-48 mx-12 flex-shrink-0" />
+            <img src="/logos/oodles.png" alt="Oodles" className="h-48 mx-12 flex-shrink-0" />
+            <img src="/logos/big-brain.png" alt="Big Brain" className="h-48 mx-12 flex-shrink-0" />
+            <img src="/logos/axiom.png" alt="Axiom" className="h-48 mx-12 flex-shrink-0" />
+            <img src="/logos/alphascend.png" alt="Alphascend" className="h-48 mx-12 flex-shrink-0" />
+            <img src="/logos/transform.png" alt="Transform" className="h-48 mx-12 flex-shrink-0" />
+            <img src="/logos/avania.png" alt="Avania" className="h-48 mx-12 flex-shrink-0" />
+            <img src="/logos/sourceco.png" alt="SourceCo" className="h-48 mx-12 flex-shrink-0" />
+            <img src="/logos/toptalenthq.png" alt="TopTalentHQ" className="h-48 mx-12 flex-shrink-0" />
+            <img src="/logos/fiit.png" alt="FiiT" className="h-48 mx-12 flex-shrink-0" />
+            <img src="/logos/chex-ai.png" alt="ChexAI" className="h-48 mx-12 flex-shrink-0" />
+            <img src="/logos/quotewerks.png" alt="QuoteWerks" className="h-48 mx-12 flex-shrink-0" />
+            <img src="/logos/pestshare.png" alt="PestShare" className="h-48 mx-12 flex-shrink-0" />
+          </div>
         </div>
       </div>
     </section>
