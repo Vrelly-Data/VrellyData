@@ -2,6 +2,7 @@ export const PLANS = [
   {
     id: 'starter' as const,
     name: 'Starter',
+    description: 'For growing teams',
     monthlyPrice: 75,
     annualPrice: 62,        // per month, billed annually ($749/yr)
     annualTotal: 749,
@@ -17,6 +18,7 @@ export const PLANS = [
   {
     id: 'professional' as const,
     name: 'Professional',
+    description: 'For scaling businesses',
     monthlyPrice: 150,
     annualPrice: 125,
     annualTotal: 1499,
@@ -34,6 +36,7 @@ export const PLANS = [
   {
     id: 'enterprise' as const,
     name: 'Enterprise',
+    description: 'For large organizations',
     monthlyPrice: 350,
     annualPrice: 292,
     annualTotal: 3499,
@@ -47,5 +50,23 @@ export const PLANS = [
       'Dedicated support',
     ],
     cta: 'Get Started',
+  },
+  {
+    id: 'agent' as const,
+    name: 'Agent',
+    description: 'Fully managed AI outbound agent',
+    monthlyPrice: 2500,
+    annualPrice: 2083,
+    annualTotal: 25000,
+    premium: true,
+    contactSales: true,
+    features: [
+      'Everything from Enterprise Plan',
+      'Full Outbound (Email + LinkedIn) to target audience',
+      'Full Inbound handling (responses + follow ups)',
+      'Dedicated Account Manager',
+      'Weekly Sync with Account Manager',
+    ],
+    cta: 'Talk to Sales',
   },
 ];

@@ -84,33 +84,39 @@ export default function ChoosePlan() {
         </Alert>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-5xl w-full">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 max-w-6xl w-full">
         {PLANS.map((plan) => {
           const price = isAnnual ? plan.annualPrice : plan.monthlyPrice;
           const isPopular = plan.popular;
+          const isPremium = plan.premium;
 
           return (
             <Card
               key={plan.id}
-              className={`relative flex flex-col ${isPopular ? 'border-primary shadow-lg scale-[1.02]' : ''}`}
+              className={`relative flex flex-col ${
+                isPopular ? 'border-primary shadow-lg scale-[1.02]' : ''
+              } ${isPremium ? 'border-2 border-primary shadow-xl' : ''}`}
             >
               {isPopular && (
                 <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-primary text-primary-foreground text-xs font-semibold px-3 py-1 rounded-full">
                   Most Popular
                 </div>
               )}
+              {isPremium && (
+                <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-primary text-primary-foreground text-xs font-semibold px-3 py-1 rounded-full whitespace-nowrap">
+                  Most Popular for Scale
+                </div>
+              )}
               <CardHeader className="text-center">
                 <CardTitle className="text-xl">{plan.name}</CardTitle>
-                <CardDescription>
-                  {plan.id === 'starter' ? 'For growing teams' : plan.id === 'professional' ? 'For scaling businesses' : 'For large organizations'}
-                </CardDescription>
+                <CardDescription>{plan.description}</CardDescription>
                 <div className="mt-4">
-                  <span className="text-4xl font-bold text-foreground">${price}</span>
+                  <span className="text-4xl font-bold text-foreground">${price.toLocaleString()}</span>
                   <span className="text-muted-foreground">/month</span>
                 </div>
                 {isAnnual && (
                   <p className="text-sm text-muted-foreground mt-1">
-                    Billed annually (${plan.annualTotal}/yr)
+                    Billed annually (${plan.annualTotal.toLocaleString()}/yr)
                   </p>
                 )}
               </CardHeader>
@@ -127,9 +133,11 @@ export default function ChoosePlan() {
               <CardFooter>
                 <Button
                   className="w-full"
-                  variant={isPopular ? 'default' : 'outline'}
-                  onClick={() => handleSubscribe(plan.id)}
-                  disabled={loadingPlan !== null}
+                  variant={isPopular || isPremium ? 'default' : 'outline'}
+                  onClick={() =>
+                    plan.contactSales ? navigate('/demo') : handleSubscribe(plan.id)
+                  }
+                  disabled={!plan.contactSales && loadingPlan !== null}
                 >
                   {loadingPlan === plan.id ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
