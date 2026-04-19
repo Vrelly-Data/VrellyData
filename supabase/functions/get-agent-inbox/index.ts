@@ -56,10 +56,13 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => ({}));
     const view = body.view || 'inbox';
 
+    // Optional category filter ('campaign_reply' | 'inbound_lead' | undefined = all)
+    const category: string | null = body.category ?? null;
+
     // Build aggregate counts (used in all views)
     const { data: allLeads } = await supabase
       .from('agent_leads')
-      .select('pipeline_stage, inbox_status, intent, auto_handled')
+      .select('pipeline_stage, inbox_status, intent, auto_handled, lead_category')
       .eq('user_id', authUserId);
 
     const leads = allLeads || [];
@@ -84,10 +87,15 @@ Deno.serve(async (req) => {
         out_of_office: leads.filter((l: any) => l.intent === 'out_of_office').length,
         unknown: leads.filter((l: any) => l.intent === 'unknown' || !l.intent).length,
       },
+      by_category: {
+        campaign_reply: leads.filter((l: any) => l.lead_category === 'campaign_reply').length,
+        inbound_lead: leads.filter((l: any) => l.lead_category === 'inbound_lead').length,
+        uncategorized: leads.filter((l: any) => !l.lead_category).length,
+      },
     };
 
     if (view === 'inbox') {
-      const { data: inboxLeads, error } = await supabase
+      let inboxQuery = supabase
         .from('agent_leads')
         .select('*')
         .eq('user_id', authUserId)
@@ -95,6 +103,15 @@ Deno.serve(async (req) => {
         .order('last_reply_at', { ascending: false })
         .limit(50);
 
+      if (category === 'campaign_reply') {
+        // Include legacy rows (NULL category) in Campaign Replies so pre-migration
+        // data shows up naturally for users.
+        inboxQuery = inboxQuery.or('lead_category.eq.campaign_reply,lead_category.is.null');
+      } else if (category === 'inbound_lead') {
+        inboxQuery = inboxQuery.eq('lead_category', 'inbound_lead');
+      }
+
+      const { data: inboxLeads, error } = await inboxQuery;
       if (error) throw error;
 
       return new Response(JSON.stringify({ leads: inboxLeads, counts }), {

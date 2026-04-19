@@ -2,17 +2,22 @@ import { useState, useCallback } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Loader2, CheckCircle, Linkedin, Mail } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { useAgentInboxData, useClassifyLead, type AgentLead } from '@/hooks/useAgentInbox';
+import {
+  useAgentInboxData,
+  useClassifyLead,
+  type AgentLead,
+  type LeadCategory,
+} from '@/hooks/useAgentInbox';
 import { useAgentConfig } from '@/hooks/useAgent';
 import { LeadDetailPanel, IntentBadge, ChannelBadge, formatRelativeTime } from './LeadDetailPanel';
 
 export function AgentInbox() {
-  const { leads, counts, isLoading } = useAgentInboxData('inbox');
+  const [category, setCategory] = useState<LeadCategory>('campaign_reply');
+  const { leads, counts, isLoading } = useAgentInboxData('inbox', category);
   const { data: agentConfig } = useAgentConfig();
   const classifyLead = useClassifyLead();
   const [selectedLead, setSelectedLead] = useState<AgentLead | null>(null);
   const [classifyingLeadId, setClassifyingLeadId] = useState<string | null>(null);
-  const [tab, setTab] = useState<'attention' | 'auto'>('attention');
 
   const handleSelectLead = useCallback((lead: AgentLead) => {
     setSelectedLead(lead);
@@ -38,9 +43,11 @@ export function AgentInbox() {
     );
   }
 
-  const needsAttention = leads.filter((l) => !l.auto_handled);
-  const autoHandled = leads.filter((l) => l.auto_handled);
-  const displayLeads = tab === 'attention' ? needsAttention : autoHandled;
+  // Campaign Replies tab includes uncategorized (legacy NULL) rows
+  // so historical data shows up naturally here.
+  const campaignReplyCount =
+    (counts.by_category?.campaign_reply ?? 0) + (counts.by_category?.uncategorized ?? 0);
+  const inboundLeadCount = counts.by_category?.inbound_lead ?? 0;
 
   return (
     <div className="flex h-full">
@@ -52,34 +59,34 @@ export function AgentInbox() {
         {/* Tabs */}
         <div className="flex border-b">
           <button
-            onClick={() => setTab('attention')}
+            onClick={() => setCategory('campaign_reply')}
             className={cn(
               'flex-1 px-4 py-3 text-sm font-medium transition-colors',
-              tab === 'attention'
+              category === 'campaign_reply'
                 ? 'border-b-2 border-primary text-primary'
                 : 'text-muted-foreground hover:text-foreground'
             )}
           >
-            Needs Attention
-            {needsAttention.length > 0 && (
+            Campaign Replies
+            {campaignReplyCount > 0 && (
               <Badge variant="secondary" className="ml-2 text-xs">
-                {needsAttention.length}
+                {campaignReplyCount}
               </Badge>
             )}
           </button>
           <button
-            onClick={() => setTab('auto')}
+            onClick={() => setCategory('inbound_lead')}
             className={cn(
               'flex-1 px-4 py-3 text-sm font-medium transition-colors',
-              tab === 'auto'
+              category === 'inbound_lead'
                 ? 'border-b-2 border-primary text-primary'
                 : 'text-muted-foreground hover:text-foreground'
             )}
           >
-            Auto-handled
-            {autoHandled.length > 0 && (
+            Inbound Leads
+            {inboundLeadCount > 0 && (
               <Badge variant="secondary" className="ml-2 text-xs">
-                {autoHandled.length}
+                {inboundLeadCount}
               </Badge>
             )}
           </button>
@@ -87,9 +94,9 @@ export function AgentInbox() {
 
         {/* Lead cards */}
         <div className="flex-1 overflow-auto">
-          {displayLeads.length === 0 ? (
+          {leads.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-64 px-6 text-center">
-              {tab === 'attention' ? (
+              {category === 'campaign_reply' ? (
                 <>
                   <CheckCircle className="h-10 w-10 text-green-500 mb-3" />
                   <p className="font-medium text-foreground">You're all caught up</p>
@@ -99,15 +106,15 @@ export function AgentInbox() {
                 </>
               ) : (
                 <>
-                  <p className="font-medium text-foreground">No auto-handled replies yet</p>
+                  <p className="font-medium text-foreground">No inbound leads yet</p>
                   <p className="text-sm text-muted-foreground mt-1">
-                    Auto-handled replies (out of office, bounces) will show here.
+                    Cold LinkedIn messages not tied to a campaign will show here.
                   </p>
                 </>
               )}
             </div>
           ) : (
-            displayLeads.map((lead) => (
+            leads.map((lead) => (
               <button
                 key={lead.id}
                 onClick={() => handleSelectLead(lead)}

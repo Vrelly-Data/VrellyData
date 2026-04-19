@@ -29,12 +29,19 @@ export interface AgentLead {
   notes: string;
 }
 
+export type LeadCategory = 'campaign_reply' | 'inbound_lead';
+
 export interface AgentCounts {
   total: number;
   by_stage: Record<string, number>;
   needs_attention: number;
   auto_handled: number;
   by_intent: Record<string, number>;
+  by_category?: {
+    campaign_reply: number;
+    inbound_lead: number;
+    uncategorized: number;
+  };
 }
 
 interface AgentInboxResponse {
@@ -42,19 +49,25 @@ interface AgentInboxResponse {
   counts: AgentCounts;
 }
 
-async function fetchAgentInbox(view: 'inbox' | 'pipeline'): Promise<AgentInboxResponse> {
+async function fetchAgentInbox(
+  view: 'inbox' | 'pipeline',
+  category?: LeadCategory,
+): Promise<AgentInboxResponse> {
   const { data, error } = await supabase.functions.invoke('get-agent-inbox', {
-    body: { view },
+    body: { view, ...(category && { category }) },
   });
 
   if (error) throw new Error(`Failed to fetch agent inbox: ${error.message}`);
   return data;
 }
 
-export function useAgentInbox(view: 'inbox' | 'pipeline' = 'inbox') {
+export function useAgentInbox(
+  view: 'inbox' | 'pipeline' = 'inbox',
+  category?: LeadCategory,
+) {
   return useQuery<AgentInboxResponse>({
-    queryKey: ['agent-inbox', view],
-    queryFn: () => fetchAgentInbox(view),
+    queryKey: ['agent-inbox', view, category ?? 'all'],
+    queryFn: () => fetchAgentInbox(view, category),
     refetchInterval: 30000, // Poll every 30 seconds
     staleTime: 0,
     refetchOnWindowFocus: true,
@@ -62,8 +75,11 @@ export function useAgentInbox(view: 'inbox' | 'pipeline' = 'inbox') {
 }
 
 // Convenience accessors
-export function useAgentInboxData(view: 'inbox' | 'pipeline' = 'inbox') {
-  const query = useAgentInbox(view);
+export function useAgentInboxData(
+  view: 'inbox' | 'pipeline' = 'inbox',
+  category?: LeadCategory,
+) {
+  const query = useAgentInbox(view, category);
   return {
     leads: query.data?.leads ?? [],
     counts: query.data?.counts ?? {

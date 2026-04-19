@@ -209,21 +209,34 @@ Deno.serve(async (req) => {
                 console.error(`[poll-heyreach-inbox] Failed to fetch chatroom for ${conversationId}:`, chatroomErr);
               }
 
+              // Build upsert payload. Only tag lead_category on NEW leads:
+              // HeyReach's GetConversationsV2 doesn't expose campaignId per conversation,
+              // so polling can't reliably distinguish campaign replies from inbound.
+              // Defaulting new polled leads to 'campaign_reply' matches the historical
+              // behavior (polling was built for campaign follow-ups). For existing leads,
+              // omitting the field preserves whatever the webhook already set — critical
+              // so a later polling run can't overwrite an 'inbound_lead' tag.
+              const upsertPayload: Record<string, unknown> = {
+                user_id: userId,
+                agent_config_id: agentConfig.id,
+                external_id: externalId,
+                full_name: fullName,
+                linkedin_url: linkedinUrl,
+                last_reply_text: lastMessageText,
+                reply_thread: replyThread.length > 0 ? replyThread : undefined,
+                inbox_status: 'pending',
+                channel: 'linkedin',
+                heyreach_conversation_id: conversationId,
+                heyreach_account_id: linkedInAccountId,
+              };
+
+              if (!existingLead) {
+                upsertPayload.lead_category = 'campaign_reply';
+              }
+
               const { data: upsertedLead, error: upsertError } = await supabase
                 .from('agent_leads')
-                .upsert({
-                  user_id: userId,
-                  agent_config_id: agentConfig.id,
-                  external_id: externalId,
-                  full_name: fullName,
-                  linkedin_url: linkedinUrl,
-                  last_reply_text: lastMessageText,
-                  reply_thread: replyThread.length > 0 ? replyThread : undefined,
-                  inbox_status: 'pending',
-                  channel: 'linkedin',
-                  heyreach_conversation_id: conversationId,
-                  heyreach_account_id: linkedInAccountId,
-                }, {
+                .upsert(upsertPayload, {
                   onConflict: 'user_id,external_id',
                   ignoreDuplicates: false,
                 })

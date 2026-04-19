@@ -79,25 +79,49 @@ Deno.serve(async (req) => {
     // HeyReach webhook event types:
     // EVERY_MESSAGE_REPLY_RECEIVED — a LinkedIn reply came in
     const eventType = event.eventType || event.type || "unknown";
-    console.log(`HeyReach event: ${eventType} for integration ${integrationId}`);
+    const campaignExternalId = event.campaignId?.toString() || null;
+    console.log(`HeyReach event: ${eventType} for integration ${integrationId} (campaignId=${campaignExternalId})`);
 
-    // Log the event
+    // Log the event (every event, before filtering, for debugging)
     await supabase.from("webhook_events").insert({
       integration_id: integrationId,
       team_id: integration.team_id,
       event_type: eventType,
       contact_email: event.lead?.emailAddress || null,
-      campaign_external_id: event.campaignId?.toString() || null,
+      campaign_external_id: campaignExternalId,
       event_data: event,
     });
 
-    // Only process reply events
+    // Filter: only process reply events
     if (eventType !== "EVERY_MESSAGE_REPLY_RECEIVED") {
       console.log(`Ignoring non-reply event: ${eventType}`);
-      return new Response(JSON.stringify({ success: true, skipped: true }), {
+      return new Response(JSON.stringify({ success: true, skipped: "wrong_event_type" }), {
         status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+    }
+
+    // Categorize: campaign reply (matches a synced campaign) vs inbound lead (cold DM).
+    // We capture both — inbound LinkedIn DMs are often high-value — but tag them so the
+    // agent inbox can separate "replies to our outreach" from "cold inbound leads".
+    let leadCategory: "campaign_reply" | "inbound_lead" = "inbound_lead";
+
+    if (campaignExternalId) {
+      const { data: syncedCampaign } = await supabase
+        .from("synced_campaigns")
+        .select("id")
+        .eq("integration_id", integrationId)
+        .eq("external_campaign_id", campaignExternalId)
+        .maybeSingle();
+
+      if (syncedCampaign) {
+        leadCategory = "campaign_reply";
+      } else {
+        console.log(
+          `Campaign ${campaignExternalId} not in synced_campaigns — tagging as inbound_lead. ` +
+          `Run sync-heyreach-campaigns if this should be a known campaign.`,
+        );
+      }
     }
 
     // Extract lead data from HeyReach webhook payload
@@ -138,6 +162,7 @@ Deno.serve(async (req) => {
           last_reply_text: replyText,
           inbox_status: "pending",
           channel: "linkedin",
+          lead_category: leadCategory,
           heyreach_conversation_id: conversationId,
           heyreach_account_id: accountId ? Number(accountId) : null,
           linkedin_url: linkedinUrl,
