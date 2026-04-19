@@ -21,12 +21,32 @@ const logStep = (step: string, details?: any) => {
   console.log(`[CHECK-SUBSCRIPTION] ${step}${detailsStr}`);
 };
 
-// Tier configuration mapping product IDs to tier info
-const TIER_CONFIG: Record<string, { tier: string; credits: number }> = {
-  "prod_TMHGcnFjx5n8DZ": { tier: "starter", credits: 10000 },
-  "prod_TMHHjUdtt2Xbdl": { tier: "professional", credits: 25000 },
-  "prod_TMHItV1NP0yBYU": { tier: "enterprise", credits: 75000 },
+// Credit allocations per plan — mirror stripe-webhook's PLAN_CREDITS.
+// 999999 is the internal "unlimited" flag for enterprise/agent (actual
+// enforcement uses daily caps + monthly AI quota in check-and-use-credits).
+const PLAN_CREDITS: Record<string, number> = {
+  starter:      10000,
+  professional: 25000,
+  enterprise:   999999,
+  agent:        999999,
 };
+
+// Resolve plan from Stripe price ID via env vars (primary source of truth,
+// same mapping the webhook uses). Agent price IDs are hardcoded because Agent
+// is sales-led and not provisioned via env-driven checkout.
+function getPlanFromPriceId(priceId: string): string | null {
+  const map: Record<string, string> = {
+    [Deno.env.get("STRIPE_PRICE_STARTER_MONTHLY")      || ""]: "starter",
+    [Deno.env.get("STRIPE_PRICE_STARTER_ANNUAL")       || ""]: "starter",
+    [Deno.env.get("STRIPE_PRICE_PROFESSIONAL_MONTHLY") || ""]: "professional",
+    [Deno.env.get("STRIPE_PRICE_PROFESSIONAL_ANNUAL")  || ""]: "professional",
+    [Deno.env.get("STRIPE_PRICE_ENTERPRISE_MONTHLY")   || ""]: "enterprise",
+    [Deno.env.get("STRIPE_PRICE_ENTERPRISE_ANNUAL")    || ""]: "enterprise",
+    "price_1TJMK4K2suFUahyvNqIdkFjZ": "agent",
+    "price_1TJMK4K2suFUahyvq3MH04v3": "agent",
+  };
+  return map[priceId] ?? null;
+}
 
 serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
@@ -108,12 +128,13 @@ serve(async (req) => {
       subscriptionEnd = new Date(subscription.current_period_end * 1000).toISOString();
       cancelAtPeriodEnd = subscription.cancel_at_period_end;
       cancelAt = subscription.cancel_at ? new Date(subscription.cancel_at * 1000).toISOString() : null;
-      const productId = subscription.items.data[0].price.product as string;
-      
-      const tierInfo = TIER_CONFIG[productId];
-      if (tierInfo) {
-        tier = tierInfo.tier;
-        credits = tierInfo.credits;
+      const priceId = subscription.items.data[0].price.id;
+      const resolvedPlan = getPlanFromPriceId(priceId);
+      if (resolvedPlan) {
+        tier = resolvedPlan;
+        credits = PLAN_CREDITS[resolvedPlan];
+      } else {
+        logStep("Unrecognized price ID — leaving tier as 'free'", { priceId });
       }
       logStep("Active subscription found", { subscriptionId, tier, credits, endDate: subscriptionEnd, cancelAtPeriodEnd, cancelAt });
 
