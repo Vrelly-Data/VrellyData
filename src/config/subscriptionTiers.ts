@@ -66,11 +66,3 @@ export const ANNUAL_PRICE_IDS = {
   enterprise: 'price_1TJMK4K2suFUahyvESiFTK02',
   agent: 'price_1TJMK4K2suFUahyvq3MH04v3',
 } as const;
-
-// Stripe Product IDs for tier mapping
-export const PRODUCT_IDS = {
-  starter: 'prod_UHwCqq9qzRM8qR',
-  professional: 'prod_UHwCnBo0FKSl54',
-  enterprise: 'prod_UHwCQ4tS4rX9fx',
-  agent: 'prod_UHwCt3x8a3cLlt',
-} as const;

@@ -195,7 +195,13 @@ Deno.serve(async (req) => {
             if (isNewSub || isNewPeriod) {
               // For new subs arriving as 'incomplete', provision credits but keep actual status.
               // checkout.session.completed will set status to 'active'.
-              const effectiveStatus = isActivatable ? 'active' : subscription.status;
+              // Preserve 'active' if it was already set (handles checkout.session.completed
+              // arriving before customer.subscription.created).
+              const effectiveStatus = isActivatable
+                ? 'active'
+                : (existingCredits?.subscription_status === 'active'
+                    ? 'active'
+                    : subscription.status);
               const credits = PLAN_CREDITS[plan] || PLAN_CREDITS.starter;
               const now = new Date();
 
@@ -331,7 +337,7 @@ Deno.serve(async (req) => {
         if (userId) {
           await supabase.from('user_credits').update({
             plan: 'none',
-            subscription_status: 'cancelled',
+            subscription_status: 'canceled',
             export_credits_total: 0,
             ai_credits_total: 0,
           }).eq('user_id', userId);
