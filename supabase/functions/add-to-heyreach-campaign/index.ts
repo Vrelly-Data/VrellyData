@@ -83,6 +83,36 @@ Deno.serve(async (req) => {
 
     const apiKey = integration.api_key_encrypted;
 
+    // Validate campaign_id numeric conversion — synced_campaigns.external_campaign_id
+    // is TEXT, but HeyReach's campaignId must be a positive integer.
+    const campaignIdNum = Number(campaign_id);
+    if (!Number.isFinite(campaignIdNum) || campaignIdNum <= 0) {
+      throw new Error(
+        `Invalid campaign_id: received "${campaign_id}" (Number conversion produced ${campaignIdNum}). ` +
+        `Expected a positive integer string.`,
+      );
+    }
+
+    // Build payload once so we can log it on error.
+    const heyreachPayload = {
+      campaignId: campaignIdNum,
+      accountLeadPairs: [
+        {
+          lead: {
+            firstName,
+            lastName,
+            profileUrl: lead.linkedin_url,
+            emailAddress: lead.email || "",
+            customUserFields: [
+              { name: "message", value: message },
+            ],
+          },
+        },
+      ],
+      resumeFinishedCampaign: false,
+      resumePausedCampaign: true,
+    };
+
     // Add lead to HeyReach campaign
     const heyreachResponse = await fetch(
       "https://api.heyreach.io/api/public/campaign/AddLeadsToCampaignV2",
@@ -92,29 +122,14 @@ Deno.serve(async (req) => {
           "X-API-KEY": apiKey,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          campaignId: Number(campaign_id),
-          accountLeadPairs: [
-            {
-              lead: {
-                firstName,
-                lastName,
-                profileUrl: lead.linkedin_url,
-                emailAddress: lead.email || "",
-                customUserFields: [
-                  { name: "message", value: message },
-                ],
-              },
-            },
-          ],
-          resumeFinishedCampaign: false,
-          resumePausedCampaign: true,
-        }),
+        body: JSON.stringify(heyreachPayload),
       }
     );
 
     if (!heyreachResponse.ok) {
       const errorText = await heyreachResponse.text();
+      console.error("HeyReach API error response:", heyreachResponse.status, errorText);
+      console.error("Request payload sent:", JSON.stringify(heyreachPayload));
       throw new Error(`HeyReach API error (${heyreachResponse.status}): ${errorText}`);
     }
 

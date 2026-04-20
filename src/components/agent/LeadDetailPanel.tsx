@@ -172,11 +172,19 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
     sendMessage.mutate({ lead_id: lead.id, message: draftText.trim() });
   };
 
-  // HeyReach add to campaign — passes the AI draft as the `message` custom field
+  // HeyReach add to campaign — passes the AI draft as the `message` custom field.
+  // Select value is the Supabase UUID (stable PK); we resolve to the HeyReach-native
+  // external_campaign_id at send time since that's what the edge function forwards
+  // as `campaignId` to HeyReach's AddLeadsToCampaignV2.
   const handleAddToCampaign = () => {
-    if (!draftText.trim() || !selectedCampaignId) return;
+    const campaign = heyreachCampaigns.find((c) => c.id === selectedCampaignId);
+    if (!draftText.trim() || !campaign?.external_campaign_id) return;
     addToCampaign.mutate(
-      { lead_id: lead.id, campaign_id: selectedCampaignId, message: draftText.trim() },
+      {
+        lead_id: lead.id,
+        campaign_id: campaign.external_campaign_id,
+        message: draftText.trim(),
+      },
       {
         onSuccess: () => {
           setSelectedCampaignId('');
