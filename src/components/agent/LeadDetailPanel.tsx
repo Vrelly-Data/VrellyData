@@ -284,8 +284,8 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
           </div>
         )}
 
-        {/* Draft response */}
-        {showDraft && lead.inbox_status === 'draft_ready' && (
+        {/* Draft response (email leads only — LinkedIn uses the HeyReach Actions block below) */}
+        {showDraft && !isLinkedIn && lead.inbox_status === 'draft_ready' && (
           <div className="space-y-2 border rounded-lg p-3">
             <div className="flex items-center justify-between">
               <h4 className="text-sm font-medium">Draft Response</h4>
