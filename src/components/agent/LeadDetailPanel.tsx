@@ -98,7 +98,6 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
   const sendMessage = useSendHeyReachMessage();
   const addToCampaign = useAddToHeyReachCampaign();
   const { data: heyreachCampaigns = [], isLoading: campaignsLoading } = useHeyReachCampaigns();
-  const [heyreachDraftText, setHeyreachDraftText] = useState('');
   const [selectedCampaignId, setSelectedCampaignId] = useState('');
 
   // Sync draft text when live data brings in a new draft
@@ -167,23 +166,19 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
     });
   };
 
-  // HeyReach direct message
+  // HeyReach direct message — uses the AI draft as the message
   const handleSendHeyReachMessage = () => {
-    if (!heyreachDraftText.trim()) return;
-    sendMessage.mutate(
-      { lead_id: lead.id, message: heyreachDraftText.trim() },
-      { onSuccess: () => setHeyreachDraftText('') }
-    );
+    if (!draftText.trim()) return;
+    sendMessage.mutate({ lead_id: lead.id, message: draftText.trim() });
   };
 
-  // HeyReach add to campaign
+  // HeyReach add to campaign — passes the AI draft as the `message` custom field
   const handleAddToCampaign = () => {
-    if (!heyreachDraftText.trim() || !selectedCampaignId) return;
+    if (!draftText.trim() || !selectedCampaignId) return;
     addToCampaign.mutate(
-      { lead_id: lead.id, campaign_id: selectedCampaignId, message: heyreachDraftText.trim() },
+      { lead_id: lead.id, campaign_id: selectedCampaignId, message: draftText.trim() },
       {
         onSuccess: () => {
-          setHeyreachDraftText('');
           setSelectedCampaignId('');
         },
       }
@@ -344,15 +339,23 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
           <div className="space-y-4 border rounded-lg p-3">
             <h4 className="text-sm font-medium text-muted-foreground">HeyReach Actions</h4>
             <Textarea
-              value={heyreachDraftText}
-              onChange={(e) => setHeyreachDraftText(e.target.value)}
+              value={draftText}
+              onChange={(e) => setDraftText(e.target.value)}
+              onBlur={() => {
+                if (draftText !== lead.draft_response) {
+                  updateLead.mutate({
+                    leadId: lead.id,
+                    updates: { draft_response: draftText },
+                  });
+                }
+              }}
               placeholder="Write a LinkedIn message..."
               rows={3}
               className="text-sm"
             />
             <Button
               onClick={handleSendHeyReachMessage}
-              disabled={!heyreachDraftText.trim() || sendMessage.isPending}
+              disabled={!draftText.trim() || sendMessage.isPending}
               className="w-full gap-2"
               size="sm"
             >
@@ -380,7 +383,7 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
               </Select>
               <Button
                 onClick={handleAddToCampaign}
-                disabled={!heyreachDraftText.trim() || !selectedCampaignId || addToCampaign.isPending}
+                disabled={!draftText.trim() || !selectedCampaignId || addToCampaign.isPending}
                 variant="outline"
                 className="w-full mt-2 gap-2"
                 size="sm"
