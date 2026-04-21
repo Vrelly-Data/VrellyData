@@ -29,7 +29,7 @@ export interface AgentLead {
   notes: string;
 }
 
-export type LeadCategory = 'campaign_reply' | 'inbound_lead';
+export type InboxStatusGroup = 'pending_approval' | 'total_inbox';
 
 export interface AgentCounts {
   total: number;
@@ -37,10 +37,9 @@ export interface AgentCounts {
   needs_attention: number;
   auto_handled: number;
   by_intent: Record<string, number>;
-  by_category?: {
-    campaign_reply: number;
-    inbound_lead: number;
-    uncategorized: number;
+  by_status_group?: {
+    pending_approval: number;
+    total_inbox: number;
   };
 }
 
@@ -51,10 +50,10 @@ interface AgentInboxResponse {
 
 async function fetchAgentInbox(
   view: 'inbox' | 'pipeline',
-  category?: LeadCategory,
+  statusGroup?: InboxStatusGroup,
 ): Promise<AgentInboxResponse> {
   const { data, error } = await supabase.functions.invoke('get-agent-inbox', {
-    body: { view, ...(category && { category }) },
+    body: { view, ...(statusGroup && { statusGroup }) },
   });
 
   if (error) throw new Error(`Failed to fetch agent inbox: ${error.message}`);
@@ -63,11 +62,11 @@ async function fetchAgentInbox(
 
 export function useAgentInbox(
   view: 'inbox' | 'pipeline' = 'inbox',
-  category?: LeadCategory,
+  statusGroup?: InboxStatusGroup,
 ) {
   return useQuery<AgentInboxResponse>({
-    queryKey: ['agent-inbox', view, category ?? 'all'],
-    queryFn: () => fetchAgentInbox(view, category),
+    queryKey: ['agent-inbox', view, statusGroup ?? 'pending_approval'],
+    queryFn: () => fetchAgentInbox(view, statusGroup),
     refetchInterval: 30000, // Poll every 30 seconds
     staleTime: 0,
     refetchOnWindowFocus: true,
@@ -77,9 +76,9 @@ export function useAgentInbox(
 // Convenience accessors
 export function useAgentInboxData(
   view: 'inbox' | 'pipeline' = 'inbox',
-  category?: LeadCategory,
+  statusGroup?: InboxStatusGroup,
 ) {
-  const query = useAgentInbox(view, category);
+  const query = useAgentInbox(view, statusGroup);
   return {
     leads: query.data?.leads ?? [],
     counts: query.data?.counts ?? {

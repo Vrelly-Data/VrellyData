@@ -56,13 +56,16 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => ({}));
     const view = body.view || 'inbox';
 
-    // Optional category filter ('campaign_reply' | 'inbound_lead' | undefined = all)
-    const category: string | null = body.category ?? null;
+    // Inbox tab filter. 'pending_approval' = awaiting human action;
+    // 'total_inbox' = action already taken (sent/replied/dismissed).
+    const PENDING_APPROVAL_STATUSES = ['pending', 'draft_ready'];
+    const TOTAL_INBOX_STATUSES = ['sent', 'replied', 'dismissed'];
+    const statusGroup: string = body.statusGroup ?? 'pending_approval';
 
     // Build aggregate counts (used in all views)
     const { data: allLeads } = await supabase
       .from('agent_leads')
-      .select('pipeline_stage, inbox_status, intent, auto_handled, lead_category')
+      .select('pipeline_stage, inbox_status, intent, auto_handled')
       .eq('user_id', authUserId);
 
     const leads = allLeads || [];
@@ -87,31 +90,28 @@ Deno.serve(async (req) => {
         out_of_office: leads.filter((l: any) => l.intent === 'out_of_office').length,
         unknown: leads.filter((l: any) => l.intent === 'unknown' || !l.intent).length,
       },
-      by_category: {
-        campaign_reply: leads.filter((l: any) => l.lead_category === 'campaign_reply').length,
-        inbound_lead: leads.filter((l: any) => l.lead_category === 'inbound_lead').length,
-        uncategorized: leads.filter((l: any) => !l.lead_category).length,
+      by_status_group: {
+        pending_approval: leads.filter((l: any) =>
+          PENDING_APPROVAL_STATUSES.includes(l.inbox_status),
+        ).length,
+        total_inbox: leads.filter((l: any) =>
+          TOTAL_INBOX_STATUSES.includes(l.inbox_status),
+        ).length,
       },
     };
 
     if (view === 'inbox') {
-      let inboxQuery = supabase
+      const statusList =
+        statusGroup === 'total_inbox' ? TOTAL_INBOX_STATUSES : PENDING_APPROVAL_STATUSES;
+
+      const { data: inboxLeads, error } = await supabase
         .from('agent_leads')
         .select('*')
         .eq('user_id', authUserId)
-        .in('inbox_status', ['pending', 'draft_ready'])
+        .in('inbox_status', statusList)
         .order('last_reply_at', { ascending: false })
         .limit(50);
 
-      if (category === 'campaign_reply') {
-        // Include legacy rows (NULL category) in Campaign Replies so pre-migration
-        // data shows up naturally for users.
-        inboxQuery = inboxQuery.or('lead_category.eq.campaign_reply,lead_category.is.null');
-      } else if (category === 'inbound_lead') {
-        inboxQuery = inboxQuery.eq('lead_category', 'inbound_lead');
-      }
-
-      const { data: inboxLeads, error } = await inboxQuery;
       if (error) throw error;
 
       return new Response(JSON.stringify({ leads: inboxLeads, counts }), {
