@@ -6,7 +6,12 @@ import { Sheet, SheetContent } from '@/components/ui/sheet';
 import { Loader2, Search } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAgentInboxData, type AgentLead } from '@/hooks/useAgentInbox';
-import { LeadDetailPanel, IntentBadge, ChannelBadge, formatRelativeTime } from './LeadDetailPanel';
+import {
+  LeadDetailPanel,
+  ChannelBadge,
+  formatRelativeTime,
+  getPipelineStageLabel,
+} from './LeadDetailPanel';
 
 type PipelineCategoryKey =
   | 'pending_action'
@@ -203,8 +208,7 @@ export function AgentPipeline() {
                 <th className="text-left px-4 py-2 font-medium">Name & Company</th>
                 <th className="text-left px-4 py-2 font-medium hidden md:table-cell">Job Title</th>
                 <th className="text-left px-4 py-2 font-medium">Channel</th>
-                <th className="text-left px-4 py-2 font-medium">Intent</th>
-                <th className="text-left px-4 py-2 font-medium">Stage</th>
+                <th className="text-left px-4 py-2 font-medium">Tag</th>
                 <th className="text-left px-4 py-2 font-medium hidden lg:table-cell">Last Reply</th>
               </tr>
             </thead>
@@ -228,12 +232,13 @@ export function AgentPipeline() {
                     <ChannelBadge channel={lead.channel} />
                   </td>
                   <td className="px-4 py-2.5">
-                    {lead.intent ? <IntentBadge intent={lead.intent} /> : '—'}
-                  </td>
-                  <td className="px-4 py-2.5">
-                    <Badge variant="secondary" className="text-xs">
-                      {lead.pipeline_stage?.replace(/_/g, ' ')}
-                    </Badge>
+                    {getPipelineStageLabel(lead.pipeline_stage) ? (
+                      <Badge variant="secondary" className="text-xs">
+                        {getPipelineStageLabel(lead.pipeline_stage)}
+                      </Badge>
+                    ) : (
+                      '—'
+                    )}
                   </td>
                   <td className="px-4 py-2.5 text-muted-foreground hidden lg:table-cell">
                     {lead.last_reply_at ? formatRelativeTime(lead.last_reply_at) : '—'}
