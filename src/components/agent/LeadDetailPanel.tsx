@@ -33,9 +33,21 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 export type { AgentLead };
 
-const PIPELINE_STAGES = [
-  'contacted', 'replied', 'engaged', 'meeting_booked', 'closed', 'dead',
+// Lead disposition tags. Selecting any of these also flips inbox_status to
+// 'dismissed', moving the lead from Pending Approval to Total Inbox.
+export const PIPELINE_STAGES = [
+  { value: 'bad_lead', label: 'Bad Lead' },
+  { value: 'ooo', label: 'OOO' },
+  { value: 'not_interested', label: 'Not Interested' },
+  { value: 'meeting_booked', label: 'Meeting Booked' },
 ] as const;
+
+export type PipelineStageValue = typeof PIPELINE_STAGES[number]['value'];
+
+export function getPipelineStageLabel(value: string | null | undefined): string | null {
+  const match = PIPELINE_STAGES.find((s) => s.value === value);
+  return match?.label ?? null;
+}
 
 const INTENT_COLORS: Record<string, string> = {
   interested: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400',
@@ -114,7 +126,8 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
     if (newStage === lead.pipeline_stage) return;
     updateLead.mutate({
       leadId: lead.id,
-      updates: { pipeline_stage: newStage },
+      // Tag change always moves the lead to Total Inbox (inbox_status='dismissed').
+      updates: { pipeline_stage: newStage, inbox_status: 'dismissed' },
       logStageChange: {
         oldStage: lead.pipeline_stage,
         newStage,
@@ -236,14 +249,14 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <Select value={lead.pipeline_stage} onValueChange={handleStageChange}>
+          <Select value={lead.pipeline_stage || ''} onValueChange={handleStageChange}>
             <SelectTrigger className="w-[150px] h-8 text-xs">
-              <SelectValue />
+              <SelectValue placeholder="Set tag" />
             </SelectTrigger>
             <SelectContent>
               {PIPELINE_STAGES.map((s) => (
-                <SelectItem key={s} value={s} className="text-xs">
-                  {s.replace(/_/g, ' ')}
+                <SelectItem key={s.value} value={s.value} className="text-xs">
+                  {s.label}
                 </SelectItem>
               ))}
             </SelectContent>

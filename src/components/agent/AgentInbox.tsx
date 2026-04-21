@@ -9,7 +9,13 @@ import {
   type InboxStatusGroup,
 } from '@/hooks/useAgentInbox';
 import { useAgentConfig } from '@/hooks/useAgent';
-import { LeadDetailPanel, IntentBadge, ChannelBadge, formatRelativeTime } from './LeadDetailPanel';
+import {
+  LeadDetailPanel,
+  IntentBadge,
+  ChannelBadge,
+  formatRelativeTime,
+  getPipelineStageLabel,
+} from './LeadDetailPanel';
 
 export function AgentInbox() {
   const [statusGroup, setStatusGroup] = useState<InboxStatusGroup>('pending_approval');
@@ -149,6 +155,11 @@ export function AgentInbox() {
                   {lead.inbox_status === 'pending' && !lead.auto_handled && (
                     <Badge variant="secondary" className="text-xs">
                       Pending
+                    </Badge>
+                  )}
+                  {statusGroup === 'total_inbox' && getPipelineStageLabel(lead.pipeline_stage) && (
+                    <Badge variant="secondary" className="text-xs">
+                      {getPipelineStageLabel(lead.pipeline_stage)}
                     </Badge>
                   )}
                 </div>
