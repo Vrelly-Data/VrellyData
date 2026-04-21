@@ -150,8 +150,57 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Upsert into agent_leads
-    const { error: upsertError } = await supabase
+    // Fetch full chatroom thread so reply_thread reflects the latest conversation.
+    // Mirrors the approach in poll-heyreach-inbox so webhook-captured and
+    // polling-captured leads produce identical thread structures.
+    let replyThread: Array<{ role: string; content: string; timestamp: string; channel: string }> = [];
+    if (accountId && conversationId && integration.api_key_encrypted) {
+      try {
+        const chatroomRes = await fetch(
+          `https://api.heyreach.io/api/public/inbox/GetChatroom/${accountId}/${conversationId}`,
+          {
+            headers: {
+              "X-API-KEY": integration.api_key_encrypted,
+              Accept: "application/json",
+            },
+          },
+        );
+        if (chatroomRes.ok) {
+          const chatroom = await chatroomRes.json();
+          const messages = chatroom.messages || [];
+          replyThread = messages.map(
+            (msg: { sender?: string; body?: string; createdAt?: string }) => ({
+              role: msg.sender === "ME" ? "sender" : "prospect",
+              content: msg.body || "",
+              timestamp: msg.createdAt || new Date().toISOString(),
+              channel: "linkedin",
+            }),
+          );
+        } else {
+          console.warn(`GetChatroom returned ${chatroomRes.status} for conv ${conversationId}`);
+        }
+      } catch (chatroomErr) {
+        console.error(`Failed to fetch chatroom for ${conversationId}:`, chatroomErr);
+      }
+    }
+
+    // Fallback: if chatroom fetch failed or returned empty, at least include
+    // the incoming reply itself so reply_thread is never empty on an upsert.
+    if (replyThread.length === 0) {
+      replyThread = [
+        {
+          role: "prospect",
+          content: replyText,
+          timestamp: new Date().toISOString(),
+          channel: "linkedin",
+        },
+      ];
+    }
+
+    // Upsert into agent_leads. All fields in the payload will overwrite on conflict —
+    // including inbox_status, so a new reply on a dismissed/replied/sent lead flips
+    // it back to 'pending' and the lead reappears in Pending Approval.
+    const { data: upsertedLead, error: upsertError } = await supabase
       .from("agent_leads")
       .upsert(
         {
@@ -160,6 +209,8 @@ Deno.serve(async (req) => {
           full_name: fullName,
           email,
           last_reply_text: replyText,
+          last_reply_at: new Date().toISOString(),
+          reply_thread: replyThread,
           inbox_status: "pending",
           channel: "linkedin",
           lead_category: leadCategory,
@@ -167,8 +218,10 @@ Deno.serve(async (req) => {
           heyreach_account_id: accountId ? Number(accountId) : null,
           linkedin_url: linkedinUrl,
         },
-        { onConflict: "user_id,external_id" }
-      );
+        { onConflict: "user_id,external_id" },
+      )
+      .select("id")
+      .single();
 
     if (upsertError) {
       console.error("agent_leads upsert error:", upsertError);
@@ -178,7 +231,68 @@ Deno.serve(async (req) => {
       });
     }
 
-    console.log(`Upserted agent_lead for ${fullName || externalId} (linkedin)`);
+    console.log(`Upserted agent_lead ${upsertedLead?.id} for ${fullName || externalId} (linkedin)`);
+
+    // Fire classify-reply asynchronously so the webhook can return 200 fast.
+    // Runs after the response thanks to EdgeRuntime.waitUntil.
+    if (upsertedLead?.id) {
+      const { data: agentConfig } = await supabase
+        .from("agent_configs")
+        .select("*")
+        .eq("user_id", integration.created_by)
+        .eq("is_active", true)
+        .maybeSingle();
+
+      if (agentConfig) {
+        const agentApiKey = Deno.env.get("AGENT_API_KEY") || "";
+        const classifyPromise = fetch(
+          `${supabaseUrl}/functions/v1/classify-reply`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-agent-key": agentApiKey,
+            },
+            body: JSON.stringify({
+              reply_text: replyText,
+              thread_history: replyThread,
+              lead_id: upsertedLead.id,
+              user_id: integration.created_by,
+              channel: "linkedin",
+              agent_context: {
+                offer_description: agentConfig.offer_description,
+                desired_action: agentConfig.desired_action,
+                outcome_delivered: agentConfig.outcome_delivered,
+                target_icp: agentConfig.target_icp,
+                sender_name: agentConfig.sender_name,
+                sender_title: agentConfig.sender_title,
+                sender_bio: agentConfig.sender_bio,
+                company_name: agentConfig.company_name,
+                company_url: agentConfig.company_url,
+                communication_style: agentConfig.communication_style,
+                avoid_phrases: agentConfig.avoid_phrases || [],
+                sample_message: agentConfig.sample_message || "",
+              },
+            }),
+          },
+        ).catch((err) => {
+          console.error("classify-reply invocation failed:", err);
+        });
+
+        // @ts-ignore — EdgeRuntime is injected by Supabase runtime
+        if (typeof EdgeRuntime !== "undefined" && typeof EdgeRuntime.waitUntil === "function") {
+          // @ts-ignore
+          EdgeRuntime.waitUntil(classifyPromise);
+        } else {
+          // Fallback for non-Edge runtimes — await synchronously
+          await classifyPromise;
+        }
+      } else {
+        console.log(
+          `No active agent_config for user ${integration.created_by} — skipping classify-reply`,
+        );
+      }
+    }
 
     return new Response(JSON.stringify({ success: true }), {
       status: 200,
