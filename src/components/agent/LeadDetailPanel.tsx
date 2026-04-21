@@ -35,11 +35,14 @@ export type { AgentLead };
 
 // Lead disposition tags. Selecting any of these also flips inbox_status to
 // 'dismissed', moving the lead from Pending Approval to Total Inbox.
+// Order mirrors the pipeline columns: negative dispositions → active → won.
 export const PIPELINE_STAGES = [
   { value: 'bad_lead', label: 'Bad Lead' },
   { value: 'ooo', label: 'OOO' },
   { value: 'not_interested', label: 'Not Interested' },
+  { value: 'in_progress', label: 'In Progress' },
   { value: 'meeting_booked', label: 'Meeting Booked' },
+  { value: 'closed', label: 'Closed' },
 ] as const;
 
 export type PipelineStageValue = typeof PIPELINE_STAGES[number]['value'];

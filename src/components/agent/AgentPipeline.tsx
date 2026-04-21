@@ -8,14 +8,55 @@ import { cn } from '@/lib/utils';
 import { useAgentInboxData, type AgentLead } from '@/hooks/useAgentInbox';
 import { LeadDetailPanel, IntentBadge, ChannelBadge, formatRelativeTime } from './LeadDetailPanel';
 
-const STAGES = [
-  { key: 'contacted', label: 'Contacted', color: 'bg-gray-500' },
-  { key: 'replied', label: 'Replied', color: 'bg-blue-500' },
-  { key: 'engaged', label: 'Engaged', color: 'bg-amber-500' },
-  { key: 'meeting_booked', label: 'Meeting Booked', color: 'bg-green-500' },
-  { key: 'closed', label: 'Closed', color: 'bg-emerald-500' },
-  { key: 'dead', label: 'Dead', color: 'bg-red-500' },
-] as const;
+type PipelineCategoryKey =
+  | 'pending_action'
+  | 'in_progress'
+  | 'meeting_booked'
+  | 'closed'
+  | 'dead';
+
+type StageDef = {
+  key: PipelineCategoryKey;
+  label: string;
+  color: string;
+  matches: (lead: AgentLead) => boolean;
+};
+
+const STAGES: StageDef[] = [
+  {
+    key: 'pending_action',
+    label: 'Pending Action',
+    color: 'bg-amber-500',
+    matches: (l) => l.inbox_status === 'pending' || l.inbox_status === 'draft_ready',
+  },
+  {
+    key: 'in_progress',
+    label: 'In Progress',
+    color: 'bg-blue-500',
+    matches: (l) => l.pipeline_stage === 'in_progress',
+  },
+  {
+    key: 'meeting_booked',
+    label: 'Meeting Booked',
+    color: 'bg-green-500',
+    matches: (l) => l.pipeline_stage === 'meeting_booked',
+  },
+  {
+    key: 'closed',
+    label: 'Closed',
+    color: 'bg-emerald-500',
+    matches: (l) => l.pipeline_stage === 'closed',
+  },
+  {
+    key: 'dead',
+    label: 'Dead',
+    color: 'bg-red-500',
+    matches: (l) =>
+      l.pipeline_stage === 'bad_lead' ||
+      l.pipeline_stage === 'ooo' ||
+      l.pipeline_stage === 'not_interested',
+  },
+];
 
 const INTENTS = [
   'interested', 'not_interested', 'needs_more_info', 'out_of_office', 'unknown',
@@ -31,7 +72,13 @@ export function AgentPipeline() {
 
   const filteredLeads = useMemo(() => {
     return leads.filter((lead) => {
-      if (stageFilter.size > 0 && !stageFilter.has(lead.pipeline_stage)) return false;
+      if (stageFilter.size > 0) {
+        // OR across selected stages: lead must match at least one.
+        const matchesAny = STAGES
+          .filter((s) => stageFilter.has(s.key))
+          .some((s) => s.matches(lead));
+        if (!matchesAny) return false;
+      }
       if (intentFilter.size > 0 && !intentFilter.has(lead.intent || 'unknown')) return false;
       if (channelFilter !== 'all' && lead.channel !== channelFilter) return false;
       if (search) {
@@ -63,9 +110,9 @@ export function AgentPipeline() {
   return (
     <div className="p-6 space-y-4">
       {/* Stage count cards */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
         {STAGES.map((stage) => {
-          const count = counts.by_stage[stage.key] || 0;
+          const count = counts.by_pipeline_category?.[stage.key] ?? 0;
           const active = stageFilter.has(stage.key);
           return (
             <button

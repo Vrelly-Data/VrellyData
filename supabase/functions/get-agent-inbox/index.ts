@@ -98,6 +98,20 @@ Deno.serve(async (req) => {
           TOTAL_INBOX_STATUSES.includes(l.inbox_status),
         ).length,
       },
+      // Pipeline columns — mirrors the 5-card layout in AgentPipeline.
+      // 'dead' aggregates the three negative-disposition tags set via the
+      // tag dropdown (bad_lead / ooo / not_interested).
+      by_pipeline_category: {
+        pending_action: leads.filter((l: any) =>
+          PENDING_APPROVAL_STATUSES.includes(l.inbox_status),
+        ).length,
+        in_progress: leads.filter((l: any) => l.pipeline_stage === 'in_progress').length,
+        meeting_booked: leads.filter((l: any) => l.pipeline_stage === 'meeting_booked').length,
+        closed: leads.filter((l: any) => l.pipeline_stage === 'closed').length,
+        dead: leads.filter((l: any) =>
+          ['bad_lead', 'ooo', 'not_interested'].includes(l.pipeline_stage),
+        ).length,
+      },
     };
 
     if (view === 'inbox') {

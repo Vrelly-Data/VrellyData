@@ -41,6 +41,13 @@ export interface AgentCounts {
     pending_approval: number;
     total_inbox: number;
   };
+  by_pipeline_category?: {
+    pending_action: number;
+    in_progress: number;
+    meeting_booked: number;
+    closed: number;
+    dead: number;
+  };
 }
 
 interface AgentInboxResponse {
