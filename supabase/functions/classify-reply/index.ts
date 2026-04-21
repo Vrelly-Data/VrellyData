@@ -347,15 +347,15 @@ Analyze this reply and respond as instructed.`;
     // Write classification back to agent_leads
     if (lead_id && classification.intent) {
       try {
+        // Only these 4 fields — pipeline_stage is owned by explicit user action
+        // (tag dropdown / add-to-heyreach-campaign), not the classifier.
         await supabase
           .from('agent_leads')
           .update({
             intent: classification.intent,
             intent_confidence: classification.intent_confidence,
             draft_response: classification.suggested_response,
-            pipeline_stage: classification.next_pipeline_stage,
-            inbox_status: classification.should_auto_send ? 'sent' : 'draft_ready',
-            auto_handled: classification.should_auto_send,
+            inbox_status: 'draft_ready',
           })
           .eq('id', lead_id);
 
