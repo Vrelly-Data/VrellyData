@@ -109,7 +109,7 @@ Deno.serve(async (req) => {
           },
         },
       ],
-      resumeFinishedCampaign: false,
+      resumeFinishedCampaign: true,
       resumePausedCampaign: true,
     };
 
