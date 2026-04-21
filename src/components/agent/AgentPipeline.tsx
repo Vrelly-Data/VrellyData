@@ -11,6 +11,7 @@ import {
   ChannelBadge,
   formatRelativeTime,
   getPipelineStageLabel,
+  PIPELINE_STAGES,
 } from './LeadDetailPanel';
 
 type PipelineCategoryKey =
@@ -63,15 +64,11 @@ const STAGES: StageDef[] = [
   },
 ];
 
-const INTENTS = [
-  'interested', 'not_interested', 'needs_more_info', 'out_of_office', 'unknown',
-] as const;
-
 export function AgentPipeline() {
   const { leads, counts, isLoading } = useAgentInboxData('pipeline');
   const [selectedLead, setSelectedLead] = useState<AgentLead | null>(null);
   const [stageFilter, setStageFilter] = useState<Set<string>>(new Set());
-  const [intentFilter, setIntentFilter] = useState<Set<string>>(new Set());
+  const [tagFilter, setTagFilter] = useState<Set<string>>(new Set());
   const [channelFilter, setChannelFilter] = useState<'all' | 'email' | 'linkedin'>('all');
   const [search, setSearch] = useState('');
 
@@ -84,7 +81,7 @@ export function AgentPipeline() {
           .some((s) => s.matches(lead));
         if (!matchesAny) return false;
       }
-      if (intentFilter.size > 0 && !intentFilter.has(lead.intent || 'unknown')) return false;
+      if (tagFilter.size > 0 && !tagFilter.has(lead.pipeline_stage)) return false;
       if (channelFilter !== 'all' && lead.channel !== channelFilter) return false;
       if (search) {
         const q = search.toLowerCase();
@@ -95,7 +92,7 @@ export function AgentPipeline() {
       }
       return true;
     });
-  }, [leads, stageFilter, intentFilter, channelFilter, search]);
+  }, [leads, stageFilter, tagFilter, channelFilter, search]);
 
   const toggleFilter = (set: Set<string>, value: string, setter: (s: Set<string>) => void) => {
     const next = new Set(set);
@@ -154,20 +151,20 @@ export function AgentPipeline() {
           />
         </div>
 
-        {/* Intent chips */}
-        <div className="flex items-center gap-1.5">
-          {INTENTS.map((intent) => (
+        {/* Tag chips — filter by pipeline_stage */}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {PIPELINE_STAGES.map((stage) => (
             <button
-              key={intent}
-              onClick={() => toggleFilter(intentFilter, intent, setIntentFilter)}
+              key={stage.value}
+              onClick={() => toggleFilter(tagFilter, stage.value, setTagFilter)}
               className={cn(
                 'px-2 py-1 rounded-full text-xs border transition-colors',
-                intentFilter.has(intent)
+                tagFilter.has(stage.value)
                   ? 'bg-primary text-primary-foreground border-primary'
                   : 'border-border text-muted-foreground hover:border-foreground'
               )}
             >
-              {intent.replace(/_/g, ' ')}
+              {stage.label}
             </button>
           ))}
         </div>
@@ -206,7 +203,7 @@ export function AgentPipeline() {
             <thead className="bg-muted/50">
               <tr>
                 <th className="text-left px-4 py-2 font-medium">Name & Company</th>
-                <th className="text-left px-4 py-2 font-medium hidden md:table-cell">Job Title</th>
+                <th className="text-left px-4 py-2 font-medium hidden md:table-cell">Company</th>
                 <th className="text-left px-4 py-2 font-medium">Channel</th>
                 <th className="text-left px-4 py-2 font-medium">Tag</th>
                 <th className="text-left px-4 py-2 font-medium hidden lg:table-cell">Last Reply</th>
@@ -226,7 +223,7 @@ export function AgentPipeline() {
                     )}
                   </td>
                   <td className="px-4 py-2.5 text-muted-foreground hidden md:table-cell">
-                    {lead.job_title || '—'}
+                    {lead.company || '—'}
                   </td>
                   <td className="px-4 py-2.5">
                     <ChannelBadge channel={lead.channel} />

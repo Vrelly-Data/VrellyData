@@ -128,12 +128,25 @@ Deno.serve(async (req) => {
     const lead = event.lead || {};
     const conversation = event.conversation || {};
 
+    // Log observed lead field keys so we can confirm HeyReach's actual payload
+    // shape against our extraction assumptions (inspect in Supabase function logs).
+    console.log("HeyReach lead payload keys:", JSON.stringify(Object.keys(lead)));
+
     const firstName = lead.firstName || "";
     const lastName = lead.lastName || "";
     const fullName = [firstName, lastName].filter(Boolean).join(" ") || null;
     const email = lead.emailAddress || null;
     const linkedinUrl = lead.profileUrl || lead.linkedInProfileUrl || null;
     const replyText = event.messageText || event.message || conversation.lastMessageText || "";
+
+    // Job title + company — field names inferred from LinkedIn-adjacent conventions
+    // and from poll-heyreach-inbox which uses `companyName` on correspondentProfile.
+    // Defensive fallbacks try multiple likely keys; adjust once real payloads
+    // surface in webhook_events / console logs.
+    const jobTitle =
+      lead.headline || lead.title || lead.jobTitle || lead.position || null;
+    const company =
+      lead.companyName || lead.company || lead.currentCompany || null;
 
     // Use lead's HeyReach ID or LinkedIn URL as external_id
     const externalId = lead.id?.toString() || linkedinUrl || `heyreach-${Date.now()}`;
@@ -208,6 +221,8 @@ Deno.serve(async (req) => {
           external_id: externalId,
           full_name: fullName,
           email,
+          job_title: jobTitle,
+          company,
           last_reply_text: replyText,
           last_reply_at: new Date().toISOString(),
           reply_thread: replyThread,
