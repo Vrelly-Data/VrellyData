@@ -1,29 +1,38 @@
 import { useEffect } from 'react';
 import { useAgentConfig, useUpsertAgentConfig } from '@/hooks/useAgent';
-import { useAgentInboxData, type AgentCounts } from '@/hooks/useAgentInbox';
+import { useAgentInboxData } from '@/hooks/useAgentInbox';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Loader2, Users, AlertTriangle, CalendarCheck, Zap, Pause, Play } from 'lucide-react';
+import {
+  Loader2,
+  Users,
+  Clock,
+  CalendarCheck,
+  Activity,
+  Pause,
+  Play,
+} from 'lucide-react';
+import {
+  BarChart,
+  Bar,
+  Cell,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+} from 'recharts';
 import { cn } from '@/lib/utils';
 
-const STAGE_COLORS: Record<string, string> = {
-  contacted: 'bg-gray-400',
-  replied: 'bg-blue-500',
-  engaged: 'bg-amber-500',
-  meeting_booked: 'bg-green-500',
-  closed: 'bg-emerald-500',
-  dead: 'bg-red-500',
-};
-
-const STAGE_LABELS: Record<string, string> = {
-  contacted: 'Contacted',
-  replied: 'Replied',
-  engaged: 'Engaged',
-  meeting_booked: 'Meeting Booked',
-  closed: 'Closed',
-  dead: 'Dead',
-};
+// Bar-chart column colors — mirror the semantic mapping used in AgentPipeline.
+const PIPELINE_CHART_CONFIG = [
+  { key: 'pending_action' as const,  label: 'Pending Action',  color: '#f59e0b' },
+  { key: 'in_progress' as const,     label: 'In Progress',     color: '#3b82f6' },
+  { key: 'meeting_booked' as const,  label: 'Meeting Booked',  color: '#22c55e' },
+  { key: 'closed' as const,          label: 'Closed',          color: '#10b981' },
+  { key: 'dead' as const,            label: 'Dead',            color: '#ef4444' },
+];
 
 export function AgentOverview() {
   const { data: config, isLoading: configLoading } = useAgentConfig();
@@ -54,6 +63,9 @@ export function AgentOverview() {
     });
   };
 
+  const pendingApprovalCount = counts.by_status_group?.pending_approval ?? 0;
+  const leadActivityCount = counts.by_status_group?.total_inbox ?? 0;
+
   const statCards = [
     {
       label: 'Leads in Pipeline',
@@ -62,10 +74,10 @@ export function AgentOverview() {
       color: '',
     },
     {
-      label: 'Needs Attention',
-      value: counts.needs_attention,
-      icon: AlertTriangle,
-      color: counts.needs_attention > 0 ? 'text-amber-600' : '',
+      label: 'Pending Approval',
+      value: pendingApprovalCount,
+      icon: Clock,
+      color: pendingApprovalCount > 0 ? 'text-amber-600' : '',
     },
     {
       label: 'Meetings Booked',
@@ -74,16 +86,19 @@ export function AgentOverview() {
       color: '',
     },
     {
-      label: 'Auto-handled',
-      value: counts.auto_handled,
-      icon: Zap,
+      label: 'Lead Activity',
+      value: leadActivityCount,
+      icon: Activity,
       color: '',
     },
   ];
 
-  // Pipeline bar data
-  const stages = ['contacted', 'replied', 'engaged', 'meeting_booked', 'closed', 'dead'];
-  const totalForBar = stages.reduce((sum, s) => sum + (counts.by_stage[s] || 0), 0);
+  // Pipeline bar-chart data — driven by counts.by_pipeline_category
+  const chartData = PIPELINE_CHART_CONFIG.map((c) => ({
+    name: c.label,
+    count: counts.by_pipeline_category?.[c.key] ?? 0,
+    color: c.color,
+  }));
 
   return (
     <div className="p-6 space-y-6 max-w-4xl">
@@ -152,51 +167,45 @@ export function AgentOverview() {
         </CardContent>
       </Card>
 
-      {/* Pipeline snapshot */}
+      {/* Pipeline snapshot — bar chart by pipeline category */}
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-sm font-medium text-muted-foreground">Pipeline Snapshot</CardTitle>
         </CardHeader>
         <CardContent>
-          {totalForBar === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No leads in the pipeline yet. Leads will appear here as campaigns run.
-            </p>
-          ) : (
-            <>
-              <div className="flex rounded-full overflow-hidden h-6">
-                {stages.map((stage) => {
-                  const count = counts.by_stage[stage] || 0;
-                  if (count === 0) return null;
-                  const pct = (count / totalForBar) * 100;
-                  return (
-                    <div
-                      key={stage}
-                      className={cn('flex items-center justify-center text-[10px] font-medium text-white', STAGE_COLORS[stage])}
-                      style={{ width: `${pct}%`, minWidth: count > 0 ? '24px' : 0 }}
-                      title={`${STAGE_LABELS[stage]}: ${count}`}
-                    >
-                      {pct > 8 ? count : ''}
-                    </div>
-                  );
-                })}
-              </div>
-              <div className="flex items-center gap-4 mt-3 flex-wrap">
-                {stages.map((stage) => {
-                  const count = counts.by_stage[stage] || 0;
-                  if (count === 0) return null;
-                  return (
-                    <div key={stage} className="flex items-center gap-1.5">
-                      <div className={cn('h-2.5 w-2.5 rounded-sm', STAGE_COLORS[stage])} />
-                      <span className="text-xs text-muted-foreground">
-                        {STAGE_LABELS[stage]} ({count})
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </>
-          )}
+          <ResponsiveContainer width="100%" height={240}>
+            <BarChart data={chartData} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} className="opacity-30" />
+              <XAxis
+                dataKey="name"
+                fontSize={12}
+                tickLine={false}
+                axisLine={false}
+                stroke="hsl(var(--muted-foreground))"
+              />
+              <YAxis
+                fontSize={12}
+                tickLine={false}
+                axisLine={false}
+                allowDecimals={false}
+                stroke="hsl(var(--muted-foreground))"
+              />
+              <Tooltip
+                cursor={{ fill: 'hsl(var(--muted))', opacity: 0.3 }}
+                contentStyle={{
+                  backgroundColor: 'hsl(var(--background))',
+                  border: '1px solid hsl(var(--border))',
+                  borderRadius: '6px',
+                  fontSize: '12px',
+                }}
+              />
+              <Bar dataKey="count" radius={[4, 4, 0, 0]}>
+                {chartData.map((entry, idx) => (
+                  <Cell key={idx} fill={entry.color} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
         </CardContent>
       </Card>
     </div>
