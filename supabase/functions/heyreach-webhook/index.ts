@@ -139,14 +139,11 @@ Deno.serve(async (req) => {
     const linkedinUrl = lead.profileUrl || lead.linkedInProfileUrl || null;
     const replyText = event.messageText || event.message || conversation.lastMessageText || "";
 
-    // Job title + company — field names inferred from LinkedIn-adjacent conventions
-    // and from poll-heyreach-inbox which uses `companyName` on correspondentProfile.
-    // Defensive fallbacks try multiple likely keys; adjust once real payloads
-    // surface in webhook_events / console logs.
-    const jobTitle =
-      lead.headline || lead.title || lead.jobTitle || lead.position || null;
-    const company =
-      lead.companyName || lead.company || lead.currentCompany || null;
+    // Job title + company — field names confirmed against HeyReach API docs.
+    // `position` is the structured job title; `headline` is the free-form
+    // LinkedIn headline (fallback when position isn't set).
+    const jobTitle = lead.position || lead.headline || null;
+    const company = lead.companyName || null;
 
     // Use lead's HeyReach ID or LinkedIn URL as external_id
     const externalId = lead.id?.toString() || linkedinUrl || `heyreach-${Date.now()}`;
