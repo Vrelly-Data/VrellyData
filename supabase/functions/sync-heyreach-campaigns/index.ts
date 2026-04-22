@@ -60,7 +60,7 @@ Deno.serve(async (req) => {
     // Get HeyReach integration
     let query = supabase
       .from('outbound_integrations')
-      .select('id, created_by, api_key_encrypted')
+      .select('id, team_id, created_by, api_key_encrypted')
       .eq('is_active', true)
       .eq('platform', 'heyreach');
 
@@ -144,6 +144,9 @@ Deno.serve(async (req) => {
 
             // Auto-link HeyReach campaigns so they appear in the Data Playground
             // without manual linking (HeyReach has no "Manage Campaigns" UI).
+            // team_id is required by schema (NOT NULL) and RLS filters all
+            // synced_campaigns SELECTs by team_id, so without it the row is
+            // invisible to the frontend even if the insert succeeds.
             const { error: upsertError } = await supabase
               .from('synced_campaigns')
               .upsert({
@@ -151,6 +154,7 @@ Deno.serve(async (req) => {
                 name,
                 status: status.toLowerCase(),
                 integration_id: integration.id,
+                team_id: integration.team_id,
                 stats,
                 raw_data: campaign,
                 is_linked: true,
