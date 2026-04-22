@@ -130,56 +130,17 @@ Deno.serve(async (req) => {
             const name = campaign.name || 'Unnamed Campaign';
             const status = campaign.status || 'unknown';
 
-            // Build stats from progressStats embedded in the /campaign/GetAll response
-            // (no extra API call). Field names chosen to match usePlaygroundStats
-            // expectations in the frontend (peopleCount, peopleFinished, linkedin*).
+            // Stats come exclusively from progressStats embedded in the
+            // /campaign/GetAll response — no extra API call. Per-campaign
+            // POST /stats/GetOverallStats was causing EarlyDrop timeouts;
+            // messages/replies metrics will stay 0 for HeyReach until a
+            // bulk stats endpoint or background enrichment job is added.
             const progressStats = campaign.progressStats ?? {};
             const stats: Record<string, unknown> = {
               peopleCount: progressStats.totalUsers ?? 0,
               peopleFinished: progressStats.totalUsersFinished ?? 0,
               progressStats,
             };
-
-            // Enrich with messages / replies / connections via per-campaign
-            // POST /stats/GetOverallStats. Failures are non-fatal — campaign row
-            // still gets upserted with just progressStats-derived fields.
-            try {
-              const statsRes = await fetch(`${HEYREACH_API}/stats/GetOverallStats`, {
-                method: 'POST',
-                headers: {
-                  'X-API-KEY': apiKey,
-                  'Content-Type': 'application/json',
-                  'Accept': 'application/json',
-                },
-                body: JSON.stringify({
-                  accountIds: [],
-                  campaignIds: [Number(externalId)],
-                  startDate: '2020-01-01T00:00:00.000Z',
-                  endDate: new Date().toISOString(),
-                }),
-              });
-
-              if (statsRes.ok) {
-                const body = await statsRes.json();
-                const overall = body?.overallStats ?? {};
-                stats.linkedinMessagesSent = overall.messagesSent ?? 0;
-                stats.linkedinReplies = overall.totalMessageReplies ?? 0;
-                stats.linkedinConnectionsSent = overall.connectionsSent ?? 0;
-                stats.linkedinConnectionsAccepted = overall.connectionsAccepted ?? 0;
-                stats.messageReplyRate = overall.messageReplyRate ?? 0;
-                stats.connectionAcceptanceRate = overall.connectionAcceptanceRate ?? 0;
-                stats.overallStats = overall;
-              } else {
-                console.warn(
-                  `[sync-heyreach-campaigns] GetOverallStats ${statsRes.status} for campaign ${externalId}`,
-                );
-              }
-            } catch (statsErr) {
-              console.warn(
-                `[sync-heyreach-campaigns] GetOverallStats error for campaign ${externalId}:`,
-                statsErr,
-              );
-            }
 
             const { error: upsertError } = await supabase
               .from('synced_campaigns')
@@ -188,7 +149,6 @@ Deno.serve(async (req) => {
                 name,
                 status: status.toLowerCase(),
                 integration_id: integration.id,
-                source: 'heyreach',
                 stats,
                 raw_data: campaign,
               }, {
@@ -201,9 +161,6 @@ Deno.serve(async (req) => {
             }
 
             integrationSynced++;
-
-            // Rate-limit the per-campaign GetOverallStats calls
-            await new Promise((resolve) => setTimeout(resolve, 300));
           }
 
           offset += campaigns.length;
