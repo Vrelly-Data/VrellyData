@@ -49,8 +49,34 @@ export function useSendHeyReachMessage() {
       if (!data?.success) throw new Error(data?.error || 'Failed to send message');
       return data;
     },
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
+      // Optimistic append to the cached lead so the conversation thread in
+      // LeadDetailPanel shows the sent message instantly. useLiveLead reads
+      // ['agent-lead', leadId] so mutating that cache re-renders the panel.
+      const newMessage = {
+        role: 'me',
+        content: variables.message,
+        timestamp: new Date().toISOString(),
+        channel: 'linkedin',
+      };
+      queryClient.setQueryData(
+        ['agent-lead', variables.lead_id],
+        (old: { reply_thread?: unknown[] } | undefined) => {
+          if (!old) return old;
+          return {
+            ...old,
+            reply_thread: [...(old.reply_thread ?? []), newMessage],
+          };
+        },
+      );
+
+      // Refresh list-level queries in the background. Intentionally NOT
+      // invalidating ['agent-lead', lead_id] — that would trigger a refetch
+      // and immediately overwrite the optimistic append before the webhook
+      // has a chance to ingest the sent message server-side.
       queryClient.invalidateQueries({ queryKey: ['agent-leads'] });
+      queryClient.invalidateQueries({ queryKey: ['agent-inbox'] });
+
       toast.success('Message sent');
     },
     onError: (error) => {
