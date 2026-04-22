@@ -1,5 +1,10 @@
 import { useState, useEffect } from 'react';
-import { useAgentConfig, useUpsertAgentConfig, useHeyReachIntegration, type AgentConfigInput } from '@/hooks/useAgent';
+import {
+  useAgentConfig,
+  useUpsertAgentConfig,
+  useConnectedIntegrations,
+  type AgentConfigInput,
+} from '@/hooks/useAgent';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { Button } from '@/components/ui/button';
@@ -28,65 +33,95 @@ const DESIRED_ACTIONS = [
   'Visit our website',
 ] as const;
 
+// Display helpers for the platform column/badge.
+const PLATFORM_LABELS: Record<string, string> = {
+  heyreach: 'HeyReach',
+  'reply.io': 'Reply.io',
+  smartlead: 'Smartlead',
+};
+const PLATFORM_ABBR: Record<string, string> = {
+  heyreach: 'HR',
+  'reply.io': 'RP',
+  smartlead: 'SL',
+};
+const platformLabel = (p: string): string => PLATFORM_LABELS[p.toLowerCase()] ?? p;
+const platformAbbr = (p: string): string =>
+  PLATFORM_ABBR[p.toLowerCase()] ?? p.slice(0, 2).toUpperCase();
+
 export function AgentSettings() {
   const { data: config, isLoading } = useAgentConfig();
   const upsertConfig = useUpsertAgentConfig();
   const { toast } = useToast();
-  const { data: heyreachData } = useHeyReachIntegration();
-  const hasIntegration = heyreachData?.hasIntegration ?? false;
-  const integration = heyreachData?.integration ?? null;
+  const { data: integrations = [] } = useConnectedIntegrations();
+  const hasIntegration = integrations.length > 0;
 
   const { data: campaigns } = useQuery<any[]>({
-    queryKey: ['heyreach-synced-campaigns'],
+    queryKey: ['all-synced-campaigns'],
     enabled: true,
     queryFn: async () => {
       const userId = (await supabase.auth.getSession()).data.session?.user?.id;
       if (!userId) return [];
 
-      const { data: intRow } = await (supabase as any)
+      const { data: intRows } = await (supabase as any)
         .from('outbound_integrations')
-        .select('id')
+        .select('id, platform')
         .eq('created_by', userId)
-        .eq('platform', 'heyreach')
-        .limit(1)
-        .maybeSingle();
+        .eq('is_active', true);
 
-      if (!intRow?.id) return [];
+      if (!intRows?.length) return [];
+
+      const platformById = new Map<string, string>(
+        intRows.map((i: any) => [i.id, i.platform]),
+      );
 
       const { data, error } = await (supabase as any)
         .from('synced_campaigns')
-        .select('name, status')
-        .eq('integration_id', intRow.id)
+        .select('name, status, integration_id')
+        .in('integration_id', intRows.map((i: any) => i.id))
         .order('name', { ascending: true });
 
       if (error) throw error;
-      return data ?? [];
+      return (data ?? []).map((c: any) => ({
+        name: c.name,
+        status: c.status,
+        platform: platformById.get(c.integration_id) ?? 'unknown',
+      }));
     },
   });
 
-  // Campaign rules campaigns (with id + external_campaign_id)
+  // Campaign Rules dropdown — now spans ALL connected platforms (id + external id + platform).
   const { data: ruleCampaigns } = useQuery<any[]>({
-    queryKey: ['rule-campaigns'],
+    queryKey: ['rule-campaigns-all'],
     enabled: true,
     queryFn: async () => {
-      const { data: intRow } = await (supabase as any)
-        .from('outbound_integrations')
-        .select('team_id')
-        .eq('created_by', (await supabase.auth.getSession()).data.session?.user?.id)
-        .eq('platform', 'reply.io')
-        .limit(1)
-        .maybeSingle();
+      const userId = (await supabase.auth.getSession()).data.session?.user?.id;
+      if (!userId) return [];
 
-      if (!intRow?.team_id) return [];
+      const { data: intRows } = await (supabase as any)
+        .from('outbound_integrations')
+        .select('id, platform')
+        .eq('created_by', userId)
+        .eq('is_active', true);
+
+      if (!intRows?.length) return [];
+
+      const platformById = new Map<string, string>(
+        intRows.map((i: any) => [i.id, i.platform]),
+      );
 
       const { data, error } = await (supabase as any)
         .from('synced_campaigns')
-        .select('id, name, external_campaign_id')
-        .eq('team_id', intRow.team_id)
+        .select('id, name, external_campaign_id, integration_id')
+        .in('integration_id', intRows.map((i: any) => i.id))
         .order('name', { ascending: true });
 
       if (error) throw error;
-      return data ?? [];
+      return (data ?? []).map((c: any) => ({
+        id: c.id,
+        name: c.name,
+        external_campaign_id: c.external_campaign_id,
+        platform: platformById.get(c.integration_id) ?? 'unknown',
+      }));
     },
   });
 
@@ -346,23 +381,32 @@ export function AgentSettings() {
         </CardContent>
       </Card>
 
-      {/* Section 4 — HeyReach Connection */}
+      {/* Section 4 — Outbound Connections */}
       <Card>
         <CardHeader>
-          <CardTitle>HeyReach Connection</CardTitle>
+          <CardTitle>Outbound Connections</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           {hasIntegration ? (
             <div className="space-y-3">
-              <Badge className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200 hover:bg-green-100">
-                <CheckCircle2 className="h-3 w-3 mr-1" />
-                HeyReach Connected via Data Playground
-              </Badge>
-              {integration?.last_synced_at && (
-                <div className="text-sm text-muted-foreground">
-                  Last synced: {new Date(integration.last_synced_at).toLocaleDateString()}
+              {integrations.map((int) => (
+                <div key={int.id} className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <Badge className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200 hover:bg-green-100">
+                      <CheckCircle2 className="h-3 w-3 mr-1" />
+                      {platformLabel(int.platform)} Connected
+                    </Badge>
+                    {int.name && (
+                      <span className="text-xs text-muted-foreground">{int.name}</span>
+                    )}
+                  </div>
+                  {int.last_synced_at && (
+                    <div className="text-xs text-muted-foreground pl-1">
+                      Last synced: {new Date(int.last_synced_at).toLocaleDateString()}
+                    </div>
+                  )}
                 </div>
-              )}
+              ))}
               <a
                 href="/playground"
                 className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
@@ -374,10 +418,10 @@ export function AgentSettings() {
             <div className="space-y-3">
               <Badge variant="outline" className="bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950 dark:text-amber-200 dark:border-amber-800">
                 <AlertTriangle className="h-3 w-3 mr-1" />
-                HeyReach Not Connected
+                Not Connected
               </Badge>
               <p className="text-sm text-muted-foreground">
-                Connect HeyReach in your Data Playground to activate your agent.
+                Connect an outbound tool (HeyReach, Reply.io, Smartlead, etc.) in your Data Playground to activate your agent.
               </p>
               <Button variant="outline" size="sm" asChild>
                 <a href="/playground">
@@ -398,10 +442,19 @@ export function AgentSettings() {
           {campaigns && campaigns.length > 0 ? (
             <div className="space-y-2">
               {campaigns.map((c: any, i: number) => (
-                <div key={i} className="flex items-center justify-between py-2 border-b last:border-0">
-                  <span className="font-medium text-sm">{c.name}</span>
+                <div key={i} className="flex items-center justify-between py-2 border-b last:border-0 gap-3">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Badge
+                      variant="outline"
+                      className="text-[10px] px-1.5 py-0 shrink-0 font-mono"
+                      title={platformLabel(c.platform)}
+                    >
+                      {platformAbbr(c.platform)}
+                    </Badge>
+                    <span className="font-medium text-sm truncate">{c.name}</span>
+                  </div>
                   {c.status && (
-                    <Badge variant="outline" className="text-xs capitalize">
+                    <Badge variant="outline" className="text-xs capitalize shrink-0">
                       {c.status.replace(/_/g, ' ')}
                     </Badge>
                   )}
@@ -410,7 +463,7 @@ export function AgentSettings() {
             </div>
           ) : (
             <div className="text-sm text-muted-foreground space-y-2">
-              <p>Sync your HeyReach campaigns in the Data Playground to see them here.</p>
+              <p>Sync your outbound campaigns in the Data Playground to see them here.</p>
               <a
                 href="/playground"
                 className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
@@ -463,6 +516,9 @@ export function AgentSettings() {
                         <SelectContent>
                           {(ruleCampaigns ?? []).map((c: any) => (
                             <SelectItem key={c.id} value={c.external_campaign_id} className="text-xs">
+                              <span className="font-mono text-[10px] text-muted-foreground mr-1.5">
+                                [{platformAbbr(c.platform)}]
+                              </span>
                               {c.name}
                             </SelectItem>
                           ))}

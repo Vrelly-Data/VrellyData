@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useUpsertAgentConfig, useReplyIntegration, type AgentConfigInput } from '@/hooks/useAgent';
+import { useUpsertAgentConfig, useConnectedIntegrations, type AgentConfigInput } from '@/hooks/useAgent';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -50,9 +50,16 @@ interface FormData {
 export function AgentOnboarding() {
   const navigate = useNavigate();
   const upsertConfig = useUpsertAgentConfig();
-  const { data: replyData, isLoading: replyLoading } = useReplyIntegration();
-  const hasIntegration = replyData?.hasIntegration ?? false;
-  const integration = replyData?.integration ?? null;
+  const { data: integrations = [], isLoading: integrationsLoading } = useConnectedIntegrations();
+  const hasIntegration = integrations.length > 0;
+
+  // Friendly platform labels for the connected-state card
+  const PLATFORM_LABELS: Record<string, string> = {
+    heyreach: 'HeyReach',
+    'reply.io': 'Reply.io',
+    smartlead: 'Smartlead',
+  };
+  const platformLabel = (p: string): string => PLATFORM_LABELS[p.toLowerCase()] ?? p;
   const [currentStep, setCurrentStep] = useState(1);
   const [showApiKey, setShowApiKey] = useState(false);
   const [testingConnection, setTestingConnection] = useState(false);
@@ -309,28 +316,33 @@ export function AgentOnboarding() {
         <div className="space-y-6">
           <h2 className="text-2xl font-semibold">Connect your tools and go live</h2>
           <div className="space-y-4">
-            {replyLoading ? (
+            {integrationsLoading ? (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" /> Checking Reply.io connection...
+                <Loader2 className="h-4 w-4 animate-spin" /> Checking connections...
               </div>
             ) : hasIntegration ? (
               <Card className="border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-950/30">
                 <CardContent className="pt-4 space-y-3">
                   <div className="flex items-center gap-2 text-green-700 dark:text-green-400 font-medium">
                     <CheckCircle2 className="h-5 w-5" />
-                    Reply.io Connected
+                    {integrations.length === 1
+                      ? `${platformLabel(integrations[0].platform)} Connected`
+                      : `${integrations.length} Platforms Connected`}
                   </div>
                   <p className="text-sm text-green-700 dark:text-green-300">
                     Your Data Playground connection is being used automatically. No additional setup needed.
                   </p>
-                  {integration && (
-                    <div className="text-xs text-green-600 dark:text-green-400 space-y-1">
-                      {integration.name && <div>Connection: {integration.name}</div>}
-                      {integration.last_synced_at && (
-                        <div>Last synced: {new Date(integration.last_synced_at).toLocaleDateString()}</div>
-                      )}
-                    </div>
-                  )}
+                  <div className="text-xs text-green-600 dark:text-green-400 space-y-1">
+                    {integrations.map((int) => (
+                      <div key={int.id}>
+                        <span className="font-medium">{platformLabel(int.platform)}</span>
+                        {int.name ? ` — ${int.name}` : ''}
+                        {int.last_synced_at
+                          ? ` · synced ${new Date(int.last_synced_at).toLocaleDateString()}`
+                          : ''}
+                      </div>
+                    ))}
+                  </div>
                   <a
                     href="/playground"
                     className="inline-flex items-center gap-1 text-sm text-green-700 dark:text-green-400 hover:underline"
@@ -345,7 +357,7 @@ export function AgentOnboarding() {
                   <CardContent className="pt-4 space-y-3">
                     <div className="flex items-center gap-2 text-blue-700 dark:text-blue-300 font-medium text-sm">
                       <AlertCircle className="h-4 w-4" />
-                      Connect Reply.io in the Data Playground first to enable your agent.
+                      Connect an outbound tool (HeyReach, Reply.io, Smartlead) in the Data Playground first to enable your agent.
                     </div>
                     <Button
                       variant="outline"
@@ -472,7 +484,7 @@ export function AgentOnboarding() {
             </Button>
             {!hasIntegration && !formData.reply_api_key && (
               <div className="absolute bottom-full mb-2 right-0 bg-popover text-popover-foreground text-xs rounded-md px-3 py-1.5 shadow-md border whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">
-                Connect Reply.io first
+                Connect an outbound tool first
               </div>
             )}
           </div>

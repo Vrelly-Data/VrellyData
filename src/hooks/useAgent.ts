@@ -146,6 +146,37 @@ export function useHeyReachIntegration() {
   });
 }
 
+// Platform-agnostic: every active outbound_integrations row for the user,
+// regardless of platform. Consumers display a list (connection badges,
+// campaign source tags, etc).
+export interface ConnectedIntegration {
+  id: string;
+  platform: string;
+  name: string | null;
+  sync_status: string | null;
+  last_synced_at: string | null;
+}
+
+export function useConnectedIntegrations() {
+  return useQuery<ConnectedIntegration[]>({
+    queryKey: ['connected-integrations'],
+    queryFn: async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.user) return [];
+
+      const { data, error } = await db
+        .from('outbound_integrations')
+        .select('id, platform, name, sync_status, last_synced_at')
+        .eq('created_by', session.user.id)
+        .eq('is_active', true)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      return (data || []) as ConnectedIntegration[];
+    },
+  });
+}
+
 export function useUpsertAgentConfig() {
   const queryClient = useQueryClient();
 
