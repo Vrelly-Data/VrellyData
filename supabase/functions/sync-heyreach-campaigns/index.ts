@@ -87,8 +87,6 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      const ownerId = integration.created_by;
-
       await supabase
         .from('outbound_integrations')
         .update({ sync_status: 'syncing', sync_error: null })
@@ -190,7 +188,6 @@ Deno.serve(async (req) => {
                 name,
                 status: status.toLowerCase(),
                 integration_id: integration.id,
-                user_id: ownerId,
                 source: 'heyreach',
                 stats,
                 raw_data: campaign,
