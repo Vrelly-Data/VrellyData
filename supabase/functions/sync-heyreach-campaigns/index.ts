@@ -178,7 +178,53 @@ Deno.serve(async (req) => {
           }
         }
 
-        // Update integration status on success
+        // One bulk stats call per integration (account-level totals). Replaces
+        // the per-campaign GetOverallStats calls that were causing EarlyDrop.
+        // Result cached on outbound_integrations.stats_cache; usePlaygroundStats
+        // reads it for top-level cards (Total Messages Sent / Replies).
+        let statsCacheUpdate: Record<string, unknown> | null = null;
+        try {
+          const statsRes = await fetch(`${HEYREACH_API}/stats/GetOverallStats`, {
+            method: 'POST',
+            headers: {
+              'X-API-KEY': apiKey,
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
+            body: JSON.stringify({
+              accountIds: [],
+              campaignIds: [],
+              startDate: '2020-01-01T00:00:00.000Z',
+              endDate: new Date().toISOString(),
+            }),
+          });
+
+          if (statsRes.ok) {
+            const body = await statsRes.json();
+            const overall = body?.overallStats ?? {};
+            statsCacheUpdate = {
+              linkedinMessagesSent: overall.messagesSent ?? 0,
+              linkedinReplies: overall.totalMessageReplies ?? 0,
+              linkedinConnectionsSent: overall.connectionsSent ?? 0,
+              linkedinConnectionsAccepted: overall.connectionsAccepted ?? 0,
+              messageReplyRate: overall.messageReplyRate ?? 0,
+              connectionAcceptanceRate: overall.connectionAcceptanceRate ?? 0,
+              overallStats: overall,
+              cached_at: new Date().toISOString(),
+            };
+          } else {
+            console.warn(
+              `[sync-heyreach-campaigns] GetOverallStats ${statsRes.status} for integration ${integration.id}`,
+            );
+          }
+        } catch (statsErr) {
+          console.warn(
+            `[sync-heyreach-campaigns] GetOverallStats error for integration ${integration.id}:`,
+            statsErr,
+          );
+        }
+
+        // Update integration status on success (merge stats_cache when available)
         await supabase
           .from('outbound_integrations')
           .update({
@@ -186,6 +232,7 @@ Deno.serve(async (req) => {
             sync_error: null,
             last_synced_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
+            ...(statsCacheUpdate ? { stats_cache: statsCacheUpdate } : {}),
           })
           .eq('id', integration.id);
 

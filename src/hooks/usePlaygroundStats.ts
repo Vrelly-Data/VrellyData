@@ -155,6 +155,28 @@ export function usePlaygroundStats() {
         }
       }
       
+      // Merge in bulk stats cached on outbound_integrations. HeyReach's
+      // sync-heyreach-campaigns writes one GetOverallStats result per
+      // integration into stats_cache; those numbers are account-wide and
+      // don't need summing across campaigns client-side.
+      const { data: integrations, error: integrationsError } = await supabase
+        .from('outbound_integrations')
+        .select('stats_cache')
+        .eq('is_active', true);
+
+      if (integrationsError) {
+        console.warn('[usePlaygroundStats] stats_cache fetch failed', integrationsError);
+      }
+
+      (integrations ?? []).forEach((int: any) => {
+        const cache = int.stats_cache as Record<string, number> | null;
+        if (!cache) return;
+        linkedinMessagesSent += cache.linkedinMessagesSent ?? 0;
+        linkedinReplies += cache.linkedinReplies ?? 0;
+        linkedinConnectionsSent += cache.linkedinConnectionsSent ?? 0;
+        linkedinConnectionsAccepted += cache.linkedinConnectionsAccepted ?? 0;
+      });
+
       // Calculate totals
       totalMessagesSent = emailDeliveries + linkedinMessagesSent + linkedinConnectionsSent;
       totalReplies = emailReplies + linkedinReplies;
