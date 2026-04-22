@@ -54,7 +54,7 @@ export function useSendHeyReachMessage() {
       // LeadDetailPanel shows the sent message instantly. useLiveLead reads
       // ['agent-lead', leadId] so mutating that cache re-renders the panel.
       const newMessage = {
-        role: 'me',
+        role: 'sender',
         content: variables.message,
         timestamp: new Date().toISOString(),
         channel: 'linkedin',
