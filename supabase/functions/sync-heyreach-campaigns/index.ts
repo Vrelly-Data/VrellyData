@@ -184,6 +184,7 @@ Deno.serve(async (req) => {
         // reads it for top-level cards (Total Messages Sent / Replies).
         let statsCacheUpdate: Record<string, unknown> | null = null;
         try {
+          console.log(`[sync-heyreach-campaigns] Calling GetOverallStats bulk for integration ${integration.id}...`);
           const statsRes = await fetch(`${HEYREACH_API}/stats/GetOverallStats`, {
             method: 'POST',
             headers: {

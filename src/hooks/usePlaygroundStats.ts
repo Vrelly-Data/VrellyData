@@ -42,13 +42,6 @@ export function usePlaygroundStats() {
         .select('id, status, stats')
         .eq('is_linked', true);
 
-      // DEBUG: surfaces what RLS returns for the stat-card pipeline.
-      console.log('[usePlaygroundStats] synced_campaigns fetch', {
-        error: campaignsError,
-        rowCount: campaigns?.length ?? 0,
-        sample: (campaigns ?? []).slice(0, 3),
-      });
-
       if (campaignsError) throw campaignsError;
 
       // Get the IDs of linked campaigns to scope contact query
