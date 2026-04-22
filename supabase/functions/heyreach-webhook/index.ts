@@ -22,40 +22,112 @@ Deno.serve(async (req) => {
   }
 
   try {
-    // Extract integration ID from URL path (e.g. /heyreach-webhook/<integrationId>)
+    // Optional integration ID trailing the URL path
+    // (e.g. /heyreach-webhook/<uuid>). If absent, we resolve it below.
     const url = new URL(req.url);
     const pathParts = url.pathname.split("/");
-    const integrationId = pathParts[pathParts.length - 1];
+    const lastSegment = pathParts[pathParts.length - 1] ?? "";
+    const uuidPattern = /^[0-9a-f-]{36}$/i;
+    const urlIntegrationId: string | null = uuidPattern.test(lastSegment)
+      ? lastSegment
+      : null;
 
-    if (!integrationId || integrationId === "heyreach-webhook") {
-      return new Response(JSON.stringify({ error: "Missing integration ID" }), {
+    const payload = await req.text();
+    console.log("HeyReach webhook payload:", payload.substring(0, 500));
+
+    // Parse JSON up-front — event.campaignId may be needed to disambiguate
+    // when multiple HeyReach integrations exist for a single user/team.
+    let event: Record<string, unknown>;
+    try {
+      event = JSON.parse(payload);
+    } catch {
+      return new Response(JSON.stringify({ error: "Invalid JSON payload" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-
-    const payload = await req.text();
-    console.log("HeyReach webhook payload:", payload.substring(0, 500));
 
     // Service role for database writes
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Verify integration exists
-    const { data: integration, error: integrationError } = await supabase
-      .from("outbound_integrations")
-      .select("id, team_id, is_active, created_by, api_key_encrypted")
-      .eq("id", integrationId)
-      .eq("platform", "heyreach")
-      .single();
+    // Resolve which HeyReach integration this webhook belongs to.
+    // Order of preference: (1) explicit UUID in URL → (2) sole active
+    // HeyReach integration → (3) disambiguate via synced_campaigns lookup
+    // using event.campaignId → (4) error.
+    type IntegrationRow = {
+      id: string;
+      team_id: string;
+      is_active: boolean;
+      created_by: string;
+      api_key_encrypted: string;
+    };
+    let integration: IntegrationRow | null = null;
 
-    if (integrationError || !integration) {
-      console.error("HeyReach integration not found:", integrationId);
-      return new Response(JSON.stringify({ error: "Integration not found" }), {
-        status: 404,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+    if (urlIntegrationId) {
+      const { data } = await supabase
+        .from("outbound_integrations")
+        .select("id, team_id, is_active, created_by, api_key_encrypted")
+        .eq("id", urlIntegrationId)
+        .eq("platform", "heyreach")
+        .maybeSingle();
+      integration = (data as IntegrationRow | null) ?? null;
+      if (!integration) {
+        console.warn(
+          `URL integration ID ${urlIntegrationId} not found — falling back to platform lookup`,
+        );
+      }
+    }
+
+    if (!integration) {
+      const { data: candidates } = await supabase
+        .from("outbound_integrations")
+        .select("id, team_id, is_active, created_by, api_key_encrypted")
+        .eq("platform", "heyreach")
+        .eq("is_active", true);
+
+      const rows = (candidates ?? []) as IntegrationRow[];
+
+      if (rows.length === 0) {
+        console.error("No active HeyReach integration found");
+        return new Response(
+          JSON.stringify({ error: "No active HeyReach integration" }),
+          { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+
+      if (rows.length === 1) {
+        integration = rows[0];
+      } else {
+        // Disambiguate multiple integrations via campaign membership
+        const campaignExternalIdForLookup = (event as { campaignId?: unknown }).campaignId?.toString();
+        if (campaignExternalIdForLookup) {
+          const { data: campaignRow } = await supabase
+            .from("synced_campaigns")
+            .select("integration_id")
+            .eq("external_campaign_id", campaignExternalIdForLookup)
+            .in("integration_id", rows.map((r) => r.id))
+            .maybeSingle();
+          if (campaignRow?.integration_id) {
+            integration = rows.find((r) => r.id === campaignRow.integration_id) ?? null;
+          }
+        }
+
+        if (!integration) {
+          console.error("Could not disambiguate HeyReach integration", {
+            candidates: rows.length,
+            campaignId: (event as { campaignId?: unknown }).campaignId,
+          });
+          return new Response(
+            JSON.stringify({
+              error:
+                "Multiple HeyReach integrations — cannot determine target. Include the integration UUID in the webhook URL path.",
+            }),
+            { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+          );
+        }
+      }
     }
 
     if (!integration.created_by) {
@@ -66,25 +138,15 @@ Deno.serve(async (req) => {
       });
     }
 
-    let event;
-    try {
-      event = JSON.parse(payload);
-    } catch {
-      return new Response(JSON.stringify({ error: "Invalid JSON payload" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
     // HeyReach webhook event types:
     // EVERY_MESSAGE_REPLY_RECEIVED — a LinkedIn reply came in
     const eventType = event.eventType || event.type || "unknown";
     const campaignExternalId = event.campaignId?.toString() || null;
-    console.log(`HeyReach event: ${eventType} for integration ${integrationId} (campaignId=${campaignExternalId})`);
+    console.log(`HeyReach event: ${eventType} for integration ${integration.id} (campaignId=${campaignExternalId})`);
 
     // Log the event (every event, before filtering, for debugging)
     await supabase.from("webhook_events").insert({
-      integration_id: integrationId,
+      integration_id: integration.id,
       team_id: integration.team_id,
       event_type: eventType,
       contact_email: event.lead?.emailAddress || null,
@@ -110,7 +172,7 @@ Deno.serve(async (req) => {
       const { data: syncedCampaign } = await supabase
         .from("synced_campaigns")
         .select("id")
-        .eq("integration_id", integrationId)
+        .eq("integration_id", integration.id)
         .eq("external_campaign_id", campaignExternalId)
         .maybeSingle();
 
