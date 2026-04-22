@@ -118,8 +118,10 @@ export function usePlaygroundStats() {
             linkedinCampaignCount++;
           }
         }
-        // Count campaigns that are still running (active or paused)
-        const runningStatuses = ['active', 'paused'];
+        // Count campaigns that are still running. Includes HeyReach-native
+        // statuses (in_progress, starting, scheduled) alongside the Reply.io
+        // conventions (active, paused) — lowercased at write time by each sync.
+        const runningStatuses = ['active', 'paused', 'in_progress', 'starting', 'scheduled'];
         if (runningStatuses.includes(campaign.status?.toLowerCase() || '')) {
           activeCampaigns++;
         }
