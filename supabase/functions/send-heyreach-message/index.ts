@@ -51,7 +51,7 @@ Deno.serve(async (req) => {
     // Fetch the agent_leads row for this user
     const { data: lead, error: leadError } = await supabase
       .from("agent_leads")
-      .select("heyreach_conversation_id, heyreach_account_id")
+      .select("heyreach_conversation_id, heyreach_account_id, reply_thread")
       .eq("id", lead_id)
       .eq("user_id", user.id)
       .single();
@@ -100,10 +100,29 @@ Deno.serve(async (req) => {
       throw new Error(`HeyReach API error (${heyreachResponse.status}): ${errorText}`);
     }
 
+    // Append the sent message to reply_thread so it persists in the DB
+    // (the HeyReach webhook only rewrites reply_thread on INCOMING replies,
+    // so without this the outgoing message would only exist in the React
+    // Query optimistic cache and disappear on next server refetch).
+    // Read-then-write pattern; small race window on concurrent sends to
+    // the same lead, acceptable for a single-user send flow.
+    const existingThread = Array.isArray(lead.reply_thread) ? lead.reply_thread : [];
+    const newMessage = {
+      role: "sender",
+      content: message,
+      timestamp: new Date().toISOString(),
+      channel: "linkedin",
+    };
+    const updatedThread = [...existingThread, newMessage];
+
     // Update agent_leads on success
     const { error: updateError } = await supabase
       .from("agent_leads")
-      .update({ draft_approved: true, inbox_status: "replied" })
+      .update({
+        draft_approved: true,
+        inbox_status: "replied",
+        reply_thread: updatedThread,
+      })
       .eq("id", lead_id)
       .eq("user_id", user.id);
 
