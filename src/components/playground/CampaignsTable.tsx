@@ -58,11 +58,13 @@ export function CampaignsTable() {
     return (
       <div className="text-center py-8 space-y-4">
         <p className="text-muted-foreground">
-          No linked campaigns yet. Use "Manage Campaigns" to select which campaigns to track.
+          {activeIntegration
+            ? 'No linked campaigns yet. Use "Manage Campaigns" or link them all below.'
+            : 'No campaigns synced yet. Run a sync on one of your connected integrations to populate this table.'}
         </p>
         {activeIntegration && (
-          <Button 
-            onClick={handleLinkAll} 
+          <Button
+            onClick={handleLinkAll}
             disabled={linkAllCampaigns.isPending}
             variant="outline"
             className="gap-2"

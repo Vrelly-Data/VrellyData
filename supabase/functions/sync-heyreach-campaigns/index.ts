@@ -142,6 +142,8 @@ Deno.serve(async (req) => {
               progressStats,
             };
 
+            // Auto-link HeyReach campaigns so they appear in the Data Playground
+            // without manual linking (HeyReach has no "Manage Campaigns" UI).
             const { error: upsertError } = await supabase
               .from('synced_campaigns')
               .upsert({
@@ -151,6 +153,7 @@ Deno.serve(async (req) => {
                 integration_id: integration.id,
                 stats,
                 raw_data: campaign,
+                is_linked: true,
               }, {
                 onConflict: 'integration_id,external_campaign_id',
               });
