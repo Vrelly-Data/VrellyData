@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useAgentConfig, useUpsertAgentConfig, useReplyIntegration, type AgentConfigInput } from '@/hooks/useAgent';
+import { useAgentConfig, useUpsertAgentConfig, useHeyReachIntegration, type AgentConfigInput } from '@/hooks/useAgent';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { Button } from '@/components/ui/button';
@@ -32,37 +32,35 @@ export function AgentSettings() {
   const { data: config, isLoading } = useAgentConfig();
   const upsertConfig = useUpsertAgentConfig();
   const { toast } = useToast();
-  const { data: replyData } = useReplyIntegration();
-  const hasIntegration = replyData?.hasIntegration ?? false;
-  const integration = replyData?.integration ?? null;
+  const { data: heyreachData } = useHeyReachIntegration();
+  const hasIntegration = heyreachData?.hasIntegration ?? false;
+  const integration = heyreachData?.integration ?? null;
 
   const { data: campaigns } = useQuery<any[]>({
-    queryKey: ['synced-campaigns'],
+    queryKey: ['heyreach-synced-campaigns'],
     enabled: true,
     queryFn: async () => {
+      const userId = (await supabase.auth.getSession()).data.session?.user?.id;
+      if (!userId) return [];
+
       const { data: intRow } = await (supabase as any)
         .from('outbound_integrations')
-        .select('team_id')
-        .eq('created_by', (await supabase.auth.getSession()).data.session?.user?.id)
-        .eq('platform', 'reply.io')
+        .select('id')
+        .eq('created_by', userId)
+        .eq('platform', 'heyreach')
         .limit(1)
         .maybeSingle();
 
-      if (!intRow?.team_id) return [];
+      if (!intRow?.id) return [];
 
       const { data, error } = await (supabase as any)
         .from('synced_campaigns')
-        .select('name, stats, team_id')
-        .eq('team_id', intRow.team_id)
-        .order('created_at', { ascending: false });
+        .select('name, status')
+        .eq('integration_id', intRow.id)
+        .order('name', { ascending: true });
 
       if (error) throw error;
-      return (data ?? []).map((c: any) => ({
-        name: c.name,
-        total_people: c.stats?.peopleCount ?? 0,
-        linkedin_replies: c.stats?.linkedinReplies ?? 0,
-        email_replies: c.stats?.replies ?? 0,
-      }));
+      return data ?? [];
     },
   });
 
@@ -348,24 +346,21 @@ export function AgentSettings() {
         </CardContent>
       </Card>
 
-      {/* Section 4 — Reply.io Connection */}
+      {/* Section 4 — HeyReach Connection */}
       <Card>
         <CardHeader>
-          <CardTitle>Reply.io Connection</CardTitle>
+          <CardTitle>HeyReach Connection</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           {hasIntegration ? (
             <div className="space-y-3">
               <Badge className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200 hover:bg-green-100">
                 <CheckCircle2 className="h-3 w-3 mr-1" />
-                Reply.io Connected via Data Playground
+                HeyReach Connected via Data Playground
               </Badge>
-              {integration && (
-                <div className="text-sm text-muted-foreground space-y-1">
-                  {integration.reply_team_id && <div>Team ID: {integration.reply_team_id}</div>}
-                  {integration.last_synced_at && (
-                    <div>Last synced: {new Date(integration.last_synced_at).toLocaleDateString()}</div>
-                  )}
+              {integration?.last_synced_at && (
+                <div className="text-sm text-muted-foreground">
+                  Last synced: {new Date(integration.last_synced_at).toLocaleDateString()}
                 </div>
               )}
               <a
@@ -379,10 +374,10 @@ export function AgentSettings() {
             <div className="space-y-3">
               <Badge variant="outline" className="bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950 dark:text-amber-200 dark:border-amber-800">
                 <AlertTriangle className="h-3 w-3 mr-1" />
-                Reply.io Not Connected
+                HeyReach Not Connected
               </Badge>
               <p className="text-sm text-muted-foreground">
-                Connect Reply.io in your Data Playground to activate your agent.
+                Connect HeyReach in your Data Playground to activate your agent.
               </p>
               <Button variant="outline" size="sm" asChild>
                 <a href="/playground">
@@ -401,21 +396,21 @@ export function AgentSettings() {
         </CardHeader>
         <CardContent>
           {campaigns && campaigns.length > 0 ? (
-            <div className="space-y-3">
+            <div className="space-y-2">
               {campaigns.map((c: any, i: number) => (
                 <div key={i} className="flex items-center justify-between py-2 border-b last:border-0">
                   <span className="font-medium text-sm">{c.name}</span>
-                  <div className="flex gap-4 text-xs text-muted-foreground">
-                    <span>{c.total_people ?? 0} people</span>
-                    <span>{c.linkedin_replies ?? 0} LinkedIn</span>
-                    <span>{c.email_replies ?? 0} email</span>
-                  </div>
+                  {c.status && (
+                    <Badge variant="outline" className="text-xs capitalize">
+                      {c.status.replace(/_/g, ' ')}
+                    </Badge>
+                  )}
                 </div>
               ))}
             </div>
           ) : (
             <div className="text-sm text-muted-foreground space-y-2">
-              <p>Sync your campaigns in the Data Playground to see them here.</p>
+              <p>Sync your HeyReach campaigns in the Data Playground to see them here.</p>
               <a
                 href="/playground"
                 className="inline-flex items-center gap-1 text-sm text-primary hover:underline"

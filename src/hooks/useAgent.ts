@@ -114,6 +114,38 @@ export function useReplyIntegration() {
   });
 }
 
+export interface HeyReachIntegration {
+  id: string;
+  platform: string;
+  name: string;
+  sync_status: string | null;
+  last_synced_at: string | null;
+}
+
+export function useHeyReachIntegration() {
+  return useQuery<{ integration: HeyReachIntegration | null; hasIntegration: boolean }>({
+    queryKey: ['heyreach-integration'],
+    queryFn: async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.user) return { integration: null, hasIntegration: false };
+
+      const { data, error } = await db
+        .from('outbound_integrations')
+        .select('id, platform, name, sync_status, last_synced_at')
+        .eq('created_by', session.user.id)
+        .eq('platform', 'heyreach')
+        .eq('is_active', true)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (error) throw error;
+      const integration = data as HeyReachIntegration | null;
+      return { integration, hasIntegration: !!integration };
+    },
+  });
+}
+
 export function useUpsertAgentConfig() {
   const queryClient = useQueryClient();
 
