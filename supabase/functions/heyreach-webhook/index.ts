@@ -157,13 +157,10 @@ Deno.serve(async (req) => {
     // If eventType isn't explicitly set, infer from payload shape — the
     // presence of a message array / conversation object strongly implies a
     // reply event.
-    const recentMessages = (event as { recent_messages?: unknown }).recent_messages;
-    const messagesArr = (event as { messages?: unknown }).messages;
-    const convoObj = (event as { conversation?: unknown }).conversation;
     const looksLikeReplyPayload =
-      Array.isArray(recentMessages) ||
-      Array.isArray(messagesArr) ||
-      !!convoObj;
+      Array.isArray((event as { recent_messages?: unknown }).recent_messages) ||
+      Array.isArray((event as { messages?: unknown }).messages) ||
+      !!(event as { conversation?: unknown }).conversation;
 
     const eventType =
       (event as { eventType?: string }).eventType ||
