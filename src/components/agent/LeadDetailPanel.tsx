@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Send, UserPlus, Loader2, X, Linkedin, Mail } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -203,6 +203,7 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
         lead_id: lead.id,
         campaign_id: campaign.external_campaign_id,
         message: draftText.trim(),
+        campaign_name: campaign.name,
       },
       {
         onSuccess: () => {
@@ -217,6 +218,14 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
     : lead.last_reply_text
       ? [{ role: 'prospect', content: lead.last_reply_text, timestamp: lead.last_reply_at, channel: lead.channel }]
       : [];
+
+  // Auto-scroll the conversation container to the bottom whenever the
+  // thread grows or a new lead is opened.
+  const threadScrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = threadScrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [thread.length, lead.id]);
 
   const confidenceColor =
     lead.intent_confidence > 0.7 ? 'text-green-600' :
@@ -277,26 +286,48 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
       <div className="flex-1 overflow-auto p-4 space-y-4">
         {/* Conversation thread */}
         {thread.length > 0 && (
-          <div className="space-y-3">
+          <div className="space-y-2">
             <h4 className="text-sm font-medium text-muted-foreground">Conversation</h4>
-            {thread.map((msg, i) => (
-              <div
-                key={i}
-                className={cn(
-                  'max-w-[85%] rounded-lg px-3 py-2 text-sm',
-                  msg.role === 'prospect'
-                    ? 'bg-muted mr-auto'
-                    : 'bg-blue-100 dark:bg-blue-900/30 ml-auto'
-                )}
-              >
-                <p className="whitespace-pre-wrap">{msg.content}</p>
-                {msg.timestamp && (
-                  <p className="text-[10px] text-muted-foreground mt-1">
-                    {formatRelativeTime(msg.timestamp)}
-                  </p>
-                )}
-              </div>
-            ))}
+            <div
+              ref={threadScrollRef}
+              className="border rounded-lg p-3 bg-muted/20 space-y-3 min-h-[300px] max-h-[50vh] overflow-y-auto"
+            >
+              {thread.map((msg, i) => {
+                if (msg.role === 'system') {
+                  return (
+                    <div
+                      key={i}
+                      className="text-xs text-muted-foreground italic text-center py-1"
+                    >
+                      {msg.content}
+                      {msg.timestamp && (
+                        <span className="ml-2 text-[10px]">
+                          · {formatRelativeTime(msg.timestamp)}
+                        </span>
+                      )}
+                    </div>
+                  );
+                }
+                return (
+                  <div
+                    key={i}
+                    className={cn(
+                      'max-w-[85%] rounded-lg px-3 py-2 text-sm',
+                      msg.role === 'prospect'
+                        ? 'bg-muted mr-auto'
+                        : 'bg-blue-100 dark:bg-blue-900/30 ml-auto'
+                    )}
+                  >
+                    <p className="whitespace-pre-wrap">{msg.content}</p>
+                    {msg.timestamp && (
+                      <p className="text-[10px] text-muted-foreground mt-1">
+                        {formatRelativeTime(msg.timestamp)}
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
 

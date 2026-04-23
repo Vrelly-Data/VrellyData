@@ -150,6 +150,28 @@ Deno.serve(async (req) => {
       console.warn("Campaign name lookup failed:", e);
     }
 
+    // Fetch existing reply_thread so we can append a system message marking
+    // the campaign addition without losing history. Read-then-write; fine for
+    // single-user action flows (same pattern as send-heyreach-message).
+    const { data: currentLead } = await supabase
+      .from("agent_leads")
+      .select("reply_thread")
+      .eq("id", lead_id)
+      .eq("user_id", user.id)
+      .single();
+    const existingThread = Array.isArray(
+      (currentLead as { reply_thread?: unknown } | null)?.reply_thread,
+    )
+      ? ((currentLead as { reply_thread: unknown[] }).reply_thread)
+      : [];
+    const systemMessage = {
+      role: "system",
+      content: `Added to campaign: ${campaignName ?? "Unknown"}`,
+      timestamp: new Date().toISOString(),
+      channel: "linkedin",
+    };
+    const updatedThread = [...existingThread, systemMessage];
+
     // Update agent_leads on success. pipeline_stage → 'in_progress' because
     // the lead is now being actively worked via an outbound sequence.
     const { error: updateError } = await supabase
@@ -158,6 +180,7 @@ Deno.serve(async (req) => {
         inbox_status: "replied",
         pipeline_stage: "in_progress",
         last_campaign_name: campaignName,
+        reply_thread: updatedThread,
       })
       .eq("id", lead_id)
       .eq("user_id", user.id);
