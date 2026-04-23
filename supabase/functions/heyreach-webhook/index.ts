@@ -181,7 +181,7 @@ Deno.serve(async (req) => {
       integration_id: integration.id,
       team_id: integration.team_id,
       event_type: eventType,
-      contact_email: event.lead?.emailAddress || null,
+      contact_email: (event as { lead?: { email_address?: string } }).lead?.email_address || null,
       campaign_external_id: campaignExternalId,
       event_data: event,
     });
@@ -218,87 +218,78 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Extract lead data from HeyReach webhook payload
-    const lead = event.lead || {};
-    const conversation = event.conversation || {};
+    // Extract lead data from HeyReach webhook payload.
+    // Field names are snake_case per the observed payload shape (e.g.
+    // first_name / profile_url / company_name). Top-level conversation_id
+    // and sender.linkedInAccount.id instead of nested conversation object.
+    const lead = (event as { lead?: Record<string, unknown> }).lead ?? {};
+    const sender = (event as { sender?: Record<string, unknown> }).sender ?? {};
 
-    // Log observed lead field keys so we can confirm HeyReach's actual payload
-    // shape against our extraction assumptions (inspect in Supabase function logs).
     console.log("HeyReach lead payload keys:", JSON.stringify(Object.keys(lead)));
 
-    const firstName = lead.firstName || "";
-    const lastName = lead.lastName || "";
-    const fullName = [firstName, lastName].filter(Boolean).join(" ") || null;
-    const email = lead.emailAddress || null;
-    const linkedinUrl = lead.profileUrl || lead.linkedInProfileUrl || null;
-    const replyText = event.messageText || event.message || conversation.lastMessageText || "";
+    const firstName = (lead.first_name as string) || "";
+    const lastName = (lead.last_name as string) || "";
+    const fullName =
+      (lead.full_name as string) ||
+      [firstName, lastName].filter(Boolean).join(" ") ||
+      null;
+    const email = (lead.email_address as string) || null;
+    const linkedinUrl = (lead.profile_url as string) || null;
+    const jobTitle = (lead.position as string) || null;
+    const company = (lead.company_name as string) || null;
 
-    // Job title + company — field names confirmed against HeyReach API docs.
-    // `position` is the structured job title; `headline` is the free-form
-    // LinkedIn headline (fallback when position isn't set).
-    const jobTitle = lead.position || lead.headline || null;
-    const company = lead.companyName || null;
+    // Top-level conversation_id (not nested under a conversation object)
+    const conversationId =
+      (event as { conversation_id?: unknown }).conversation_id?.toString() || null;
 
-    // Use lead's HeyReach ID or LinkedIn URL as external_id
-    const externalId = lead.id?.toString() || linkedinUrl || `heyreach-${Date.now()}`;
+    // Sender → LinkedIn account ID. HeyReach nests it under sender.linkedInAccount.id,
+    // with a flatter sender.id fallback.
+    const senderLinkedInAccount = (sender as { linkedInAccount?: { id?: unknown } }).linkedInAccount;
+    const accountId =
+      senderLinkedInAccount?.id ??
+      (sender as { id?: unknown }).id ??
+      null;
 
-    // Conversation and account IDs for sending replies
-    const conversationId = conversation.id?.toString() || event.conversationId?.toString() || null;
-    const accountId = event.linkedInAccountId || conversation.linkedInAccountId || null;
+    // Build reply_thread directly from event.recent_messages — the payload
+    // carries the full conversation, so no separate GetChatroom call needed.
+    // is_reply === true are prospect messages; everything else is outbound.
+    type RawMsg = { message?: string; creation_time?: string; is_reply?: boolean };
+    const recentMessages: RawMsg[] = Array.isArray(
+      (event as { recent_messages?: unknown }).recent_messages,
+    )
+      ? ((event as { recent_messages: RawMsg[] }).recent_messages)
+      : [];
+
+    const replyThread: Array<{
+      role: string;
+      content: string;
+      timestamp: string;
+      channel: string;
+    }> = recentMessages.map((msg) => ({
+      role: msg.is_reply === true ? "prospect" : "sender",
+      content: msg.message || "",
+      timestamp: msg.creation_time || new Date().toISOString(),
+      channel: "linkedin",
+    }));
+
+    // replyText = last incoming reply's body. If no incoming message exists
+    // in the thread, we skip — there's nothing new from the prospect to act on.
+    const lastIncomingReply = [...recentMessages]
+      .reverse()
+      .find((m) => m.is_reply === true);
+    const replyText = lastIncomingReply?.message || "";
+
+    // external_id prefers the LinkedIn profile URL (stable per prospect across
+    // conversations); falls back to conversation_id, then a timestamp so the
+    // upsert can still land on a unique row even with minimal data.
+    const externalId = linkedinUrl || conversationId || `heyreach-${Date.now()}`;
 
     if (!replyText) {
-      console.log("No reply text in event, skipping agent_leads upsert");
-      return new Response(JSON.stringify({ success: true, skipped: true }), {
+      console.log("No reply text in recent_messages (no is_reply=true message) — skipping");
+      return new Response(JSON.stringify({ success: true, skipped: "no_incoming_reply" }), {
         status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
-    }
-
-    // Fetch full chatroom thread so reply_thread reflects the latest conversation.
-    // Mirrors the approach in poll-heyreach-inbox so webhook-captured and
-    // polling-captured leads produce identical thread structures.
-    let replyThread: Array<{ role: string; content: string; timestamp: string; channel: string }> = [];
-    if (accountId && conversationId && integration.api_key_encrypted) {
-      try {
-        const chatroomRes = await fetch(
-          `https://api.heyreach.io/api/public/inbox/GetChatroom/${accountId}/${conversationId}`,
-          {
-            headers: {
-              "X-API-KEY": integration.api_key_encrypted,
-              Accept: "application/json",
-            },
-          },
-        );
-        if (chatroomRes.ok) {
-          const chatroom = await chatroomRes.json();
-          const messages = chatroom.messages || [];
-          replyThread = messages.map(
-            (msg: { sender?: string; body?: string; createdAt?: string }) => ({
-              role: msg.sender === "ME" ? "sender" : "prospect",
-              content: msg.body || "",
-              timestamp: msg.createdAt || new Date().toISOString(),
-              channel: "linkedin",
-            }),
-          );
-        } else {
-          console.warn(`GetChatroom returned ${chatroomRes.status} for conv ${conversationId}`);
-        }
-      } catch (chatroomErr) {
-        console.error(`Failed to fetch chatroom for ${conversationId}:`, chatroomErr);
-      }
-    }
-
-    // Fallback: if chatroom fetch failed or returned empty, at least include
-    // the incoming reply itself so reply_thread is never empty on an upsert.
-    if (replyThread.length === 0) {
-      replyThread = [
-        {
-          role: "prospect",
-          content: replyText,
-          timestamp: new Date().toISOString(),
-          channel: "linkedin",
-        },
-      ];
     }
 
     // Upsert into agent_leads. All fields in the payload will overwrite on conflict —
