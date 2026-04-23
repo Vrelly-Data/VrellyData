@@ -27,6 +27,7 @@ export interface AgentLead {
   }>;
   auto_handled: boolean;
   notes: string;
+  last_campaign_name?: string | null;
 }
 
 export type InboxStatusGroup = 'pending_approval' | 'total_inbox';

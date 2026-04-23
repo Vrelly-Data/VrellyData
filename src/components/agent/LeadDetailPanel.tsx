@@ -176,6 +176,9 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
   };
 
   const handleNotesSave = () => {
+    // Skip if the textarea lost focus without the user having edited it.
+    // Prevents a noisy update round-trip on every click-away.
+    if (notes === (lead.notes ?? '')) return;
     updateLead.mutate({
       leadId: lead.id,
       updates: { notes },
@@ -419,6 +422,25 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
                 )}
                 Add to Campaign
               </Button>
+            </div>
+          </div>
+        )}
+
+        {/* Campaign History — only when the lead is actively in a campaign */}
+        {lead.pipeline_stage === 'in_progress' && (
+          <div className="space-y-2">
+            <h4 className="text-sm font-medium text-muted-foreground">Campaign History</h4>
+            <div className="border rounded-lg px-3 py-2.5 text-sm">
+              {lead.last_campaign_name ? (
+                <>
+                  <span className="text-muted-foreground">Currently in: </span>
+                  <span className="font-medium">{lead.last_campaign_name}</span>
+                </>
+              ) : (
+                <span className="text-muted-foreground italic">
+                  In progress — campaign name not recorded.
+                </span>
+              )}
             </div>
           </div>
         )}
