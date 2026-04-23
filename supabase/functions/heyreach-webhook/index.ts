@@ -269,12 +269,14 @@ Deno.serve(async (req) => {
       channel: "linkedin",
     }));
 
-    // replyText = last incoming reply's body. If no incoming message exists
-    // in the thread, we skip — there's nothing new from the prospect to act on.
-    const lastIncomingReply = [...recentMessages]
-      .reverse()
-      .find((m) => m.is_reply === true);
-    const replyText = lastIncomingReply?.message || "";
+    // replyText = body of the LAST message in recent_messages, regardless of
+    // is_reply. Test payloads from HeyReach's dashboard may not set is_reply
+    // correctly, and even real conversations where the webhook fires on an
+    // outbound message (edge case) should still populate something. The
+    // is_reply → role mapping is still preserved above for thread correctness.
+    const lastMessage =
+      recentMessages.length > 0 ? recentMessages[recentMessages.length - 1] : null;
+    const replyText = lastMessage?.message || "";
 
     // external_id prefers the LinkedIn profile URL (stable per prospect across
     // conversations); falls back to conversation_id, then a timestamp so the
@@ -282,8 +284,8 @@ Deno.serve(async (req) => {
     const externalId = linkedinUrl || conversationId || `heyreach-${Date.now()}`;
 
     if (!replyText) {
-      console.log("No reply text in recent_messages (no is_reply=true message) — skipping");
-      return new Response(JSON.stringify({ success: true, skipped: "no_incoming_reply" }), {
+      console.log("recent_messages empty or last message has no content — skipping");
+      return new Response(JSON.stringify({ success: true, skipped: "no_message_content" }), {
         status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
