@@ -138,11 +138,43 @@ Deno.serve(async (req) => {
       });
     }
 
+    // Log the full payload shape so we can see what HeyReach actually sends.
+    // Observed in practice: `eventType` / `type` aren't always set; some
+    // payloads come through as a conversation snapshot with `recent_messages`
+    // and no explicit event type.
+    const topLevelKeys = Object.keys(event);
+    const keyTypes = Object.fromEntries(
+      Object.entries(event).map(([k, v]) => [
+        k,
+        Array.isArray(v) ? `array[${v.length}]` : typeof v,
+      ]),
+    );
+    console.log("HeyReach payload top-level keys:", topLevelKeys);
+    console.log("HeyReach payload key types:", keyTypes);
+
     // HeyReach webhook event types:
     // EVERY_MESSAGE_REPLY_RECEIVED — a LinkedIn reply came in
-    const eventType = event.eventType || event.type || "unknown";
-    const campaignExternalId = event.campaignId?.toString() || null;
-    console.log(`HeyReach event: ${eventType} for integration ${integration.id} (campaignId=${campaignExternalId})`);
+    // If eventType isn't explicitly set, infer from payload shape — the
+    // presence of a message array / conversation object strongly implies a
+    // reply event.
+    const recentMessages = (event as { recent_messages?: unknown }).recent_messages;
+    const messagesArr = (event as { messages?: unknown }).messages;
+    const convoObj = (event as { conversation?: unknown }).conversation;
+    const looksLikeReplyPayload =
+      Array.isArray(recentMessages) ||
+      Array.isArray(messagesArr) ||
+      !!convoObj;
+
+    const eventType =
+      (event as { eventType?: string }).eventType ||
+      (event as { type?: string }).type ||
+      (looksLikeReplyPayload ? "EVERY_MESSAGE_REPLY_RECEIVED" : "unknown");
+
+    const campaignExternalId =
+      (event as { campaignId?: unknown }).campaignId?.toString() || null;
+    console.log(
+      `HeyReach event: ${eventType} for integration ${integration.id} (campaignId=${campaignExternalId}, inferred=${!(event as { eventType?: string }).eventType && !(event as { type?: string }).type && looksLikeReplyPayload})`,
+    );
 
     // Log the event (every event, before filtering, for debugging)
     await supabase.from("webhook_events").insert({
