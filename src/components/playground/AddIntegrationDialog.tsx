@@ -26,7 +26,7 @@ import { toast } from 'sonner';
 const PLATFORMS = [
   { value: 'reply.io', label: 'Reply.io', icon: '📧', comingSoon: false },
   { value: 'heyreach', label: 'HeyReach', icon: '🤝', comingSoon: false },
-  { value: 'smartlead', label: 'Smartlead', icon: '🎯', comingSoon: true },
+  { value: 'smartlead', label: 'Smartlead', icon: '🎯', comingSoon: false },
   { value: 'instantly', label: 'Instantly.ai', icon: '⚡', comingSoon: true },
   { value: 'lemlist', label: 'Lemlist', icon: '🍋', comingSoon: true },
 ];
@@ -43,9 +43,15 @@ interface AddIntegrationDialogProps {
 
 async function validateApiKey(platform: string, apiKey: string): Promise<{ valid: boolean; error?: string }> {
   try {
-    const { data, error } = await supabase.functions.invoke('validate-api-key', {
-      body: { platform, apiKey }
-    });
+    // Route to the platform-specific validator. validate-api-key no longer
+    // silently accepts unknown platforms — each new platform must add its
+    // own validator function.
+    const functionName =
+      platform === 'smartlead' ? 'validate-smartlead-key' : 'validate-api-key';
+    const body =
+      platform === 'smartlead' ? { apiKey } : { platform, apiKey };
+
+    const { data, error } = await supabase.functions.invoke(functionName, { body });
 
     if (error) {
       console.error('Validation function error:', error);

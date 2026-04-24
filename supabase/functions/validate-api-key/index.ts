@@ -88,9 +88,17 @@ Deno.serve(async (req) => {
       );
     }
 
-    // For other platforms (Smartlead, Instantly, Lemlist), skip validation for now
+    // Platforms need an explicit validator — Smartlead has validate-smartlead-key,
+    // future ones (Instantly, Lemlist) will need their own. Silent `valid: true`
+    // was a footgun: it would auto-approve any API key / garbage input for any
+    // platform we hadn't explicitly implemented, leaking through to the DB.
     return new Response(
-      JSON.stringify({ valid: true, message: "Validation not yet implemented for this platform" }),
+      JSON.stringify({
+        valid: false,
+        error:
+          `No validator configured for platform "${platform}". ` +
+          `Call the platform-specific validator (e.g. validate-smartlead-key for Smartlead).`,
+      }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
 

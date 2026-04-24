@@ -96,3 +96,6 @@ verify_jwt = false
 
 [functions.poll-heyreach-inbox]
 verify_jwt = false
+
+[functions.smartlead-webhook]
+verify_jwt = false
