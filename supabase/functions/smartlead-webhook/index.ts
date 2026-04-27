@@ -1,22 +1,45 @@
-// [smartlead-webhook v1]
+// [smartlead-webhook v2]
 //
-// Receives Smartlead webhooks (primary: "email reply received"). Smartlead
-// doesn't document HMAC webhook signatures as of writing, so we use a
-// shared-secret query param (?secret=<value>) gated by the
-// SMARTLEAD_WEBHOOK_SECRET env var.
+// Receives Smartlead webhooks. Primary event is EMAIL_REPLY; we also recognise
+// (and gracefully skip) EMAIL_BOUNCE, LEAD_UNSUBSCRIBED, CAMPAIGN_COMPLETED,
+// and LEAD_CATEGORY_UPDATED. Anything else is logged and 200-acknowledged so
+// Smartlead doesn't retry.
 //
-// The exact payload shape for "email reply received" is NOT documented in
-// the Smartlead PDF. This first version:
-//   1. Verbosely logs the raw payload + key-level types so the first real
-//      webhook surfaces the actual structure in function logs.
-//   2. Uses best-effort extraction against plausible snake_case / camelCase
-//      field names (email, reply_message_id, campaign_id, lead_id, body).
-//   3. Gracefully ignores non-reply events (bounced / unsubscribed / etc)
-//      with a 200 response so Smartlead doesn't retry.
-//   4. Always records the raw event in webhook_events before acting.
+// === Real payload shape (EMAIL_REPLY) =====================================
+// Captured from a live test event. The named fields below are the canonical
+// references — older v1 guesswork (lead.email, payload.reply_body, etc.) does
+// NOT match the wire format. Examples:
+//   {
+//     "event_type": "EMAIL_REPLY",
+//     "from_email": "rep@your-domain.com",        // sender mailbox (NOT prospect)
+//     "to_email":   "prospect@example.com",       // prospect (the inversion gotcha)
+//     "to_name":    "Jane Prospect",
+//     "sl_lead_email": "prospect@example.com",    // canonical prospect email
+//     "sl_email_lead_id": 121,                    // canonical lead id
+//     "sl_email_lead_map_id": 1221,
+//     "campaign_id": 100,
+//     "campaign_name": "Link insertion",
+//     "sent_message":  { "message_id": "<…>", "html": "…", "text": "…", "time": "ISO" },
+//     "reply_message": { "message_id": "<…>", "html": "…", "text": "…", "time": "ISO" },
+//     "secret_key":   "…",                        // body-level shared secret
+//     "webhook_id":   100
+//   }
 //
-// classify-reply invocation is deferred to Phase C — Phase A is observation-
-// only from a data-flow perspective.
+// IMPORTANT inversion: from_email is the campaign's SENDER mailbox and
+// to_email is the PROSPECT — opposite of what the names suggest in a
+// reply context. Always use sl_lead_email as the canonical prospect address.
+//
+// === Auth ================================================================
+// Primary check: URL query param  ?secret=<SMARTLEAD_WEBHOOK_SECRET>
+// Optional defence-in-depth: body field  payload.secret_key === <SMARTLEAD_BODY_SECRET>
+//
+// The body check is OPT-IN — only enforced when SMARTLEAD_BODY_SECRET is
+// configured. Smartlead's dashboard test payload sends the literal string
+// "secretkey" as a placeholder, and at time of writing it isn't confirmed
+// whether owners can pick a real value for that body field. Requiring a body
+// match by default would risk rejecting real webhooks. Once we confirm
+// Smartlead supports a configurable body secret, set SMARTLEAD_BODY_SECRET
+// and the second check activates automatically.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -34,6 +57,24 @@ function getCorsHeaders(req: Request) {
   };
 }
 
+// Strip the Zendesk-style "type your reply above this line" marker plus
+// anything after it. Full quoted-chain stripping (Gmail/Outlook headers,
+// "On <date> <name> wrote:" blocks, etc.) is deferred to Phase C in
+// classify-reply preprocessing.
+function stripZendeskMarker(text: string): string {
+  if (!text) return "";
+  const markerRe = /##-\s*Please type your reply above this line\s*-##/i;
+  const idx = text.search(markerRe);
+  return (idx >= 0 ? text.slice(0, idx) : text).trim();
+}
+
+const SKIPPABLE_EVENTS = new Set([
+  "EMAIL_BOUNCE",
+  "LEAD_UNSUBSCRIBED",
+  "CAMPAIGN_COMPLETED",
+  "LEAD_CATEGORY_UPDATED",
+]);
+
 Deno.serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
 
@@ -42,14 +83,14 @@ Deno.serve(async (req) => {
   }
 
   try {
-    // === Auth: shared-secret query param ====================================
+    // === Auth check 1: URL query secret =====================================
     const url = new URL(req.url);
-    const providedSecret = url.searchParams.get("secret");
-    const expectedSecret = Deno.env.get("SMARTLEAD_WEBHOOK_SECRET");
+    const providedUrlSecret = url.searchParams.get("secret");
+    const expectedUrlSecret = Deno.env.get("SMARTLEAD_WEBHOOK_SECRET");
 
-    if (!expectedSecret) {
+    if (!expectedUrlSecret) {
       console.error(
-        "[smartlead-webhook v1] SMARTLEAD_WEBHOOK_SECRET env var not set — refusing all requests until configured",
+        "[smartlead-webhook v2] SMARTLEAD_WEBHOOK_SECRET env var not set — refusing all requests until configured",
       );
       return new Response(
         JSON.stringify({ error: "Webhook secret not configured on server" }),
@@ -57,8 +98,8 @@ Deno.serve(async (req) => {
       );
     }
 
-    if (providedSecret !== expectedSecret) {
-      console.warn("[smartlead-webhook v1] Secret mismatch — rejecting request");
+    if (providedUrlSecret !== expectedUrlSecret) {
+      console.warn("[smartlead-webhook v2] URL secret mismatch — rejecting request");
       return new Response(JSON.stringify({ error: "Unauthorized" }), {
         status: 401,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -68,7 +109,7 @@ Deno.serve(async (req) => {
     // === Payload parsing ====================================================
     const rawText = await req.text();
     console.log(
-      "[smartlead-webhook v1] Raw payload (first 2000 chars):",
+      "[smartlead-webhook v2] Raw payload (first 2000 chars):",
       rawText.substring(0, 2000),
     );
 
@@ -76,45 +117,54 @@ Deno.serve(async (req) => {
     try {
       payload = JSON.parse(rawText);
     } catch {
-      console.error("[smartlead-webhook v1] Invalid JSON payload");
-      // Return 200 so Smartlead doesn't retry a malformed request forever.
+      console.error("[smartlead-webhook v2] Invalid JSON payload");
       return new Response(
         JSON.stringify({ success: false, error: "invalid_json" }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
 
-    // Shape diagnostics — will confirm or refute the field-name assumptions
-    // below on the first real webhook.
-    const topLevelKeys = Object.keys(payload);
-    const keyTypes = Object.fromEntries(
-      Object.entries(payload).map(([k, v]) => [
-        k,
-        Array.isArray(v) ? `array[${v.length}]` : v === null ? "null" : typeof v,
-      ]),
-    );
-    console.log("[smartlead-webhook v1] Top-level keys:", topLevelKeys);
-    console.log("[smartlead-webhook v1] Key types:", keyTypes);
+    // === Auth check 2 (optional): body-level secret ========================
+    // Opt-in defence-in-depth. Only enforced when SMARTLEAD_BODY_SECRET is
+    // explicitly set. Reasoning lives in the top-of-file docstring; tl;dr:
+    // Smartlead test payloads use a literal "secretkey" placeholder and
+    // configurability isn't yet confirmed, so we don't enforce by default.
+    const expectedBodySecret = Deno.env.get("SMARTLEAD_BODY_SECRET");
+
+    if (expectedBodySecret) {
+      console.log(
+        "[smartlead-webhook v2] Body secret check: ENABLED (SMARTLEAD_BODY_SECRET set)",
+      );
+      const providedBodySecret =
+        (payload.secret_key as string | undefined) ?? null;
+
+      if (providedBodySecret !== expectedBodySecret) {
+        console.warn(
+          "[smartlead-webhook v2] Body secret_key mismatch — rejecting request",
+        );
+        return new Response(JSON.stringify({ error: "Unauthorized" }), {
+          status: 401,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+    } else {
+      console.log(
+        "[smartlead-webhook v2] Body secret check: SKIPPED (SMARTLEAD_BODY_SECRET unset — URL-only auth mode)",
+      );
+    }
 
     // === Event type detection ===============================================
-    // Try every plausible field name Smartlead might use.
-    const eventType = (
-      (payload.event_type as string) ||
-      (payload.eventType as string) ||
-      (payload.type as string) ||
-      (payload.event as string) ||
-      "unknown"
-    ).toString();
-    console.log(`[smartlead-webhook v1] eventType="${eventType}"`);
+    const eventType = ((payload.event_type as string) || "unknown").toString();
+    console.log(`[smartlead-webhook v2] eventType="${eventType}"`);
 
     // === DB client ==========================================================
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Always log the raw event (before filtering / processing). integration_id
-    // left null because we don't yet know how to derive it from the payload —
-    // will be revisited once real payload shape is observed.
+    // Always log the raw event before filtering. integration_id / team_id are
+    // resolved further down; webhook_events.team_id and integration_id NOT
+    // NULL constraint fix is tracked separately.
     try {
       await supabase.from("webhook_events").insert({
         integration_id: null,
@@ -124,92 +174,74 @@ Deno.serve(async (req) => {
       });
     } catch (logErr) {
       console.warn(
-        "[smartlead-webhook v1] webhook_events insert failed (non-fatal):",
+        "[smartlead-webhook v2] webhook_events insert failed (non-fatal):",
         logErr,
       );
     }
 
-    // === Filter: reply-like events only =====================================
-    const looksLikeReply =
-      eventType.toLowerCase().includes("reply") ||
-      !!payload.reply_message_id ||
-      !!payload.email_body ||
-      !!payload.reply_body;
-
-    if (!looksLikeReply) {
+    // === Skip non-reply events gracefully ===================================
+    if (SKIPPABLE_EVENTS.has(eventType)) {
       console.log(
-        `[smartlead-webhook v1] Event "${eventType}" is not a reply — acknowledged but skipped`,
+        `[smartlead-webhook v2] Event "${eventType}" recognised but not actioned — acknowledged`,
       );
       return new Response(
-        JSON.stringify({ success: true, skipped: "not_a_reply", eventType }),
+        JSON.stringify({ success: true, skipped: "non_reply_event", eventType }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
 
-    // === Best-effort payload extraction =====================================
-    // These paths are GUESSES. Once the first real webhook lands in the logs,
-    // refactor this block to match the observed field names.
-    const lead = (payload.lead as Record<string, unknown>) ?? {};
+    if (eventType !== "EMAIL_REPLY") {
+      console.log(
+        `[smartlead-webhook v2] Unrecognised eventType "${eventType}" — acknowledged but not processed`,
+      );
+      return new Response(
+        JSON.stringify({ success: true, skipped: "unknown_event", eventType }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
+    // === EMAIL_REPLY extraction =============================================
+    const replyMessage =
+      (payload.reply_message as Record<string, unknown> | undefined) ?? {};
 
     const emailRaw =
-      (lead.email as string | undefined) ??
-      (lead.email_address as string | undefined) ??
-      (payload.email as string | undefined) ??
+      (payload.sl_lead_email as string | undefined) ??
       (payload.to_email as string | undefined) ??
       null;
     const email = emailRaw ? emailRaw.toLowerCase() : null;
 
-    const firstName =
-      (lead.first_name as string | undefined) ??
-      (lead.firstName as string | undefined) ??
-      null;
-    const lastName =
-      (lead.last_name as string | undefined) ??
-      (lead.lastName as string | undefined) ??
-      null;
-    const company =
-      (lead.company_name as string | undefined) ??
-      (lead.company as string | undefined) ??
-      null;
-    const jobTitle =
-      (lead.position as string | undefined) ??
-      (lead.title as string | undefined) ??
-      null;
+    const fullName = (payload.to_name as string | undefined) ?? null;
 
     const smartleadLeadId =
-      ((payload.lead_id ?? payload.leadId ?? lead.id) as
-        | string
-        | number
-        | undefined)?.toString() ?? null;
+      payload.sl_email_lead_id !== undefined && payload.sl_email_lead_id !== null
+        ? String(payload.sl_email_lead_id)
+        : null;
     const smartleadCampaignId =
-      ((payload.campaign_id ?? payload.campaignId) as
-        | string
-        | number
-        | undefined)?.toString() ?? null;
-    const replyMessageId =
-      ((payload.reply_message_id ?? payload.message_id) as
-        | string
-        | number
-        | undefined)?.toString() ?? null;
+      payload.campaign_id !== undefined && payload.campaign_id !== null
+        ? String(payload.campaign_id)
+        : null;
+    const lastCampaignName = (payload.campaign_name as string | undefined) ?? null;
 
-    // Reply body: stripped text for display + raw HTML for debugging.
-    // Thorough HTML / quoted-chain stripping (Phase C) replaces this basic regex.
-    const rawHtml =
-      (payload.reply_body as string | undefined) ??
-      (payload.email_body as string | undefined) ??
-      (payload.body as string | undefined) ??
-      null;
-    const replyText = rawHtml
-      ? rawHtml
-          .replace(/<[^>]+>/g, " ")
-          .replace(/\s+/g, " ")
-          .trim()
-      : "";
+    const replyMessageId = (replyMessage.message_id as string | undefined) ?? null;
+    const replyHtml = (replyMessage.html as string | undefined) ?? null;
+    const replyTextRaw = (replyMessage.text as string | undefined) ?? null;
+    const replyTimestamp =
+      (replyMessage.time as string | undefined) ?? new Date().toISOString();
+
+    // Prefer the plain-text body; fall back to a quick HTML-strip if Smartlead
+    // ever omits .text. Zendesk-style "type your reply above this line" marker
+    // and anything after it is dropped here; full quoted-chain stripping is
+    // Phase C work in classify-reply preprocessing.
+    const replyText = stripZendeskMarker(
+      replyTextRaw ??
+        (replyHtml
+          ? replyHtml.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ")
+          : ""),
+    );
 
     if (!email) {
       console.warn(
-        "[smartlead-webhook v1] No email address in reply payload — skipping upsert. Keys:",
-        topLevelKeys,
+        "[smartlead-webhook v2] No prospect email in EMAIL_REPLY payload — skipping",
       );
       return new Response(
         JSON.stringify({ success: true, skipped: "no_email", eventType }),
@@ -219,7 +251,7 @@ Deno.serve(async (req) => {
 
     // === Route to an integration ============================================
     // Smartlead payload doesn't expose which integration in our DB it maps
-    // to. For Phase A, pick the first active Smartlead integration; multi-
+    // to. Pick the first active Smartlead integration for now; multi-
     // integration disambiguation can be added later via API-key hashing or
     // a per-integration webhook secret.
     const { data: integration } = await supabase
@@ -233,7 +265,7 @@ Deno.serve(async (req) => {
 
     if (!integration?.created_by || !integration?.team_id) {
       console.warn(
-        "[smartlead-webhook v1] No active Smartlead integration — cannot route lead",
+        "[smartlead-webhook v2] No active Smartlead integration — cannot route lead",
       );
       return new Response(
         JSON.stringify({ success: true, skipped: "no_active_integration", eventType }),
@@ -241,12 +273,25 @@ Deno.serve(async (req) => {
       );
     }
 
+    // === Build reply_thread (single-message for now) ========================
+    // heyreach-webhook builds the full thread from event.recent_messages.
+    // Smartlead's EMAIL_REPLY payload only carries the latest reply_message
+    // (and an unrelated sent_message), so we record just the prospect's
+    // message. Phase C may stitch in earlier messages from Smartlead's
+    // history endpoints if/when needed.
+    const replyThread = [
+      {
+        role: "prospect",
+        content: replyText,
+        timestamp: replyTimestamp,
+        channel: "email",
+      },
+    ];
+
     // === Upsert agent_leads =================================================
-    // external_id = lowercased email. Stable per prospect; matches the
-    // conflict key pattern used by heyreach-webhook.
+    // external_id = lowercased canonical prospect email. Stable per prospect;
+    // matches the conflict key used by heyreach-webhook.
     const externalId = email;
-    const fullName = [firstName, lastName].filter(Boolean).join(" ") || null;
-    const nowIso = new Date().toISOString();
 
     const { data: upsertedLead, error: upsertError } = await supabase
       .from("agent_leads")
@@ -257,15 +302,15 @@ Deno.serve(async (req) => {
           email,
           email_address: email,
           full_name: fullName,
-          company,
-          job_title: jobTitle,
           channel: "email",
           smartlead_lead_id: smartleadLeadId,
           smartlead_campaign_id: smartleadCampaignId,
+          last_campaign_name: lastCampaignName,
           reply_message_id: replyMessageId,
           last_reply_text: replyText,
-          last_reply_raw_html: rawHtml,
-          last_reply_at: nowIso,
+          last_reply_raw_html: replyHtml,
+          last_reply_at: replyTimestamp,
+          reply_thread: replyThread,
           inbox_status: "pending",
         },
         { onConflict: "user_id,external_id" },
@@ -274,7 +319,7 @@ Deno.serve(async (req) => {
       .single();
 
     if (upsertError) {
-      console.error("[smartlead-webhook v1] agent_leads upsert error:", upsertError);
+      console.error("[smartlead-webhook v2] agent_leads upsert error:", upsertError);
       // 200 so Smartlead doesn't retry; we've logged for investigation.
       return new Response(
         JSON.stringify({ success: false, error: "upsert_failed", eventType }),
@@ -283,7 +328,7 @@ Deno.serve(async (req) => {
     }
 
     console.log(
-      `[smartlead-webhook v1] Upserted agent_lead ${upsertedLead?.id} for email=${email}`,
+      `[smartlead-webhook v2] Upserted agent_lead ${upsertedLead?.id} for email=${email}`,
     );
 
     // classify-reply invocation intentionally deferred to Phase C.
@@ -293,7 +338,7 @@ Deno.serve(async (req) => {
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   } catch (err) {
-    console.error("[smartlead-webhook v1] Fatal error:", err);
+    console.error("[smartlead-webhook v2] Fatal error:", err);
     return new Response(
       JSON.stringify({
         success: false,
