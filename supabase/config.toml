@@ -99,3 +99,6 @@ verify_jwt = false
 
 [functions.smartlead-webhook]
 verify_jwt = false
+
+[functions.sync-smartlead-campaigns]
+verify_jwt = false
