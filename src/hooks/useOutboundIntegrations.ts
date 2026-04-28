@@ -169,8 +169,30 @@ export function useOutboundIntegrations() {
           } catch (err) {
             console.error('HeyReach auto-sync error:', err);
           }
-        } else {
-          // Reply.io sync chain (default)
+        } else if (platform === 'smartlead') {
+          // Smartlead post-add: campaign sync only. Webhook registration is
+          // configured manually by the user in the Smartlead dashboard
+          // (current model — no auto-register endpoint), so no equivalent of
+          // Reply.io's setup-reply-webhook step here.
+          try {
+            const { error } = await supabase.functions.invoke('sync-smartlead-campaigns', {
+              body: { integrationId: data.id },
+            });
+
+            if (error) {
+              console.error('Smartlead campaign sync failed:', error);
+              toast.error('Campaign sync failed - you can try again manually');
+            } else {
+              queryClient.invalidateQueries({ queryKey: ['outbound-integrations'] });
+              queryClient.invalidateQueries({ queryKey: ['playground-stats'] });
+              queryClient.invalidateQueries({ queryKey: ['synced-campaigns'] });
+              toast.success('Smartlead campaigns synced');
+            }
+          } catch (err) {
+            console.error('Smartlead auto-sync error:', err);
+          }
+        } else if (platform === 'reply.io' || platform === 'replyio') {
+          // Reply.io sync chain
           try {
             // Step 1: Fetch available campaigns with AUTO-LINK enabled for first sync
             try {
@@ -222,6 +244,13 @@ export function useOutboundIntegrations() {
           } catch (err) {
             console.error('Auto-sync error:', err);
           }
+        } else {
+          // Throwing here would surface as an unhandled rejection (the
+          // mutation's onError only catches mutationFn errors, not
+          // onSuccess errors), so we toast directly to keep the UX intent.
+          const message = `No add-integration handler configured for platform "${platform || 'unknown'}"`;
+          console.error(message);
+          toast.error(message);
         }
       }
     },
@@ -278,7 +307,6 @@ export function useOutboundIntegrations() {
       const platform = current?.platform?.toLowerCase() || '';
 
       if (platform === 'heyreach') {
-        // HeyReach sync
         const { data, error } = await supabase.functions.invoke('sync-heyreach-campaigns', {
           body: { integrationId },
         });
@@ -287,30 +315,44 @@ export function useOutboundIntegrations() {
         return data;
       }
 
-      // Reply.io sync (default)
-      // Step 1: Call fetch-available-campaigns FIRST with auto-link enabled
-      try {
-        const { data: fetchResult, error: availableError } = await supabase.functions.invoke('fetch-available-campaigns', {
-          body: { integrationId, autoLinkOnFirstSync: true },
+      if (platform === 'smartlead') {
+        const { data, error } = await supabase.functions.invoke('sync-smartlead-campaigns', {
+          body: { integrationId },
         });
-        if (availableError) {
-          console.warn('fetch-available-campaigns failed (peopleCount may be 0):', availableError);
-        } else {
-          if (fetchResult?.autoLinked) {
-            toast.info(`Auto-linked ${fetchResult.linkedCount} campaigns`);
-          }
-        }
-      } catch (err) {
-        console.warn('fetch-available-campaigns error:', err);
+
+        if (error) throw error;
+        return data;
       }
 
-      // Step 2: Run the main V3 sync for status/name consistency
-      const { data, error } = await supabase.functions.invoke('sync-reply-campaigns', {
-        body: { integrationId },
-      });
+      if (platform === 'reply.io' || platform === 'replyio') {
+        // Step 1: Call fetch-available-campaigns FIRST with auto-link enabled
+        try {
+          const { data: fetchResult, error: availableError } = await supabase.functions.invoke('fetch-available-campaigns', {
+            body: { integrationId, autoLinkOnFirstSync: true },
+          });
+          if (availableError) {
+            console.warn('fetch-available-campaigns failed (peopleCount may be 0):', availableError);
+          } else {
+            if (fetchResult?.autoLinked) {
+              toast.info(`Auto-linked ${fetchResult.linkedCount} campaigns`);
+            }
+          }
+        } catch (err) {
+          console.warn('fetch-available-campaigns error:', err);
+        }
 
-      if (error) throw error;
-      return data;
+        // Step 2: Run the main V3 sync for status/name consistency
+        const { data, error } = await supabase.functions.invoke('sync-reply-campaigns', {
+          body: { integrationId },
+        });
+
+        if (error) throw error;
+        return data;
+      }
+
+      throw new Error(
+        `No sync handler configured for platform "${platform || 'unknown'}"`,
+      );
     },
     onSuccess: (data, integrationId) => {
       queryClient.invalidateQueries({ queryKey: ['outbound-integrations'] });
@@ -320,14 +362,19 @@ export function useOutboundIntegrations() {
       const current = (queryClient.getQueryData(['outbound-integrations']) as OutboundIntegration[] | undefined)
         ?.find(i => i.id === integrationId);
       const platform = current?.platform?.toLowerCase() || '';
+      const isReplyIo = platform === 'reply.io' || platform === 'replyio';
 
-      if (platform !== 'heyreach') {
-        // Start background contact sync for linked campaigns (Reply.io only)
+      if (isReplyIo) {
+        // Background contact sync for linked campaigns is Reply.io-only —
+        // HeyReach and Smartlead don't have an equivalent.
         startContactsSync(integrationId);
       }
 
-      const count = data?.campaigns ?? 'unknown';
-      toast.success(`Synced ${count} campaigns${platform !== 'heyreach' ? ' - syncing contacts...' : ''}`);
+      // Each sync function uses a slightly different result shape:
+      // sync-reply-campaigns returns { campaigns: N }, sync-heyreach-campaigns
+      // and sync-smartlead-campaigns return { synced: N }.
+      const count = data?.synced ?? data?.campaigns ?? 'unknown';
+      toast.success(`Synced ${count} campaigns${isReplyIo ? ' - syncing contacts...' : ''}`);
     },
     onError: (error) => {
       queryClient.invalidateQueries({ queryKey: ['outbound-integrations'] });
