@@ -228,6 +228,23 @@ Deno.serve(async (req) => {
     const replyTimestamp =
       (replyMessage.time as string | undefined) ?? new Date().toISOString();
 
+    // email_stats_id: undocumented but required by Smartlead's
+    // POST /campaigns/{id}/reply-email-thread endpoint. The webhook payload
+    // ships it as `stats_id` (top-level); we tolerate a few likely synonyms
+    // in case Smartlead changes the name. Stored on agent_leads so
+    // send-smartlead-email can forward it.
+    const smartleadEmailStatsId =
+      ((payload.stats_id ??
+        payload.email_stats_id ??
+        (replyMessage.stats_id as unknown)) as string | number | undefined) !==
+      undefined
+        ? String(
+            payload.stats_id ??
+              payload.email_stats_id ??
+              (replyMessage.stats_id as unknown),
+          )
+        : null;
+
     // Prefer the plain-text body; fall back to a quick HTML-strip if Smartlead
     // ever omits .text. Zendesk-style "type your reply above this line" marker
     // and anything after it is dropped here; full quoted-chain stripping is
@@ -305,6 +322,7 @@ Deno.serve(async (req) => {
           channel: "email",
           smartlead_lead_id: smartleadLeadId,
           smartlead_campaign_id: smartleadCampaignId,
+          smartlead_email_stats_id: smartleadEmailStatsId,
           last_campaign_name: lastCampaignName,
           reply_message_id: replyMessageId,
           last_reply_text: replyText,
@@ -331,7 +349,84 @@ Deno.serve(async (req) => {
       `[smartlead-webhook v2] Upserted agent_lead ${upsertedLead?.id} for email=${email}`,
     );
 
-    // classify-reply invocation intentionally deferred to Phase C.
+    // === classify-reply (async) =============================================
+    // Mirrors heyreach-webhook: fire classify-reply asynchronously via
+    // EdgeRuntime.waitUntil so the webhook returns 200 to Smartlead fast.
+    // Gated on an active agent_config — without one, classify-reply has no
+    // sender persona / offer copy to work with, so we just leave the lead
+    // as inbox_status='pending' for manual handling.
+    //
+    // Empty-text guard: Smartlead's dashboard test fixture (and rare real-
+    // world cases like prospects replying with only quoted history) results
+    // in replyText collapsing to "" after Zendesk-marker stripping. We
+    // upsert the row regardless (metadata like smartlead_lead_id /
+    // reply_message_id is still useful for the inbox) but skip classify-
+    // reply, since classify-reply rejects empty reply_text with 400.
+    if (upsertedLead?.id) {
+      const hasReplyContent = !!replyText && replyText.trim().length > 0;
+
+      if (!hasReplyContent) {
+        console.log(
+          `[smartlead-webhook v2] Empty reply text, skipping classification for lead ${upsertedLead.id}`,
+        );
+      } else {
+        const { data: agentConfig } = await supabase
+          .from("agent_configs")
+          .select("*")
+          .eq("user_id", integration.created_by)
+          .eq("is_active", true)
+          .maybeSingle();
+
+        if (agentConfig) {
+          const agentApiKey = Deno.env.get("AGENT_API_KEY") || "";
+          const classifyPromise = fetch(
+            `${supabaseUrl}/functions/v1/classify-reply`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "x-agent-key": agentApiKey,
+              },
+              body: JSON.stringify({
+                reply_text: replyText,
+                thread_history: replyThread,
+                lead_id: upsertedLead.id,
+                user_id: integration.created_by,
+                channel: "email",
+                agent_context: {
+                  offer_description: agentConfig.offer_description,
+                  desired_action: agentConfig.desired_action,
+                  outcome_delivered: agentConfig.outcome_delivered,
+                  target_icp: agentConfig.target_icp,
+                  sender_name: agentConfig.sender_name,
+                  sender_title: agentConfig.sender_title,
+                  sender_bio: agentConfig.sender_bio,
+                  company_name: agentConfig.company_name,
+                  company_url: agentConfig.company_url,
+                  communication_style: agentConfig.communication_style,
+                  avoid_phrases: agentConfig.avoid_phrases || [],
+                  sample_message: agentConfig.sample_message || "",
+                },
+              }),
+            },
+          ).catch((err) => {
+            console.error("[smartlead-webhook v2] classify-reply invocation failed:", err);
+          });
+
+          // @ts-ignore — EdgeRuntime is injected by Supabase runtime
+          if (typeof EdgeRuntime !== "undefined" && typeof EdgeRuntime.waitUntil === "function") {
+            // @ts-ignore
+            EdgeRuntime.waitUntil(classifyPromise);
+          } else {
+            await classifyPromise;
+          }
+        } else {
+          console.log(
+            `[smartlead-webhook v2] No active agent_config for user ${integration.created_by} — skipping classify-reply`,
+          );
+        }
+      }
+    }
 
     return new Response(
       JSON.stringify({ success: true, eventType, leadId: upsertedLead?.id }),

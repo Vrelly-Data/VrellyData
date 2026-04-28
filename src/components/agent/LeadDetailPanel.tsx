@@ -98,6 +98,28 @@ function useSendAgentReply() {
   });
 }
 
+// Smartlead email send. Mirrors useSendAgentReply's shape so the email-send
+// dispatch site can pick a hook by `smartlead_lead_id` presence and treat
+// both as drop-in replacements (apart from per-platform body keys).
+function useSendSmartleadEmail() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ leadId, message }: { leadId: string; message: string }) => {
+      const { data, error } = await supabase.functions.invoke('send-smartlead-email', {
+        body: { leadId, message },
+      });
+      if (error) throw new Error(error.message || 'Failed to send Smartlead email');
+      if (data?.error) throw new Error(data.error);
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['agent-inbox'] });
+      queryClient.invalidateQueries({ queryKey: ['agent-activity'] });
+    },
+  });
+}
+
 export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, classifying = false }: LeadDetailPanelProps) {
   const { data: liveLead } = useLiveLead(initialLead.id);
   const lead = liveLead ?? initialLead;
@@ -105,6 +127,7 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
   const updateLead = useUpdateAgentLead();
   const approveDraft = useApproveDraft();
   const sendReply = useSendAgentReply();
+  const sendSmartleadEmail = useSendSmartleadEmail();
   const { toast } = useToast();
   const [draftText, setDraftText] = useState(lead.draft_response || '');
   const [notes, setNotes] = useState(lead.notes || '');
@@ -124,6 +147,12 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
   const [showConfirm, setShowConfirm] = useState(false);
 
   const isLinkedIn = lead.channel === 'linkedin';
+  // Email-send dispatch: smartlead_lead_id presence is the reliable signal
+  // for "this lead came from Smartlead" — `channel === 'email'` alone isn't
+  // enough because Reply.io's reply-webhook also writes channel='email'.
+  const isSmartleadEmail = lead.channel === 'email' && !!lead.smartlead_lead_id;
+  const isReplyIoEmail = lead.channel === 'email' && !lead.smartlead_lead_id;
+  const hasEmailSendHandler = isSmartleadEmail || isReplyIoEmail;
 
   const handleStageChange = (newStage: string) => {
     if (newStage === lead.pipeline_stage) return;
@@ -142,30 +171,62 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
 
   const handleApprove = () => {
     setShowConfirm(false);
-    sendReply.mutate(
-      {
-        leadId: lead.id,
-        draftResponse: draftText,
-        intent: lead.intent,
-      },
-      {
-        onSuccess: () => {
-          toast({ title: 'Reply sent via Reply.io ✓' });
-        },
-        onError: (err: any) => {
-          const msg = err?.message || 'Failed to send reply';
-          if (msg.includes('No campaign mapped')) {
+
+    if (isSmartleadEmail) {
+      sendSmartleadEmail.mutate(
+        { leadId: lead.id, message: draftText },
+        {
+          onSuccess: () => {
+            toast({ title: 'Reply sent via Smartlead ✓' });
+          },
+          onError: (err: any) => {
             toast({
-              title: 'Campaign not configured',
-              description: 'Set up Campaign Rules in Agent Settings to enable sending.',
+              title: 'Error',
+              description: err?.message || 'Failed to send Smartlead email',
               variant: 'destructive',
             });
-          } else {
-            toast({ title: 'Error', description: msg, variant: 'destructive' });
-          }
+          },
+        }
+      );
+      return;
+    }
+
+    if (isReplyIoEmail) {
+      sendReply.mutate(
+        {
+          leadId: lead.id,
+          draftResponse: draftText,
+          intent: lead.intent,
         },
-      }
-    );
+        {
+          onSuccess: () => {
+            toast({ title: 'Reply sent via Reply.io ✓' });
+          },
+          onError: (err: any) => {
+            const msg = err?.message || 'Failed to send reply';
+            if (msg.includes('No campaign mapped')) {
+              toast({
+                title: 'Campaign not configured',
+                description: 'Set up Campaign Rules in Agent Settings to enable sending.',
+                variant: 'destructive',
+              });
+            } else {
+              toast({ title: 'Error', description: msg, variant: 'destructive' });
+            }
+          },
+        }
+      );
+      return;
+    }
+
+    // Belt-and-braces: the Approve & Send button is disabled when no handler
+    // is available, so this branch shouldn't be reachable. Surface as a toast
+    // rather than silently failing if the disabled gate is ever bypassed.
+    toast({
+      title: 'Error',
+      description: `No send handler configured for channel "${lead.channel ?? 'unknown'}"`,
+      variant: 'destructive',
+    });
   };
 
   const handleDismiss = () => {
@@ -372,9 +433,13 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
                 size="sm"
                 className="bg-amber-600 hover:bg-amber-700 text-white"
                 onClick={() => setShowConfirm(true)}
-                disabled={sendReply.isPending}
+                disabled={
+                  sendReply.isPending ||
+                  sendSmartleadEmail.isPending ||
+                  !hasEmailSendHandler
+                }
               >
-                {sendReply.isPending ? (
+                {sendReply.isPending || sendSmartleadEmail.isPending ? (
                   <><Loader2 className="h-3 w-3 animate-spin mr-1" /> Sending...</>
                 ) : (
                   'Approve & Send'
@@ -496,9 +561,11 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
           <AlertDialogHeader>
             <AlertDialogTitle>Approve Response</AlertDialogTitle>
             <AlertDialogDescription>
-              {lead.channel === 'linkedin'
-                ? 'This will send the message via your Reply.io LinkedIn campaign. Make sure you have a campaign mapped for this intent in Settings.'
-                : 'This will send via your Reply.io email campaign.'}
+              {isSmartleadEmail
+                ? 'This will send via Smartlead email.'
+                : lead.channel === 'linkedin'
+                  ? 'This will send the message via your Reply.io LinkedIn campaign. Make sure you have a campaign mapped for this intent in Settings.'
+                  : 'This will send via your Reply.io email campaign.'}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

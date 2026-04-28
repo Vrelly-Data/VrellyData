@@ -102,3 +102,6 @@ verify_jwt = false
 
 [functions.sync-smartlead-campaigns]
 verify_jwt = false
+
+[functions.send-smartlead-email]
+verify_jwt = false

@@ -2,6 +2,93 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 console.log('classify-reply starting');
 
+// === Email reply preprocessing =============================================
+// Aggressive HTML / quoted-chain / signature stripping for email channel.
+// Idempotent: works on already-plain-text input (HTML detection check),
+// and a no-op for LinkedIn replies (only invoked when channel === 'email').
+//
+// Order matters: HTML → Zendesk marker → quoted chains → signatures →
+// blank-line collapse. Each step trims off everything FROM the first
+// matched marker onward, so signature/quote markers earlier in the text
+// take precedence over later ones.
+function preprocessEmailReply(text: string): string {
+  if (!text) return '';
+  let s = text;
+
+  // 1. HTML strip (idempotent — skip if no tags detected)
+  if (/<[a-z][^>]*>/i.test(s)) {
+    s = s
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/p>/gi, '\n\n')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&amp;/gi, '&')
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;/gi, "'");
+  }
+
+  // 2. Zendesk-style marker (defensive — smartlead-webhook also strips this)
+  s = s.replace(/##-\s*Please type your reply above this line\s*-##[\s\S]*$/i, '');
+
+  // 3. Quoted-reply chains. Each pattern matches the START of a quote block;
+  // we cut from the earliest match.
+  const quoteMarkers: RegExp[] = [
+    /^On\s+.+?\swrote:\s*$/m,                  // "On <date>, <name> wrote:"
+    /^From:\s.+?\nSent:\s/m,                   // Outlook header block (Sent:)
+    /^From:\s.+?\nDate:\s/m,                   // Apple Mail / iOS header block
+    /^_{20,}\s*$/m,                            // Outlook horizontal-rule divider
+    /^>\s.+$/m,                                // Gmail/Apple ">" quoted lines
+  ];
+  let earliestQuote = -1;
+  for (const re of quoteMarkers) {
+    const m = s.search(re);
+    if (m >= 0 && (earliestQuote === -1 || m < earliestQuote)) {
+      earliestQuote = m;
+    }
+  }
+  if (earliestQuote >= 0) {
+    s = s.slice(0, earliestQuote);
+  }
+
+  // 4. Signature markers — cut from the earliest match.
+  const sigMarkers: RegExp[] = [
+    /^--\s*$/m,                                // RFC "-- " standard
+    /^Sent from my iPhone\b/im,
+    /^Sent from my iPad\b/im,
+    /^Get Outlook for (iOS|Android)\b/im,
+    /^Sent from Outlook\b/im,
+  ];
+  let earliestSig = -1;
+  for (const re of sigMarkers) {
+    const m = s.search(re);
+    if (m >= 0 && (earliestSig === -1 || m < earliestSig)) {
+      earliestSig = m;
+    }
+  }
+  if (earliestSig >= 0) {
+    s = s.slice(0, earliestSig);
+  }
+
+  // 5. Closing + name pattern: "Best,\n<Name>" / "Thanks,\n<Name>" etc.
+  // Match the closing word at the start of a line followed by a short
+  // name line (≤60 chars, letters/spaces/hyphens/periods/apostrophes).
+  const closingRe =
+    /^(Best|Thanks|Thank you|Regards|Best regards|Kind regards|Cheers|Sincerely|Yours)[,!.]?\s*\n\s*[A-Za-z][A-Za-z\s.\-']{0,60}\s*$/im;
+  const closingMatch = s.search(closingRe);
+  if (closingMatch >= 0) {
+    s = s.slice(0, closingMatch);
+  }
+
+  // 6. Collapse runs of 3+ blank lines and trim.
+  s = s.replace(/\n{3,}/g, '\n\n').trim();
+
+  return s;
+}
+
 const allowedOrigins = [
   'https://vrelly.com',
   'https://www.vrelly.com',
@@ -57,6 +144,9 @@ Deno.serve(async (req) => {
       );
       const { data: { user }, error: authError } = await authClient.auth.getUser();
       if (authError || !user) {
+        console.warn(
+          `[classify-reply] 401: JWT auth failed (${authError?.message ?? 'no user'})`,
+        );
         return new Response(JSON.stringify({ error: 'Unauthorized' }), {
           status: 401,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -64,6 +154,9 @@ Deno.serve(async (req) => {
       }
       authUserId = user.id;
     } else {
+      console.warn(
+        '[classify-reply] 401: no x-agent-key match and no Bearer token',
+      );
       return new Response(JSON.stringify({ error: 'Unauthorized' }), {
         status: 401,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -86,10 +179,45 @@ Deno.serve(async (req) => {
     const user_id = authUserId || bodyUserId;
 
     if (!reply_text || !agent_context || !channel || !user_id) {
-      return new Response(JSON.stringify({ error: 'Missing required fields' }), {
+      // Per-field diagnostic so future debugging doesn't require source diving.
+      // Falsy includes null, undefined, AND empty string for the same reason
+      // empty replies (e.g. Smartlead test fixtures whose body is purely a
+      // Zendesk marker) trip this branch.
+      const missing = {
+        reply_text: !reply_text
+          ? (reply_text === '' ? 'empty_string' : 'missing')
+          : 'ok',
+        agent_context: !agent_context ? 'missing' : 'ok',
+        channel: !channel ? 'missing' : 'ok',
+        user_id: !user_id ? 'missing' : 'ok',
+      };
+      console.warn('[classify-reply] 400: missing/empty required fields', missing);
+      return new Response(JSON.stringify({ error: 'Missing required fields', missing }), {
         status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
+    }
+
+    // Email-only preprocessing: strip HTML, quoted chains, signatures so
+    // Claude classifies the prospect's actual words rather than their entire
+    // mail-thread history. LinkedIn replies arrive clean from heyreach-webhook
+    // and skip this entirely. If preprocessing collapses the message to
+    // <20 chars (bug-class: misidentified marker eating the whole reply),
+    // fall back to the original so we always classify *something*.
+    let processed_reply_text: string = reply_text;
+    if (channel === 'email') {
+      const before = reply_text.length;
+      const cleaned = preprocessEmailReply(reply_text);
+      console.log(
+        `[classify-reply v2] email preprocessing: ${before} chars → ${cleaned.length} chars`,
+      );
+      if (cleaned.length < 20) {
+        console.warn(
+          `[classify-reply v2] preprocessing left only ${cleaned.length} chars — using original reply_text`,
+        );
+      } else {
+        processed_reply_text = cleaned;
+      }
     }
 
     // Create Supabase client with service role key
@@ -288,7 +416,7 @@ Return a JSON object with exactly these fields:
 Return ONLY valid JSON. No markdown fences. No explanation.`;
 
     const userMessage = `Channel: ${channel}
-Prospect reply: ${reply_text}
+Prospect reply: ${processed_reply_text}
 Conversation history: ${JSON.stringify(thread_history || [])}
 Analyze this reply and respond as instructed.`;
 
