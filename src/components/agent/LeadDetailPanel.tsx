@@ -523,20 +523,21 @@ export function IntentBadge({ intent }: { intent: string }) {
 
 // Reusable channel badge
 export function ChannelBadge({ channel }: { channel: string }) {
-  return (
-    <Badge variant="outline" className={cn(
-      'text-xs',
-      channel === 'linkedin'
-        ? 'border-blue-300 text-blue-700 dark:text-blue-400'
-        : 'border-green-300 text-green-700 dark:text-green-400'
-    )}>
-      {channel === 'linkedin' ? (
-        <><Linkedin className="h-3 w-3 mr-1" /> LinkedIn</>
-      ) : (
-        <><Mail className="h-3 w-3 mr-1" /> Email</>
-      )}
-    </Badge>
-  );
+  if (channel === 'linkedin') {
+    return (
+      <Badge variant="outline" className="text-xs border-blue-300 text-blue-700 dark:text-blue-400">
+        <Linkedin className="h-3 w-3 mr-1" /> LinkedIn
+      </Badge>
+    );
+  }
+  if (channel === 'email') {
+    return (
+      <Badge variant="outline" className="text-xs border-green-300 text-green-700 dark:text-green-400">
+        <Mail className="h-3 w-3 mr-1" /> Email
+      </Badge>
+    );
+  }
+  return null;
 }
 
 export { formatRelativeTime };
