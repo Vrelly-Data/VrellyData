@@ -105,3 +105,6 @@ verify_jwt = false
 
 [functions.send-smartlead-email]
 verify_jwt = false
+
+[functions.add-to-smartlead-campaign]
+verify_jwt = false

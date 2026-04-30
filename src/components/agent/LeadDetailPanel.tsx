@@ -27,6 +27,10 @@ import {
   useAddToHeyReachCampaign,
   useHeyReachCampaigns,
 } from '@/hooks/useHeyReach';
+import {
+  useAddToSmartleadCampaign,
+  useSmartleadCampaigns,
+} from '@/hooks/useSmartlead';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -137,6 +141,15 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
   const addToCampaign = useAddToHeyReachCampaign();
   const { data: heyreachCampaigns = [], isLoading: campaignsLoading } = useHeyReachCampaigns();
   const [selectedCampaignId, setSelectedCampaignId] = useState('');
+
+  // Smartlead Add to Campaign (for Email channel with smartlead_lead_id).
+  // Filtering by integration platform (not synced_campaigns.source) mirrors
+  // useHeyReachCampaigns and prevents cross-channel adds — a Smartlead
+  // campaign cannot appear in the LinkedIn dropdown and vice versa.
+  const addToSmartleadCampaign = useAddToSmartleadCampaign();
+  const { data: smartleadCampaigns = [], isLoading: smartleadCampaignsLoading } =
+    useSmartleadCampaigns();
+  const [selectedSmartleadCampaignId, setSelectedSmartleadCampaignId] = useState('');
 
   // Sync draft text when live data brings in a new draft
   const [lastSyncedDraft, setLastSyncedDraft] = useState(lead.draft_response || '');
@@ -269,6 +282,27 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
       {
         onSuccess: () => {
           setSelectedCampaignId('');
+        },
+      }
+    );
+  };
+
+  // Smartlead add to campaign — uses the Draft Response textarea content as
+  // the personalized message (passed through to Smartlead's
+  // {{first_touch_message}} custom field by the edge function).
+  const handleAddToSmartleadCampaign = () => {
+    const campaign = smartleadCampaigns.find((c) => c.id === selectedSmartleadCampaignId);
+    if (!draftText.trim() || !campaign?.external_campaign_id) return;
+    addToSmartleadCampaign.mutate(
+      {
+        lead_id: lead.id,
+        campaign_id: campaign.external_campaign_id,
+        message: draftText.trim(),
+        campaign_name: campaign.name,
+      },
+      {
+        onSuccess: () => {
+          setSelectedSmartleadCampaignId('');
         },
       }
     );
@@ -519,6 +553,50 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
                 Add to Campaign
               </Button>
             </div>
+          </div>
+        )}
+
+        {/* Smartlead Add to Campaign — Email leads with a smartlead_lead_id.
+            Reply.io email leads (no smartlead_lead_id) render nothing here;
+            those are reserved for a future Reply.io campaign-add expansion. */}
+        {isSmartleadEmail && (
+          <div className="space-y-2 border rounded-lg p-3">
+            <p className="text-xs font-medium text-muted-foreground">Add to Campaign</p>
+            <Select
+              value={selectedSmartleadCampaignId}
+              onValueChange={setSelectedSmartleadCampaignId}
+            >
+              <SelectTrigger className="h-8 text-xs">
+                <SelectValue
+                  placeholder={smartleadCampaignsLoading ? 'Loading campaigns...' : 'Select a campaign'}
+                />
+              </SelectTrigger>
+              <SelectContent>
+                {smartleadCampaigns.map((campaign) => (
+                  <SelectItem key={campaign.id} value={campaign.id}>
+                    {campaign.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              onClick={handleAddToSmartleadCampaign}
+              disabled={
+                !draftText.trim() ||
+                !selectedSmartleadCampaignId ||
+                addToSmartleadCampaign.isPending
+              }
+              variant="outline"
+              className="w-full mt-2 gap-2"
+              size="sm"
+            >
+              {addToSmartleadCampaign.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <UserPlus className="h-4 w-4" />
+              )}
+              Add to Campaign
+            </Button>
           </div>
         )}
 
