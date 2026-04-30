@@ -15,8 +15,8 @@
 //   - V-only mark composited at top-left (~120px tall, 50px padding). Bright
 //     blue V on the matching gradient corner has enough contrast on its own
 //     — no vignette/backdrop needed.
-//   - Headline (white, 64px, weight 800, letter-spacing -1.4) on two lines
-//   - Tagline (white @ 70% opacity, 24px, weight 400) on two lines
+//   - Headline (white, 104px, weight 800, letter-spacing -2) — single line
+//   - Tagline (white @ 70% opacity, 24px, weight 400) — two lines
 //
 // SVG composition: the gradient + text are rendered as a single SVG by
 // libvips/resvg, then the mark PNG is composited on top. Font fallback chain
@@ -38,21 +38,19 @@ const outputPath = resolve(projectRoot, 'public/og-image.png');
 const W = 1200;
 const H = 630;
 
-const HEADLINE_LINE_1 = 'Outbound &amp; Inbound Sales Agents';
-const HEADLINE_LINE_2 = 'Built on Your Data';
-const TAGLINE_LINE_1 = 'Find prospects from a 4M-person database.';
+const HEADLINE = 'Start Selling Smarter';
+const TAGLINE_LINE_1 = 'Find prospects from a 100M-person database.';
 const TAGLINE_LINE_2 = 'Run outbound on autopilot. Let AI handle replies.';
 
-const HEADLINE_FONT_SIZE = 64;
+const HEADLINE_FONT_SIZE = 104;
 const TAGLINE_FONT_SIZE = 24;
-// -0.02em ≈ -1.28px at 64px; round to -1.4 for a touch more tightening.
-const HEADLINE_LETTER_SPACING = -1.4;
+// -0.02em ≈ -2.08px at 104px; round to -2 for the modern SaaS look.
+const HEADLINE_LETTER_SPACING = -2;
 const FONT_FAMILY = "'Inter', 'Helvetica Neue', Helvetica, Arial, sans-serif";
 
-// Headline baselines (75px line-height) center the two-line block slightly
-// above the canvas midpoint (315), leaving room for the tagline below.
-const HEADLINE_Y_1 = 305;
-const HEADLINE_Y_2 = 380;
+// Single-line headline sits slightly above center; tagline anchors below
+// with ~140px gap so the visual block reads as one unit.
+const HEADLINE_Y = 330;
 const TAGLINE_Y_1 = 460;
 const TAGLINE_Y_2 = 492;
 
@@ -79,8 +77,7 @@ async function main() {
   </defs>
   <rect width="${W}" height="${H}" fill="url(#bg)"/>
   <g font-family="${FONT_FAMILY}" fill="#ffffff" text-anchor="middle">
-    <text x="${W / 2}" y="${HEADLINE_Y_1}" font-size="${HEADLINE_FONT_SIZE}" font-weight="800" letter-spacing="${HEADLINE_LETTER_SPACING}">${HEADLINE_LINE_1}</text>
-    <text x="${W / 2}" y="${HEADLINE_Y_2}" font-size="${HEADLINE_FONT_SIZE}" font-weight="800" letter-spacing="${HEADLINE_LETTER_SPACING}">${HEADLINE_LINE_2}</text>
+    <text x="${W / 2}" y="${HEADLINE_Y}" font-size="${HEADLINE_FONT_SIZE}" font-weight="800" letter-spacing="${HEADLINE_LETTER_SPACING}">${HEADLINE}</text>
     <text x="${W / 2}" y="${TAGLINE_Y_1}" font-size="${TAGLINE_FONT_SIZE}" font-weight="400" fill-opacity="0.7">${TAGLINE_LINE_1}</text>
     <text x="${W / 2}" y="${TAGLINE_Y_2}" font-size="${TAGLINE_FONT_SIZE}" font-weight="400" fill-opacity="0.7">${TAGLINE_LINE_2}</text>
   </g>
