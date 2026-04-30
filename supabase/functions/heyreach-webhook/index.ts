@@ -328,6 +328,72 @@ Deno.serve(async (req) => {
 
     console.log(`Upserted agent_lead ${upsertedLead?.id} for ${fullName || externalId} (linkedin)`);
 
+    // Best-effort full-thread sync: the webhook payload's recent_messages
+    // can be a partial slice (real conversations have shown up with only the
+    // triggering message), so overwrite reply_thread with the platform's
+    // canonical history via GetChatroom. Mirrors poll-heyreach-inbox's
+    // proven shape. Errors are logged and non-fatal — we keep the partial
+    // thread written above rather than failing the webhook.
+    let fullReplyThread: typeof replyThread | null = null;
+    if (upsertedLead?.id && accountId && conversationId && integration.api_key_encrypted) {
+      try {
+        const chatroomRes = await fetch(
+          `https://api.heyreach.io/api/public/inbox/GetChatroom/${accountId}/${conversationId}`,
+          {
+            headers: {
+              "X-API-KEY": integration.api_key_encrypted,
+              Accept: "application/json",
+            },
+          },
+        );
+
+        if (!chatroomRes.ok) {
+          const errBody = await chatroomRes.text().catch(() => "");
+          console.warn(
+            `[heyreach-webhook] GetChatroom ${chatroomRes.status} for conv ${conversationId} — keeping partial thread. Body: ${errBody.substring(0, 200)}`,
+          );
+        } else {
+          const chatroom = await chatroomRes.json();
+          const messages = Array.isArray(chatroom?.messages) ? chatroom.messages : [];
+
+          fullReplyThread = messages.map(
+            (msg: { sender?: string; body?: string; createdAt?: string }) => ({
+              role: msg.sender === "ME" ? "sender" : "prospect",
+              content: msg.body || "",
+              timestamp: msg.createdAt || new Date().toISOString(),
+              channel: "linkedin",
+            }),
+          );
+
+          if (fullReplyThread.length > 0) {
+            const { error: threadUpdateErr } = await supabase
+              .from("agent_leads")
+              .update({ reply_thread: fullReplyThread })
+              .eq("id", upsertedLead.id);
+
+            if (threadUpdateErr) {
+              console.warn(
+                `[heyreach-webhook] Full-thread UPDATE failed for lead ${upsertedLead.id}:`,
+                threadUpdateErr,
+              );
+              fullReplyThread = null;
+            } else {
+              console.log(
+                `[heyreach-webhook] Synced full thread (${fullReplyThread.length} msgs) for lead ${upsertedLead.id}`,
+              );
+            }
+          } else {
+            fullReplyThread = null;
+          }
+        }
+      } catch (chatroomErr) {
+        console.error(
+          `[heyreach-webhook] Full-thread sync threw for conv ${conversationId}:`,
+          chatroomErr,
+        );
+      }
+    }
+
     // Fire classify-reply asynchronously so the webhook can return 200 fast.
     // Runs after the response thanks to EdgeRuntime.waitUntil.
     if (upsertedLead?.id) {
@@ -350,7 +416,10 @@ Deno.serve(async (req) => {
             },
             body: JSON.stringify({
               reply_text: replyText,
-              thread_history: replyThread,
+              // Prefer the canonical full thread from GetChatroom when the
+              // best-effort fetch succeeded; fall back to the partial
+              // payload-derived thread otherwise.
+              thread_history: fullReplyThread ?? replyThread,
               lead_id: upsertedLead.id,
               user_id: integration.created_by,
               channel: "linkedin",
