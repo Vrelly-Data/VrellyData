@@ -273,7 +273,7 @@ Deno.serve(async (req) => {
     // a per-integration webhook secret.
     const { data: integration } = await supabase
       .from("outbound_integrations")
-      .select("id, team_id, created_by")
+      .select("id, team_id, created_by, api_key_encrypted")
       .eq("platform", "smartlead")
       .eq("is_active", true)
       .order("created_at", { ascending: false })
@@ -290,12 +290,11 @@ Deno.serve(async (req) => {
       );
     }
 
-    // === Build reply_thread (single-message for now) ========================
-    // heyreach-webhook builds the full thread from event.recent_messages.
-    // Smartlead's EMAIL_REPLY payload only carries the latest reply_message
-    // (and an unrelated sent_message), so we record just the prospect's
-    // message. Phase C may stitch in earlier messages from Smartlead's
-    // history endpoints if/when needed.
+    // === Build reply_thread (single-message seed) ===========================
+    // The EMAIL_REPLY payload only carries the latest reply_message (and an
+    // unrelated sent_message), so this is just a seed. The post-upsert
+    // best-effort fetch from Smartlead's /message-history endpoint below
+    // overwrites reply_thread with the full canonical history.
     const replyThread = [
       {
         role: "prospect",
@@ -349,6 +348,87 @@ Deno.serve(async (req) => {
       `[smartlead-webhook v2] Upserted agent_lead ${upsertedLead?.id} for email=${email}`,
     );
 
+    // === Best-effort full-thread sync =======================================
+    // Mirrors heyreach-webhook: the upsert payload only carries the latest
+    // reply, so overwrite reply_thread with Smartlead's canonical history
+    // via /campaigns/{campaign_id}/leads/{lead_id}/message-history. Errors
+    // are logged and non-fatal — the seed thread written by the upsert
+    // stays in place and the webhook still returns 200.
+    //
+    // api_key in QUERY STRING — never log the URL (contains the credential).
+    let fullReplyThread: typeof replyThread | null = null;
+    if (
+      upsertedLead?.id &&
+      smartleadCampaignId &&
+      smartleadLeadId &&
+      integration.api_key_encrypted
+    ) {
+      try {
+        const historyUrl = new URL(
+          `https://server.smartlead.ai/api/v1/campaigns/${encodeURIComponent(smartleadCampaignId)}/leads/${encodeURIComponent(smartleadLeadId)}/message-history`,
+        );
+        historyUrl.searchParams.set("api_key", integration.api_key_encrypted);
+
+        const historyRes = await fetch(historyUrl.toString(), {
+          headers: { Accept: "application/json" },
+        });
+
+        if (!historyRes.ok) {
+          const errBody = await historyRes.text().catch(() => "");
+          console.warn(
+            `[smartlead-webhook v2] message-history ${historyRes.status} for campaign=${smartleadCampaignId} lead=${smartleadLeadId} — keeping seed thread. Body: ${errBody.substring(0, 200)}`,
+          );
+        } else {
+          const history = await historyRes.json();
+          const messages = Array.isArray(history) ? history : [];
+
+          fullReplyThread = messages.map(
+            (msg: { type?: string; body?: string; timestamp?: string }) => {
+              const rawBody = msg.body ?? "";
+              // Same strip-then-collapse approach used for the EMAIL_REPLY
+              // body, then Zendesk-marker truncation. Phase C will tackle
+              // full quoted-chain stripping in classify-reply preprocessing.
+              const stripped = stripZendeskMarker(
+                rawBody.replace(/<[^>]+>/g, " ").replace(/\s+/g, " "),
+              );
+              return {
+                role: msg.type === "SENT" ? "sender" : "prospect",
+                content: stripped,
+                timestamp: msg.timestamp || new Date().toISOString(),
+                channel: "email",
+              };
+            },
+          );
+
+          if (fullReplyThread.length > 0) {
+            const { error: threadUpdateErr } = await supabase
+              .from("agent_leads")
+              .update({ reply_thread: fullReplyThread })
+              .eq("id", upsertedLead.id);
+
+            if (threadUpdateErr) {
+              console.warn(
+                `[smartlead-webhook v2] Full-thread UPDATE failed for lead ${upsertedLead.id}:`,
+                threadUpdateErr,
+              );
+              fullReplyThread = null;
+            } else {
+              console.log(
+                `[smartlead-webhook v2] Synced full thread (${fullReplyThread.length} msgs) for lead ${upsertedLead.id}`,
+              );
+            }
+          } else {
+            fullReplyThread = null;
+          }
+        }
+      } catch (historyErr) {
+        console.error(
+          `[smartlead-webhook v2] Full-thread sync threw for campaign=${smartleadCampaignId} lead=${smartleadLeadId}:`,
+          historyErr,
+        );
+      }
+    }
+
     // === classify-reply (async) =============================================
     // Mirrors heyreach-webhook: fire classify-reply asynchronously via
     // EdgeRuntime.waitUntil so the webhook returns 200 to Smartlead fast.
@@ -389,7 +469,10 @@ Deno.serve(async (req) => {
               },
               body: JSON.stringify({
                 reply_text: replyText,
-                thread_history: replyThread,
+                // Prefer the canonical full thread from /message-history when
+                // the best-effort fetch succeeded; fall back to the seed
+                // thread otherwise.
+                thread_history: fullReplyThread ?? replyThread,
                 lead_id: upsertedLead.id,
                 user_id: integration.created_by,
                 channel: "email",
