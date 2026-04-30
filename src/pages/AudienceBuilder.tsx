@@ -216,6 +216,19 @@ export default function AudienceBuilder() {
     loadExternalProjects();
   }, []);
 
+  // Auto-refetch when pagination changes. Uses the snapshotted filterState
+  // so pagination paginates the last-submitted search, not whatever is being
+  // typed into FilterBuilder. Skipped on initial mount (hasSearched=false)
+  // and after a tab switch / reset clears results — in those cases the user
+  // should re-click Search rather than auto-refetch stale filters against
+  // the new tab (setCurrentType resets currentPage to 1, which would
+  // otherwise re-trigger this effect with the wrong entity type).
+  useEffect(() => {
+    if (!hasSearched || !filterState || results.length === 0) return;
+    handleSearch(filterState);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentPage, perPage]);
+
   const loadExternalProjects = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
