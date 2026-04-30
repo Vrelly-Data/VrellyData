@@ -5,8 +5,18 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Loader2, Link2 } from 'lucide-react';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { Loader2, Link2, Info } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
+import { ChannelBadge } from '@/components/agent/LeadDetailPanel';
+
+// Maps synced_campaigns.source → ChannelBadge channel string.
+// HeyReach is LinkedIn-native; Smartlead and Reply.io are both email outreach.
+function sourceToChannel(source: string | null | undefined): string | null {
+  if (source === 'heyreach') return 'linkedin';
+  if (source === 'smartlead' || source === 'reply_io') return 'email';
+  return null;
+}
 
 // Keys used by the filter pills. 'in_progress' is the canonical key for the
 // "Active" pill; Reply.io's `active` status is treated as synonymous so both
@@ -176,7 +186,32 @@ export function CampaignsTable() {
               <TableHead>Status</TableHead>
               <TableHead className="text-right">Contacts</TableHead>
               <TableHead className="text-right">Sent</TableHead>
-              <TableHead className="text-right">Opens</TableHead>
+              <TableHead className="text-right">
+                <span className="inline-flex items-center justify-end gap-1">
+                  Opens / Connections
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Info className="h-3 w-3 text-muted-foreground cursor-help" />
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-xs">
+                      For email campaigns: email opens. For LinkedIn campaigns: connection requests accepted.
+                    </TooltipContent>
+                  </Tooltip>
+                </span>
+              </TableHead>
+              <TableHead className="text-right">
+                <span className="inline-flex items-center justify-end gap-1">
+                  Clicks / Views
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Info className="h-3 w-3 text-muted-foreground cursor-help" />
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-xs">
+                      For email campaigns: link clicks. For LinkedIn campaigns: profile views and post likes.
+                    </TooltipContent>
+                  </Tooltip>
+                </span>
+              </TableHead>
               <TableHead className="text-right">Replies</TableHead>
               <TableHead>Last Updated</TableHead>
             </TableRow>
@@ -185,38 +220,47 @@ export function CampaignsTable() {
             {filteredCampaigns.length === 0 ? (
               <TableRow>
                 <TableCell
-                  colSpan={7}
+                  colSpan={8}
                   className="text-center text-sm text-muted-foreground py-8"
                 >
                   No campaigns match this filter.
                 </TableCell>
               </TableRow>
             ) : (
-              filteredCampaigns.map((campaign) => (
-                <TableRow key={campaign.id}>
-                  <TableCell className="font-medium max-w-[300px] truncate">
-                    {campaign.name}
-                  </TableCell>
-                  <TableCell>
-                    {getStatusBadge(campaign.status)}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    {campaign.stats?.peopleCount ?? '-'}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    {campaign.stats?.sent ?? campaign.stats?.delivered ?? '-'}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    {campaign.stats?.opens ?? '-'}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    {campaign.stats?.replies ?? '-'}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground text-sm">
-                    {formatDistanceToNow(new Date(campaign.updated_at), { addSuffix: true })}
-                  </TableCell>
-                </TableRow>
-              ))
+              filteredCampaigns.map((campaign) => {
+                const channel = sourceToChannel(campaign.source);
+                return (
+                  <TableRow key={campaign.id}>
+                    <TableCell className="font-medium max-w-[340px]">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="truncate">{campaign.name}</span>
+                        {channel && <ChannelBadge channel={channel} />}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      {getStatusBadge(campaign.status)}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {campaign.stats?.peopleCount ?? '-'}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {campaign.stats?.sent ?? campaign.stats?.delivered ?? '-'}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {campaign.stats?.opens ?? '-'}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {campaign.stats?.clicks ?? '-'}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {campaign.stats?.replies ?? '-'}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground text-sm">
+                      {formatDistanceToNow(new Date(campaign.updated_at), { addSuffix: true })}
+                    </TableCell>
+                  </TableRow>
+                );
+              })
             )}
           </TableBody>
         </Table>

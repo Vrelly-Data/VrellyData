@@ -5,12 +5,16 @@ export interface SyncedCampaign {
   id: string;
   name: string;
   status: string | null;
+  // Platform tag: 'heyreach' (LinkedIn) | 'smartlead' (email) | 'reply_io' (email).
+  // Drives the channel badge in CampaignsTable.
+  source: string | null;
   stats: {
     peopleCount?: number;
     sent?: number;
     delivered?: number;
     replies?: number;
     opens?: number;
+    clicks?: number;
     peopleFinished?: number;
   } | null;
   updated_at: string;
@@ -24,7 +28,7 @@ export function useSyncedCampaigns(onlyLinked: boolean = true) {
     queryFn: async (): Promise<SyncedCampaign[]> => {
       let query = supabase
         .from('synced_campaigns')
-        .select('id, name, status, stats, updated_at, external_campaign_id, is_linked');
+        .select('id, name, status, source, stats, updated_at, external_campaign_id, is_linked');
 
       // Filter to only linked campaigns if requested
       if (onlyLinked) {
