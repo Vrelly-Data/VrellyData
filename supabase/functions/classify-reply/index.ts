@@ -477,6 +477,8 @@ Analyze this reply and respond as instructed.`;
       try {
         // Only these 4 fields — pipeline_stage is owned by explicit user action
         // (tag dropdown / add-to-heyreach-campaign), not the classifier.
+        // Ownership check — without .eq('user_id', user_id), a JWT-authenticated
+        // attacker could pass any lead_id and overwrite the victim's draft.
         await supabase
           .from('agent_leads')
           .update({
@@ -485,7 +487,8 @@ Analyze this reply and respond as instructed.`;
             draft_response: classification.suggested_response,
             inbox_status: 'draft_ready',
           })
-          .eq('id', lead_id);
+          .eq('id', lead_id)
+          .eq('user_id', user_id);
 
         // Log draft created activity
         await supabase.from('agent_activity').insert({

@@ -62,13 +62,14 @@ Deno.serve(async (req) => {
       is_active: boolean;
       created_by: string;
       api_key_encrypted: string;
+      webhook_secret: string | null;
     };
     let integration: IntegrationRow | null = null;
 
     if (urlIntegrationId) {
       const { data } = await supabase
         .from("outbound_integrations")
-        .select("id, team_id, is_active, created_by, api_key_encrypted")
+        .select("id, team_id, is_active, created_by, api_key_encrypted, webhook_secret")
         .eq("id", urlIntegrationId)
         .eq("platform", "heyreach")
         .maybeSingle();
@@ -83,7 +84,7 @@ Deno.serve(async (req) => {
     if (!integration) {
       const { data: candidates } = await supabase
         .from("outbound_integrations")
-        .select("id, team_id, is_active, created_by, api_key_encrypted")
+        .select("id, team_id, is_active, created_by, api_key_encrypted, webhook_secret")
         .eq("platform", "heyreach")
         .eq("is_active", true);
 
@@ -136,6 +137,31 @@ Deno.serve(async (req) => {
         status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+    }
+
+    // Verify URL ?secret= against the integration's stored webhook_secret.
+    // Backward-compat: if no secret is stored yet, log a warning and accept
+    // the request so existing flows don't break during the rollout. Once
+    // webhook_secret is populated and the customer's HeyReach webhook URL
+    // is updated to include ?secret=<value>, mismatches return 401.
+    {
+      const providedSecret = url.searchParams.get("secret");
+      const expectedSecret = integration.webhook_secret;
+      if (expectedSecret) {
+        if (providedSecret !== expectedSecret) {
+          console.warn(
+            `[heyreach-webhook] URL secret mismatch for integration ${integration.id} — rejecting`,
+          );
+          return new Response(JSON.stringify({ error: "Unauthorized" }), {
+            status: 401,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+      } else {
+        console.warn(
+          `[heyreach-webhook] No webhook_secret stored for integration ${integration.id} — accepting unauthenticated request (backward-compat). Generate a secret and update the HeyReach webhook URL with ?secret=<value> to enable verification.`,
+        );
+      }
     }
 
     // Log the full payload shape so we can see what HeyReach actually sends.

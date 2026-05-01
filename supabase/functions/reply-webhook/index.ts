@@ -75,6 +75,31 @@ Deno.serve(async (req) => {
 
     console.log(`Matched integration ${integration.id} for TeamId=${teamId}`);
 
+    // Verify URL ?secret= against the integration's stored webhook_secret.
+    // Backward-compat: if no secret is stored yet, log a warning and accept
+    // the request so existing flows don't break during the rollout. Once
+    // webhook_secret is populated and the customer's Reply.io webhook URL
+    // is updated to include ?secret=<value>, mismatches return 401.
+    {
+      const providedSecret = new URL(req.url).searchParams.get('secret');
+      const expectedSecret = integration.webhook_secret as string | null;
+      if (expectedSecret) {
+        if (providedSecret !== expectedSecret) {
+          console.warn(
+            `[reply-webhook] URL secret mismatch for integration ${integration.id} — rejecting`,
+          );
+          return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+            status: 401,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+      } else {
+        console.warn(
+          `[reply-webhook] No webhook_secret stored for integration ${integration.id} — accepting unauthenticated request (backward-compat). Generate a secret and update the Reply.io webhook URL with ?secret=<value> to enable verification.`,
+        );
+      }
+    }
+
     // Log the event
     await supabase.from('webhook_events').insert({
       integration_id: integration.id,
