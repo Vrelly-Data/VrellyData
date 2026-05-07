@@ -33,6 +33,8 @@ Deno.serve(async (req) => {
   const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
   const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
+  console.log(`[poll-heyreach-inbox] START method=${req.method}`);
+
   try {
     // Auth: x-agent-key for cron, or JWT for manual trigger
     const agentKey = req.headers.get('x-agent-key');
@@ -42,6 +44,7 @@ Deno.serve(async (req) => {
     let filterUserId: string | null = null;
 
     if (agentKey && agentKey === expectedKey) {
+      console.log('[poll-heyreach-inbox] auth=agent_key (cron path), filterUserId=null');
       filterUserId = null;
     } else if (authHeader?.startsWith('Bearer ')) {
       const token = authHeader.replace('Bearer ', '');
@@ -50,13 +53,18 @@ Deno.serve(async (req) => {
       });
       const { data: { user } } = await userClient.auth.getUser();
       if (!user) {
+        console.warn('[poll-heyreach-inbox] auth=bearer but getUser returned null → 401');
         return new Response(JSON.stringify({ error: 'Unauthorized' }), {
           status: 401,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
       filterUserId = user.id;
+      console.log(`[poll-heyreach-inbox] auth=bearer, filterUserId=${filterUserId}`);
     } else {
+      console.warn(
+        `[poll-heyreach-inbox] auth=missing → 401. agentKey_present=${!!agentKey} agentKey_match=${!!agentKey && agentKey === expectedKey} expectedKey_present=${!!expectedKey} authHeader_present=${!!authHeader}`,
+      );
       return new Response(JSON.stringify({ error: 'Unauthorized' }), {
         status: 401,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -84,16 +92,28 @@ Deno.serve(async (req) => {
       });
     }
 
-    console.log(`[poll-heyreach-inbox] Processing ${integrations?.length ?? 0} integrations`);
+    console.log(
+      `[poll-heyreach-inbox] Found ${integrations?.length ?? 0} active heyreach integrations` +
+        (integrations && integrations.length > 0
+          ? ` (ids: ${integrations.map((i) => i.id).join(',')})`
+          : ''),
+    );
 
     let totalPolled = 0;
     let totalNew = 0;
+    let totalConversationsSeen = 0;
+    let skippedNoText = 0;
+    let skippedSenderMe = 0;
+    let skippedSameText = 0;
+    let integrationsSkippedNoKey = 0;
+    let integrationsSkippedNoAgentConfig = 0;
 
     for (const integration of integrations ?? []) {
       try {
         const apiKey = integration.api_key_encrypted;
         if (!apiKey) {
           console.warn(`[poll-heyreach-inbox] No API key for integration ${integration.id}`);
+          integrationsSkippedNoKey++;
           continue;
         }
 
@@ -109,6 +129,7 @@ Deno.serve(async (req) => {
 
         if (!agentConfig) {
           console.log(`[poll-heyreach-inbox] No active agent config for user ${userId}, skipping`);
+          integrationsSkippedNoAgentConfig++;
           continue;
         }
 
@@ -147,24 +168,29 @@ Deno.serve(async (req) => {
 
           console.log(`[poll-heyreach-inbox] Fetched ${conversations.length} conversations (offset=${offset}, total=${totalCount})`);
 
+          totalConversationsSeen += conversations.length;
+
           for (const convo of conversations) {
             try {
               const conversationId = convo.id;
               const linkedInAccountId = convo.linkedInAccountId;
               const lastMessageText = convo.lastMessageText || '';
 
-              // Skip if no reply text
-              if (!lastMessageText) continue;
+              if (!lastMessageText) {
+                skippedNoText++;
+                continue;
+              }
 
-              // Skip if last message was sent by us
-              if (convo.lastMessageSender === 'ME') continue;
+              if (convo.lastMessageSender === 'ME') {
+                skippedSenderMe++;
+                continue;
+              }
 
               const profile = convo.correspondentProfile || {};
               const fullName = [profile.firstName, profile.lastName].filter(Boolean).join(' ') || 'Unknown';
               const linkedinUrl = profile.profileUrl || '';
               const externalId = conversationId;
 
-              // Check if we already have this lead with the same last_reply_text
               const { data: existingLead } = await supabase
                 .from('agent_leads')
                 .select('id, last_reply_text')
@@ -172,8 +198,8 @@ Deno.serve(async (req) => {
                 .eq('external_id', externalId)
                 .maybeSingle();
 
-              // Skip if last_reply_text hasn't changed
               if (existingLead && existingLead.last_reply_text === lastMessageText) {
+                skippedSameText++;
                 continue;
               }
 
@@ -209,13 +235,6 @@ Deno.serve(async (req) => {
                 console.error(`[poll-heyreach-inbox] Failed to fetch chatroom for ${conversationId}:`, chatroomErr);
               }
 
-              // Build upsert payload. Only tag lead_category on NEW leads:
-              // HeyReach's GetConversationsV2 doesn't expose campaignId per conversation,
-              // so polling can't reliably distinguish campaign replies from inbound.
-              // Defaulting new polled leads to 'campaign_reply' matches the historical
-              // behavior (polling was built for campaign follow-ups). For existing leads,
-              // omitting the field preserves whatever the webhook already set — critical
-              // so a later polling run can't overwrite an 'inbound_lead' tag.
               const upsertPayload: Record<string, unknown> = {
                 user_id: userId,
                 agent_config_id: agentConfig.id,
@@ -229,10 +248,6 @@ Deno.serve(async (req) => {
                 heyreach_conversation_id: conversationId,
                 heyreach_account_id: linkedInAccountId,
               };
-
-              if (!existingLead) {
-                upsertPayload.lead_category = 'campaign_reply';
-              }
 
               const { data: upsertedLead, error: upsertError } = await supabase
                 .from('agent_leads')
@@ -284,12 +299,32 @@ Deno.serve(async (req) => {
       }
     }
 
-    console.log(`[poll-heyreach-inbox] Done. Polled: ${totalPolled}, New: ${totalNew}`);
+    console.log(
+      `[poll-heyreach-inbox] Done. polled=${totalPolled} new=${totalNew} seen=${totalConversationsSeen} ` +
+        `skippedNoText=${skippedNoText} skippedSenderMe=${skippedSenderMe} skippedSameText=${skippedSameText} ` +
+        `intSkipNoKey=${integrationsSkippedNoKey} intSkipNoAgentConfig=${integrationsSkippedNoAgentConfig}`,
+    );
 
-    return new Response(JSON.stringify({ success: true, polled: totalPolled, new: totalNew }), {
-      status: 200,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return new Response(
+      JSON.stringify({
+        success: true,
+        polled: totalPolled,
+        new: totalNew,
+        seen: totalConversationsSeen,
+        integrations: integrations?.length ?? 0,
+        skipped: {
+          noText: skippedNoText,
+          senderMe: skippedSenderMe,
+          sameText: skippedSameText,
+          integrationsNoKey: integrationsSkippedNoKey,
+          integrationsNoAgentConfig: integrationsSkippedNoAgentConfig,
+        },
+      }),
+      {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      },
+    );
   } catch (error) {
     console.error('[poll-heyreach-inbox] Fatal error:', error);
     return new Response(JSON.stringify({ error: 'Internal error' }), {
