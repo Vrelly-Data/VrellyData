@@ -37,6 +37,14 @@ function getCorsHeaders(req: Request) {
 
 const SMARTLEAD_API_BASE = "https://server.smartlead.ai/api/v1";
 
+// Defensive strip — see add-to-smartlead-campaign for context. Applied
+// before HTML wrapping so the body that lands on the wire and in
+// reply_thread never contains the surrounding `{...}`.
+function stripBraceWrapper(s: string): string {
+  if (!s) return s;
+  return s.trim().replace(/^\{+/, "").replace(/\}+$/, "").trim();
+}
+
 // HTML escape for the plaintext path so a draft like "I love <3" doesn't
 // emit broken HTML. Skip ' / " — they're safe in body content and look
 // noisy when rendered raw if the receiving client doesn't decode them.
@@ -84,7 +92,7 @@ Deno.serve(async (req) => {
 
     const body = await req.json();
     const leadId: string | undefined = body.leadId ?? body.lead_id;
-    const message: string | undefined = body.message;
+    const message: string = stripBraceWrapper(String(body.message ?? ""));
 
     if (!leadId || !message) {
       throw new Error("Missing required fields: leadId, message");

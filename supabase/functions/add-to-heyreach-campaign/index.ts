@@ -14,6 +14,14 @@ function getCorsHeaders(req: Request) {
   };
 }
 
+// Defensive: classify-reply already strips `{...}` wrappers, but a stale
+// draft may still carry braces. Strip again here so the prospect never
+// receives a brace-wrapped message regardless of what's in agent_leads.
+function stripBraceWrapper(s: string): string {
+  if (!s) return s;
+  return s.trim().replace(/^\{+/, "").replace(/\}+$/, "").trim();
+}
+
 Deno.serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
 
@@ -42,7 +50,8 @@ Deno.serve(async (req) => {
     }
 
     const body = await req.json();
-    const { lead_id, campaign_id, message } = body;
+    const { lead_id, campaign_id } = body;
+    const message = stripBraceWrapper(String(body.message ?? ""));
 
     if (!lead_id || !campaign_id || !message) {
       throw new Error("Missing required fields: lead_id, campaign_id, message");

@@ -102,6 +102,17 @@ function getCorsHeaders(req: Request) {
   };
 }
 
+// Strip a single layer of `{...}` wrapping that the model occasionally puts
+// around `suggested_response`. The prompt asks for a JSON object whose
+// `suggested_response` is a plain message string; the model sometimes
+// hallucinates extra braces inside that string, which then get sent to the
+// prospect verbatim. Defensive — applied both at draft persistence and at
+// every send point.
+function stripBraceWrapper(s: string): string {
+  if (!s) return s;
+  return s.trim().replace(/^\{+/, '').replace(/\}+$/, '').trim();
+}
+
 const SAFE_FALLBACK = {
   intent: 'unknown',
   intent_confidence: 0,
@@ -471,6 +482,15 @@ Analyze this reply and respond as instructed.`;
 
     // Parse response JSON
     const classification = JSON.parse(textBlock.text);
+
+    // Strip the occasional `{...}` wrapper the model adds around the message
+    // body. Prevents drafts like "{Absolutely! Here's my calendar link...}"
+    // from being persisted (and later sent) with literal braces.
+    if (typeof classification.suggested_response === 'string') {
+      classification.suggested_response = stripBraceWrapper(
+        classification.suggested_response,
+      );
+    }
 
     // Write classification back to agent_leads
     if (lead_id && classification.intent) {

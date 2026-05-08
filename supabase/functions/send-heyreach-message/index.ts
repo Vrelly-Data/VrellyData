@@ -14,6 +14,12 @@ function getCorsHeaders(req: Request) {
   };
 }
 
+// Defensive strip — see add-to-heyreach-campaign for context.
+function stripBraceWrapper(s: string): string {
+  if (!s) return s;
+  return s.trim().replace(/^\{+/, "").replace(/\}+$/, "").trim();
+}
+
 Deno.serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
 
@@ -42,7 +48,8 @@ Deno.serve(async (req) => {
     }
 
     const body = await req.json();
-    const { lead_id, message } = body;
+    const { lead_id } = body;
+    const message = stripBraceWrapper(String(body.message ?? ""));
 
     if (!lead_id || !message) {
       throw new Error("Missing required fields: lead_id, message");

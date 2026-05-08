@@ -14,6 +14,14 @@ function getCorsHeaders(req: Request) {
   };
 }
 
+// Defensive strip — classify-reply already sanitizes `{...}` wrappers but a
+// stale draft may still carry braces. Applied here so Reply.io's `message`
+// custom field never expands to a brace-wrapped message.
+function stripBraceWrapper(s: string): string {
+  if (!s) return s;
+  return s.trim().replace(/^\{+/, '').replace(/\}+$/, '').trim();
+}
+
 const INTENT_STAGE_MAP: Record<string, string> = {
   interested: 'engaged',
   needs_more_info: 'engaged',
@@ -59,7 +67,8 @@ Deno.serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     );
 
-    const { leadId, draftResponse, intent } = await req.json();
+    const { leadId, draftResponse: rawDraft, intent } = await req.json();
+    const draftResponse = stripBraceWrapper(String(rawDraft ?? ''));
 
     if (!leadId || !draftResponse || !intent) {
       return new Response(JSON.stringify({ error: 'Missing required fields: leadId, draftResponse, intent' }), {

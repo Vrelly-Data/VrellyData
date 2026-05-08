@@ -40,6 +40,14 @@ function getCorsHeaders(req: Request) {
 
 const SMARTLEAD_API_BASE = "https://server.smartlead.ai/api/v1";
 
+// Defensive strip — classify-reply already strips `{...}` wrappers but a
+// stale draft may still carry braces. Strip again here so Smartlead's
+// {{first_touch_message}} never expands to a brace-wrapped message.
+function stripBraceWrapper(s: string): string {
+  if (!s) return s;
+  return s.trim().replace(/^\{+/, "").replace(/\}+$/, "").trim();
+}
+
 Deno.serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
 
@@ -70,7 +78,7 @@ Deno.serve(async (req) => {
     const body = await req.json();
     const leadId: string | undefined = body.leadId ?? body.lead_id;
     const campaignId: string | undefined = body.campaignId ?? body.campaign_id;
-    const message: string | undefined = body.message;
+    const message: string = stripBraceWrapper(String(body.message ?? ""));
 
     if (!leadId || !campaignId || !message) {
       throw new Error("Missing required fields: leadId, campaignId, message");
