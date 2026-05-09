@@ -173,13 +173,24 @@ Deno.serve(async (req) => {
     )
       ? ((currentLead as { reply_thread: unknown[] }).reply_thread)
       : [];
+    const sentAtIso = new Date().toISOString();
+    // Render the queued draft as a sender message so the thread shows what
+    // we just enrolled this prospect with — HeyReach's campaign send flow
+    // doesn't echo back to our webhook for tracked outbound, so this is
+    // the only place the message lands in the thread.
+    const sentMessage = {
+      role: "sender",
+      content: message,
+      timestamp: sentAtIso,
+      channel: "linkedin",
+    };
     const systemMessage = {
       role: "system",
       content: `Added to campaign: ${campaignName ?? "Unknown"}`,
-      timestamp: new Date().toISOString(),
+      timestamp: sentAtIso,
       channel: "linkedin",
     };
-    const updatedThread = [...existingThread, systemMessage];
+    const updatedThread = [...existingThread, sentMessage, systemMessage];
 
     // Update agent_leads on success. pipeline_stage → 'in_progress' because
     // the lead is now being actively worked via an outbound sequence.

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Send, UserPlus, Loader2, X, Linkedin, Mail } from 'lucide-react';
+import { Send, UserPlus, Loader2, X, Linkedin, Mail, Check } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -20,6 +20,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import { useUpdateAgentLead, useApproveDraft, useLiveLead, type AgentLead } from '@/hooks/useAgentInbox';
 import {
@@ -167,19 +173,36 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
   const isReplyIoEmail = lead.channel === 'email' && !lead.smartlead_lead_id;
   const hasEmailSendHandler = isSmartleadEmail || isReplyIoEmail;
 
+  // A LinkedIn lead with no HeyReach conversation id is a cold inbound —
+  // HeyReach's SendMessage requires a tracked conversation, so the direct
+  // Send Message button has nothing to send to. Add to Campaign still
+  // works (it creates the conversation by enrolling the lead).
+  const isColdInboundLinkedIn = isLinkedIn && !(lead as any).heyreach_conversation_id;
+
   const handleStageChange = (newStage: string) => {
     if (newStage === lead.pipeline_stage) return;
-    updateLead.mutate({
-      leadId: lead.id,
-      // Tag change always moves the lead to Total Inbox (inbox_status='dismissed').
-      updates: { pipeline_stage: newStage, inbox_status: 'dismissed' },
-      logStageChange: {
-        oldStage: lead.pipeline_stage,
-        newStage,
-        leadName: lead.full_name,
-        leadCompany: lead.company,
+    updateLead.mutate(
+      {
+        leadId: lead.id,
+        // Tag change always moves the lead to Total Inbox (inbox_status='dismissed').
+        updates: { pipeline_stage: newStage, inbox_status: 'dismissed' },
+        logStageChange: {
+          oldStage: lead.pipeline_stage,
+          newStage,
+          leadName: lead.full_name,
+          leadCompany: lead.company,
+        },
       },
-    });
+      {
+        onError: (err: any) => {
+          toast({
+            title: "Couldn't update tag",
+            description: err?.message || 'The change was rejected by the database.',
+            variant: 'destructive',
+          });
+        },
+      },
+    );
   };
 
   const handleApprove = () => {
@@ -249,15 +272,70 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
     });
   };
 
-  const handleNotesSave = () => {
-    // Skip if the textarea lost focus without the user having edited it.
-    // Prevents a noisy update round-trip on every click-away.
-    if (notes === (lead.notes ?? '')) return;
-    updateLead.mutate({
-      leadId: lead.id,
-      updates: { notes },
-    });
+  // Notes auto-save: debounced 1.2s after the last keystroke, plus an
+  // immediate save on blur. Three states surface to the UI:
+  //   idle    — no unsaved change
+  //   saving  — write in flight
+  //   saved   — last write succeeded (auto-clears after 2s)
+  // Errors raise a destructive toast — silent failures here are how the
+  // user lost notes pre-fix.
+  type NotesSaveState = 'idle' | 'saving' | 'saved';
+  const [notesSaveState, setNotesSaveState] = useState<NotesSaveState>('idle');
+  const notesDebounceRef = useRef<number | null>(null);
+  const notesSavedTimerRef = useRef<number | null>(null);
+  const lastSavedNotesRef = useRef(lead.notes ?? '');
+
+  const persistNotes = (value: string) => {
+    if (value === lastSavedNotesRef.current) return;
+    setNotesSaveState('saving');
+    updateLead.mutate(
+      { leadId: lead.id, updates: { notes: value } },
+      {
+        onSuccess: () => {
+          lastSavedNotesRef.current = value;
+          setNotesSaveState('saved');
+          if (notesSavedTimerRef.current) window.clearTimeout(notesSavedTimerRef.current);
+          notesSavedTimerRef.current = window.setTimeout(
+            () => setNotesSaveState('idle'),
+            2000,
+          );
+        },
+        onError: (err: any) => {
+          setNotesSaveState('idle');
+          toast({
+            title: "Couldn't save notes",
+            description: err?.message || 'The change was rejected by the database.',
+            variant: 'destructive',
+          });
+        },
+      },
+    );
   };
+
+  const handleNotesChange = (value: string) => {
+    setNotes(value);
+    if (notesDebounceRef.current) window.clearTimeout(notesDebounceRef.current);
+    notesDebounceRef.current = window.setTimeout(() => persistNotes(value), 1200);
+  };
+
+  const handleNotesBlur = () => {
+    if (notesDebounceRef.current) {
+      window.clearTimeout(notesDebounceRef.current);
+      notesDebounceRef.current = null;
+    }
+    persistNotes(notes);
+  };
+
+  // Reset the saved-notes baseline when switching leads so the indicator
+  // doesn't carry over from another row.
+  useEffect(() => {
+    lastSavedNotesRef.current = lead.notes ?? '';
+    setNotesSaveState('idle');
+    return () => {
+      if (notesDebounceRef.current) window.clearTimeout(notesDebounceRef.current);
+      if (notesSavedTimerRef.current) window.clearTimeout(notesSavedTimerRef.current);
+    };
+  }, [lead.id]);
 
   // HeyReach direct message — uses the AI draft as the message
   const handleSendHeyReachMessage = () => {
@@ -491,10 +569,10 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
           </div>
         )}
 
-        {/* HeyReach LinkedIn actions */}
+        {/* LinkedIn actions (powered by HeyReach under the hood) */}
         {isLinkedIn && (
           <div className="space-y-4 border rounded-lg p-3">
-            <h4 className="text-sm font-medium text-muted-foreground">HeyReach Actions</h4>
+            <h4 className="text-sm font-medium text-muted-foreground">LinkedIn Actions</h4>
             <Textarea
               value={draftText}
               onChange={(e) => setDraftText(e.target.value)}
@@ -510,19 +588,38 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
               rows={3}
               className="text-sm"
             />
-            <Button
-              onClick={handleSendHeyReachMessage}
-              disabled={!draftText.trim() || sendMessage.isPending}
-              className="w-full gap-2"
-              size="sm"
-            >
-              {sendMessage.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Send className="h-4 w-4" />
-              )}
-              Send Message
-            </Button>
+            <TooltipProvider delayDuration={200}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="block">
+                    <Button
+                      onClick={handleSendHeyReachMessage}
+                      disabled={
+                        !draftText.trim() ||
+                        sendMessage.isPending ||
+                        isColdInboundLinkedIn
+                      }
+                      className="w-full gap-2"
+                      size="sm"
+                    >
+                      {sendMessage.isPending ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Send className="h-4 w-4" />
+                      )}
+                      Send Message
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                {isColdInboundLinkedIn && (
+                  <TooltipContent side="top" className="max-w-[260px] text-xs">
+                    This prospect isn't in a HeyReach campaign yet — direct
+                    sends require a tracked conversation. Reply on LinkedIn,
+                    or use Add to Campaign below.
+                  </TooltipContent>
+                )}
+              </Tooltip>
+            </TooltipProvider>
 
             <div className="border-t border-border pt-3">
               <p className="text-xs font-medium text-muted-foreground mb-2">Add to Campaign</p>
@@ -556,11 +653,12 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
           </div>
         )}
 
-        {/* Smartlead Add to Campaign — Email leads with a smartlead_lead_id.
-            Reply.io email leads (no smartlead_lead_id) render nothing here;
-            those are reserved for a future Reply.io campaign-add expansion. */}
+        {/* Email actions (Smartlead under the hood). Reply.io email leads
+            (no smartlead_lead_id) render nothing here; those are reserved
+            for a future Reply.io campaign-add expansion. */}
         {isSmartleadEmail && (
           <div className="space-y-2 border rounded-lg p-3">
+            <h4 className="text-sm font-medium text-muted-foreground">Email Actions</h4>
             <p className="text-xs font-medium text-muted-foreground">Add to Campaign</p>
             <Select
               value={selectedSmartleadCampaignId}
@@ -621,11 +719,23 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
 
         {/* Notes */}
         <div className="space-y-2">
-          <h4 className="text-sm font-medium text-muted-foreground">Notes</h4>
+          <div className="flex items-center justify-between">
+            <h4 className="text-sm font-medium text-muted-foreground">Notes</h4>
+            {notesSaveState === 'saving' && (
+              <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                <Loader2 className="h-3 w-3 animate-spin" /> Saving…
+              </span>
+            )}
+            {notesSaveState === 'saved' && (
+              <span className="flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400">
+                <Check className="h-3 w-3" /> Saved
+              </span>
+            )}
+          </div>
           <Textarea
             value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            onBlur={handleNotesSave}
+            onChange={(e) => handleNotesChange(e.target.value)}
+            onBlur={handleNotesBlur}
             placeholder="Add notes about this lead..."
             rows={3}
             className="text-sm"

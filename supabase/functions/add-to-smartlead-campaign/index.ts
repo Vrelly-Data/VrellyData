@@ -221,16 +221,25 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Append a system message to reply_thread documenting the action.
-    // Read-then-write; same race window pattern as add-to-heyreach-campaign.
+    // Append the queued draft as a sender message so the thread reflects
+    // what we just enrolled the prospect with, plus a system marker for
+    // the campaign-add itself. Read-then-write; same race window pattern
+    // as add-to-heyreach-campaign.
     const existingThread = Array.isArray(lead.reply_thread) ? lead.reply_thread : [];
+    const sentAtIso = new Date().toISOString();
+    const sentMessage = {
+      role: "sender",
+      content: message,
+      timestamp: sentAtIso,
+      channel: "email",
+    };
     const systemMessage = {
       role: "system",
       content: `Added to campaign: ${campaignName ?? "Unknown"}`,
-      timestamp: new Date().toISOString(),
+      timestamp: sentAtIso,
       channel: "email",
     };
-    const updatedThread = [...existingThread, systemMessage];
+    const updatedThread = [...existingThread, sentMessage, systemMessage];
 
     // Mirrors add-to-heyreach-campaign: inbox_status='replied' (lead is now
     // out of the pending queue) + pipeline_stage='in_progress' (active
