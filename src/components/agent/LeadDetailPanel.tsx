@@ -406,8 +406,13 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="p-4 border-b flex items-start justify-between gap-3">
+      {/* Header. The status dropdown renders unconditionally — it must be
+          visible for every lead regardless of intent, lead_category,
+          inbox_status, or channel. The pr-12 reserves space for the
+          absolute close-X that <Sheet> renders at right-4 in Pipeline view
+          (without it, the parent's auto-X overlays our right cluster and
+          the dropdown trigger looks missing). */}
+      <div className="pl-4 pr-12 py-4 border-b flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h3 className="font-semibold text-lg truncate">{lead.full_name}</h3>
           {lead.company && (

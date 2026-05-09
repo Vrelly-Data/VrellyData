@@ -305,9 +305,21 @@ Deno.serve(async (req) => {
     ];
 
     // === Upsert agent_leads =================================================
-    // external_id = lowercased canonical prospect email. Stable per prospect;
-    // matches the conflict key used by heyreach-webhook.
+    // Dedup on (user_id, email_address) — the natural per-prospect identifier
+    // for email. external_id stays informational. Empty/missing email is
+    // skipped above; here we additionally normalize so '' never claims a
+    // unique slot.
     const externalId = email;
+    const emailForKey = email && email.trim() ? email.trim().toLowerCase() : null;
+    if (!emailForKey) {
+      console.warn(
+        "[smartlead-webhook v2] Skipping upsert — no email_address on payload",
+      );
+      return new Response(
+        JSON.stringify({ success: true, skipped: "missing_email_address" }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
 
     const { data: upsertedLead, error: upsertError } = await supabase
       .from("agent_leads")
@@ -316,7 +328,7 @@ Deno.serve(async (req) => {
           user_id: integration.created_by,
           external_id: externalId,
           email,
-          email_address: email,
+          email_address: emailForKey,
           full_name: fullName,
           channel: "email",
           smartlead_lead_id: smartleadLeadId,
@@ -330,7 +342,7 @@ Deno.serve(async (req) => {
           reply_thread: replyThread,
           inbox_status: "pending",
         },
-        { onConflict: "user_id,external_id" },
+        { onConflict: "user_id,email_address" },
       )
       .select("id")
       .single();

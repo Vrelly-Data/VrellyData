@@ -188,15 +188,43 @@ Deno.serve(async (req) => {
 
               const profile = convo.correspondentProfile || {};
               const fullName = [profile.firstName, profile.lastName].filter(Boolean).join(' ') || 'Unknown';
-              const linkedinUrl = profile.profileUrl || '';
+              const linkedinUrlRaw = profile.profileUrl || '';
+              const linkedinUrl = linkedinUrlRaw.trim() || null;
               const externalId = conversationId;
 
-              const { data: existingLead } = await supabase
-                .from('agent_leads')
-                .select('id, last_reply_text')
-                .eq('user_id', userId)
-                .eq('external_id', externalId)
-                .maybeSingle();
+              // Without a linkedin_url we have no dedup key (the unique
+              // index would let every poll create a new row). Skip and
+              // log so we can investigate malformed correspondentProfile
+              // payloads in the field.
+              if (!linkedinUrl) {
+                console.warn(
+                  `[poll-heyreach-inbox] Skipping conversation ${conversationId} — no profileUrl on correspondentProfile`,
+                );
+                continue;
+              }
+
+              // Existing-lead lookup on (user_id, linkedin_url) — matches the
+              // unique-index dedup key. If linkedin_url is missing we fall back
+              // to external_id so legacy rows still resolve.
+              let existingLead: { id: string; last_reply_text: string | null } | null = null;
+              if (linkedinUrl) {
+                const { data } = await supabase
+                  .from('agent_leads')
+                  .select('id, last_reply_text')
+                  .eq('user_id', userId)
+                  .eq('linkedin_url', linkedinUrl)
+                  .maybeSingle();
+                existingLead = data ?? null;
+              }
+              if (!existingLead && externalId) {
+                const { data } = await supabase
+                  .from('agent_leads')
+                  .select('id, last_reply_text')
+                  .eq('user_id', userId)
+                  .eq('external_id', externalId)
+                  .maybeSingle();
+                existingLead = data ?? null;
+              }
 
               if (existingLead && existingLead.last_reply_text === lastMessageText) {
                 skippedSameText++;
@@ -252,7 +280,7 @@ Deno.serve(async (req) => {
               const { data: upsertedLead, error: upsertError } = await supabase
                 .from('agent_leads')
                 .upsert(upsertPayload, {
-                  onConflict: 'user_id,external_id',
+                  onConflict: 'user_id,linkedin_url',
                   ignoreDuplicates: false,
                 })
                 .select()

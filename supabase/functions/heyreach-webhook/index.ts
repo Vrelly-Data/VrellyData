@@ -304,9 +304,10 @@ Deno.serve(async (req) => {
       recentMessages.length > 0 ? recentMessages[recentMessages.length - 1] : null;
     const replyText = lastMessage?.message || "";
 
-    // external_id prefers the LinkedIn profile URL (stable per prospect across
-    // conversations); falls back to conversation_id, then a timestamp so the
-    // upsert can still land on a unique row even with minimal data.
+    // external_id is now informational only; dedup happens on (user_id,
+    // linkedin_url) via the partial unique index. Keep it stable per
+    // prospect for downstream activity logs and history. Empty fallback
+    // chain mirrors the prior behaviour so existing rows still match.
     const externalId = linkedinUrl || conversationId || `heyreach-${Date.now()}`;
 
     if (!replyText) {
@@ -320,6 +321,22 @@ Deno.serve(async (req) => {
     // Upsert into agent_leads. All fields in the payload will overwrite on conflict —
     // including inbox_status, so a new reply on a dismissed/replied/sent lead flips
     // it back to 'pending' and the lead reappears in Pending Approval.
+    //
+    // Conflict target is (user_id, linkedin_url) — the natural per-prospect
+    // identifier on LinkedIn. Empty strings are normalized to NULL so they
+    // don't claim a unique slot (Postgres treats multiple NULLs as distinct).
+    // Without a linkedin_url we have no dedup key, so skip rather than
+    // create runaway rows on every redelivery.
+    const linkedinUrlForKey = linkedinUrl && linkedinUrl.trim() ? linkedinUrl.trim() : null;
+    if (!linkedinUrlForKey) {
+      console.warn(
+        `[heyreach-webhook] Skipping upsert — no linkedin_url on payload (conversation_id=${conversationId})`,
+      );
+      return new Response(
+        JSON.stringify({ success: true, skipped: "missing_linkedin_url" }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
     const { data: upsertedLead, error: upsertError } = await supabase
       .from("agent_leads")
       .upsert(
@@ -337,9 +354,9 @@ Deno.serve(async (req) => {
           channel: "linkedin",
           heyreach_conversation_id: conversationId,
           heyreach_account_id: accountId ? Number(accountId) : null,
-          linkedin_url: linkedinUrl,
+          linkedin_url: linkedinUrlForKey,
         },
-        { onConflict: "user_id,external_id" },
+        { onConflict: "user_id,linkedin_url" },
       )
       .select("id")
       .single();
