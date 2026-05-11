@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Save, Download, Users, Building2, Info, ChevronDown, FolderPlus, Send, ChevronsUpDown } from 'lucide-react';
+import { Save, Download, Users, Building2, Info, ChevronDown, FolderPlus, Send, ChevronsUpDown, AlertCircle } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import {
@@ -98,6 +98,7 @@ export default function AudienceBuilder() {
   const [currentCreditsForSave, setCurrentCreditsForSave] = useState(0);
   const [previewMode, setPreviewMode] = useState<'expanded' | 'compact'>('expanded');
   const [hasSearched, setHasSearched] = useState(false);
+  const [timedOut, setTimedOut] = useState(false);
 
   const { isEstimate, setIsEstimate } = useAudienceStore();
 
@@ -154,6 +155,7 @@ export default function AudienceBuilder() {
     setLoading(true);
     setHasSearched(true);
     setSelectedRecords(new Set()); // Clear selection on new search
+    setTimedOut(false);
     setFilterState(filterState); // Store filter state for selection operations
     
     try {
@@ -172,6 +174,8 @@ export default function AudienceBuilder() {
       }
       
       setResults(filteredItems);
+      const resultsTimedOut = response.timedOut?.results === true;
+      setTimedOut(resultsTimedOut);
       // If results returned < page size, we have the true total - no estimation needed
       const trueTotal = response.items.length < perPage && response.items.length > 0
         ? response.items.length
@@ -194,12 +198,21 @@ export default function AudienceBuilder() {
       const entityLabel = currentType === 'person' ? 'people' : 'companies';
       const suffix = filterState.contactFilter === 'net_new' ? ' (net new only)' : '';
 
-      toast({
-        title: 'Search complete',
-        description: displayTotal === 0
-          ? 'No results found'
-          : `Found ${estimatePrefix}${formatTotal(displayTotal)} ${entityLabel}${suffix}`,
-      });
+      if (resultsTimedOut) {
+        toast({
+          title: 'Search timed out',
+          description:
+            'This combination of filters is heavy. Try narrowing — for example, add a Job Title, Seniority, or Industry.',
+          variant: 'destructive',
+        });
+      } else {
+        toast({
+          title: 'Search complete',
+          description: displayTotal === 0
+            ? 'No results found'
+            : `Found ${estimatePrefix}${formatTotal(displayTotal)} ${entityLabel}${suffix}`,
+        });
+      }
     } catch (error: any) {
       toast({
         title: 'Error',
@@ -876,7 +889,17 @@ export default function AudienceBuilder() {
                     </>
                   )}
                   
-                  {!loading && results.length === 0 && totalEstimate === 0 && (
+                  {!loading && timedOut && results.length === 0 && (
+                    <div className="flex flex-col items-center justify-center h-64 gap-2 px-6 text-center text-muted-foreground">
+                      <AlertCircle className="h-6 w-6 text-amber-600" />
+                      <p className="font-medium text-foreground">Search took too long</p>
+                      <p className="text-sm max-w-md">
+                        This combination of filters is heavy on the database. Try narrowing —
+                        for example, add a Job Title, Seniority, or Industry to reduce the result set.
+                      </p>
+                    </div>
+                  )}
+                  {!loading && !timedOut && results.length === 0 && totalEstimate === 0 && (
                     <div className="flex items-center justify-center h-64 text-muted-foreground">
                       {hasSearched ? 'No results found' : 'Build your filters and click Search to find people'}
                     </div>
@@ -1022,7 +1045,17 @@ export default function AudienceBuilder() {
                     </>
                   )}
                   
-                  {!loading && results.length === 0 && totalEstimate === 0 && (
+                  {!loading && timedOut && results.length === 0 && (
+                    <div className="flex flex-col items-center justify-center h-64 gap-2 px-6 text-center text-muted-foreground">
+                      <AlertCircle className="h-6 w-6 text-amber-600" />
+                      <p className="font-medium text-foreground">Search took too long</p>
+                      <p className="text-sm max-w-md">
+                        This combination of filters is heavy on the database. Try narrowing —
+                        for example, add a Job Title, Seniority, or Industry to reduce the result set.
+                      </p>
+                    </div>
+                  )}
+                  {!loading && !timedOut && results.length === 0 && totalEstimate === 0 && (
                     <div className="flex items-center justify-center h-64 text-muted-foreground">
                       {hasSearched ? 'No results found' : 'Build your filters and click Search to find companies'}
                     </div>

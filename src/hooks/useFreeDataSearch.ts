@@ -20,6 +20,18 @@ export interface FreeDataSearchResponse<T> {
     per_page: number;
     total_pages: number;
   };
+  timedOut?: { results: boolean; count: boolean };
+}
+
+// Postgres statement_timeout surfaces as error code 57014 with message
+// "canceling statement due to statement timeout". Match by code when
+// present, fall back to message substring for transport variants.
+function isStatementTimeoutError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { code?: string; message?: string };
+  if (e.code === '57014') return true;
+  return typeof e.message === 'string' &&
+    /canceling statement|statement timeout/i.test(e.message);
 }
 
 // Helper to convert prospectData flags to individual booleans
@@ -152,29 +164,40 @@ export function useFreeDataSearch() {
 
       // Process results (fast path - always available)
       let items: T[] = [];
+      let resultsTimedOut = false;
       if (resultsResponse.status === 'fulfilled') {
         const { data, error } = resultsResponse.value;
         if (error) {
-          console.error('Error in search_prospects_results:', JSON.stringify(error));
-          throw error;
-        }
-        const results = (data || []) as any[];
-        items = results.map((record: any) => {
-          if (entityType === 'person') {
-            return mapFreeDataToPerson(record) as T;
+          if (isStatementTimeoutError(error)) {
+            console.warn('Results query hit statement_timeout — returning empty set');
+            resultsTimedOut = true;
           } else {
-            return mapFreeDataToCompany(record) as T;
+            console.error('Error in search_prospects_results:', JSON.stringify(error));
+            throw error;
           }
-        });
+        } else {
+          const results = (data || []) as any[];
+          items = results.map((record: any) =>
+            entityType === 'person'
+              ? (mapFreeDataToPerson(record) as T)
+              : (mapFreeDataToCompany(record) as T),
+          );
+        }
       } else {
-        console.error('Results query rejected:', resultsResponse.reason);
-        throw resultsResponse.reason;
+        if (isStatementTimeoutError(resultsResponse.reason)) {
+          console.warn('Results query rejected with statement_timeout');
+          resultsTimedOut = true;
+        } else {
+          console.error('Results query rejected:', resultsResponse.reason);
+          throw resultsResponse.reason;
+        }
       }
 
       // Process count (may fail gracefully)
       let totalCount = items.length; // fallback: at least what we got
       let isEstimate = true;
-      
+      let countTimedOut = false;
+
       if (countResponse.status === 'fulfilled') {
         const { data, error } = countResponse.value;
         if (!error && data && (data as any[]).length > 0) {
@@ -182,12 +205,14 @@ export function useFreeDataSearch() {
           totalCount = Number(countRow.total_count) || 0;
           isEstimate = Boolean(countRow.is_estimate);
         } else if (error) {
+          if (isStatementTimeoutError(error)) countTimedOut = true;
           console.warn('Count query failed (using fallback):', error.message);
           // Fallback: use items.length as minimum estimate
           totalCount = items.length;
           isEstimate = true;
         }
       } else {
+        if (isStatementTimeoutError(countResponse.reason)) countTimedOut = true;
         console.warn('Count query rejected (using fallback):', countResponse.reason);
         totalCount = items.length;
         isEstimate = true;
@@ -205,6 +230,9 @@ export function useFreeDataSearch() {
           per_page: perPage,
           total_pages: totalPages,
         },
+        ...(resultsTimedOut || countTimedOut
+          ? { timedOut: { results: resultsTimedOut, count: countTimedOut } }
+          : {}),
       };
     } catch (error) {
       console.error('Error in searchFreeData:', error);
