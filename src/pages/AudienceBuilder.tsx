@@ -604,6 +604,37 @@ export default function AudienceBuilder() {
     });
   };
 
+  // Per-company dedup against the CURRENT SELECTION rather than the
+  // full audience. Enables natural stacking: click "Select first: 1000"
+  // then "Select per company: 1" → the second click caps the existing
+  // 1000-row selection down to one-per-company. Operates only on the
+  // person tab (companies have no `company` field).
+  const handleSelectPerCompanyOnSelection = (maxPerCompany: number) => {
+    if (maxPerCompany <= 0 || !Number.isFinite(maxPerCompany)) return;
+    if (currentType !== 'person') return;
+
+    const selectedRows = (results as PersonEntity[]).filter(r =>
+      selectedRecords.has(r.id),
+    );
+    if (selectedRows.length === 0) return;
+
+    const companyCounts = new Map<string, number>();
+    const selectedIds: string[] = [];
+    for (const row of selectedRows) {
+      const companyKey = row.company?.trim().toLowerCase() || 'no-company';
+      const cnt = companyCounts.get(companyKey) ?? 0;
+      if (cnt >= maxPerCompany) continue;
+      companyCounts.set(companyKey, cnt + 1);
+      selectedIds.push(row.id);
+    }
+
+    setSelectedRecords(new Set(selectedIds));
+    toast({
+      title: 'Selected per company',
+      description: `Selected ${selectedIds.length.toLocaleString()} from ${companyCounts.size.toLocaleString()} ${companyCounts.size === 1 ? 'company' : 'companies'}`,
+    });
+  };
+
   // Combined stacked-select handler. Called by PreviewTable's single
   // "Select N people, max M per company" row. Delegates to the existing
   // building-block handlers for single-field cases; runs new combined
@@ -1110,6 +1141,7 @@ export default function AudienceBuilder() {
                         onSelectFirstN={handleSelectFirstN}
                         onSelectPerCompanyAcrossAudience={handleSelectPerCompanyAcrossAudience}
                         onSelectStacked={handleSelectStacked}
+                        onSelectPerCompanyOnSelection={handleSelectPerCompanyOnSelection}
                       />
                       
                       {totalPages > 1 && (
@@ -1268,6 +1300,7 @@ export default function AudienceBuilder() {
                         onSelectFirstN={handleSelectFirstN}
                         onSelectPerCompanyAcrossAudience={handleSelectPerCompanyAcrossAudience}
                         onSelectStacked={handleSelectStacked}
+                        onSelectPerCompanyOnSelection={handleSelectPerCompanyOnSelection}
                       />
                       
                       {totalPages > 1 && (
