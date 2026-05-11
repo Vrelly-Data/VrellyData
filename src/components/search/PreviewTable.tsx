@@ -33,9 +33,10 @@ interface PreviewTableProps {
   onSelectAllResults?: () => void;
   onSelectFirstN?: (count: number) => Promise<void>;
   onSelectPerCompanyAcrossAudience?: (countPerCompany: number) => Promise<void>;
+  onSelectStacked?: (people: number | null, maxPerCompany: number | null) => void | Promise<void>;
 }
 
-export function PreviewTable({ data, entityType, isUnlocked, selectedRecords, onSelectionChange, totalResults, onSelectAllResults, onSelectFirstN, onSelectPerCompanyAcrossAudience }: PreviewTableProps) {
+export function PreviewTable({ data, entityType, isUnlocked, selectedRecords, onSelectionChange, totalResults, onSelectAllResults, onSelectFirstN, onSelectPerCompanyAcrossAudience, onSelectStacked }: PreviewTableProps) {
   const [selectCount, setSelectCount] = useState<string>('');
   const [selectPerCompanyCount, setSelectPerCompanyCount] = useState<string>('');
 
@@ -47,74 +48,26 @@ export function PreviewTable({ data, entityType, isUnlocked, selectedRecords, on
     onSelectionChange(newSelected);
   };
 
-  const handleSelectNumber = (count: number) => {
-    const newSelected = new Set(data.slice(0, count).map(r => r.id));
-    onSelectionChange(newSelected);
-  };
-
-  const handleCustomSelect = async (value: string) => {
-    const count = parseInt(value, 10);
-    if (!isNaN(count) && count > 0) {
-      const validCount = Math.min(count, totalResults);
-      
-      // If count is within current page, select directly
-      if (validCount <= data.length) {
-        handleSelectNumber(validCount);
-        setSelectCount('');
-        return;
-      }
-      
-      // If count exceeds current page, use callback to fetch more
-      if (onSelectFirstN) {
-        await onSelectFirstN(validCount);
-        setSelectCount('');
-      }
-    }
-  };
-
   const handleDeselectAll = () => {
     onSelectionChange(new Set());
   };
 
-  const handleSelectPerCompany = (countPerCompany: number) => {
-    // Only works for PersonEntity records
-    const peopleRecords = data as PersonEntity[];
-    
-    // Group by company
-    const companiesMap = new Map<string, PersonEntity[]>();
-    
-    peopleRecords.forEach(person => {
-      const companyName = person.company?.trim().toLowerCase() || 'no-company';
-      if (!companiesMap.has(companyName)) {
-        companiesMap.set(companyName, []);
-      }
-      companiesMap.get(companyName)!.push(person);
-    });
-    
-    // Select X people from each company
-    const selectedIds: string[] = [];
-    companiesMap.forEach((people) => {
-      const toSelect = people.slice(0, countPerCompany);
-      selectedIds.push(...toSelect.map(p => p.id));
-    });
-    
-    onSelectionChange(new Set(selectedIds));
+  const parsePositiveInt = (s: string): number | null => {
+    const n = parseInt(s, 10);
+    return !isNaN(n) && n > 0 ? n : null;
   };
 
-  const handleCustomPerCompanySelect = (value: string) => {
-    const count = parseInt(value, 10);
-    if (!isNaN(count) && count > 0) {
-      // If the parent supplies an across-audience handler and the visible
-      // page doesn't already contain the full audience, delegate so the
-      // dedup runs against every matching row, not just the current page.
-      if (onSelectPerCompanyAcrossAudience && data.length < totalResults) {
-        onSelectPerCompanyAcrossAudience(count);
-      } else {
-        handleSelectPerCompany(count);
-      }
-      setSelectPerCompanyCount('');
-    }
+  const handleStackedSelect = () => {
+    const people = parsePositiveInt(selectCount);
+    const maxPer = parsePositiveInt(selectPerCompanyCount);
+    if (!people && !maxPer) return;
+    onSelectStacked?.(people, maxPer);
+    setSelectCount('');
+    setSelectPerCompanyCount('');
   };
+
+  const canSubmitStacked =
+    !!parsePositiveInt(selectCount) || !!parsePositiveInt(selectPerCompanyCount);
 
   const handleToggleRow = (id: string) => {
     const newSelected = new Set(selectedRecords);
@@ -167,60 +120,41 @@ export function PreviewTable({ data, entityType, isUnlocked, selectedRecords, on
                       )}
                       <DropdownMenuSeparator />
                       <div className="px-2 py-2">
-                        <label className="text-sm font-medium mb-1.5 block">Select first:</label>
-                        <div className="flex items-center gap-2">
+                        <label className="text-sm font-medium mb-1.5 block">
+                          Select N people, max M per company:
+                        </label>
+                        <div className="flex items-center gap-1.5">
                           <Input
                             type="number"
                             min="1"
                             max={totalResults}
                             value={selectCount}
                             onChange={(e) => setSelectCount(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
-                                handleCustomSelect(selectCount);
-                              }
-                            }}
-                            placeholder={`1-${formatTotal(totalResults)}`}
-                            className="h-8 w-24"
+                            onKeyDown={(e) => { if (e.key === 'Enter') handleStackedSelect(); }}
+                            placeholder="N"
+                            className="h-8 w-16"
                           />
-                          <Button 
-                            size="sm" 
-                            onClick={() => handleCustomSelect(selectCount)}
-                            disabled={!selectCount}
+                          <span className="text-xs text-muted-foreground whitespace-nowrap">people, max</span>
+                          <Input
+                            type="number"
+                            min="1"
+                            value={selectPerCompanyCount}
+                            onChange={(e) => setSelectPerCompanyCount(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') handleStackedSelect(); }}
+                            placeholder="M"
+                            className="h-8 w-14"
+                            disabled={entityType !== 'person'}
+                          />
+                          <span className="text-xs text-muted-foreground whitespace-nowrap">per co.</span>
+                          <Button
+                            size="sm"
+                            onClick={handleStackedSelect}
+                            disabled={!canSubmitStacked}
                           >
                             Select
                           </Button>
+                        </div>
                       </div>
-                    </div>
-                    <DropdownMenuSeparator />
-                    <div className="px-2 py-2">
-                      <label className="text-sm font-medium mb-1.5 block">Select per company:</label>
-                      <div className="flex items-center gap-2">
-                        <Input
-                          type="number"
-                          min="1"
-                          value={selectPerCompanyCount}
-                          onChange={(e) => setSelectPerCompanyCount(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              handleCustomPerCompanySelect(selectPerCompanyCount);
-                            }
-                          }}
-                          placeholder="1, 2, 3..."
-                          className="h-8 w-24"
-                        />
-                        <Button 
-                          size="sm" 
-                          onClick={() => handleCustomPerCompanySelect(selectPerCompanyCount)}
-                          disabled={!selectPerCompanyCount}
-                        >
-                          Select
-                        </Button>
-                      </div>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        Select X people from each company
-                      </p>
-                    </div>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem onClick={handleDeselectAll}>
                       Deselect All
@@ -318,26 +252,36 @@ export function PreviewTable({ data, entityType, isUnlocked, selectedRecords, on
                     )}
                     <DropdownMenuSeparator />
                     <div className="px-2 py-2">
-                      <label className="text-sm font-medium mb-1.5 block">Select first:</label>
-                      <div className="flex items-center gap-2">
+                      <label className="text-sm font-medium mb-1.5 block">
+                        Select N people, max M per company:
+                      </label>
+                      <div className="flex items-center gap-1.5">
                         <Input
                           type="number"
                           min="1"
                           max={totalResults}
                           value={selectCount}
                           onChange={(e) => setSelectCount(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              handleCustomSelect(selectCount);
-                            }
-                          }}
-                          placeholder={`1-${formatTotal(totalResults)}`}
-                          className="h-8 w-24"
+                          onKeyDown={(e) => { if (e.key === 'Enter') handleStackedSelect(); }}
+                          placeholder="N"
+                          className="h-8 w-16"
                         />
-                        <Button 
-                          size="sm" 
-                          onClick={() => handleCustomSelect(selectCount)}
-                          disabled={!selectCount}
+                        <span className="text-xs text-muted-foreground whitespace-nowrap">people, max</span>
+                        <Input
+                          type="number"
+                          min="1"
+                          value={selectPerCompanyCount}
+                          onChange={(e) => setSelectPerCompanyCount(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') handleStackedSelect(); }}
+                          placeholder="M"
+                          className="h-8 w-14"
+                          disabled={entityType !== 'person'}
+                        />
+                        <span className="text-xs text-muted-foreground whitespace-nowrap">per co.</span>
+                        <Button
+                          size="sm"
+                          onClick={handleStackedSelect}
+                          disabled={!canSubmitStacked}
                         >
                           Select
                         </Button>

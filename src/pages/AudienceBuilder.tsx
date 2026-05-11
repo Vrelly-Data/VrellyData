@@ -604,6 +604,145 @@ export default function AudienceBuilder() {
     });
   };
 
+  // Combined stacked-select handler. Called by PreviewTable's single
+  // "Select N people, max M per company" row. Delegates to the existing
+  // building-block handlers for single-field cases; runs new combined
+  // logic when both fields are set. NULL/empty `company` rows collapse
+  // into a single 'no-company' bucket — same semantics as
+  // handleSelectPerCompanyAcrossAudience.
+  const handleSelectStacked = async (
+    people: number | null,
+    maxPerCompany: number | null,
+  ) => {
+    if (!people && !maxPerCompany) return;
+
+    // Single-field delegations preserve existing UX (incl. fast paths).
+    if (people && !maxPerCompany) {
+      if (results.length >= people) {
+        setSelectedRecords(new Set(results.slice(0, people).map(r => r.id)));
+        return;
+      }
+      await handleSelectFirstN(people);
+      return;
+    }
+    if (!people && maxPerCompany) {
+      await handleSelectPerCompanyAcrossAudience(maxPerCompany);
+      return;
+    }
+
+    // Both fields filled — new stacked logic.
+    const peopleCap = people!;
+    const maxCap = maxPerCompany!;
+
+    // Company tab: no `company` field — fall back to "first N".
+    if (currentType !== 'person') {
+      await handleSelectFirstN(peopleCap);
+      return;
+    }
+
+    // In-memory fast path: results already cover the full audience.
+    if (results.length >= totalEstimate && totalEstimate > 0) {
+      const companyCounts = new Map<string, number>();
+      const selectedIds: string[] = [];
+      for (const row of results as PersonEntity[]) {
+        const companyKey = row.company?.trim().toLowerCase() || 'no-company';
+        const cnt = companyCounts.get(companyKey) ?? 0;
+        if (cnt >= maxCap) continue;
+        companyCounts.set(companyKey, cnt + 1);
+        selectedIds.push(row.id);
+        if (selectedIds.length >= peopleCap) break;
+      }
+      setSelectedRecords(new Set(selectedIds));
+      toast({
+        title: 'Selected',
+        description: `Selected ${selectedIds.length.toLocaleString()} from ${companyCounts.size.toLocaleString()} ${companyCounts.size === 1 ? 'company' : 'companies'}`,
+      });
+      return;
+    }
+
+    // Hard row-fetch ceiling: peopleCap * 10, capped at TOTAL_DISPLAY_CAP
+    // so a low-distinct-company audience can't burn unbounded pages.
+    const rowFetchCeiling = Math.min(peopleCap * 10, TOTAL_DISPLAY_CAP);
+
+    if (totalEstimate > 1000) {
+      const confirmed = window.confirm(
+        `Selecting up to ${peopleCap.toLocaleString()} people, max ${maxCap} per company. This may take a moment. Continue?`,
+      );
+      if (!confirmed) return;
+    }
+
+    setLoading(true);
+    let fetchTimedOut = false;
+    try {
+      const allFetched: PersonEntity[] = [];
+      const seenIds = new Set<string>();
+      const companyCounts = new Map<string, number>();
+      const selectedIds: string[] = [];
+      const totalPagesToFetch = Math.ceil(
+        Math.min(totalEstimate, rowFetchCeiling) / perPage,
+      );
+      const currentFilterState = filterState || getDefaultFilterBuilderState();
+
+      for (let page = 1; page <= totalPagesToFetch; page++) {
+        const response = await searchPeople(currentFilterState, page, perPage);
+
+        if (response.timedOut?.results) {
+          fetchTimedOut = true;
+          break;
+        }
+
+        for (const row of response.items) {
+          if (seenIds.has(row.id)) continue;
+          seenIds.add(row.id);
+          allFetched.push(row);
+
+          const companyKey = row.company?.trim().toLowerCase() || 'no-company';
+          const cnt = companyCounts.get(companyKey) ?? 0;
+          if (cnt >= maxCap) continue;
+          companyCounts.set(companyKey, cnt + 1);
+          selectedIds.push(row.id);
+
+          if (selectedIds.length >= peopleCap) break;
+        }
+
+        if (selectedIds.length >= peopleCap) break;
+        if (response.items.length === 0) break;
+        if (allFetched.length >= rowFetchCeiling) break;
+      }
+
+      if (fetchTimedOut) {
+        setResults([]);
+        setTotalEstimate(0);
+        setTimedOut(true);
+        return;
+      }
+
+      setResults(allFetched);
+      setTotalEstimate(allFetched.length);
+      setSelectedRecords(new Set(selectedIds));
+
+      // If we fell short of peopleCap without timing out, the audience
+      // either ran out of rows or ran out of distinct companies before we
+      // could hit the target. Surface that explicitly so the success
+      // toast doesn't read like everything-is-fine.
+      const fellShort = selectedIds.length < peopleCap;
+      toast({
+        title: 'Selected',
+        description: fellShort
+          ? `Selected ${selectedIds.length.toLocaleString()} from ${companyCounts.size.toLocaleString()} ${companyCounts.size === 1 ? 'company' : 'companies'} — fewer than requested. Audience may not have ${peopleCap.toLocaleString()} distinct companies.`
+          : `Selected ${selectedIds.length.toLocaleString()} from ${companyCounts.size.toLocaleString()} ${companyCounts.size === 1 ? 'company' : 'companies'}`,
+      });
+    } catch (error) {
+      toast({
+        title: 'Error',
+        description: 'Failed to fetch audience for stacked selection',
+        variant: 'destructive',
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleSelectFirstN = async (count: number) => {
     setLoading(true);
     try {
@@ -970,6 +1109,7 @@ export default function AudienceBuilder() {
                         onSelectAllResults={handleSelectAllResults}
                         onSelectFirstN={handleSelectFirstN}
                         onSelectPerCompanyAcrossAudience={handleSelectPerCompanyAcrossAudience}
+                        onSelectStacked={handleSelectStacked}
                       />
                       
                       {totalPages > 1 && (
@@ -1127,6 +1267,7 @@ export default function AudienceBuilder() {
                         onSelectAllResults={handleSelectAllResults}
                         onSelectFirstN={handleSelectFirstN}
                         onSelectPerCompanyAcrossAudience={handleSelectPerCompanyAcrossAudience}
+                        onSelectStacked={handleSelectStacked}
                       />
                       
                       {totalPages > 1 && (
