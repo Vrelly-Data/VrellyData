@@ -32,9 +32,10 @@ interface PreviewTableProps {
   totalResults: number;
   onSelectAllResults?: () => void;
   onSelectFirstN?: (count: number) => Promise<void>;
+  onSelectPerCompanyAcrossAudience?: (countPerCompany: number) => Promise<void>;
 }
 
-export function PreviewTable({ data, entityType, isUnlocked, selectedRecords, onSelectionChange, totalResults, onSelectAllResults, onSelectFirstN }: PreviewTableProps) {
+export function PreviewTable({ data, entityType, isUnlocked, selectedRecords, onSelectionChange, totalResults, onSelectAllResults, onSelectFirstN, onSelectPerCompanyAcrossAudience }: PreviewTableProps) {
   const [selectCount, setSelectCount] = useState<string>('');
   const [selectPerCompanyCount, setSelectPerCompanyCount] = useState<string>('');
 
@@ -103,7 +104,14 @@ export function PreviewTable({ data, entityType, isUnlocked, selectedRecords, on
   const handleCustomPerCompanySelect = (value: string) => {
     const count = parseInt(value, 10);
     if (!isNaN(count) && count > 0) {
-      handleSelectPerCompany(count);
+      // If the parent supplies an across-audience handler and the visible
+      // page doesn't already contain the full audience, delegate so the
+      // dedup runs against every matching row, not just the current page.
+      if (onSelectPerCompanyAcrossAudience && data.length < totalResults) {
+        onSelectPerCompanyAcrossAudience(count);
+      } else {
+        handleSelectPerCompany(count);
+      }
       setSelectPerCompanyCount('');
     }
   };

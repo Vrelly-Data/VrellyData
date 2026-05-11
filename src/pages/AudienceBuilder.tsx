@@ -509,6 +509,101 @@ export default function AudienceBuilder() {
     }
   };
 
+  // Mirror of handleSelectAllResults, but ends with a per-company dedup
+  // instead of selecting every row. Short-circuits the fetch if `results`
+  // already contains the full audience (e.g. user clicked Select All
+  // first). The dedup logic is intentionally inlined to match
+  // PreviewTable.handleSelectPerCompany verbatim (lowercased+trimmed
+  // company name, nulls collapsed to one bucket).
+  const handleSelectPerCompanyAcrossAudience = async (countPerCompany: number) => {
+    if (countPerCompany <= 0 || !Number.isFinite(countPerCompany)) return;
+    if (currentType !== 'person') return; // companies don't have a `company` field
+
+    let pool: (PersonEntity | CompanyEntity)[] = results;
+
+    // Fetch the full audience only if we don't already have it.
+    if (results.length < totalEstimate) {
+      if (totalEstimate > 1000) {
+        const confirmed = window.confirm(
+          `Selecting ${countPerCompany} per company across ${totalEstimate.toLocaleString()} records. This may take a moment. Continue?`
+        );
+        if (!confirmed) return;
+      }
+
+      setLoading(true);
+      let fetchTimedOut = false;
+      try {
+        const allResults: (PersonEntity | CompanyEntity)[] = [];
+        const totalPagesToFetch = Math.ceil(totalEstimate / perPage);
+        const currentFilterState = filterState || getDefaultFilterBuilderState();
+
+        for (let page = 1; page <= totalPagesToFetch; page++) {
+          const response = currentType === 'person'
+            ? await searchPeople(currentFilterState, page, perPage)
+            : await searchCompanies(currentFilterState, page, perPage);
+          allResults.push(...response.items);
+          // Break early on empty page (no more rows) or on a timed-out page
+          // — every subsequent page would also burn 15s on statement_timeout.
+          if (response.items.length === 0 || response.timedOut?.results) {
+            if (response.timedOut?.results) fetchTimedOut = true;
+            break;
+          }
+        }
+
+        if (fetchTimedOut) {
+          // Surface the same amber empty-state we use for top-level search
+          // timeouts: clear results + totalEstimate so the timeout JSX
+          // renders, and skip both the success toast and a redundant
+          // generic error toast.
+          setResults([]);
+          setTotalEstimate(0);
+          setTimedOut(true);
+          return;
+        }
+
+        const uniqueResults = Array.from(
+          new Map(allResults.map(r => [r.id, r])).values()
+        );
+        setResults(uniqueResults);
+        setTotalEstimate(uniqueResults.length);
+        pool = uniqueResults;
+      } catch (error) {
+        toast({
+          title: 'Error',
+          description: 'Failed to fetch full audience for per-company selection',
+          variant: 'destructive',
+        });
+        return;
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    // Per-company dedup. NULL/empty `company` rows are intentionally
+    // collapsed into a single 'no-company' bucket — same semantics as
+    // PreviewTable.handleSelectPerCompany. Worth revisiting separately.
+    const peopleRecords = pool as PersonEntity[];
+    const companiesMap = new Map<string, PersonEntity[]>();
+    peopleRecords.forEach(person => {
+      const companyName = person.company?.trim().toLowerCase() || 'no-company';
+      if (!companiesMap.has(companyName)) {
+        companiesMap.set(companyName, []);
+      }
+      companiesMap.get(companyName)!.push(person);
+    });
+    const selectedIds: string[] = [];
+    companiesMap.forEach((people) => {
+      const toSelect = people.slice(0, countPerCompany);
+      selectedIds.push(...toSelect.map(p => p.id));
+    });
+    setSelectedRecords(new Set(selectedIds));
+
+    toast({
+      title: 'Selected per company',
+      description: `Selected ${selectedIds.length.toLocaleString()} from ${companiesMap.size.toLocaleString()} ${companiesMap.size === 1 ? 'company' : 'companies'}`,
+    });
+  };
+
   const handleSelectFirstN = async (count: number) => {
     setLoading(true);
     try {
@@ -874,6 +969,7 @@ export default function AudienceBuilder() {
                         totalResults={totalEstimate}
                         onSelectAllResults={handleSelectAllResults}
                         onSelectFirstN={handleSelectFirstN}
+                        onSelectPerCompanyAcrossAudience={handleSelectPerCompanyAcrossAudience}
                       />
                       
                       {totalPages > 1 && (
@@ -1030,6 +1126,7 @@ export default function AudienceBuilder() {
                         totalResults={totalEstimate}
                         onSelectAllResults={handleSelectAllResults}
                         onSelectFirstN={handleSelectFirstN}
+                        onSelectPerCompanyAcrossAudience={handleSelectPerCompanyAcrossAudience}
                       />
                       
                       {totalPages > 1 && (
