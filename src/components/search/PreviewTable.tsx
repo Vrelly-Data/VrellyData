@@ -58,29 +58,39 @@ export function PreviewTable({ data, entityType, isUnlocked, selectedRecords, on
     return !isNaN(n) && n > 0 ? n : null;
   };
 
-  const handleFirstSelect = () => {
-    const n = parsePositiveInt(selectCount);
-    if (!n) return;
-    onSelectStacked?.(n, null);
-    setSelectCount('');
-  };
+  // Both Select buttons run the same handler. It reads BOTH input
+  // fields and routes to the appropriate parent path:
+  //   (people, max)            → onSelectStacked(people, max)
+  //   (people, null)           → onSelectStacked(people, null)
+  //   (null, max) + selection  → onSelectPerCompanyOnSelection(max)
+  //                              (sequential stacking on prior selection)
+  //   (null, max) no selection → onSelectStacked(null, max)
+  //                              (full-audience dedup)
+  //   (null, null)             → no-op
+  const handleStackedSubmit = () => {
+    const people = parsePositiveInt(selectCount);
+    const maxPer = parsePositiveInt(selectPerCompanyCount);
+    if (!people && !maxPer) return;
 
-  const handlePerCompanySelect = () => {
-    const n = parsePositiveInt(selectPerCompanyCount);
-    if (!n) return;
-    // Natural stacking: if rows are already selected (e.g. user just
-    // clicked Select first: 1000), dedup the selection in-memory.
-    // Otherwise fall through to the full-audience per-company dedup.
-    if (selectedRecords.size > 0 && onSelectPerCompanyOnSelection) {
-      onSelectPerCompanyOnSelection(n);
+    if (people && maxPer) {
+      onSelectStacked?.(people, maxPer);
+    } else if (people && !maxPer) {
+      onSelectStacked?.(people, null);
     } else {
-      onSelectStacked?.(null, n);
+      // max-only case
+      if (selectedRecords.size > 0 && onSelectPerCompanyOnSelection) {
+        onSelectPerCompanyOnSelection(maxPer!);
+      } else {
+        onSelectStacked?.(null, maxPer);
+      }
     }
+
+    setSelectCount('');
     setSelectPerCompanyCount('');
   };
 
-  const canSubmitFirst = !!parsePositiveInt(selectCount);
-  const canSubmitPerCompany = !!parsePositiveInt(selectPerCompanyCount);
+  const canSubmit =
+    !!parsePositiveInt(selectCount) || !!parsePositiveInt(selectPerCompanyCount);
 
   const handleToggleRow = (id: string) => {
     const newSelected = new Set(selectedRecords);
@@ -141,14 +151,14 @@ export function PreviewTable({ data, entityType, isUnlocked, selectedRecords, on
                             max={totalResults}
                             value={selectCount}
                             onChange={(e) => setSelectCount(e.target.value)}
-                            onKeyDown={(e) => { if (e.key === 'Enter') handleFirstSelect(); }}
+                            onKeyDown={(e) => { if (e.key === 'Enter') handleStackedSubmit(); }}
                             placeholder={`1-${formatTotal(totalResults)}`}
                             className="h-8 w-24"
                           />
                           <Button
                             size="sm"
-                            onClick={handleFirstSelect}
-                            disabled={!canSubmitFirst}
+                            onClick={handleStackedSubmit}
+                            disabled={!canSubmit}
                           >
                             Select
                           </Button>
@@ -163,14 +173,14 @@ export function PreviewTable({ data, entityType, isUnlocked, selectedRecords, on
                             min="1"
                             value={selectPerCompanyCount}
                             onChange={(e) => setSelectPerCompanyCount(e.target.value)}
-                            onKeyDown={(e) => { if (e.key === 'Enter') handlePerCompanySelect(); }}
+                            onKeyDown={(e) => { if (e.key === 'Enter') handleStackedSubmit(); }}
                             placeholder="1, 2, 3..."
                             className="h-8 w-24"
                           />
                           <Button
                             size="sm"
-                            onClick={handlePerCompanySelect}
-                            disabled={!canSubmitPerCompany}
+                            onClick={handleStackedSubmit}
+                            disabled={!canSubmit}
                           >
                             Select
                           </Button>
@@ -284,14 +294,14 @@ export function PreviewTable({ data, entityType, isUnlocked, selectedRecords, on
                           max={totalResults}
                           value={selectCount}
                           onChange={(e) => setSelectCount(e.target.value)}
-                          onKeyDown={(e) => { if (e.key === 'Enter') handleFirstSelect(); }}
+                          onKeyDown={(e) => { if (e.key === 'Enter') handleStackedSubmit(); }}
                           placeholder={`1-${formatTotal(totalResults)}`}
                           className="h-8 w-24"
                         />
                         <Button
                           size="sm"
-                          onClick={handleFirstSelect}
-                          disabled={!canSubmitFirst}
+                          onClick={handleStackedSubmit}
+                          disabled={!canSubmit}
                         >
                           Select
                         </Button>
