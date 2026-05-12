@@ -85,6 +85,15 @@ export default function AudienceBuilder() {
     canUpdate: Array<{ id: string; current: any; new: any; changes: string[]; newHash: string }>;
     newRecords: Array<{ id: string; data: any; hash: string }>;
   } | null>(null);
+  // Separate dedup analysis for the Save Audience flow — captured at
+  // dialog-open time so the modal can show the deduped credit cost
+  // and the alreadyOwned breakdown. Null when analysis failed or
+  // hasn't run yet (handleSaveAudienceConfirm falls back to flat charge).
+  const [saveDeduplicationAnalysis, setSaveDeduplicationAnalysis] = useState<{
+    alreadyOwned: Array<{ id: string; data: any }>;
+    canUpdate: Array<{ id: string; current: any; new: any; changes: string[]; newHash: string }>;
+    newRecords: Array<{ id: string; data: any; hash: string }>;
+  } | null>(null);
   
   const [selectedRecords, setSelectedRecords] = useState<Set<string>>(new Set());
   const [isListDialogOpen, setIsListDialogOpen] = useState(false);
@@ -839,20 +848,38 @@ export default function AudienceBuilder() {
       });
       return;
     }
-    
+
     // Get remaining credits
     const remaining = getRemainingCredits();
     setCurrentCreditsForSave(remaining);
+
+    // Run dedup analysis BEFORE opening the dialog so it can render
+    // the deduped credit cost and the "already owned" breakdown. If
+    // analysis fails, fall back to flat charge and warn the user —
+    // better than blocking the save entirely.
+    const selectedItems = results.filter(r => selectedRecords.has(r.id));
+    try {
+      const analysis = await analyzeRecords(selectedItems);
+      setSaveDeduplicationAnalysis(analysis);
+    } catch (error) {
+      console.error('Dedup analysis failed for Save Audience:', error);
+      setSaveDeduplicationAnalysis(null);
+      toast({
+        title: "Couldn't check for duplicates",
+        description: 'You will be charged the full amount. Already-owned contacts may be paid for twice.',
+      });
+    }
+
     setShowSaveAudienceDialog(true);
   };
 
   const handleSaveAudienceConfirm = async (audienceName: string) => {
     try {
       setLoading(true);
-      
+
       // Get selected records from already-loaded results
       const selectedItems = results.filter(r => selectedRecords.has(r.id));
-      
+
       if (selectedItems.length === 0) {
         toast({
           title: 'No records selected',
@@ -861,32 +888,40 @@ export default function AudienceBuilder() {
         });
         return;
       }
-      
-      // Get remaining credits
-      const remaining = getRemainingCredits();
-      
-      // Check if enough credits
-      if (remaining < selectedItems.length) {
-        toast({
-          title: 'Insufficient credits',
-          description: 'Not enough credits to save this audience',
-          variant: 'destructive',
-        });
-        return;
-      }
 
-      // Deduct credits (1 credit per contact)
-      const result = await deductCredits(selectedItems.length, {
-        entityType: currentType as 'person' | 'company',
-        recordCount: selectedItems.length,
-      });
-      if (!result.success) {
-        toast({
-          title: 'Error deducting credits',
-          variant: 'destructive',
+      // Use the dedup analysis captured at dialog-open time. Null means
+      // analysis failed and the user accepted the flat-charge fallback
+      // via the toast in handleSaveAudience.
+      const analysis = saveDeduplicationAnalysis;
+      const creditsRequired = analysis
+        ? analysis.newRecords.length + analysis.canUpdate.length
+        : selectedItems.length;
+
+      if (creditsRequired > 0) {
+        const enoughCredits = await hasEnoughCredits(creditsRequired);
+        if (!enoughCredits) {
+          toast({
+            title: 'Insufficient credits',
+            description: 'Not enough credits to save this audience',
+            variant: 'destructive',
+          });
+          return;
+        }
+
+        const result = await deductCredits(creditsRequired, {
+          entityType: currentType as 'person' | 'company',
+          recordCount: analysis ? analysis.newRecords.length : selectedItems.length,
         });
-        return;
+        if (!result.success) {
+          toast({
+            title: 'Error deducting credits',
+            variant: 'destructive',
+          });
+          return;
+        }
       }
+      // If creditsRequired === 0, skip both the check and the deduct —
+      // the save proceeds free (everything is already owned).
 
       // Get user and team info
       const { data: { user } } = await supabase.auth.getUser();
@@ -960,9 +995,21 @@ export default function AudienceBuilder() {
         metadata: { audienceName, filters: filters || {}, listId: newList.id },
       });
 
+      // Mark new records as unlocked ONLY after the audience save
+      // succeeded. If any earlier step threw, we never reach this and
+      // the user keeps their credits + records stay un-marked
+      // (matching reality).
+      if (analysis && analysis.newRecords.length > 0) {
+        await markAsUnlocked(
+          analysis.newRecords.map(r => r.id),
+          analysis.newRecords.map(r => r.data),
+        );
+      }
+
       setShowSaveAudienceDialog(false);
       setSelectedRecords(new Set());
-      
+      setSaveDeduplicationAnalysis(null);
+
       toast({
         title: 'Audience saved',
         description: `"${audienceName}" has been saved with ${selectedItems.length.toLocaleString()} records and added to a new list.`,
@@ -1382,6 +1429,10 @@ export default function AudienceBuilder() {
         open={showSaveAudienceDialog}
         onOpenChange={setShowSaveAudienceDialog}
         totalContacts={selectedRecords.size}
+        creditCost={saveDeduplicationAnalysis
+          ? saveDeduplicationAnalysis.newRecords.length + saveDeduplicationAnalysis.canUpdate.length
+          : selectedRecords.size}
+        alreadyOwnedCount={saveDeduplicationAnalysis?.alreadyOwned.length ?? 0}
         currentCredits={currentCreditsForSave}
         onConfirm={handleSaveAudienceConfirm}
         onCancel={() => setShowSaveAudienceDialog(false)}

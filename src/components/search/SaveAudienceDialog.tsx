@@ -17,6 +17,8 @@ interface SaveAudienceDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   totalContacts: number;
+  creditCost?: number;
+  alreadyOwnedCount?: number;
   currentCredits: number;
   onConfirm: (name: string) => void;
   onCancel: () => void;
@@ -26,12 +28,16 @@ export function SaveAudienceDialog({
   open,
   onOpenChange,
   totalContacts,
+  creditCost: creditCostProp,
+  alreadyOwnedCount = 0,
   currentCredits,
   onConfirm,
   onCancel,
 }: SaveAudienceDialogProps) {
   const [audienceName, setAudienceName] = useState('');
-  const creditCost = totalContacts;
+  // Use the deduped cost from props when provided; fall back to flat
+  // (totalContacts) so callers that haven't migrated still work.
+  const creditCost = creditCostProp ?? totalContacts;
   const remainingCredits = currentCredits - creditCost;
   const hasEnoughCredits = currentCredits >= creditCost;
 
@@ -78,6 +84,14 @@ export function SaveAudienceDialog({
               <span className="text-muted-foreground">Total contacts:</span>
               <span className="font-semibold">{totalContacts.toLocaleString()}</span>
             </div>
+            {alreadyOwnedCount > 0 && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Already owned:</span>
+                <span className="font-semibold">
+                  {alreadyOwnedCount.toLocaleString()} (0 credits)
+                </span>
+              </div>
+            )}
             <div className="flex justify-between">
               <span className="text-muted-foreground">Credit cost:</span>
               <span className="font-semibold">{creditCost.toLocaleString()} credits</span>
