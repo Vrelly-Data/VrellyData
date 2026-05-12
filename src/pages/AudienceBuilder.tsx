@@ -858,8 +858,20 @@ export default function AudienceBuilder() {
     // analysis fails, fall back to flat charge and warn the user —
     // better than blocking the save entirely.
     const selectedItems = results.filter(r => selectedRecords.has(r.id));
+    console.log('[SaveAudience] before analyzeRecords', {
+      inputCount: selectedItems.length,
+      first3Ids: selectedItems.slice(0, 3).map(r => r.id),
+      first3Raw: selectedItems.slice(0, 3),
+      entityType: currentType,
+    });
     try {
       const analysis = await analyzeRecords(selectedItems);
+      console.log('[SaveAudience] analyzeRecords result', {
+        alreadyOwnedCount: analysis?.alreadyOwned?.length,
+        canUpdateCount: analysis?.canUpdate?.length,
+        newRecordsCount: analysis?.newRecords?.length,
+        analysisIsNull: analysis === null,
+      });
       setSaveDeduplicationAnalysis(analysis);
     } catch (error) {
       console.error('Dedup analysis failed for Save Audience:', error);
