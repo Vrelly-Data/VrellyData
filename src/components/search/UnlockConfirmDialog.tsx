@@ -100,7 +100,7 @@ export function UnlockConfirmDialog({
                   <div className="flex-1 flex items-center justify-between">
                     <span className="text-sm font-medium text-blue-600">Updated Data Available</span>
                     <span className="text-sm font-semibold text-blue-600">
-                      {canUpdate.toLocaleString()} <span className="font-normal">({canUpdate} credits)</span>
+                      {canUpdate.toLocaleString()} <span className="font-normal">(0 credits)</span>
                     </span>
                   </div>
                 </div>

@@ -296,9 +296,14 @@ export default function AudienceBuilder() {
     
     // Calculate credits required:
     // - New records cost 1 credit each
-    // - Updated records cost 1 credit each  
+    // - Updated records cost 0 credits — the data_hash column doesn't
+    //   exist on unlocked_records, so every prior row reads back as
+    //   hash=null and hasDataChanged(null, x) always returns true,
+    //   producing false "Updated Data Available" buckets. Same fix as
+    //   Save Audience in 51395f8. A real refresh-charge feature needs
+    //   the data_hash column added + populated; separate work.
     // - Already owned (same data) cost 0 credits
-    const creditsRequired = analysis.newRecords.length + analysis.canUpdate.length;
+    const creditsRequired = analysis.newRecords.length;
     
     if (creditsRequired > 0) {
       // Show unlock confirmation dialog with detailed breakdown
