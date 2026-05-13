@@ -18,29 +18,17 @@ export function useDeduplication(entityType: EntityType) {
     setAnalyzing(true);
     
     try {
-      console.log('[analyzeRecords] entered', {
-        searchResultsCount: searchResults.length,
-        first3Inputs: searchResults.slice(0, 3),
-        entityType,
-      });
-
       // 1. Get team ID
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
         throw new Error('Not authenticated');
       }
 
-      const { data: membership, error: teamError } = await supabase
+      const { data: membership } = await supabase
         .from('team_memberships')
         .select('team_id')
         .eq('user_id', user.id)
         .single();
-
-      console.log('[analyzeRecords] team lookup', {
-        membership,
-        teamId: membership?.team_id,
-        teamLookupError: teamError ?? null,
-      });
 
       if (!membership) {
         throw new Error('No team membership found');
@@ -49,13 +37,6 @@ export function useDeduplication(entityType: EntityType) {
       // 2. Get all entity_external_ids from search results
       const searchResultIds = searchResults.map(r => r.id);
 
-      console.log('[analyzeRecords] about to query unlocked_records', {
-        queryTeamId: membership?.team_id,
-        queryEntityType: entityType,
-        queryIdsCount: searchResultIds.length,
-        queryIdsFirst5: searchResultIds.slice(0, 5),
-      });
-
       // 3. Fetch existing unlocked records from database (includes data_hash if available)
       const { data: unlockedRecords, error: unlockedError } = await supabase
         .from('unlocked_records')
@@ -63,12 +44,6 @@ export function useDeduplication(entityType: EntityType) {
         .eq('team_id', membership.team_id)
         .eq('entity_type', entityType)
         .in('entity_external_id', searchResultIds);
-
-      console.log('[analyzeRecords] unlocked_records returned', {
-        returnedCount: unlockedRecords?.length ?? 0,
-        firstReturned: unlockedRecords?.[0],
-        lookupError: unlockedError ?? null,
-      });
 
       if (unlockedError) throw unlockedError;
 
@@ -115,7 +90,6 @@ export function useDeduplication(entityType: EntityType) {
       return { alreadyOwned, canUpdate, newRecords };
     } catch (error) {
       console.error('Error analyzing records:', error);
-      console.warn('[analyzeRecords] CAUGHT — falling back to all-new', error);
       // On error, treat all as new to avoid blocking the user
       return {
         alreadyOwned: [],
