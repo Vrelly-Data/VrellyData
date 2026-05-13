@@ -904,9 +904,17 @@ export default function AudienceBuilder() {
       // Use the dedup analysis captured at dialog-open time. Null means
       // analysis failed and the user accepted the flat-charge fallback
       // via the toast in handleSaveAudience.
+      //
+      // Charge only for newRecords. canUpdate is currently always
+      // false-positive (the data_hash column doesn't exist on
+      // unlocked_records, so every prior row reads back hash=null and
+      // hasDataChanged(null, x) returns true) — we treat those rows as
+      // already-owned for billing. If a real data-refresh feature is
+      // ever wanted, it needs (a) the data_hash column added and
+      // (b) markAsUnlocked writing it, both separate work.
       const analysis = saveDeduplicationAnalysis;
       const creditsRequired = analysis
-        ? analysis.newRecords.length + analysis.canUpdate.length
+        ? analysis.newRecords.length
         : selectedItems.length;
 
       if (creditsRequired > 0) {
@@ -922,7 +930,7 @@ export default function AudienceBuilder() {
 
         const result = await deductCredits(creditsRequired, {
           entityType: currentType as 'person' | 'company',
-          recordCount: analysis ? analysis.newRecords.length : selectedItems.length,
+          recordCount: creditsRequired,
         });
         if (!result.success) {
           toast({
@@ -1442,9 +1450,11 @@ export default function AudienceBuilder() {
         onOpenChange={setShowSaveAudienceDialog}
         totalContacts={selectedRecords.size}
         creditCost={saveDeduplicationAnalysis
-          ? saveDeduplicationAnalysis.newRecords.length + saveDeduplicationAnalysis.canUpdate.length
+          ? saveDeduplicationAnalysis.newRecords.length
           : selectedRecords.size}
-        alreadyOwnedCount={saveDeduplicationAnalysis?.alreadyOwned.length ?? 0}
+        alreadyOwnedCount={saveDeduplicationAnalysis
+          ? saveDeduplicationAnalysis.alreadyOwned.length + saveDeduplicationAnalysis.canUpdate.length
+          : 0}
         currentCredits={currentCreditsForSave}
         onConfirm={handleSaveAudienceConfirm}
         onCancel={() => setShowSaveAudienceDialog(false)}
