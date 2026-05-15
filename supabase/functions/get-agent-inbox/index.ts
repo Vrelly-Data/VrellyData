@@ -118,12 +118,24 @@ Deno.serve(async (req) => {
       const statusList =
         statusGroup === 'total_inbox' ? TOTAL_INBOX_STATUSES : PENDING_APPROVAL_STATUSES;
 
+      // Deterministic newest-first ordering across both tabs:
+      //   last_reply_at  — most authoritative "recent activity" signal
+      //   updated_at     — bumps on tag change, draft edit, inbox_status flip
+      //   created_at     — floor for freshly-imported leads
+      //   id             — final tie-breaker so two rows with identical
+      //                    timestamps don't flip order on each 30s refetch
+      // nullsFirst: false on the timestamp columns prevents null-timestamp
+      // rows from floating to the top of DESC order (Postgres' default for
+      // DESC is NULLS FIRST).
       const { data: inboxLeads, error } = await supabase
         .from('agent_leads')
         .select('*')
         .eq('user_id', authUserId)
         .in('inbox_status', statusList)
-        .order('last_reply_at', { ascending: false })
+        .order('last_reply_at', { ascending: false, nullsFirst: false })
+        .order('updated_at', { ascending: false, nullsFirst: false })
+        .order('created_at', { ascending: false, nullsFirst: false })
+        .order('id', { ascending: false })
         .limit(50);
 
       if (error) throw error;
