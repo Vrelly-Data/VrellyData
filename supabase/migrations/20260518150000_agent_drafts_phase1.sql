@@ -54,24 +54,24 @@ SET
   ),
   pricing_summary = COALESCE(
     pricing_summary,
-    '<TODO — Myall will provide later>'
+    '<TODO - Myall will provide later>'
   ),
   case_studies = COALESCE(
     case_studies,
-    $$Case studies the agent can reference:
+    $cs$Case studies the agent can reference:
 - Private Equity firm: 100+ meetings per month from outbound
 - Medical Device Regulatory company: $100K+ in contracts in under 1 month
-- Independent Consultant: 10 meetings in week 1$$
+- Independent Consultant: 10 meetings in week 1$cs$
   ),
   disqualification_criteria = COALESCE(
     disqualification_criteria,
-    '<TODO — Myall will provide later>'
+    '<TODO - Myall will provide later>'
   ),
   objection_handling_notes = COALESCE(
     objection_handling_notes,
-    '<TODO — Myall will provide later>'
+    '<TODO - Myall will provide later>'
   )
-WHERE user_id = 'af405b27-a1b7-498e-850f-2ae1b0a53b84';
+WHERE user_id = '5edc98cc-7762-43e8-ab8d-ae8d69a08db8';
 
 -- =============================================================================
 -- PART B — agent_activity.activity_type: widen CHECK to add new types
@@ -141,19 +141,19 @@ ALTER TABLE public.draft_audit ENABLE ROW LEVEL SECURITY;
 -- SELECT + INSERT only, no UPDATE / DELETE. Mirrors credit_transactions.
 -- Idempotent CREATE POLICY via the DO $$ ... EXCEPTION WHEN duplicate_object
 -- pattern used elsewhere in this codebase (see 20260412_create_agent_leads).
-DO $$ BEGIN
+DO $pol$ BEGIN
   CREATE POLICY "Users can view their own draft audit"
     ON public.draft_audit FOR SELECT
     USING (auth.uid() = user_id);
 EXCEPTION WHEN duplicate_object THEN NULL;
-END $$;
+END $pol$;
 
-DO $$ BEGIN
+DO $pol$ BEGIN
   CREATE POLICY "Users can insert their own draft audit"
     ON public.draft_audit FOR INSERT
     WITH CHECK (auth.uid() = user_id);
 EXCEPTION WHEN duplicate_object THEN NULL;
-END $$;
+END $pol$;
 
 -- =============================================================================
 -- PART D — No draft_corrections table (intentionally)
