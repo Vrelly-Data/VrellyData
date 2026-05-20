@@ -321,29 +321,118 @@ Deno.serve(async (req) => {
       );
     }
 
+    // === Best-effort lead enrichment ========================================
+    // Smartlead's reply webhook carries only to_name — no company, job_title,
+    // or linkedin. Fetch those from the leads-by-email endpoint so email leads
+    // get the same prospect context HeyReach leads already have (HeyReach gets
+    // them free in its payload; Smartlead doesn't).
+    //
+    // Enrich-only-when-missing: if the existing row already has all three
+    // fields, skip the fetch so we don't hit Smartlead's API on every reply to
+    // an already-enriched lead.
+    //
+    // api_key in QUERY STRING — never log the URL (it contains the credential).
+    let gotEnrichment = false;
+    let enrichedCompany: string | null = null;
+    let enrichedLinkedin: string | null = null;
+    let enrichedJobTitle: string | null = null;
+
+    const { data: existingLead } = await supabase
+      .from("agent_leads")
+      .select("job_title, company, linkedin_url")
+      .eq("user_id", integration.created_by)
+      .eq("email_address", emailForKey)
+      .maybeSingle();
+
+    const alreadyEnriched =
+      !!existingLead?.job_title &&
+      !!existingLead?.company &&
+      !!existingLead?.linkedin_url;
+
+    if (alreadyEnriched) {
+      console.log(
+        `[smartlead-webhook v2] Lead already enriched (email=${email}) — skipping enrichment fetch`,
+      );
+    } else if (integration.api_key_encrypted) {
+      const enrichController = new AbortController();
+      const enrichTimeout = setTimeout(() => enrichController.abort(), 5000);
+      try {
+        const leadsUrl = new URL("https://server.smartlead.ai/api/v1/leads/");
+        leadsUrl.searchParams.set("api_key", integration.api_key_encrypted);
+        leadsUrl.searchParams.set("email", emailForKey);
+
+        const enrichRes = await fetch(leadsUrl.toString(), {
+          headers: { Accept: "application/json" },
+          signal: enrichController.signal,
+        });
+
+        if (!enrichRes.ok) {
+          const errBody = await enrichRes.text().catch(() => "");
+          console.warn(
+            `[smartlead-webhook v2] lead enrichment ${enrichRes.status} for email=${email} — proceeding without. Body: ${errBody.substring(0, 200)}`,
+          );
+        } else {
+          const body = await enrichRes.json();
+          // Shape isn't guaranteed — the endpoint may return an object or a
+          // single-element array. Handle both; null-fallback every field.
+          const lead = (Array.isArray(body) ? body[0] : body) as
+            | {
+                company_name?: string | null;
+                linkedin_profile?: string | null;
+                custom_fields?: { job_title?: string | null } | null;
+              }
+            | null
+            | undefined;
+          enrichedCompany = lead?.company_name ?? null;
+          enrichedLinkedin = lead?.linkedin_profile ?? null;
+          enrichedJobTitle = lead?.custom_fields?.job_title ?? null;
+          gotEnrichment = true;
+          console.log(
+            `[smartlead-webhook v2] Enriched email=${email} (company=${enrichedCompany ? "y" : "n"}, title=${enrichedJobTitle ? "y" : "n"}, linkedin=${enrichedLinkedin ? "y" : "n"})`,
+          );
+        }
+      } catch (enrichErr) {
+        console.warn(
+          `[smartlead-webhook v2] lead enrichment fetch failed for email=${email} (proceeding without):`,
+          enrichErr,
+        );
+      } finally {
+        clearTimeout(enrichTimeout);
+      }
+    }
+
+    // Build the upsert row. Only include the enrichment columns when a fetch
+    // actually succeeded — otherwise omit them so the upsert preserves any
+    // existing values (a skipped or failed fetch must never overwrite good
+    // data with null). On success, prefer the fresh value, fall back to the
+    // existing stored value, and never downgrade a populated field to null.
+    const leadRow: Record<string, unknown> = {
+      user_id: integration.created_by,
+      external_id: externalId,
+      email,
+      email_address: emailForKey,
+      full_name: fullName,
+      channel: "email",
+      smartlead_lead_id: smartleadLeadId,
+      smartlead_campaign_id: smartleadCampaignId,
+      smartlead_email_stats_id: smartleadEmailStatsId,
+      last_campaign_name: lastCampaignName,
+      reply_message_id: replyMessageId,
+      last_reply_text: replyText,
+      last_reply_raw_html: replyHtml,
+      last_reply_at: replyTimestamp,
+      reply_thread: replyThread,
+      inbox_status: "pending",
+    };
+    if (gotEnrichment) {
+      leadRow.job_title = enrichedJobTitle ?? existingLead?.job_title ?? null;
+      leadRow.company = enrichedCompany ?? existingLead?.company ?? null;
+      leadRow.linkedin_url = enrichedLinkedin ?? existingLead?.linkedin_url ?? null;
+    }
+
     const { data: upsertedLead, error: upsertError } = await supabase
       .from("agent_leads")
-      .upsert(
-        {
-          user_id: integration.created_by,
-          external_id: externalId,
-          email,
-          email_address: emailForKey,
-          full_name: fullName,
-          channel: "email",
-          smartlead_lead_id: smartleadLeadId,
-          smartlead_campaign_id: smartleadCampaignId,
-          smartlead_email_stats_id: smartleadEmailStatsId,
-          last_campaign_name: lastCampaignName,
-          reply_message_id: replyMessageId,
-          last_reply_text: replyText,
-          last_reply_raw_html: replyHtml,
-          last_reply_at: replyTimestamp,
-          reply_thread: replyThread,
-          inbox_status: "pending",
-        },
-        { onConflict: "user_id,email_address" },
-      )
+      .upsert(leadRow, { onConflict: "user_id,email_address" })
       .select("id")
       .single();
 
