@@ -1,21 +1,23 @@
 import { useState } from 'react';
-import { LayoutDashboard, Inbox, Kanban, ActivitySquare, Settings } from 'lucide-react';
+import { LayoutDashboard, Inbox, Kanban, ActivitySquare, BookOpen, Settings } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { AgentOverview } from './AgentOverview';
 import { AgentInbox } from './AgentInbox';
 import { AgentPipeline } from './AgentPipeline';
 import { AgentActivity } from './AgentActivity';
+import { SalesPlaybook } from './SalesPlaybook';
 import { AgentSettings } from './AgentSettings';
 import { useAgentInboxData } from '@/hooks/useAgentInbox';
 import { cn } from '@/lib/utils';
 
-type View = 'overview' | 'inbox' | 'pipeline' | 'activity' | 'settings';
+type View = 'overview' | 'inbox' | 'pipeline' | 'activity' | 'sales_playbook' | 'settings';
 
 const navItems: { key: View; label: string; icon: typeof LayoutDashboard }[] = [
   { key: 'overview', label: 'Overview', icon: LayoutDashboard },
   { key: 'inbox', label: 'Inbox', icon: Inbox },
   { key: 'pipeline', label: 'Pipeline', icon: Kanban },
   { key: 'activity', label: 'Activity', icon: ActivitySquare },
+  { key: 'sales_playbook', label: 'Sales Playbook', icon: BookOpen },
   { key: 'settings', label: 'Settings', icon: Settings },
 ];
 
@@ -55,6 +57,7 @@ export function AgentWorkspace() {
         {activeView === 'inbox' && <AgentInbox />}
         {activeView === 'pipeline' && <AgentPipeline />}
         {activeView === 'activity' && <AgentActivity />}
+        {activeView === 'sales_playbook' && <SalesPlaybook />}
         {activeView === 'settings' && <AgentSettings />}
       </div>
     </div>

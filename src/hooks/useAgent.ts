@@ -79,6 +79,11 @@ export interface AgentConfigInput {
   communication_style?: string;
   avoid_phrases?: string[];
   sample_message?: string;
+  calendar_link?: string;
+  pricing_summary?: string;
+  case_studies?: string;
+  disqualification_criteria?: string;
+  objection_handling_notes?: string;
   reply_api_key?: string;
   mode?: string;
   is_active?: boolean;
