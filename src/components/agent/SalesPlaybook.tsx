@@ -1,9 +1,7 @@
 import { useState, useEffect } from 'react';
-import {
-  useAgentConfig,
-  useUpsertAgentConfig,
-  type AgentConfigInput,
-} from '@/hooks/useAgent';
+import { useQueryClient } from '@tanstack/react-query';
+import { useAgentConfig } from '@/hooks/useAgent';
+import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -49,9 +47,10 @@ function calendarLinkLooksValid(v: string): boolean {
 
 export function SalesPlaybook() {
   const { data: config, isLoading } = useAgentConfig();
-  const upsertConfig = useUpsertAgentConfig();
+  const queryClient = useQueryClient();
   const { toast } = useToast();
 
+  const [isSaving, setIsSaving] = useState(false);
   const [formData, setFormData] = useState({
     calendar_link: '',
     pricing_summary: '',
@@ -76,18 +75,43 @@ export function SalesPlaybook() {
     setFormData((prev) => ({ ...prev, [field]: value }));
 
   const handleSave = async () => {
-    // Only the 5 playbook fields are sent. useUpsertAgentConfig upserts on
-    // user_id; on conflict only the provided columns update, so the rest of
-    // agent_configs is preserved untouched.
-    const input = {
-      calendar_link: formData.calendar_link || undefined,
-      pricing_summary: formData.pricing_summary || undefined,
-      case_studies: formData.case_studies || undefined,
-      disqualification_criteria: formData.disqualification_criteria || undefined,
-      objection_handling_notes: formData.objection_handling_notes || undefined,
-    } as AgentConfigInput;
-    await upsertConfig.mutateAsync(input);
-    toast({ title: 'Playbook saved', description: 'Your sales playbook has been updated.' });
+    // Direct UPDATE (not upsert) keyed on user_id. agent_configs has NOT NULL
+    // columns (company_name, sender_name, offer_description); a partial upsert
+    // fails PostgREST's up-front INSERT-path validation before reaching the
+    // ON CONFLICT branch. UPDATE only touches provided columns, sidestepping
+    // that. Safe because SalesPlaybook is only reachable post-onboarding, so
+    // the agent_configs row is guaranteed to exist.
+    setIsSaving(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('Not authenticated');
+
+      const { error } = await (supabase as any)
+        .from('agent_configs')
+        .update({
+          calendar_link: formData.calendar_link || null,
+          pricing_summary: formData.pricing_summary || null,
+          case_studies: formData.case_studies || null,
+          disqualification_criteria: formData.disqualification_criteria || null,
+          objection_handling_notes: formData.objection_handling_notes || null,
+        })
+        .eq('user_id', user.id)
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      queryClient.invalidateQueries({ queryKey: ['agent-config'] });
+      toast({ title: 'Playbook saved', description: 'Your sales playbook has been updated.' });
+    } catch (err) {
+      toast({
+        title: 'Save failed',
+        description: err instanceof Error ? err.message : 'Could not save your playbook.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   if (isLoading) {
@@ -215,9 +239,9 @@ export function SalesPlaybook() {
 
       {/* Sticky save button */}
       <div className="fixed bottom-0 left-0 right-0 bg-background border-t p-4 flex justify-end z-10">
-        <Button onClick={handleSave} disabled={upsertConfig.isPending} className="gap-2">
+        <Button onClick={handleSave} disabled={isSaving} className="gap-2">
           <Save className="h-4 w-4" />
-          {upsertConfig.isPending ? 'Saving...' : 'Save Playbook'}
+          {isSaving ? 'Saving...' : 'Save Playbook'}
         </Button>
       </div>
     </div>
