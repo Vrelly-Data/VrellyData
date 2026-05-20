@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Send, UserPlus, Loader2, X, Linkedin, Mail, Check } from 'lucide-react';
+import { Send, UserPlus, Loader2, X, Linkedin, Mail, Check, Sparkles } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -70,6 +70,18 @@ const INTENT_COLORS: Record<string, string> = {
   bounce: 'bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-400',
   referral: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400',
   unknown: 'bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-400',
+};
+
+// Humanized labels for prospect_read (Phase 3.1a) pills.
+const SENIORITY_LABELS: Record<string, string> = {
+  exec: 'Executive',
+  mid: 'Mid-level',
+  ic: 'IC',
+};
+const BUYING_ROLE_LABELS: Record<string, string> = {
+  decision_maker: 'Decision-maker',
+  influencer: 'Influencer',
+  end_user: 'End user',
 };
 
 function formatRelativeTime(dateStr: string): string {
@@ -404,6 +416,19 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
     lead.intent_confidence > 0.7 ? 'text-green-600' :
     lead.intent_confidence > 0.4 ? 'text-amber-600' : 'text-red-600';
 
+  // Agent's Read — derived from prospect_read (Phase 3.1a). Only surfaced
+  // when at least one signal is meaningful (not null / not all 'unknown').
+  const pr = lead.prospect_read ?? null;
+  const prSeniority = pr?.seniority && pr.seniority !== 'unknown'
+    ? (SENIORITY_LABELS[pr.seniority] ?? pr.seniority)
+    : null;
+  const prRole = pr?.buying_role && pr.buying_role !== 'unknown'
+    ? (BUYING_ROLE_LABELS[pr.buying_role] ?? pr.buying_role)
+    : null;
+  const prPersona = pr?.matched_persona || null;
+  const prAngle = pr?.suggested_angle || null;
+  const showAgentRead = !!(prSeniority || prRole || prPersona || prAngle);
+
   return (
     <div className="flex flex-col h-full">
       {/* Header. The status dropdown renders unconditionally — it must be
@@ -517,6 +542,43 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
               <p className="text-sm font-medium">Classifying reply...</p>
               <p className="text-xs text-muted-foreground">Analyzing intent and drafting a response</p>
             </div>
+          </div>
+        )}
+
+        {/* Agent's Read — compact prospect_read summary, above the draft.
+            Renders for both channels; hidden entirely when no signal. */}
+        {showAgentRead && (
+          <div className="border rounded-lg px-3 py-2.5 space-y-1.5">
+            <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+              <Sparkles className="h-3.5 w-3.5" />
+              Agent's Read
+            </div>
+            {(prSeniority || prRole) && (
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {prSeniority && (
+                  <Badge variant="outline" className="text-xs font-normal text-muted-foreground">
+                    {prSeniority}
+                  </Badge>
+                )}
+                {prRole && (
+                  <Badge variant="outline" className="text-xs font-normal text-muted-foreground">
+                    {prRole}
+                  </Badge>
+                )}
+              </div>
+            )}
+            {prPersona && (
+              <div className="text-xs">
+                <span className="text-muted-foreground">Persona: </span>
+                <span className="font-medium">{prPersona}</span>
+              </div>
+            )}
+            {prAngle && (
+              <div className="text-sm">
+                <span className="text-xs text-muted-foreground">Angle: </span>
+                {prAngle}
+              </div>
+            )}
           </div>
         )}
 

@@ -15,6 +15,12 @@ export interface AgentLead {
   inbox_status: string;
   intent: string;
   intent_confidence: number;
+  prospect_read?: {
+    seniority?: string;
+    buying_role?: string;
+    matched_persona?: string | null;
+    suggested_angle?: string;
+  } | null;
   draft_response: string;
   draft_approved: boolean;
   last_reply_at: string;
