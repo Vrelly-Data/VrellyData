@@ -186,12 +186,18 @@ export function useClassifyLead() {
         target_icp: string | null;
         sender_name: string;
         sender_title: string | null;
+        sender_linkedin: string | null;
         sender_bio: string | null;
         company_name: string;
         company_url: string | null;
         communication_style: string | null;
         avoid_phrases: string[] | null;
         sample_message: string | null;
+        calendar_link: string | null;
+        pricing_summary: string | null;
+        case_studies: string | null;
+        disqualification_criteria: string | null;
+        objection_handling_notes: string | null;
       };
     }) => {
       const replyText = lead.last_reply_text
@@ -209,12 +215,18 @@ export function useClassifyLead() {
             target_icp: agentConfig.target_icp,
             sender_name: agentConfig.sender_name,
             sender_title: agentConfig.sender_title,
+            sender_linkedin: agentConfig.sender_linkedin || '',
             sender_bio: agentConfig.sender_bio,
             company_name: agentConfig.company_name,
             company_url: agentConfig.company_url,
             communication_style: agentConfig.communication_style,
             avoid_phrases: agentConfig.avoid_phrases || [],
             sample_message: agentConfig.sample_message || '',
+            calendar_link: agentConfig.calendar_link || '',
+            pricing_summary: agentConfig.pricing_summary || '',
+            case_studies: agentConfig.case_studies || '',
+            disqualification_criteria: agentConfig.disqualification_criteria || '',
+            objection_handling_notes: agentConfig.objection_handling_notes || '',
           },
           channel: lead.channel,
         },

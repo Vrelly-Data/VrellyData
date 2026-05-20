@@ -22,6 +22,11 @@ export interface AgentConfig {
   communication_style: string | null;
   avoid_phrases: string[] | null;
   sample_message: string | null;
+  calendar_link: string | null;
+  pricing_summary: string | null;
+  case_studies: string | null;
+  disqualification_criteria: string | null;
+  objection_handling_notes: string | null;
   reply_api_key: string | null;
   managed_campaigns: string[] | null;
   mode: string | null;
