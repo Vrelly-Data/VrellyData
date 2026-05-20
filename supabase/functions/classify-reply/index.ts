@@ -122,6 +122,92 @@ const SAFE_FALLBACK = {
   next_pipeline_stage: 'replied',
 };
 
+// SHA-256 hex of a string (prompt-drift fingerprint for draft_audit).
+async function sha256Hex(input: string): Promise<string> {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
+  return Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+// One Anthropic call returning parsed JSON. Does fetch + parse, and on a parse
+// failure makes ONE retry (re-prompting with the bad output + a corrective
+// user turn). Returns { json, retried, usage, ms } or THROWS on HTTP error /
+// missing text block / retry failure. Usage tokens are summed across the
+// original + retry when a retry occurs.
+async function callAnthropicJSON(opts: {
+  apiKey: string;
+  systemPrompt: string;
+  messages: Array<{ role: 'user' | 'assistant'; content: string }>;
+  temperature: number;
+  maxTokens?: number;
+}): Promise<{
+  json: any;
+  retried: boolean;
+  usage: { input_tokens: number; output_tokens: number };
+  ms: number;
+}> {
+  const t0 = Date.now();
+  const base = {
+    model: 'claude-sonnet-4-20250514',
+    max_tokens: opts.maxTokens ?? 1000,
+    temperature: opts.temperature,
+    system: opts.systemPrompt,
+    messages: opts.messages,
+  };
+  const post = (body: unknown) =>
+    fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': opts.apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify(body),
+    });
+
+  const res = await post(base);
+  if (!res.ok) {
+    throw new Error(`Anthropic HTTP ${res.status}: ${(await res.text().catch(() => '')).slice(0, 200)}`);
+  }
+  const data = await res.json();
+  const u1 = data.usage ?? {};
+  const tb = data.content?.find((b: { type: string }) => b.type === 'text');
+  if (!tb) throw new Error('no text block in response');
+
+  try {
+    return {
+      json: JSON.parse(tb.text),
+      retried: false,
+      usage: { input_tokens: u1.input_tokens ?? 0, output_tokens: u1.output_tokens ?? 0 },
+      ms: Date.now() - t0,
+    };
+  } catch {
+    const retry = await post({
+      ...base,
+      messages: [
+        ...opts.messages,
+        { role: 'assistant', content: tb.text },
+        { role: 'user', content: 'Your previous response was not valid JSON. Return ONLY a valid JSON object with the required fields. No markdown, no explanation, no prose.' },
+      ],
+    });
+    if (!retry.ok) throw new Error(`retry HTTP ${retry.status}`);
+    const rdata = await retry.json();
+    const u2 = rdata.usage ?? {};
+    const rtb = rdata.content?.find((b: { type: string }) => b.type === 'text');
+    if (!rtb) throw new Error('retry missing text block');
+    return {
+      json: JSON.parse(rtb.text),
+      retried: true,
+      usage: {
+        input_tokens: (u1.input_tokens ?? 0) + (u2.input_tokens ?? 0),
+        output_tokens: (u1.output_tokens ?? 0) + (u2.output_tokens ?? 0),
+      },
+      ms: Date.now() - t0,
+    };
+  }
+}
+
 Deno.serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
 
@@ -253,6 +339,15 @@ Deno.serve(async (req) => {
       .from('sales_knowledge')
       .select('title, content')
       .in('category', templateCategories)
+      .eq('is_active', true);
+
+    // Buyer personas for Call 1 matching (compact list) + Call 2 (full content
+    // of the matched persona). GLOBAL scope — mirrors the guideline/template
+    // queries above (no created_by filter; service-role bypasses RLS).
+    const { data: personas } = await supabase
+      .from('sales_knowledge')
+      .select('title, content, tags')
+      .eq('category', 'audience_insight')
       .eq('is_active', true);
 
     console.log(`[classify-reply] sales_knowledge fetched +${Date.now() - t0}ms`);
@@ -429,62 +524,16 @@ Use this campaign data to:
     const line = (label: string, value: string | null | undefined) =>
       value && value.trim() ? `${label}${value}` : '';
 
-    const promptVersion = 'phase2-v1';
+    const promptVersion = 'phase3-v1';
 
-    const systemPrompt = `You are an expert B2B sales agent operating on behalf of ${sender_name}${sender_title ? `, ${sender_title}` : ''} at ${company_name}.
-
-## About ${sender_name}
-${sender_bio || ''}
-${line('LinkedIn: ', sender_linkedin)}
-
-## The Offer
-Company: ${company_name}${company_url ? ` (${company_url})` : ''}
-What we sell: ${offer_description}
-${line("Who it's for: ", target_icp)}
-${line('Outcome we deliver: ', outcome_delivered)}
-${line('Desired prospect action: ', desired_action)}
-${line('Communication style: ', communication_style)}
-${avoid_phrases && avoid_phrases.length > 0 ? 'Never say or reference: ' + avoid_phrases.join(', ') : ''}
-${sample_message ? 'Writing style example (match this tone exactly):\n' + sample_message : ''}
-
-## Resources to Reference
-${line('Calendar booking link: ', calendar_link)}
-${case_studies || ''}
-
-## Pricing
-${pricing_summary || 'Pricing depends on use case — direct prospects to a call rather than quoting numbers.'}
-
-## When to Disqualify
-${disqualification_criteria || 'Use judgment — politely decline if the prospect is clearly outside ICP.'}
-
-## Objection Playbook
-${objection_handling_notes || 'Acknowledge the objection, validate it, then redirect to value.'}
-
-## About the Prospect
-${line('Name: ', leadName)}
-${line('Title: ', leadJobTitle)}
-${line('Company: ', leadCompany)}
-${line('LinkedIn: ', leadLinkedinUrl)}
-${line('First contacted in: ', leadLastCampaignName)}
-
-## Your Core Sales Guidelines
-${guidelinesText || 'No specific guidelines configured yet.'}
-
-## Relevant Templates & Frameworks
-${templatesText || 'No templates available.'}
-${campaignIntelligence}
-
-## Your Task
-Analyze the prospect's reply and the conversation history. Return a JSON object with exactly these fields:
-- intent: one of 'interested', 'not_interested', 'referral', 'out_of_office', 'bounce', 'needs_more_info', 'unknown'
-- intent_confidence: float 0.00-1.00
-- suggested_response: the ideal next message (2-4 sentences, matches ${sender_name}'s voice, grounded in the resources above. Reference the prospect by name where natural. Use the calendar link if booking a meeting. Reference case studies if it strengthens credibility.)
-- should_auto_send: boolean (true ONLY if channel is email AND intent is out_of_office or bounce)
-- reasoning: one sentence explaining your classification
-- next_pipeline_stage: one of 'contacted', 'replied', 'engaged', 'meeting_booked', 'closed', 'dead'
-  Rules: not_interested → dead, bounce → dead, explicit meeting agreement → meeting_booked, interested/needs_more_info → engaged, everything else → replied
-
-Return ONLY valid JSON. No markdown fences. No explanation.`;
+    // Compact persona list for Call 1 (titles + tags only). Full content of the
+    // matched persona is looked up after Call 1 from the same `personas` array.
+    const personaList = (personas ?? []).length
+      ? (personas ?? [])
+          .map((p: { title: string; tags?: string[] | null }) =>
+            `- ${p.title}${p.tags && p.tags.length ? ` [tags: ${p.tags.join(', ')}]` : ''}`)
+          .join('\n')
+      : 'No personas defined.';
 
     // Convert thread_history into Anthropic-native messages.
     // prospect → user, sender → assistant. Role values verified stable
@@ -539,7 +588,7 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
 
     const messages = collapsed;
 
-    // Call Anthropic API
+    // Anthropic key — required before either model call.
     const anthropicApiKey = Deno.env.get('ANTHROPIC_API_KEY');
     if (!anthropicApiKey) {
       console.error('ANTHROPIC_API_KEY not set');
@@ -549,160 +598,337 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
       });
     }
 
-    console.log(`[classify-reply] calling Anthropic API +${Date.now() - t0}ms`);
+    const isFirstTouch = trimmedThread.length === 0;
 
-    const promptT0 = Date.now();
-    const anthropicRes = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': anthropicApiKey,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 1000,
-        temperature: 0.5,
-        system: systemPrompt,
-        messages,
-      }),
-    });
-    const generationMs = Date.now() - promptT0;
+    // ============================ CALL 1 — classify ========================
+    const call1SystemPrompt = `You are an expert B2B sales analyst working on behalf of ${sender_name} at ${company_name}. Your job is to read an inbound prospect reply and classify it precisely — you do NOT write the response, you analyze.
 
-    console.log(`[classify-reply] Anthropic responded ${anthropicRes.status} +${Date.now() - t0}ms`);
+## The Offer
+${offer_description}
+${line("Who it's for: ", target_icp)}
 
-    if (!anthropicRes.ok) {
-      console.error('Anthropic API error:', anthropicRes.status, await anthropicRes.text());
-      return new Response(JSON.stringify(SAFE_FALLBACK), {
-        status: 200,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
+## The Prospect
+${line('Name: ', leadName)}
+${line('Title: ', leadJobTitle)}
+${line('Company: ', leadCompany)}
 
-    const response = await anthropicRes.json();
+## Known Buyer Personas
+Match the prospect to the single best-fit persona below, by its EXACT title. Judge fit from their title, company, and how they're replying. If none genuinely fit, use null — do not force a match.
+${personaList}
 
-    // Extract text from response
-    const textBlock = response.content?.find((b: { type: string }) => b.type === 'text');
-    if (!textBlock || textBlock.type !== 'text') {
-      console.error('No text in Claude response');
-      return new Response(JSON.stringify(SAFE_FALLBACK), {
-        status: 200,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
+## Your Task
+Analyze the prospect's latest reply together with the conversation so far, then return ONLY this JSON object:
+{
+  "intent": one of 'interested', 'not_interested', 'referral', 'out_of_office', 'bounce', 'needs_more_info', 'unknown',
+  "intent_confidence": a float from 0.00 to 1.00,
+  "is_objection": boolean — true if the reply pushes back or raises a concern (price, timing, "we already use X", skepticism, "not the right time") rather than giving a clean yes or a flat no. A reply can be not_interested OR needs_more_info AND still be an objection.
+  "prospect_read": {
+    "seniority": one of "exec", "mid", "ic", "unknown",
+    "buying_role": one of "decision_maker", "influencer", "end_user", "unknown",
+    "matched_persona": the EXACT title of the best-fit persona above, or null,
+    "suggested_angle": "one sentence — the specific angle to take with this person"
+  }
+}
 
-    // Parse response JSON. One retry on parse failure — re-prompt the model
-    // with the bad output as an assistant turn and a corrective user turn.
-    let classification: any;
-    let parseRetried = false;
-    let parseFailed = false;
+Classification rules:
+- 'interested' = any genuine buying signal (wants to talk, asks about booking, positive engagement).
+- 'needs_more_info' = engaged but asking a question before committing.
+- 'not_interested' = a real no. If it's a soft no with a reason, set is_objection true.
+- 'referral' = pointing you to someone else.
+- 'out_of_office' / 'bounce' = auto-replies / delivery failures.
+- 'unknown' = genuinely unclear.
+
+Return ONLY valid JSON. No markdown fences. No explanation.`;
+
+    const call1SystemPromptHash = await sha256Hex(call1SystemPrompt);
+
+    let call1: { json: any; retried: boolean; usage: { input_tokens: number; output_tokens: number }; ms: number } | null = null;
     try {
-      classification = JSON.parse(textBlock.text);
-    } catch (parseErr) {
-      console.warn('[classify-reply] initial JSON parse failed, retrying once:', (parseErr as Error)?.message);
-      parseRetried = true;
-      try {
-        const retryRes = await fetch('https://api.anthropic.com/v1/messages', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': anthropicApiKey,
-            'anthropic-version': '2023-06-01',
-          },
-          body: JSON.stringify({
-            model: 'claude-sonnet-4-20250514',
-            max_tokens: 1000,
-            temperature: 0.5,
-            system: systemPrompt,
-            messages: [
-              ...messages,
-              { role: 'assistant', content: textBlock.text },
-              { role: 'user', content: 'Your previous response was not valid JSON. Return ONLY a valid JSON object with the required fields. No markdown, no explanation, no prose.' },
-            ],
-          }),
-        });
-        if (!retryRes.ok) throw new Error(`retry HTTP ${retryRes.status}`);
-        const retryJson = await retryRes.json();
-        const retryText = retryJson.content?.find((b: { type: string }) => b.type === 'text');
-        if (!retryText) throw new Error('retry response missing text block');
-        classification = JSON.parse(retryText.text);
-      } catch (retryErr) {
-        console.error('[classify-reply] retry parse also failed, using SAFE_FALLBACK:', (retryErr as Error)?.message);
-        parseFailed = true;
-        classification = { ...SAFE_FALLBACK };
+      call1 = await callAnthropicJSON({
+        apiKey: anthropicApiKey,
+        systemPrompt: call1SystemPrompt,
+        messages,
+        temperature: 0,
+        maxTokens: 500,
+      });
+      console.log(`[classify-reply] Call 1 done +${Date.now() - t0}ms (intent=${call1.json?.intent}, persona=${call1.json?.prospect_read?.matched_persona ?? 'none'}, retried=${call1.retried})`);
+    } catch (call1Err) {
+      console.error('[classify-reply] Call 1 (classify) failed:', (call1Err as Error)?.message);
+    }
+
+    // Call 1 failure → cannot proceed without intent. Log + return SAFE_FALLBACK.
+    if (!call1) {
+      if (lead_id) {
+        try {
+          await supabase.from('agent_activity').insert({
+            user_id,
+            lead_id,
+            activity_type: 'draft_created',
+            description: 'Draft generation failed — needs manual review',
+            metadata: { parse_failed: true, prompt_version: promptVersion, channel, call1_failed: true },
+          });
+        } catch (e) {
+          console.error('[classify-reply] call1-failed activity insert failed (non-fatal):', e);
+        }
       }
-    }
-
-    // Strip the occasional `{...}` wrapper the model adds around the message
-    // body. Prevents drafts like "{Absolutely! Here's my calendar link...}"
-    // from being persisted (and later sent) with literal braces.
-    if (typeof classification.suggested_response === 'string') {
-      classification.suggested_response = stripBraceWrapper(
-        classification.suggested_response,
-      );
-    }
-
-    // Write classification back to agent_leads. Parse-failed runs skip the
-    // write — we don't surface inbox_status='draft_ready' for a run that
-    // never produced a usable draft. The parse-failed activity row below
-    // is the user-visible signal that something needs manual review.
-    if (lead_id && classification.intent && !parseFailed) {
       try {
-        // Only these 4 fields — pipeline_stage is owned by explicit user action
-        // (tag dropdown / add-to-heyreach-campaign), not the classifier.
-        // Ownership check — without .eq('user_id', user_id), a JWT-authenticated
-        // attacker could pass any lead_id and overwrite the victim's draft.
+        await supabase.from('draft_audit').insert({
+          user_id,
+          lead_id: lead_id ?? null,
+          lead_name: leadName,
+          lead_company: leadCompany,
+          channel,
+          model: 'claude-sonnet-4-20250514',
+          prompt_version: promptVersion,
+          temperature: 0,
+          system_prompt_hash: call1SystemPromptHash,
+          input_tokens: null,
+          output_tokens: null,
+          generation_ms: null,
+          intent_classified: null,
+          intent_confidence: null,
+          draft_response: null,
+          metadata: { two_call: true, call1_failed: true, call1_system_prompt_hash: call1SystemPromptHash },
+        });
+      } catch (e) {
+        console.error('[classify-reply] draft_audit (call1 fail) write failed (non-fatal):', e);
+      }
+      return new Response(JSON.stringify(SAFE_FALLBACK), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    const intent: string = call1.json?.intent ?? 'unknown';
+    const intentConfidence: number =
+      typeof call1.json?.intent_confidence === 'number' ? call1.json.intent_confidence : 0;
+    const isObjection: boolean = call1.json?.is_objection === true;
+    const prospectRead = call1.json?.prospect_read ?? null;
+    const matchedTitle: string | null = prospectRead?.matched_persona ?? null;
+    const matchedPersona = matchedTitle
+      ? (personas ?? []).find((p: { title: string }) => p.title === matchedTitle) ?? null
+      : null;
+
+    // ============================ CALL 2 — generate ========================
+    const personaSection = matchedPersona
+      ? `## Who You're Talking To
+The prospect best matches this buyer persona. Use it to calibrate your positioning, the pains you speak to, and your tone. This is reference for HOW to position — it is NOT a script to copy, and you should never quote it back to the prospect:
+
+${matchedPersona.content}`
+      : '';
+
+    const stageSection = isFirstTouch
+      ? `## Conversation Stage — First Reply
+This is the prospect's first reply in this thread. You have no prior rapport to lean on.
+- Open warmly and acknowledge what they actually said.
+- Establish relevance fast — connect to why the outreach matters to them specifically.
+- Don't assume shared context or reference things that haven't been discussed yet.`
+      : `## Conversation Stage — Ongoing Thread
+This is part of an ongoing exchange.
+- Build on what's already been said; do not re-introduce yourself or repeat earlier points.
+- Pick up from where the conversation left off and move it forward.
+- Reference specifics from the thread so it reads as a real, continuous conversation.`;
+
+    let intentSection = '';
+    if (isObjection && (intent === 'not_interested' || intent === 'needs_more_info')) {
+      intentSection = `## How to Respond — Objection
+The prospect is raising a concern, not closing the door. Handle it with the Objection Playbook above.
+- Acknowledge the concern as legitimate — never dismiss or argue.
+- Validate it briefly, then redirect to the value or proof that addresses it (use Case Studies if relevant).
+- Stay calm and non-defensive; you're resolving a blocker, not winning a debate.
+- Once you've addressed it, lower the friction to a next step — if the concern is reasonably handled, still offer the call and the calendar link, but don't steamroll a prospect who needs reassurance first.`;
+    } else if (intent === 'interested') {
+      intentSection = `## How to Respond — Interested
+This prospect is showing genuine buying interest. Your single goal is to get a meeting on the calendar — do not soften it into an exploratory question.
+- Lead straight to booking. Propose the call explicitly and confidently.
+- If a calendar booking link is available in the Resources section, share it directly and invite them to grab a time.
+- If no calendar link is available, propose specific times or ask for their availability directly — still drive toward a booked slot, just without the link.
+- Suggest a concrete next step (e.g. a short 15–20 min call) rather than asking open-ended "would you be open to learning more?" filler.
+- Do NOT bury the ask. One clear, confident call-to-action beats three soft questions.
+- Keep it short — a prospect who's leaning in doesn't need a pitch, they need an easy yes.`;
+    } else if (intent === 'needs_more_info') {
+      intentSection = `## How to Respond — Needs More Info
+Treat the question as a buying signal, not a request for a lengthy explanation. Answer it, then convert to a call — don't get stuck in back-and-forth Q&A.
+- Answer their specific question directly and concisely first (one or two sentences — never dodge it).
+- If the question is a simple factual one you can answer outright (a yes/no, a capability, a number), ANSWER it plainly — don't deflect a quick answer into a call. Push for the call when the honest answer is "it depends on your setup."
+- Immediately bridge to a call as the best way to go deeper, and share the calendar booking link if one is available.
+- Frame the call as the fastest way to get them what they need, not as another hurdle.
+- Avoid answering so thoroughly that there's no reason left to talk — give enough to build confidence, then push for the booking.
+- End on the ask, with the link, not on another open question.`;
+    } else if (intent === 'not_interested') {
+      intentSection = `## How to Respond — Not Interested
+This is a genuine no, not an objection. Respect it.
+- Exit gracefully and thank them for the reply.
+- Leave the door open for the future without pitching, pushing, or guilt-tripping.
+- Do NOT offer the calendar link or propose a call — that reads as not listening.
+- Keep it short and classy. A clean, respectful close protects the brand and leaves room to re-engage later.`;
+    }
+
+    const call2SystemPrompt = `You are an expert B2B sales agent operating on behalf of ${sender_name}${sender_title ? `, ${sender_title}` : ''} at ${company_name}.
+
+## About ${sender_name}
+${sender_bio || ''}
+${line('LinkedIn: ', sender_linkedin)}
+
+## The Offer
+Company: ${company_name}${company_url ? ` (${company_url})` : ''}
+What we sell: ${offer_description}
+${line("Who it's for: ", target_icp)}
+${line('Outcome we deliver: ', outcome_delivered)}
+${line('Desired prospect action: ', desired_action)}
+${line('Communication style: ', communication_style)}
+${avoid_phrases && avoid_phrases.length > 0 ? 'Never say or reference: ' + avoid_phrases.join(', ') : ''}
+${sample_message ? 'Writing style example (match this tone exactly):\n' + sample_message : ''}
+
+## Resources to Reference
+${line('Calendar booking link: ', calendar_link)}
+${case_studies || ''}
+
+## Pricing
+${pricing_summary || 'Pricing depends on use case — direct prospects to a call rather than quoting numbers.'}
+
+## When to Disqualify
+${disqualification_criteria || 'Use judgment — politely decline if the prospect is clearly outside ICP.'}
+
+## Objection Playbook
+${objection_handling_notes || 'Acknowledge the objection, validate it, then redirect to value.'}
+
+## About the Prospect
+${line('Name: ', leadName)}
+${line('Title: ', leadJobTitle)}
+${line('Company: ', leadCompany)}
+${line('LinkedIn: ', leadLinkedinUrl)}
+${line('First contacted in: ', leadLastCampaignName)}
+${prospectRead?.suggested_angle ? 'Suggested angle: ' + prospectRead.suggested_angle : ''}
+${personaSection ? '\n' + personaSection : ''}
+
+${stageSection}
+${intentSection ? '\n' + intentSection : ''}
+
+## Your Core Sales Guidelines
+${guidelinesText || 'No specific guidelines configured yet.'}
+
+## Relevant Templates & Frameworks
+${templatesText || 'No templates available.'}
+${campaignIntelligence}
+
+## Your Task
+The prospect's intent has been classified as: ${intent}${isObjection ? ' (objection-flavored)' : ''}. Generate the reply accordingly. Return ONLY this JSON object:
+- suggested_response: the ideal next message (2-4 sentences, matches ${sender_name}'s voice, grounded in the resources above. Reference the prospect by name where natural. Use the calendar link if booking a meeting. Reference case studies if it strengthens credibility.)
+- reasoning: one sentence explaining your response
+- should_auto_send: boolean (true ONLY if channel is email AND intent is out_of_office or bounce)
+- next_pipeline_stage: one of 'contacted', 'replied', 'engaged', 'meeting_booked', 'closed', 'dead'
+  Rules: not_interested → dead, bounce → dead, explicit meeting agreement → meeting_booked, interested/needs_more_info → engaged, everything else → replied
+
+Return ONLY valid JSON. No markdown fences. No explanation.`;
+
+    const call2SystemPromptHash = await sha256Hex(call2SystemPrompt);
+
+    let call2: { json: any; retried: boolean; usage: { input_tokens: number; output_tokens: number }; ms: number } | null = null;
+    try {
+      call2 = await callAnthropicJSON({
+        apiKey: anthropicApiKey,
+        systemPrompt: call2SystemPrompt,
+        messages,
+        temperature: 0.5,
+        maxTokens: 1000,
+      });
+      console.log(`[classify-reply] Call 2 done +${Date.now() - t0}ms (retried=${call2.retried})`);
+    } catch (call2Err) {
+      console.error('[classify-reply] Call 2 (generate) failed:', (call2Err as Error)?.message);
+    }
+    const call2Failed = !call2;
+
+    // Assemble response. On Call 2 success include the draft; on failure fall
+    // back to SAFE_FALLBACK's draft fields but keep Call 1's intent + read.
+    let suggestedResponse = '';
+    let reasoning = SAFE_FALLBACK.reasoning;
+    let shouldAutoSend = false;
+    let nextPipelineStage = 'replied';
+    if (call2) {
+      suggestedResponse = typeof call2.json?.suggested_response === 'string'
+        ? stripBraceWrapper(call2.json.suggested_response)
+        : '';
+      reasoning = call2.json?.reasoning ?? reasoning;
+      shouldAutoSend = call2.json?.should_auto_send === true;
+      nextPipelineStage = call2.json?.next_pipeline_stage ?? 'replied';
+    }
+
+    const classification = {
+      intent,
+      intent_confidence: intentConfidence,
+      is_objection: isObjection,
+      prospect_read: prospectRead,
+      suggested_response: suggestedResponse,
+      should_auto_send: shouldAutoSend,
+      reasoning,
+      next_pipeline_stage: nextPipelineStage,
+    };
+
+    // Write-back: intent + prospect_read whenever Call 1 succeeded (which it
+    // did to reach here); draft_response + draft_ready only on Call 2 success.
+    if (lead_id) {
+      try {
+        const update: Record<string, unknown> = {
+          intent,
+          intent_confidence: intentConfidence,
+          prospect_read: prospectRead,
+        };
+        if (!call2Failed) {
+          update.draft_response = suggestedResponse;
+          update.inbox_status = 'draft_ready';
+        }
+        // Ownership guard — .eq('user_id', user_id) prevents a JWT-authenticated
+        // attacker passing an arbitrary lead_id from overwriting a victim's row.
         await supabase
           .from('agent_leads')
-          .update({
-            intent: classification.intent,
-            intent_confidence: classification.intent_confidence,
-            draft_response: classification.suggested_response,
-            inbox_status: 'draft_ready',
-          })
+          .update(update)
           .eq('id', lead_id)
           .eq('user_id', user_id);
 
-        // Log draft created activity
-        await supabase.from('agent_activity').insert({
-          user_id,
-          lead_id,
-          activity_type: 'draft_created',
-          description: `Draft response created — classified as ${classification.intent} (${Math.round(classification.intent_confidence * 100)}% confidence)`,
-          metadata: {
-            intent: classification.intent,
-            confidence: classification.intent_confidence,
-            channel,
-            auto_handled: classification.should_auto_send,
-          },
-        });
+        await supabase.from('agent_activity').insert(
+          !call2Failed
+            ? {
+                user_id,
+                lead_id,
+                activity_type: 'draft_created',
+                description: `Draft response created — classified as ${intent} (${Math.round(intentConfidence * 100)}% confidence)`,
+                metadata: {
+                  intent,
+                  confidence: intentConfidence,
+                  channel,
+                  auto_handled: shouldAutoSend,
+                  matched_persona: matchedTitle,
+                  is_objection: isObjection,
+                },
+              }
+            : {
+                user_id,
+                lead_id,
+                activity_type: 'draft_created',
+                description: 'Draft generation failed — needs manual review',
+                metadata: {
+                  parse_failed: true,
+                  prompt_version: promptVersion,
+                  channel,
+                  intent,
+                  matched_persona: matchedTitle,
+                  call2_failed: true,
+                },
+              },
+        );
 
         console.log(`[classify-reply] wrote classification to agent_leads ${lead_id} +${Date.now() - t0}ms`);
       } catch (writeErr) {
         console.error('[classify-reply] failed to write to agent_leads:', writeErr);
       }
-    } else if (lead_id && parseFailed) {
-      try {
-        await supabase.from('agent_activity').insert({
-          user_id,
-          lead_id,
-          activity_type: 'draft_created',
-          description: 'Draft generation failed — needs manual review',
-          metadata: { parse_failed: true, prompt_version: promptVersion, channel },
-        });
-      } catch (activityErr) {
-        console.error('[classify-reply] parse-failed activity insert failed (non-fatal):', activityErr);
-      }
     }
 
-    // Append-only draft telemetry. Service-role bypasses RLS. Audit-write
-    // failure must never block the classification response.
+    // Append-only draft telemetry. One row, combined token usage across both
+    // calls. Service-role bypasses RLS. Audit-write failure never blocks.
     try {
-      const hashBuf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(systemPrompt));
-      const systemPromptHash = Array.from(new Uint8Array(hashBuf))
-        .map((b) => b.toString(16).padStart(2, '0'))
-        .join('');
-      const usage = response.usage || {};
+      const c1 = call1.usage;
+      const c2 = call2?.usage ?? { input_tokens: 0, output_tokens: 0 };
       await supabase.from('draft_audit').insert({
         user_id,
         lead_id: lead_id ?? null,
@@ -712,14 +938,27 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
         model: 'claude-sonnet-4-20250514',
         prompt_version: promptVersion,
         temperature: 0.5,
-        system_prompt_hash: systemPromptHash,
-        input_tokens: usage.input_tokens ?? null,
-        output_tokens: usage.output_tokens ?? null,
-        generation_ms: generationMs,
-        intent_classified: classification.intent ?? null,
-        intent_confidence: classification.intent_confidence ?? null,
-        draft_response: classification.suggested_response ?? null,
-        metadata: { parse_retried: parseRetried, parse_failed: parseFailed },
+        system_prompt_hash: call2SystemPromptHash,
+        input_tokens: c1.input_tokens + c2.input_tokens,
+        output_tokens: c1.output_tokens + c2.output_tokens,
+        generation_ms: call2?.ms ?? null,
+        intent_classified: intent,
+        intent_confidence: intentConfidence,
+        draft_response: suggestedResponse || null,
+        metadata: {
+          two_call: true,
+          call1_intent: intent,
+          call1_matched_persona: matchedTitle,
+          call1_tokens: c1.input_tokens + c1.output_tokens,
+          call2_tokens: c2.input_tokens + c2.output_tokens,
+          parse_retried_call1: call1.retried,
+          parse_retried_call2: call2?.retried ?? false,
+          is_objection: isObjection,
+          first_touch: isFirstTouch,
+          call1_failed: false,
+          call2_failed: call2Failed,
+          call1_system_prompt_hash: call1SystemPromptHash,
+        },
       });
     } catch (auditErr) {
       console.error('[classify-reply] draft_audit write failed (non-fatal):', auditErr);
