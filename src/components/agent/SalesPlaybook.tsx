@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAgentConfig } from '@/hooks/useAgent';
+import { useLearnings, useAddLearning, useDeleteLearning } from '@/hooks/useLearnings';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { Button } from '@/components/ui/button';
@@ -13,7 +14,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
-import { Loader2, Save, HelpCircle } from 'lucide-react';
+import { Loader2, Save, HelpCircle, Plus, Trash2 } from 'lucide-react';
 
 // Inline help affordance next to a card title. Mirrors the Tooltip pattern
 // used in LeadDetailPanel.
@@ -58,6 +59,11 @@ export function SalesPlaybook() {
     disqualification_criteria: '',
     objection_handling_notes: '',
   });
+
+  const { data: globalLearnings = [] } = useLearnings({ global: true });
+  const addLearning = useAddLearning();
+  const deleteLearning = useDeleteLearning();
+  const [newLearning, setNewLearning] = useState('');
 
   useEffect(() => {
     if (config) {
@@ -112,6 +118,23 @@ export function SalesPlaybook() {
     } finally {
       setIsSaving(false);
     }
+  };
+
+  const handleAddLearning = () => {
+    const text = newLearning.trim();
+    if (!text) return;
+    addLearning.mutate(
+      { text, leadId: null },
+      {
+        onSuccess: () => {
+          setNewLearning('');
+          toast({ title: 'Lesson added', description: 'The agent will apply this when drafting replies.' });
+        },
+        onError: (err: any) => {
+          toast({ title: 'Could not add lesson', description: err?.message || 'Try again.', variant: 'destructive' });
+        },
+      },
+    );
   };
 
   if (isLoading) {
@@ -234,6 +257,56 @@ export function SalesPlaybook() {
 - 'Sounds expensive' → 'Compared to a $5K/mo SDR? It's 1/10th.'
 - 'I need to think about it' → 'Sure — what specifically? I can often answer the blocker on the call.'`}
           />
+        </CardContent>
+      </Card>
+
+      {/* Teach the Agent — global learnings. Self-contained: adds/deletes
+          immediately, NOT part of the Save Playbook batch. */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-1.5">
+            <CardTitle>Teach the Agent</CardTitle>
+            <FieldHelp text="Lessons here are saved immediately on Add (not with Save Playbook) and apply to every lead the agent drafts for." />
+          </div>
+          <p className="text-sm text-muted-foreground mt-1">
+            Add lessons the agent should apply when drafting replies. These apply to all leads.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <Textarea
+            rows={3}
+            value={newLearning}
+            onChange={(e) => setNewLearning(e.target.value)}
+            placeholder="e.g. When prospects hesitate on price, mention the 14-day pilot before quoting anything."
+          />
+          <Button
+            onClick={handleAddLearning}
+            disabled={!newLearning.trim() || addLearning.isPending}
+            size="sm"
+            className="gap-2"
+          >
+            {addLearning.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+            Add Lesson
+          </Button>
+          {globalLearnings.length > 0 && (
+            <div className="space-y-2 pt-1">
+              {globalLearnings.map((l) => (
+                <div key={l.id} className="flex items-start justify-between gap-2 border rounded-md px-3 py-2">
+                  <p className="text-sm flex-1">{l.metadata?.learning_text ?? l.description}</p>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
+                    onClick={() => deleteLearning.mutate({ id: l.id })}
+                    disabled={deleteLearning.isPending}
+                    aria-label="Delete lesson"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
         </CardContent>
       </Card>
 

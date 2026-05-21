@@ -6,7 +6,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Sheet, SheetContent } from '@/components/ui/sheet';
 import {
   Loader2, MessageSquare, PenSquare, CheckCircle,
-  ArrowRight, Rocket, Zap, Search,
+  ArrowRight, Rocket, Zap, Search, GraduationCap,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAgentActivity, useAgentInboxData, type AgentActivityItem, type AgentLead } from '@/hooks/useAgentInbox';
@@ -23,6 +23,7 @@ const ACTIVITY_ICONS: Record<string, { icon: typeof MessageSquare; color: string
   contact_added: { icon: MessageSquare, color: 'text-blue-400' },
   agent_paused: { icon: Zap, color: 'text-gray-500' },
   agent_resumed: { icon: Zap, color: 'text-green-500' },
+  learning_added: { icon: GraduationCap, color: 'text-indigo-500' },
 };
 
 const TYPE_OPTIONS = [
@@ -32,6 +33,7 @@ const TYPE_OPTIONS = [
   { value: 'message_approved', label: 'Messages Approved' },
   { value: 'lead_stage_changed', label: 'Stage Changes' },
   { value: 'campaign_routed', label: 'Campaign Routed' },
+  { value: 'learning_added', label: 'Learnings Added' },
 ];
 
 function getDefaultDateRange() {

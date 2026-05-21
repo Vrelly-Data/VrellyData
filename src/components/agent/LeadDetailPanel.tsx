@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Send, UserPlus, Loader2, X, Linkedin, Mail, Check, Sparkles } from 'lucide-react';
+import { Send, UserPlus, Loader2, X, Linkedin, Mail, Check, Sparkles, Plus, Trash2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -28,6 +28,7 @@ import {
 } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import { useUpdateAgentLead, useApproveDraft, useLiveLead, type AgentLead } from '@/hooks/useAgentInbox';
+import { useLearnings, useAddLearning, useDeleteLearning } from '@/hooks/useLearnings';
 import {
   useSendHeyReachMessage,
   useAddToHeyReachCampaign,
@@ -153,6 +154,27 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
   const { toast } = useToast();
   const [draftText, setDraftText] = useState(lead.draft_response || '');
   const [notes, setNotes] = useState(lead.notes || '');
+  const { data: leadLearnings = [] } = useLearnings({ leadId: lead.id });
+  const addLearning = useAddLearning();
+  const deleteLearning = useDeleteLearning();
+  const [newLearning, setNewLearning] = useState('');
+
+  const handleAddLearning = () => {
+    const text = newLearning.trim();
+    if (!text) return;
+    addLearning.mutate(
+      { text, leadId: lead.id, leadName: lead.full_name, leadCompany: lead.company },
+      {
+        onSuccess: () => {
+          setNewLearning('');
+          toast({ title: 'Lesson added' });
+        },
+        onError: (err: any) => {
+          toast({ title: 'Could not add lesson', description: err?.message || 'Try again.', variant: 'destructive' });
+        },
+      },
+    );
+  };
 
   // HeyReach actions (for LinkedIn channel)
   const sendMessage = useSendHeyReachMessage();
@@ -807,6 +829,47 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
             rows={3}
             className="text-sm"
           />
+        </div>
+
+        {/* Teach the agent — lead-attributed learnings (immediate add/delete) */}
+        <div className="space-y-2">
+          <h4 className="text-sm font-medium text-muted-foreground">Teach the agent</h4>
+          <Textarea
+            value={newLearning}
+            onChange={(e) => setNewLearning(e.target.value)}
+            placeholder="Teach the agent from this conversation — applies to all future drafts."
+            rows={2}
+            className="text-sm"
+          />
+          <Button
+            onClick={handleAddLearning}
+            disabled={!newLearning.trim() || addLearning.isPending}
+            size="sm"
+            variant="outline"
+            className="gap-2"
+          >
+            {addLearning.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+            Add
+          </Button>
+          {leadLearnings.length > 0 && (
+            <div className="space-y-1.5 pt-1">
+              {leadLearnings.map((l) => (
+                <div key={l.id} className="flex items-start justify-between gap-2 border rounded-md px-2.5 py-1.5">
+                  <p className="text-xs flex-1">{l.metadata?.learning_text ?? l.description}</p>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6 shrink-0 text-muted-foreground hover:text-destructive"
+                    onClick={() => deleteLearning.mutate({ id: l.id })}
+                    disabled={deleteLearning.isPending}
+                    aria-label="Delete lesson"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
