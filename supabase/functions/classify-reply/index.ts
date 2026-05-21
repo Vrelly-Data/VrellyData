@@ -350,6 +350,26 @@ Deno.serve(async (req) => {
       .eq('category', 'audience_insight')
       .eq('is_active', true);
 
+    // Recent operator "learnings" (Teach the Agent, Phase 3.4). User-scoped,
+    // best-effort — a failed fetch must not block classification. Injected
+    // into Call 2 (generation) only. Text lives in metadata.learning_text
+    // (Phase 1 migration Part D contract), with description as fallback.
+    let learnings: string[] = [];
+    try {
+      const { data: learningRows } = await supabase
+        .from('agent_activity')
+        .select('description, metadata')
+        .eq('user_id', user_id)
+        .eq('activity_type', 'learning_added')
+        .order('created_at', { ascending: false })
+        .limit(10);
+      learnings = (learningRows ?? [])
+        .map((r: any) => (r.metadata?.learning_text ?? r.description ?? '').trim())
+        .filter((t: string) => t.length > 0);
+    } catch (e) {
+      console.warn('[classify-reply] learnings fetch failed (continuing):', e);
+    }
+
     console.log(`[classify-reply] sales_knowledge fetched +${Date.now() - t0}ms`);
 
     // --- Campaign Intelligence fetches ---
@@ -524,7 +544,7 @@ Use this campaign data to:
     const line = (label: string, value: string | null | undefined) =>
       value && value.trim() ? `${label}${value}` : '';
 
-    const promptVersion = 'phase3-v1';
+    const promptVersion = 'phase3-v2';
 
     // Compact persona list for Call 1 (titles + tags only). Full content of the
     // matched persona is looked up after Call 1 from the same `personas` array.
@@ -764,6 +784,12 @@ This is a genuine no, not an objection. Respect it.
 - Keep it short and classy. A clean, respectful close protects the brand and leaves room to re-engage later.`;
     }
 
+    const learningsSection = learnings.length > 0
+      ? `## What ${sender_name} Has Taught You
+${sender_name} has specifically taught you these lessons from past replies. Apply them — they reflect what actually works, and override generic advice where they conflict:
+${learnings.map((l) => `- ${l}`).join('\n')}`
+      : '';
+
     const call2SystemPrompt = `You are an expert B2B sales agent operating on behalf of ${sender_name}${sender_title ? `, ${sender_title}` : ''} at ${company_name}.
 
 ## About ${sender_name}
@@ -807,6 +833,7 @@ ${intentSection ? '\n' + intentSection : ''}
 
 ## Your Core Sales Guidelines
 ${guidelinesText || 'No specific guidelines configured yet.'}
+${learningsSection ? '\n' + learningsSection : ''}
 
 ## Relevant Templates & Frameworks
 ${templatesText || 'No templates available.'}
@@ -955,6 +982,7 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
           parse_retried_call2: call2?.retried ?? false,
           is_objection: isObjection,
           first_touch: isFirstTouch,
+          learnings_count: learnings.length,
           call1_failed: false,
           call2_failed: call2Failed,
           call1_system_prompt_hash: call1SystemPromptHash,
