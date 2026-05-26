@@ -46,15 +46,17 @@ Vrelly is a B2B sales intelligence platform. Users search a database of ~240K+ p
 | Stripe | Subscriptions & billing |
 | Reply.io API (V1/V2/V3) | Outbound campaign sync |
 | Anthropic Claude API | AI copy generation + audience building (generate-copy, revamp-copy, build-audience) |
-| Lovable AI Gateway (Google Gemini 3 Flash) | CSV field mapping analysis (analyze-csv-knowledge) |
+| Lovable AI Gateway (Google Gemini 3 Flash Preview) | CSV field mapping analysis (analyze-csv-knowledge) |
 | AudienceLab API | Audience enrichment (audiencelab-api) |
 
 ### Deployment
 | Service | Purpose |
 |---------|---------|
-| Lovable | Frontend hosting & CI/CD (auto-deploys from git) |
+| Vercel | Frontend hosting & CI/CD — every push to `main` auto-deploys as a Vercel production build (~20s). vrelly.com is the production URL. |
 | Supabase Cloud | Database + Edge Functions hosting |
 | Stripe | Payment processing |
+
+**Deploy model:** Frontend is fully automated (push → Vercel build). Backend is manual — edge functions via `npx supabase functions deploy <name> --project-ref lgnvolndyftsbcjprmic`, and migrations via the Supabase Studio SQL editor (see §13).
 
 ---
 
@@ -291,7 +293,7 @@ All functions have `verify_jwt = false` in config.toml — JWT verification is d
 | `generate-copy` | Generate multi-channel outreach sequences from top campaign data | Anthropic Claude |
 | `revamp-copy` | Rewrite/improve existing email copy using campaign performance data | Anthropic Claude |
 | `build-audience` | Build ICP using AI analysis + prospect search | Anthropic Claude (Sonnet 4.5) + search_prospects RPC |
-| `analyze-csv-knowledge` | Analyze CSV data for sales knowledge field mapping | Lovable AI Gateway (Gemini 3 Flash) |
+| `analyze-csv-knowledge` | Analyze CSV data for sales knowledge field mapping | Lovable AI Gateway (Gemini 3 Flash Preview) |
 | `publish-resource` | Publish blog/resource articles (used by OpenClaw agent via `x-agent-key`) | — |
 
 ### Admin

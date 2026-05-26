@@ -1,33 +1,21 @@
-# Welcome to your Lovable project
+# Vrelly
 
-## Project info
+Prospect audience builder & outbound platform. Vite + React + TypeScript
+frontend on Vercel; Supabase (Postgres + Edge Functions) + Stripe backend.
 
-**URL**: https://lovable.dev/projects/1bc03e2e-2ab2-42ce-b07e-9dce24f14931
+**Production:** https://vrelly.com
 
-## How can I edit this code?
+## Editing the code
 
-There are several ways of editing your application.
-
-**Use Lovable**
-
-Simply visit the [Lovable Project](https://lovable.dev/projects/1bc03e2e-2ab2-42ce-b07e-9dce24f14931) and start prompting.
-
-Changes made via Lovable will be committed automatically to this repo.
-
-**Use your preferred IDE**
-
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
-
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
-
-Follow these steps:
+Clone and work locally in your own IDE. Requires Node.js & npm
+([install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)).
 
 ```sh
 # Step 1: Clone the repository using the project's Git URL.
 git clone <YOUR_GIT_URL>
 
 # Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
+cd VrellyData
 
 # Step 3: Install the necessary dependencies.
 npm i
@@ -50,9 +38,7 @@ npm run dev
 - Click on "New codespace" to launch a new Codespace environment.
 - Edit files directly within the Codespace and commit and push your changes once you're done.
 
-## What technologies are used for this project?
-
-This project is built with:
+## Tech stack
 
 - Vite
 - TypeScript
@@ -60,14 +46,19 @@ This project is built with:
 - shadcn-ui
 - Tailwind CSS
 
-## How can I deploy this project?
+Backend: Supabase + Stripe. See `VRELLY-INFRA.md` for the full architecture.
 
-Simply open [Lovable](https://lovable.dev/projects/1bc03e2e-2ab2-42ce-b07e-9dce24f14931) and click on Share -> Publish.
+## Deployment
 
-## Can I connect a custom domain to my Lovable project?
+- **Frontend** — hosted on Vercel. Every push to `main` auto-deploys as a
+  Vercel production build (~20s). vrelly.com serves the latest build; no
+  manual step.
+- **Edge functions** — deployed **manually**, NOT on push:
+  `npx supabase functions deploy <name> --project-ref lgnvolndyftsbcjprmic`
+- **Database migrations** — applied **manually** via the Supabase Studio
+  SQL editor.
 
-Yes, you can!
+## Custom domain
 
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
-
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+vrelly.com is configured as the production domain in Vercel
+(Project → Settings → Domains).
