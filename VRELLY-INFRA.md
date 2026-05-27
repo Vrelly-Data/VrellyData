@@ -78,6 +78,69 @@ Vrelly is a B2B sales intelligence platform. Users search a database of ~240K+ p
 
 Vite loads env files by mode. `npm run dev` → development, `npm run build` → production. `.env.local` always wins.
 
+### Push-to-Test → Prod Workflow
+
+Three layers — **frontend**, **edge functions**, **migrations** — promote **independently**; there is no single command that moves all three. Frontend is automated per git branch; edge functions and migrations are **manual and per-project**.
+
+#### Ship a change (start to finish)
+1. Commit onto `dev` (or branch off it); `git push origin dev`.
+2. Open the **Vercel Preview** URL for that push — it builds against the **dev** Supabase (`iqxz…`, verified) — and test there.
+3. If the change includes **edge functions**, deploy to dev: `npx supabase functions deploy <name> --project-ref iqxzetwuxykplzdjysiu`.
+4. If the change includes **migrations**, run the SQL in the **dev** project's Studio SQL editor.
+5. Verify end-to-end on the preview (include a Stripe **test card** if billing is touched — see ⚠️ below).
+6. Promote frontend: `git checkout main && git merge dev && git push origin main` → Vercel **Production** (prod Supabase `lgnv…`).
+7. Promote edge functions to prod: `npx supabase functions deploy <name> --project-ref lgnvolndyftsbcjprmic`.
+8. Promote migrations: run the **identical** SQL in the **prod** project's Studio SQL editor.
+
+> Frontend promotes automatically on push to `main`; **edge functions and migrations do NOT** — skip steps 7–8 and prod runs stale backend code / schema.
+
+#### Project refs
+
+| Ref | Role | Use for |
+|-----|------|---------|
+| `iqxzetwuxykplzdjysiu` | **Dev / test** | Preview deploys + all test-env edge-fn deploys & migrations |
+| `lgnvolndyftsbcjprmic` | **Prod** | Live (vrelly.com); promotion target |
+| `srartzeqcbxbytfixeiv` | **LEGACY — NEVER USE** | Nothing; it is the `config.toml` default (see the CRITICAL footgun) |
+
+#### 1. Frontend (automated, git-branch driven)
+```
+work on `dev`  →  git push origin dev  →  Vercel Preview (builds against DEV Supabase ✅ verified)
+            →  test on the preview URL
+            →  git checkout main && git merge dev && git push origin main
+            →  Vercel Production (builds against PROD Supabase)
+```
+- Pushing `dev` builds a Vercel **Preview**; merging to `main` builds **Production** (~20s).
+- `.env.development` / `.env.production` are **gitignored** — Vercel does not read them. The frontend's Supabase target is selected entirely by **Vercel dashboard env vars, scoped per environment**.
+- **✅ Verified:** Vercel **Preview** scope `VITE_SUPABASE_URL = iqxzetwuxykplzdjysiu` (dev) and **Production** scope `VITE_SUPABASE_URL = lgnvolndyftsbcjprmic` (prod). Preview builds therefore hit the **dev** database, not prod — the test env is **safe at the DB layer**.
+
+#### 2. Edge functions (manual, per-project — ALWAYS explicit `--project-ref`)
+```bash
+# DEV (test first)
+npx supabase functions deploy <name> --project-ref iqxzetwuxykplzdjysiu
+# PROD (promote after verifying)
+npx supabase functions deploy <name> --project-ref lgnvolndyftsbcjprmic
+```
+
+#### 3. Migrations (manual, Studio SQL editor)
+Apply in the **dev** project's Studio SQL editor first, verify, then re-apply the **identical** SQL in the **prod** project's Studio. There is no automated parity check — promotion = re-running the same SQL against prod.
+```
+Dev Studio (iqxz…) SQL editor  →  run  →  verify  →  Prod Studio (lgnv…) SQL editor  →  run same SQL
+```
+
+#### 🔴 CRITICAL footgun — `config.toml` points at the LEGACY project
+`supabase/config.toml` has `project_id = "srartzeqcbxbytfixeiv"` — the **legacy** project. Any Supabase CLI command run **without** an explicit `--project-ref` targets it, **not dev or prod**.
+
+- **NEVER run a bare `supabase functions deploy` or `supabase db push`.**
+- **Always** pass `--project-ref iqxzetwuxykplzdjysiu` (dev) or `--project-ref lgnvolndyftsbcjprmic` (prod).
+
+#### ⚠️ VERIFY VIA TEST CARD — not yet confirmed
+The DB layer is verified; the **dev Stripe wiring is not.** The dev Supabase project's edge functions **should** use Stripe **TEST** keys (`STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`) + a **test-mode** webhook, so test checkouts don't charge real cards. Stripe mode is set by **which project's edge functions run**, not by branch or frontend env.
+
+- **To confirm:** run a Stripe **test card (`4242 4242 4242 4242`)** through checkout on the **dev preview**. It should succeed in Stripe **test mode** (visible in the Stripe *test* dashboard) and provision credits, with **no live charge**. If it errors or appears in the live dashboard, the dev project's Stripe secrets/webhook are misconfigured (pointed at live).
+
+#### Cleanup note
+`.env.local.save` is **stale committed cruft** — a leftover backup with the prod Supabase URL + a public anon key (anon keys ship in the client, so not a secret leak, but misleading). Not part of the env-file system above; safe to delete in a separate small cleanup.
+
 ---
 
 ## 4. Repository Structure
