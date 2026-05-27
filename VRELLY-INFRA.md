@@ -91,6 +91,7 @@ Three layers — **frontend**, **edge functions**, **migrations** — promote **
 6. Promote frontend: `git checkout main && git merge dev && git push origin main` → Vercel **Production** (prod Supabase `lgnv…`).
 7. Promote edge functions to prod: `npx supabase functions deploy <name> --project-ref lgnvolndyftsbcjprmic`.
 8. Promote migrations: run the **identical** SQL in the **prod** project's Studio SQL editor.
+9. **Keep `dev` in sync:** after promoting, fast-forward `dev` back to `main` (`git checkout dev && git merge --ff-only main`) — or just branch fresh from `main` next time — so it never drifts. (`dev` was **181 commits stale** at the start of this session because this step had been skipped.)
 
 > Frontend promotes automatically on push to `main`; **edge functions and migrations do NOT** — skip steps 7–8 and prod runs stale backend code / schema.
 
