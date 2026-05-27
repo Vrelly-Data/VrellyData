@@ -120,7 +120,7 @@ export default {
         "gradient-shift": "gradient-shift 3s ease infinite",
         "pulse-glow": "pulse-glow 2s ease-in-out infinite",
         "line-grow": "line-grow 1s ease-out forwards",
-        "scroll-left": "scroll-left 25s linear infinite",
+        "scroll-left": "scroll-left 35s linear infinite",
       },
     },
   },
