@@ -157,14 +157,16 @@ export default function ChoosePlan() {
         })}
       </div>
 
-      <Button
-        variant="ghost"
-        className="mt-8 text-muted-foreground"
-        onClick={() => signOut()}
-      >
-        <LogOut className="h-4 w-4 mr-2" />
-        Sign out
-      </Button>
+      {user && (
+        <Button
+          variant="ghost"
+          className="mt-8 text-muted-foreground"
+          onClick={() => signOut()}
+        >
+          <LogOut className="h-4 w-4 mr-2" />
+          Sign out
+        </Button>
+      )}
     </div>
   );
 }

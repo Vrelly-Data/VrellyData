@@ -20,9 +20,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // Then set up the listener for changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (event, session) => {
-        // Ignore transient SIGNED_OUT during cross-origin redirects (e.g. Stripe).
-        // Explicit logout is handled by signOut() in authStore which clears state directly.
-        if (event === 'SIGNED_OUT') return;
 
         setSession(session);
         setUser(session?.user ?? null);
