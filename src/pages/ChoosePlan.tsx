@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useEffect, useRef } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Check, Loader2, LogOut, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
@@ -13,8 +13,10 @@ export default function ChoosePlan() {
   const { createCheckoutSession } = useSubscriptionActions();
   const { signOut, profile, user } = useAuthStore();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [loadingPlan, setLoadingPlan] = useState<string | null>(null);
   const [isAnnual, setIsAnnual] = useState(false);
+  const autoCheckoutFiredRef = useRef(false);
 
   // If subscription is already active, redirect to dashboard
   useEffect(() => {
@@ -23,11 +25,41 @@ export default function ChoosePlan() {
     }
   }, [profile, navigate]);
 
+  // Auto-checkout after signup: when the URL carries an `autocheckout` plan
+  // param and the user is now authenticated, fire createCheckoutSession once
+  // with the carried interval. The URL params are stripped immediately so a
+  // refresh can't re-fire, and a ref guard prevents any double-fire within
+  // the same mount. Malformed params fall back to manual click.
+  useEffect(() => {
+    if (autoCheckoutFiredRef.current) return;
+    if (!user) return;
+    const autoPlan = searchParams.get('autocheckout');
+    if (!autoPlan) return;
+    const autoInterval = searchParams.get('interval');
+
+    autoCheckoutFiredRef.current = true;
+    setSearchParams({}, { replace: true });
+
+    const isValidPlan = PLANS.some((p) => p.id === autoPlan && !p.contactSales);
+    const isValidInterval = autoInterval === 'monthly' || autoInterval === 'annual';
+    if (!isValidPlan || !isValidInterval) return;
+
+    setIsAnnual(autoInterval === 'annual');
+    setLoadingPlan(autoPlan);
+    createCheckoutSession(autoPlan, autoInterval as 'monthly' | 'annual').finally(() =>
+      setLoadingPlan(null),
+    );
+  }, [user, searchParams, setSearchParams, createCheckoutSession]);
+
   const handleSubscribe = async (planId: string) => {
-    // Unauthenticated visitor from the landing page: route to signup.
-    // After signup, SubscriptionGuard on /dashboard will send them back here.
+    // Unauthenticated visitor from the landing page: route to signup,
+    // preserving the plan + interval so Auth.tsx can bounce them back to
+    // /pricing?autocheckout=... after successful signup.
     if (!user) {
-      navigate('/auth?tab=signup');
+      const interval = isAnnual ? 'annual' : 'monthly';
+      navigate(
+        `/auth?tab=signup&plan=${encodeURIComponent(planId)}&interval=${interval}`,
+      );
       return;
     }
     setLoadingPlan(planId);
