@@ -11,7 +11,7 @@ import { useAuthStore } from '@/stores/authStore';
 
 export default function ChoosePlan() {
   const { createCheckoutSession } = useSubscriptionActions();
-  const { signOut, profile } = useAuthStore();
+  const { signOut, profile, user } = useAuthStore();
   const navigate = useNavigate();
   const [loadingPlan, setLoadingPlan] = useState<string | null>(null);
   const [isAnnual, setIsAnnual] = useState(false);
@@ -24,6 +24,12 @@ export default function ChoosePlan() {
   }, [profile, navigate]);
 
   const handleSubscribe = async (planId: string) => {
+    // Unauthenticated visitor from the landing page: route to signup.
+    // After signup, SubscriptionGuard on /dashboard will send them back here.
+    if (!user) {
+      navigate('/auth?tab=signup');
+      return;
+    }
     setLoadingPlan(planId);
     try {
       await createCheckoutSession(planId, isAnnual ? 'annual' : 'monthly');
