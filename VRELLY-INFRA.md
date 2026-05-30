@@ -494,14 +494,18 @@ prospects.company_size → (parsed & bucketed) → PersonEntity.companySize
 ### Stripe Price IDs
 
 **Monthly:**
-- Starter: `price_1SPYhwRvAXonKS41WFHowijk`
-- Professional: `price_1SPYjHRvAXonKS41B0eriTUC`
-- Enterprise: `price_1SPYjTRvAXonKS41RdJr9r7I`
+- Starter: `price_1TJMK2K2suFUahyv6qI9xgH8`
+- Professional: `price_1TJMK3K2suFUahyvFqnoDpn5`
+- Enterprise: `price_1TJMK3K2suFUahyvlHEyW7oc`
+- Agent: `price_1TJMK4K2suFUahyvNqIdkFjZ`
 
 **Annual:**
-- Starter: `price_1T9TqvRvAXonKS41LFgEf983`
-- Professional: `price_1T9TqwRvAXonKS41vRpnp2xU`
-- Enterprise: `price_1T9TqwRvAXonKS41G4SCT11j`
+- Starter: `price_1TJMK3K2suFUahyvjsbF0EFL`
+- Professional: `price_1TJMK3K2suFUahyv6HUBovHt`
+- Enterprise: `price_1TJMK4K2suFUahyvESiFTK02`
+- Agent: `price_1TJMK4K2suFUahyvq3MH04v3`
+
+> **Lesson learned (2026-05-29 prod incident):** When migrating Stripe accounts, update **both** the code (`src/config/subscriptionTiers.ts`) **and** the Supabase project secrets (`supabase secrets set --project-ref <ref> STRIPE_PRICE_* ...`). The 2026-04-06 account migration updated only the codebase; the edge functions read `STRIPE_PRICE_*` from Supabase secrets (not from `src/config`), so every prod checkout silently 500'd with `No such price: 'price_1SPYhw…'` for ~7 weeks until the secrets were rotated to match. Runtime source-of-truth for price IDs is Supabase secrets, not these consts.
 
 ### Billing Flow
 1. User signs up → `handle_new_user_credits()` trigger creates `user_credits` row (plan: 'none')
