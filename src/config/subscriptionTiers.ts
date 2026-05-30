@@ -51,18 +51,9 @@ export const SUBSCRIPTION_TIERS = {
 
 export type SubscriptionTier = keyof typeof SUBSCRIPTION_TIERS;
 
-// Stripe Price IDs for each tier — monthly
-export const PRICE_IDS = {
-  starter: 'price_1TJMK2K2suFUahyv6qI9xgH8',
-  professional: 'price_1TJMK3K2suFUahyvFqnoDpn5',
-  enterprise: 'price_1TJMK3K2suFUahyvlHEyW7oc',
-  agent: 'price_1TJMK4K2suFUahyvNqIdkFjZ',
-} as const;
-
-// Stripe Price IDs — annual
-export const ANNUAL_PRICE_IDS = {
-  starter: 'price_1TJMK3K2suFUahyvjsbF0EFL',
-  professional: 'price_1TJMK3K2suFUahyv6HUBovHt',
-  enterprise: 'price_1TJMK4K2suFUahyvESiFTK02',
-  agent: 'price_1TJMK4K2suFUahyvq3MH04v3',
-} as const;
+// NOTE: Runtime Stripe price IDs are sourced from Supabase project secrets
+// (STRIPE_PRICE_STARTER_MONTHLY, …) read by the create-checkout edge function,
+// NOT from this file. The hardcoded PRICE_IDS / ANNUAL_PRICE_IDS exports that
+// used to live here were dead code (zero importers) and caused diagnostic
+// confusion during the 2026-05-29 prod payment incident. See VRELLY-INFRA.md
+// § "Stripe Price IDs" for current values and the secrets-vs-code drift note.
