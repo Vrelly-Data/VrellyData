@@ -26,8 +26,8 @@ function getPlanFromPriceId(priceId: string): string | null {
     [Deno.env.get('STRIPE_PRICE_PROFESSIONAL_ANNUAL') || '']:  'professional',
     [Deno.env.get('STRIPE_PRICE_ENTERPRISE_MONTHLY') || '']:   'enterprise',
     [Deno.env.get('STRIPE_PRICE_ENTERPRISE_ANNUAL') || '']:    'enterprise',
-    'price_1TJMK4K2suFUahyvNqIdkFjZ': 'agent',
-    'price_1TJMK4K2suFUahyvq3MH04v3': 'agent',
+    [Deno.env.get('STRIPE_PRICE_AGENT_MONTHLY') || '']:        'agent',
+    [Deno.env.get('STRIPE_PRICE_AGENT_ANNUAL') || '']:         'agent',
   };
   return map[priceId] ?? null;
 }
@@ -37,7 +37,7 @@ function getBillingInterval(priceId: string): string {
     Deno.env.get('STRIPE_PRICE_STARTER_ANNUAL'),
     Deno.env.get('STRIPE_PRICE_PROFESSIONAL_ANNUAL'),
     Deno.env.get('STRIPE_PRICE_ENTERPRISE_ANNUAL'),
-    'price_1TJMK4K2suFUahyvq3MH04v3',
+    Deno.env.get('STRIPE_PRICE_AGENT_ANNUAL'),
   ];
   return annualIds.includes(priceId) ? 'annual' : 'monthly';
 }
