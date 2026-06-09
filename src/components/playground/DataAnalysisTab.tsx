@@ -16,10 +16,14 @@ import {
   Mail,
   AlertTriangle,
   Percent,
+  Pencil,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
-import { NewClientAnalysisDialog } from './NewClientAnalysisDialog';
+import {
+  NewClientAnalysisDialog,
+  type ClientAnalysisEditingState,
+} from './NewClientAnalysisDialog';
 
 type Range = '7d' | '30d' | 'mtd';
 
@@ -80,7 +84,13 @@ interface StatsSnapshot {
 export function DataAnalysisTab() {
   const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [showNewDialog, setShowNewDialog] = useState(false);
+  // One dialog instance serves both create and edit. When `editingClient` is
+  // null on open, the dialog is in create mode; when it carries pre-fill data,
+  // it's in edit mode. Lifted to this top level so the same instance is
+  // reachable from both the list view and the detail view.
+  const [showDialog, setShowDialog] = useState(false);
+  const [editingClient, setEditingClient] =
+    useState<ClientAnalysisEditingState | null>(null);
 
   const listQuery = useQuery({
     queryKey: ['client_analysis', 'list'],
@@ -94,83 +104,104 @@ export function DataAnalysisTab() {
     },
   });
 
-  if (selectedId) {
-    return (
-      <DataAnalysisDetail
-        clientId={selectedId}
-        onBack={() => setSelectedId(null)}
-      />
-    );
-  }
+  // Fires after the dialog succeeds (create or update). Invalidate both the
+  // list and the (possibly newly-selected) row's detail; jump to the new row
+  // on create, stay put on edit.
+  const handleSaved = (clientId: string) => {
+    queryClient.invalidateQueries({ queryKey: ['client_analysis', 'list'] });
+    queryClient.invalidateQueries({ queryKey: ['client_analysis', clientId] });
+    if (!editingClient) {
+      setSelectedId(clientId);
+    }
+  };
 
   return (
-    <div className="space-y-4">
-      <div className="flex justify-between items-start">
-        <div>
-          <h2 className="text-xl font-semibold">Client analyses</h2>
-          <p className="text-sm text-muted-foreground">
-            Generate per-client performance reports and to-do lists from HeyReach and Smartlead data.
-          </p>
-        </div>
-        <Button onClick={() => setShowNewDialog(true)}>
-          <Plus className="mr-2 h-4 w-4" /> New client analysis
-        </Button>
-      </div>
-
-      {listQuery.isLoading && (
-        <div className="flex justify-center py-12">
-          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-        </div>
-      )}
-
-      {listQuery.error && (
-        <Card className="border-destructive/50">
-          <CardContent className="py-6">
-            <p className="text-sm text-destructive">
-              Failed to load clients: {(listQuery.error as Error).message}
-            </p>
-          </CardContent>
-        </Card>
-      )}
-
-      {listQuery.data && listQuery.data.length === 0 && (
-        <Card className="border-dashed">
-          <CardContent className="py-12 text-center text-muted-foreground">
-            No clients yet. Click "New client analysis" to get started.
-          </CardContent>
-        </Card>
-      )}
-
-      {listQuery.data && listQuery.data.length > 0 && (
-        <div className="grid gap-3 md:grid-cols-2">
-          {listQuery.data.map((c) => (
-            <Card
-              key={c.id}
-              className="cursor-pointer hover:bg-accent/50 transition-colors"
-              onClick={() => setSelectedId(c.id)}
+    <>
+      {selectedId ? (
+        <DataAnalysisDetail
+          clientId={selectedId}
+          onBack={() => setSelectedId(null)}
+          onEdit={(editing) => {
+            setEditingClient(editing);
+            setShowDialog(true);
+          }}
+        />
+      ) : (
+        <div className="space-y-4">
+          <div className="flex justify-between items-start">
+            <div>
+              <h2 className="text-xl font-semibold">Client analyses</h2>
+              <p className="text-sm text-muted-foreground">
+                Generate per-client performance reports and to-do lists from HeyReach and Smartlead data.
+              </p>
+            </div>
+            <Button
+              onClick={() => {
+                setEditingClient(null);
+                setShowDialog(true);
+              }}
             >
-              <CardContent className="pt-6">
-                <h3 className="font-semibold">{c.display_name}</h3>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {c.last_generated_at
-                    ? `Last generated ${new Date(c.last_generated_at).toLocaleString()} (${c.last_range})`
-                    : 'Not yet generated'}
+              <Plus className="mr-2 h-4 w-4" /> New client analysis
+            </Button>
+          </div>
+
+          {listQuery.isLoading && (
+            <div className="flex justify-center py-12">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          )}
+
+          {listQuery.error && (
+            <Card className="border-destructive/50">
+              <CardContent className="py-6">
+                <p className="text-sm text-destructive">
+                  Failed to load clients: {(listQuery.error as Error).message}
                 </p>
               </CardContent>
             </Card>
-          ))}
+          )}
+
+          {listQuery.data && listQuery.data.length === 0 && (
+            <Card className="border-dashed">
+              <CardContent className="py-12 text-center text-muted-foreground">
+                No clients yet. Click "New client analysis" to get started.
+              </CardContent>
+            </Card>
+          )}
+
+          {listQuery.data && listQuery.data.length > 0 && (
+            <div className="grid gap-3 md:grid-cols-2">
+              {listQuery.data.map((c) => (
+                <Card
+                  key={c.id}
+                  className="cursor-pointer hover:bg-accent/50 transition-colors"
+                  onClick={() => setSelectedId(c.id)}
+                >
+                  <CardContent className="pt-6">
+                    <h3 className="font-semibold">{c.display_name}</h3>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {c.last_generated_at
+                        ? `Last generated ${new Date(c.last_generated_at).toLocaleString()} (${c.last_range})`
+                        : 'Not yet generated'}
+                    </p>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
       <NewClientAnalysisDialog
-        open={showNewDialog}
-        onOpenChange={setShowNewDialog}
-        onCreated={(id) => {
-          queryClient.invalidateQueries({ queryKey: ['client_analysis', 'list'] });
-          setSelectedId(id);
+        open={showDialog}
+        onOpenChange={(o) => {
+          setShowDialog(o);
+          if (!o) setEditingClient(null);
         }}
+        editing={editingClient ?? undefined}
+        onSaved={handleSaved}
       />
-    </div>
+    </>
   );
 }
 
@@ -186,9 +217,11 @@ interface DetailQueryResult {
 function DataAnalysisDetail({
   clientId,
   onBack,
+  onEdit,
 }: {
   clientId: string;
   onBack: () => void;
+  onEdit: (editing: ClientAnalysisEditingState) => void;
 }) {
   const queryClient = useQueryClient();
   // Default the range selector to whatever was last generated, or 30d as a
@@ -354,6 +387,19 @@ function DataAnalysisDetail({
               <TabsTrigger value="mtd">MTD</TabsTrigger>
             </TabsList>
           </Tabs>
+          <Button
+            variant="outline"
+            onClick={() =>
+              onEdit({
+                clientId: row.id,
+                displayName: row.display_name,
+                heyreachAccountIds: row.heyreach_account_ids ?? [],
+                smartleadCampaignIds: row.smartlead_campaign_ids ?? [],
+              })
+            }
+          >
+            <Pencil className="mr-2 h-4 w-4" /> Edit campaigns
+          </Button>
           <Button
             onClick={() => generateMutation.mutate()}
             disabled={generateMutation.isPending}
