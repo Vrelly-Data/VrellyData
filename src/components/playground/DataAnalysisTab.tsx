@@ -24,6 +24,8 @@ import {
   NewClientAnalysisDialog,
   type ClientAnalysisEditingState,
 } from './NewClientAnalysisDialog';
+import { CampaignBarChart } from './CampaignBarChart';
+import { RespondersList } from './RespondersList';
 
 type Range = '7d' | '30d' | 'mtd';
 
@@ -425,6 +427,14 @@ function DataAnalysisDetail({
         <StatsGrid stats={stats} showLinkedIn={showLinkedIn} showEmail={showEmail} />
       )}
 
+      {/* Per-campaign bar chart — between cards and AI summary per spec.
+          Pulls its own data from synced_campaigns and self-hides if the
+          client has no scope set. */}
+      <CampaignBarChart
+        heyreachAccountIds={row.heyreach_account_ids ?? []}
+        smartleadCampaignIds={row.smartlead_campaign_ids ?? []}
+      />
+
       {/* Analysis */}
       {row.analysis_text && (
         <Card>
@@ -433,6 +443,10 @@ function DataAnalysisDetail({
           </CardContent>
         </Card>
       )}
+
+      {/* Responders — below the AI summary per spec. SHOW-ALL for the user
+          (not filtered by campaigns; agent_leads has no reliable campaign id). */}
+      <RespondersList />
 
       {/* Checklist */}
       <ChecklistSection

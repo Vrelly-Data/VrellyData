@@ -1,0 +1,391 @@
+// Responders list for the Data Analysis report.
+//
+// Scope: SHOW-ALL for the current user's agent_leads — NOT filtered by the
+// selected client's campaigns. agent_leads has no reliable campaign_id
+// (per the build spec; campaign_external_id only lives on webhook_events),
+// so a per-client filter would be misleading.
+//
+// Sort: intent priority (interested → unknown → not_interested), then
+// last_reply_at desc within each group.
+//
+// Each row collapses by default; the full reply_thread expands on demand
+// as alternating prospect / sender chat bubbles.
+
+import { useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { Card, CardContent } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import {
+  Loader2,
+  Linkedin,
+  Mail,
+  ChevronDown,
+  ChevronUp,
+  MessageSquare,
+} from 'lucide-react';
+import { supabase } from '@/integrations/supabase/client';
+import { useAuthStore } from '@/stores/authStore';
+
+interface ReplyThreadItem {
+  role?: string;
+  channel?: string;
+  content?: string;
+  timestamp?: string;
+}
+
+interface ResponderRow {
+  id: string;
+  full_name: string | null;
+  company: string | null;
+  job_title: string | null;
+  email: string | null;
+  linkedin_url: string | null;
+  channel: string | null;
+  intent: string | null;
+  inbox_status: string | null;
+  last_reply_text: string | null;
+  last_reply_at: string | null;
+  reply_thread: ReplyThreadItem[] | null;
+}
+
+// ---------------------------------------------------------------------------
+// Sort + display helpers
+// ---------------------------------------------------------------------------
+
+function intentPriority(intent: string | null | undefined): number {
+  switch (intent) {
+    case 'interested':
+      return 0;
+    case 'unknown':
+    case null:
+    case undefined:
+    case '':
+      return 1;
+    case 'not_interested':
+      return 2;
+    default:
+      // unknown intent string — sort between unknown and not_interested
+      return 1;
+  }
+}
+
+// Compact relative-time formatter. Inline so we don't drag in date-fns just
+// for this — the precision we need (m/h/d/mo/y) is trivial to compute.
+function relativeTime(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  const ms = Date.now() - date.getTime();
+  if (ms < 0) return 'just now';
+  const sec = Math.floor(ms / 1000);
+  if (sec < 60) return 'just now';
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const days = Math.floor(hr / 24);
+  if (days < 30) return `${days}d ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months}mo ago`;
+  const years = Math.floor(months / 12);
+  return `${years}y ago`;
+}
+
+// LinkedIn leads often have null company/title. Build the "role · company"
+// line gracefully so we never render "null", a leading dot, or a trailing
+// separator.
+function buildRoleLine(jobTitle: string | null, company: string | null): string {
+  const parts: string[] = [];
+  if (jobTitle && jobTitle.trim()) parts.push(jobTitle.trim());
+  if (company && company.trim()) parts.push(company.trim());
+  return parts.join(' · ');
+}
+
+// Most-recent prospect content from the thread; falls back to the cached
+// last_reply_text field. Returns null if neither has anything to show.
+function latestProspectReply(lead: ResponderRow): string | null {
+  const thread = lead.reply_thread;
+  if (Array.isArray(thread)) {
+    for (let i = thread.length - 1; i >= 0; i--) {
+      const item = thread[i];
+      if (item?.role === 'prospect' && typeof item.content === 'string' && item.content.trim()) {
+        return item.content.trim();
+      }
+    }
+  }
+  return lead.last_reply_text && lead.last_reply_text.trim()
+    ? lead.last_reply_text.trim()
+    : null;
+}
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+
+export function RespondersList() {
+  const { user } = useAuthStore();
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  const query = useQuery({
+    queryKey: ['client_analysis_responders', user?.id],
+    queryFn: async (): Promise<ResponderRow[]> => {
+      if (!user) return [];
+      // (inbox_status='replied') OR (last_reply_at IS NOT NULL).
+      // Two .or() conditions on the same query — PostgREST .or syntax.
+      const { data, error } = await supabase
+        .from('agent_leads')
+        .select(
+          'id, full_name, company, job_title, email, linkedin_url, channel, intent, inbox_status, last_reply_text, last_reply_at, reply_thread',
+        )
+        .eq('user_id', user.id)
+        .or('inbox_status.eq.replied,last_reply_at.not.is.null');
+      if (error) throw error;
+      return (data ?? []) as unknown as ResponderRow[];
+    },
+    enabled: !!user,
+    staleTime: 30_000,
+  });
+
+  const sorted = useMemo(() => {
+    return (query.data ?? []).slice().sort((a, b) => {
+      const ap = intentPriority(a.intent);
+      const bp = intentPriority(b.intent);
+      if (ap !== bp) return ap - bp;
+      const at = a.last_reply_at ? new Date(a.last_reply_at).getTime() : 0;
+      const bt = b.last_reply_at ? new Date(b.last_reply_at).getTime() : 0;
+      return bt - at;
+    });
+  }, [query.data]);
+
+  const toggle = (id: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  return (
+    <Card>
+      <CardContent className="pt-6 space-y-3">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold flex items-center gap-2">
+            <MessageSquare className="h-4 w-4" />
+            Responses
+            {!query.isLoading && (
+              <span className="text-xs font-normal text-muted-foreground">
+                ({sorted.length})
+              </span>
+            )}
+          </h3>
+        </div>
+
+        {query.isLoading ? (
+          <div className="flex justify-center py-10">
+            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+          </div>
+        ) : query.error ? (
+          <p className="text-xs text-destructive">
+            Failed to load responses: {(query.error as Error).message}
+          </p>
+        ) : sorted.length === 0 ? (
+          <p className="text-xs text-muted-foreground py-6 text-center">
+            No responses yet.
+          </p>
+        ) : (
+          <ul className="space-y-2">
+            {sorted.map((r) => (
+              <ResponderRowView
+                key={r.id}
+                lead={r}
+                expanded={expanded.has(r.id)}
+                onToggle={() => toggle(r.id)}
+              />
+            ))}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Row + thread view
+// ---------------------------------------------------------------------------
+
+function ResponderRowView({
+  lead,
+  expanded,
+  onToggle,
+}: {
+  lead: ResponderRow;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const name = (lead.full_name && lead.full_name.trim()) || 'Unknown contact';
+  const roleLine = buildRoleLine(lead.job_title, lead.company);
+  const latestReply = latestProspectReply(lead);
+  const contactHref =
+    lead.email
+      ? `mailto:${lead.email}`
+      : lead.linkedin_url
+      ? lead.linkedin_url
+      : null;
+  const contactLabel = lead.email ?? lead.linkedin_url ?? null;
+
+  return (
+    <li className="border rounded-lg p-3 space-y-2 bg-card">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-semibold text-sm truncate">{name}</span>
+            <ChannelPill channel={lead.channel} />
+            <IntentBadge intent={lead.intent} />
+          </div>
+          {roleLine && (
+            <p className="text-xs text-muted-foreground truncate mt-0.5">
+              {roleLine}
+            </p>
+          )}
+          {contactHref && contactLabel && (
+            <a
+              href={contactHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-primary hover:underline truncate inline-block max-w-full"
+            >
+              {contactLabel}
+            </a>
+          )}
+        </div>
+        <span className="text-xs text-muted-foreground whitespace-nowrap shrink-0">
+          {relativeTime(lead.last_reply_at)}
+        </span>
+      </div>
+
+      {latestReply && !expanded && (
+        <p className="text-sm text-foreground/90 line-clamp-2 leading-snug">
+          {latestReply}
+        </p>
+      )}
+
+      {expanded && <ReplyThreadView thread={lead.reply_thread} fallback={latestReply} />}
+
+      <div className="flex justify-end">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 text-xs"
+          onClick={onToggle}
+        >
+          {expanded ? (
+            <>
+              <ChevronUp className="mr-1 h-3 w-3" /> Hide thread
+            </>
+          ) : (
+            <>
+              <ChevronDown className="mr-1 h-3 w-3" /> Show full thread
+            </>
+          )}
+        </Button>
+      </div>
+    </li>
+  );
+}
+
+function ChannelPill({ channel }: { channel: string | null }) {
+  if (channel === 'linkedin') {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-700 dark:text-blue-300 border border-blue-500/20">
+        <Linkedin className="h-3 w-3" /> LinkedIn
+      </span>
+    );
+  }
+  if (channel === 'email') {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/20">
+        <Mail className="h-3 w-3" /> Email
+      </span>
+    );
+  }
+  return null;
+}
+
+function IntentBadge({ intent }: { intent: string | null }) {
+  const v = intent ?? 'unknown';
+  if (v === 'interested') {
+    return (
+      <span className="text-xs px-2 py-0.5 rounded font-medium bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
+        Interested
+      </span>
+    );
+  }
+  if (v === 'not_interested') {
+    return (
+      <span className="text-xs px-2 py-0.5 rounded font-medium bg-rose-500/10 text-rose-700 dark:text-rose-300 border border-rose-500/20">
+        Not interested
+      </span>
+    );
+  }
+  return (
+    <span className="text-xs px-2 py-0.5 rounded font-medium bg-muted text-muted-foreground border border-border">
+      Unknown
+    </span>
+  );
+}
+
+function ReplyThreadView({
+  thread,
+  fallback,
+}: {
+  thread: ReplyThreadItem[] | null;
+  fallback: string | null;
+}) {
+  const items = Array.isArray(thread) ? thread : [];
+  if (items.length === 0) {
+    return fallback ? (
+      <div className="bg-muted/40 rounded p-2 text-sm">{fallback}</div>
+    ) : (
+      <p className="text-xs text-muted-foreground italic">No thread data.</p>
+    );
+  }
+  return (
+    <div className="space-y-2 pt-1">
+      {items.map((m, idx) => {
+        const isProspect = m.role === 'prospect';
+        return (
+          <div
+            key={idx}
+            className={
+              isProspect ? 'flex justify-start' : 'flex justify-end'
+            }
+          >
+            <div
+              className={
+                isProspect
+                  ? 'max-w-[80%] rounded-lg rounded-tl-sm px-3 py-2 bg-muted text-sm'
+                  : 'max-w-[80%] rounded-lg rounded-tr-sm px-3 py-2 bg-primary text-primary-foreground text-sm'
+              }
+            >
+              {m.content && (
+                <div className="whitespace-pre-wrap break-words">{m.content}</div>
+              )}
+              {m.timestamp && (
+                <div
+                  className={
+                    isProspect
+                      ? 'text-[10px] text-muted-foreground mt-1'
+                      : 'text-[10px] text-primary-foreground/70 mt-1'
+                  }
+                >
+                  {new Date(m.timestamp).toLocaleString()}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
