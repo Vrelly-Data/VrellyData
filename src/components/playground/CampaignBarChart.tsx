@@ -142,10 +142,9 @@ export function CampaignBarChart({
     <Card>
       <CardContent className="pt-6 space-y-3">
         <div>
-          <h3 className="text-sm font-semibold">Per-campaign performance</h3>
+          <h3 className="text-sm font-semibold">Lifetime totals per campaign</h3>
           <p className="text-xs text-muted-foreground">
-            Sent, opens, and replies per campaign (cumulative from platform sync;
-            separate from the range filter above).
+            Cumulative totals since each campaign launched — independent of the date range above.
           </p>
         </div>
 
@@ -214,6 +213,10 @@ export function CampaignBarChart({
                 <Bar dataKey="replies" fill={COLORS.replies} radius={[3, 3, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
+            <p className="text-[11px] text-muted-foreground mt-2 leading-snug">
+              The cards above reflect the selected date range; these bars show all-time campaign
+              totals. The two are expected to differ.
+            </p>
           </div>
         )}
       </CardContent>
