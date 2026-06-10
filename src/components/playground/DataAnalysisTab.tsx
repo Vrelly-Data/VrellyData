@@ -262,6 +262,26 @@ function DataAnalysisDetail({
   const [selectedSnapshotId, setSelectedSnapshotId] =
     useState<string | null>(null);
 
+  // Transient live-preview stats from a statsOnly call. Returned by the edge
+  // function but never persisted to a snapshot. Active only for the 7d/30d/
+  // MTD range tabs — Last week is excluded (it would hit the untouched
+  // client_analysis.last_range CHECK constraint in statsOnly mode, and the
+  // weekly-cadence path is meant to land in a snapshot via full Generate).
+  //
+  // ---- PRECEDENCE in the stats grid ----------------------------------------
+  // displayStats := livePreviewStats ?? selectedSnapshot.stats_snapshot
+  //
+  // i.e. live preview WINS if set. It gets cleared (snapshot view restored)
+  // when any of:
+  //   * the user picks "Last week" tab (no statsOnly path for last_week)
+  //   * the user picks a different snapshot via the Select
+  //   * a full Generate succeeds (the new snapshot is auto-selected; the
+  //     transient preview is now stale)
+  // Stale preview never persists across reloads — refresh the page and you
+  // see the selected snapshot again.
+  const [livePreviewStats, setLivePreviewStats] =
+    useState<StatsSnapshot | null>(null);
+
   const detailQuery = useQuery({
     queryKey: ['client_analysis', clientId],
     queryFn: async (): Promise<DetailQueryResult> => {
@@ -337,8 +357,11 @@ function DataAnalysisDetail({
             } added`
           : 'New snapshot saved (no new priorities)',
       );
-      // Jump to the snapshot we just created so the user sees fresh output.
+      // Jump to the snapshot we just created so the user sees fresh output,
+      // and clear any live preview that was sitting on top — the new
+      // snapshot's frozen stats are now the freshest thing we have.
       if (data.snapshot_id) setSelectedSnapshotId(data.snapshot_id);
+      setLivePreviewStats(null);
       queryClient.invalidateQueries({ queryKey: ['client_analysis', clientId] });
       queryClient.invalidateQueries({ queryKey: ['client_analysis', 'list'] });
     },
@@ -384,6 +407,31 @@ function DataAnalysisDetail({
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['client_analysis', clientId] });
     },
+  });
+
+  // ---- Live-preview stats (statsOnly) -------------------------------------
+  // Invoked ONLY for the 7d / 30d / MTD range tabs — Last week is excluded.
+  // The result is stored in livePreviewStats (above) rather than invalidating
+  // the detail query, because we explicitly do NOT want this to replace any
+  // saved snapshot data; it's an overlay on top of the selected snapshot's
+  // frozen view.
+  const statsRefreshMutation = useMutation({
+    mutationFn: async (newRange: Range) => {
+      const { data, error } = await supabase.functions.invoke(
+        'generate-client-analysis',
+        { body: { clientId, range: newRange, statsOnly: true } },
+      );
+      if (error) throw new Error(error.message);
+      if (data && typeof data === 'object' && 'error' in data && data.error) {
+        throw new Error(String(data.error));
+      }
+      return data as { stats: StatsSnapshot; statsOnly: boolean };
+    },
+    onSuccess: (data) => {
+      if (data?.stats) setLivePreviewStats(data.stats);
+    },
+    onError: (err: Error) =>
+      toast.error(`Live preview failed: ${err.message}`),
   });
 
   // ---- Editable AI summary ------------------------------------------------
@@ -499,7 +547,10 @@ function DataAnalysisDetail({
   const selectedSnapshot: SnapshotRow | null = selectedSnapshotId
     ? snapshots.find((s) => s.id === selectedSnapshotId) ?? null
     : snapshots[0] ?? null;
-  const stats = selectedSnapshot?.stats_snapshot ?? null;
+  // Precedence: live preview wins if set, else the selected snapshot's
+  // saved stats. Documented on the livePreviewStats state declaration above.
+  const stats = livePreviewStats ?? selectedSnapshot?.stats_snapshot ?? null;
+  const isLivePreview = livePreviewStats !== null;
   const showLinkedIn = (row.heyreach_account_ids ?? []).length > 0;
   const showEmail = (row.smartlead_campaign_ids ?? []).length > 0;
 
@@ -520,7 +571,21 @@ function DataAnalysisDetail({
         </div>
 
         <div className="flex items-center gap-3">
-          <Tabs value={range} onValueChange={(v) => setRange(v as Range)}>
+          <Tabs
+            value={range}
+            onValueChange={(v) => {
+              const newRange = v as Range;
+              setRange(newRange);
+              // Last week never fires statsOnly: it would hit the legacy
+              // last_range CHECK constraint, and weekly cadence is the
+              // snapshot path. Snapshot picker wins; clear any preview.
+              if (newRange === 'last_week') {
+                setLivePreviewStats(null);
+              } else {
+                statsRefreshMutation.mutate(newRange);
+              }
+            }}
+          >
             <TabsList>
               <TabsTrigger value="last_week">Last week</TabsTrigger>
               <TabsTrigger value="7d">7d</TabsTrigger>
@@ -565,7 +630,12 @@ function DataAnalysisDetail({
               <span className="text-muted-foreground">Showing snapshot:</span>
               <Select
                 value={selectedSnapshotId ?? snapshots[0].id}
-                onValueChange={(v) => setSelectedSnapshotId(v)}
+                onValueChange={(v) => {
+                  // Picking a snapshot is an explicit "show me the frozen
+                  // view" — drop any live preview so the saved stats win.
+                  setSelectedSnapshotId(v);
+                  setLivePreviewStats(null);
+                }}
               >
                 <SelectTrigger className="w-auto min-w-[14rem] h-8">
                   <SelectValue />
@@ -588,22 +658,55 @@ function DataAnalysisDetail({
         </Card>
       )}
 
-      {/* Stats — driven by the selected snapshot's stats_snapshot. Snapshots
-          are point-in-time; no live refresh. To see fresh numbers, Generate. */}
+      {/* Stats — drives off the precedence rule documented on
+          livePreviewStats: live preview (7d/30d/MTD tab click) wins if set,
+          otherwise the selected snapshot's frozen stats. "Refreshing…" chip
+          + dim only appears while the statsOnly call is in flight; cleared
+          state shows snapshot view immediately. */}
       {!stats ? (
         <Card className="border-dashed">
           <CardContent className="py-10 text-center text-muted-foreground">
-            {snapshots.length === 0
-              ? 'No stats yet. Pick a range and click Generate.'
-              : 'Selected snapshot has no stats data.'}
+            {statsRefreshMutation.isPending ? (
+              <span className="inline-flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading stats for {range}…
+              </span>
+            ) : snapshots.length === 0 ? (
+              'No stats yet. Pick a range and click Generate.'
+            ) : (
+              'Selected snapshot has no stats data.'
+            )}
           </CardContent>
         </Card>
       ) : (
-        <StatsGrid
-          stats={stats}
-          showLinkedIn={showLinkedIn}
-          showEmail={showEmail}
-        />
+        <div className="space-y-2">
+          {isLivePreview && (
+            <p className="text-xs text-muted-foreground italic">
+              Live preview · {range} · not saved to a snapshot
+            </p>
+          )}
+          <div className="relative">
+            {statsRefreshMutation.isPending && (
+              <div className="absolute -top-2 right-0 z-10 flex items-center gap-1 text-xs text-muted-foreground bg-background/80 backdrop-blur px-2 py-1 rounded border">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Refreshing {range}…
+              </div>
+            )}
+            <div
+              className={
+                statsRefreshMutation.isPending
+                  ? 'opacity-60 transition-opacity'
+                  : 'transition-opacity'
+              }
+            >
+              <StatsGrid
+                stats={stats}
+                showLinkedIn={showLinkedIn}
+                showEmail={showEmail}
+              />
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Per-campaign bar chart — between cards and AI summary per spec.
