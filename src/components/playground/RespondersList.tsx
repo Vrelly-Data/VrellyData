@@ -122,9 +122,20 @@ function latestProspectReply(lead: ResponderRow): string | null {
 // Component
 // ---------------------------------------------------------------------------
 
-export function RespondersList() {
+interface RespondersListProps {
+  // When provided, the component skips its internal supabase fetch and
+  // renders this list directly. The public report page passes the
+  // server-pre-filtered responders array; the admin view leaves it
+  // undefined and the component fetches the show-all agent_leads list.
+  data?: ResponderRow[];
+}
+
+export { type ResponderRow };
+
+export function RespondersList({ data }: RespondersListProps = {}) {
   const { user } = useAuthStore();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const isDataMode = data !== undefined;
 
   const query = useQuery({
     queryKey: ['client_analysis_responders', user?.id],
@@ -142,7 +153,7 @@ export function RespondersList() {
       if (error) throw error;
       return (data ?? []) as unknown as ResponderRow[];
     },
-    enabled: !!user,
+    enabled: !!user && !isDataMode,
     // Fresh on every detail-view mount per the spec — Replies arrive
     // out-of-band via the inbox webhooks, so even a 30s cache window can
     // miss the brand-new "Replies" row that just landed.
@@ -151,7 +162,8 @@ export function RespondersList() {
   });
 
   const sorted = useMemo(() => {
-    return (query.data ?? []).slice().sort((a, b) => {
+    const source = isDataMode ? data ?? [] : query.data ?? [];
+    return source.slice().sort((a, b) => {
       const ap = intentPriority(a.intent);
       const bp = intentPriority(b.intent);
       if (ap !== bp) return ap - bp;
@@ -159,7 +171,7 @@ export function RespondersList() {
       const bt = b.last_reply_at ? new Date(b.last_reply_at).getTime() : 0;
       return bt - at;
     });
-  }, [query.data]);
+  }, [query.data, isDataMode, data]);
 
   const toggle = (id: string) => {
     setExpanded((prev) => {
@@ -177,7 +189,7 @@ export function RespondersList() {
           <h3 className="text-sm font-semibold flex items-center gap-2">
             <MessageSquare className="h-4 w-4" />
             Responses
-            {!query.isLoading && (
+            {(isDataMode || !query.isLoading) && (
               <span className="text-xs font-normal text-muted-foreground">
                 ({sorted.length})
               </span>
@@ -185,11 +197,13 @@ export function RespondersList() {
           </h3>
         </div>
 
-        {query.isLoading ? (
+        {/* Loading + error states only fire in fetch mode. Data mode skips
+            them — the parent owns its own loading/error UX. */}
+        {!isDataMode && query.isLoading ? (
           <div className="flex justify-center py-10">
             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
           </div>
-        ) : query.error ? (
+        ) : !isDataMode && query.error ? (
           <p className="text-xs text-destructive">
             Failed to load responses: {(query.error as Error).message}
           </p>

@@ -28,6 +28,7 @@ import {
   Pencil,
   Trash2,
   History,
+  Share2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
@@ -37,6 +38,8 @@ import {
 } from './NewClientAnalysisDialog';
 import { CampaignBarChart } from './CampaignBarChart';
 import { RespondersList } from './RespondersList';
+import { StatsGrid, type StatsSnapshot } from './StatsGrid';
+import { ShareReportDialog } from './ShareReportDialog';
 
 type Range = '7d' | '30d' | 'mtd' | 'last_week';
 
@@ -82,25 +85,8 @@ interface ChecklistItem {
   created_at: string | null;
 }
 
-interface StatsSnapshot {
-  range: Range;
-  start_date: string;
-  end_date: string;
-  totals: {
-    sent: number;
-    replies: number;
-    reply_rate_pct: number | null;
-    connections_sent: number;
-    connections_accepted: number;
-    connection_accept_rate_pct: number | null;
-    opens: number;
-    open_rate_pct: number | null;
-    clicks: number;
-    click_rate_pct: number | null;
-    bounces: number;
-    bounce_rate_pct: number | null;
-  };
-}
+// StatsSnapshot moved to ./StatsGrid (the file that consumes it). Imported
+// above so the existing references in this file resolve unchanged.
 
 // ============================================================================
 // LIST VIEW
@@ -261,6 +247,10 @@ function DataAnalysisDetail({
   // the client has zero snapshots (first-run state).
   const [selectedSnapshotId, setSelectedSnapshotId] =
     useState<string | null>(null);
+
+  // Share dialog visibility. Only one client at a time, opens to that
+  // client's tokens.
+  const [showShareDialog, setShowShareDialog] = useState(false);
 
   // Transient live-preview stats from a statsOnly call. Returned by the edge
   // function but never persisted to a snapshot. Active only for the 7d/30d/
@@ -595,6 +585,12 @@ function DataAnalysisDetail({
           </Tabs>
           <Button
             variant="outline"
+            onClick={() => setShowShareDialog(true)}
+          >
+            <Share2 className="mr-2 h-4 w-4" /> Share with client
+          </Button>
+          <Button
+            variant="outline"
             onClick={() =>
               onEdit({
                 clientId: row.id,
@@ -810,114 +806,13 @@ function DataAnalysisDetail({
           deletePriorityMutation.isPending
         }
       />
-    </div>
-  );
-}
 
-// ============================================================================
-// STATS GRID (slim version of PlaygroundStatsGrid's StatCard)
-// ============================================================================
-
-interface StatCardProps {
-  title: string;
-  value: string;
-  icon: React.ReactNode;
-  subtitle?: string;
-}
-
-function StatCard({ title, value, icon, subtitle }: StatCardProps) {
-  return (
-    <Card>
-      <CardContent className="pt-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm font-medium text-muted-foreground">{title}</p>
-            <p className="text-2xl font-bold mt-1">{value}</p>
-            {subtitle && (
-              <p className="text-xs text-muted-foreground mt-1">{subtitle}</p>
-            )}
-          </div>
-          <div className="p-3 rounded-full bg-primary/10">{icon}</div>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function fmtNum(n: number): string {
-  return n.toLocaleString();
-}
-
-function fmtPct(n: number | null): string {
-  return n == null ? '—' : `${n.toFixed(1)}%`;
-}
-
-function StatsGrid({
-  stats,
-  showLinkedIn,
-  showEmail,
-}: {
-  stats: StatsSnapshot;
-  showLinkedIn: boolean;
-  showEmail: boolean;
-}) {
-  const t = stats.totals;
-  return (
-    <div className="space-y-2">
-      <p className="text-xs text-muted-foreground">
-        {stats.start_date} → {stats.end_date} ({stats.range})
-      </p>
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        <StatCard
-          title="Messages sent"
-          value={fmtNum(t.sent)}
-          icon={<Send className="h-5 w-5 text-primary" />}
-          subtitle="Email + LinkedIn DMs"
-        />
-        <StatCard
-          title="Replies"
-          value={fmtNum(t.replies)}
-          icon={<MessageSquare className="h-5 w-5 text-primary" />}
-          subtitle={fmtPct(t.reply_rate_pct) + ' reply rate'}
-        />
-        {showLinkedIn && (
-          <StatCard
-            title="Connections accepted"
-            value={fmtNum(t.connections_accepted)}
-            icon={<Linkedin className="h-5 w-5 text-primary" />}
-            subtitle={
-              fmtPct(t.connection_accept_rate_pct) +
-              ' of ' +
-              fmtNum(t.connections_sent) +
-              ' sent'
-            }
-          />
-        )}
-        {showEmail && (
-          <StatCard
-            title="Opens"
-            value={fmtNum(t.opens)}
-            icon={<Mail className="h-5 w-5 text-primary" />}
-            subtitle={fmtPct(t.open_rate_pct) + ' open rate'}
-          />
-        )}
-        {showEmail && (
-          <StatCard
-            title="Clicks"
-            value={fmtNum(t.clicks)}
-            icon={<Percent className="h-5 w-5 text-primary" />}
-            subtitle={fmtPct(t.click_rate_pct) + ' click rate'}
-          />
-        )}
-        {showEmail && (
-          <StatCard
-            title="Bounces"
-            value={fmtNum(t.bounces)}
-            icon={<AlertTriangle className="h-5 w-5 text-primary" />}
-            subtitle={fmtPct(t.bounce_rate_pct) + ' bounce rate'}
-          />
-        )}
-      </div>
+      <ShareReportDialog
+        open={showShareDialog}
+        onOpenChange={setShowShareDialog}
+        clientId={row.id}
+        clientDisplayName={row.display_name}
+      />
     </div>
   );
 }

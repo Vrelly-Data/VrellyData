@@ -27,10 +27,20 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Loader2 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 
-interface CampaignBarChartProps {
-  heyreachAccountIds: number[];
-  smartleadCampaignIds: string[];
-}
+// Two modes — admin (fetches synced_campaigns + filters client-side) vs.
+// public report page (passes a pre-filtered server-supplied data array).
+// Discriminated union so a caller can't accidentally pass both / neither.
+export type CampaignBarChartProps =
+  | {
+      heyreachAccountIds: number[];
+      smartleadCampaignIds: string[];
+      data?: undefined;
+    }
+  | {
+      data: ChartDatum[];
+      heyreachAccountIds?: undefined;
+      smartleadCampaignIds?: undefined;
+    };
 
 interface CampaignRow {
   id: string;
@@ -41,7 +51,7 @@ interface CampaignRow {
   raw_data: Record<string, unknown> | null;
 }
 
-interface ChartDatum {
+export interface ChartDatum {
   name: string;
   source: string;
   sent: number;
@@ -75,18 +85,25 @@ const COLORS = {
   replies: '#10b981',
 };
 
-export function CampaignBarChart({
-  heyreachAccountIds,
-  smartleadCampaignIds,
-}: CampaignBarChartProps) {
-  const hasScope = heyreachAccountIds.length > 0 || smartleadCampaignIds.length > 0;
+export function CampaignBarChart(props: CampaignBarChartProps) {
+  // Mode discrimination: presentational (data already filtered server-side
+  // for the public report) vs. data-fetching (admin view filters
+  // synced_campaigns client-side from picker selections).
+  const isDataMode = props.data !== undefined;
+  const heyreachAccountIds = isDataMode ? [] : props.heyreachAccountIds;
+  const smartleadCampaignIds = isDataMode ? [] : props.smartleadCampaignIds;
+  const hasScope =
+    isDataMode ||
+    heyreachAccountIds.length > 0 ||
+    smartleadCampaignIds.length > 0;
 
   // One fetch; client-side filter. The set sizes are small (Phase 1 picker
   // limits a client to its admin's accounts and campaigns), so doing this
   // in JS is cheaper than crafting a JSONB query for the HeyReach side.
   // Query key intentionally stringifies the input arrays so react-query
   // doesn't re-fetch when the parent re-renders with new (but equal) array
-  // refs.
+  // refs. `enabled: !isDataMode` makes the query a no-op for the public
+  // page; nothing about the public path touches supabase here.
   const query = useQuery({
     queryKey: [
       'client_analysis_in_scope_campaigns',
@@ -115,11 +132,18 @@ export function CampaignBarChart({
         return false;
       });
     },
-    enabled: hasScope,
+    enabled: hasScope && !isDataMode,
     staleTime: 60_000,
   });
 
   const chartData = useMemo<ChartDatum[]>(() => {
+    if (isDataMode) {
+      return (props.data ?? [])
+        .slice()
+        // Stable order: largest "sent" first so the eye lands on the biggest
+        // bar. Falls back to name when sent ties (cheap deterministic sort).
+        .sort((a, b) => b.sent - a.sent || a.name.localeCompare(b.name));
+    }
     const rows = query.data ?? [];
     return rows
       .map((c) => ({
@@ -129,10 +153,8 @@ export function CampaignBarChart({
         opens: pickNumber(c.stats, ['opens', 'opened']),
         replies: pickNumber(c.stats, ['replies', 'replied']),
       }))
-      // Stable order: largest "sent" first so the eye lands on the biggest
-      // bar. Falls back to name when sent ties (cheap deterministic sort).
       .sort((a, b) => b.sent - a.sent || a.name.localeCompare(b.name));
-  }, [query.data]);
+  }, [query.data, isDataMode, props.data]);
 
   if (!hasScope) {
     return null;
@@ -148,11 +170,13 @@ export function CampaignBarChart({
           </p>
         </div>
 
-        {query.isLoading ? (
+        {/* Loading + error states only apply in fetch mode. Data mode skips
+            them — the parent owns loading/error UX for the parent fetch. */}
+        {!isDataMode && query.isLoading ? (
           <div className="flex justify-center py-10">
             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
           </div>
-        ) : query.error ? (
+        ) : !isDataMode && query.error ? (
           <p className="text-xs text-destructive">
             Failed to load campaign stats: {(query.error as Error).message}
           </p>
