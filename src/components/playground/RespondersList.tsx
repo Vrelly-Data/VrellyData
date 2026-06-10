@@ -143,7 +143,11 @@ export function RespondersList() {
       return (data ?? []) as unknown as ResponderRow[];
     },
     enabled: !!user,
-    staleTime: 30_000,
+    // Fresh on every detail-view mount per the spec — Replies arrive
+    // out-of-band via the inbox webhooks, so even a 30s cache window can
+    // miss the brand-new "Replies" row that just landed.
+    staleTime: 0,
+    refetchOnMount: 'always',
   });
 
   const sorted = useMemo(() => {

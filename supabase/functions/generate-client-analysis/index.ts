@@ -426,6 +426,12 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => ({}));
     const clientId = (body as { clientId?: string }).clientId;
     const range = (body as { range?: Range }).range;
+    // statsOnly mode (Phase 1+): re-compute and persist stats for the given
+    // range WITHOUT calling Claude and WITHOUT touching analysis_text or
+    // client_checklist_items. Used by the range tabs and the auto-refresh on
+    // detail-view mount so numbers stay current without spending an AI call.
+    const statsOnly =
+      (body as { statsOnly?: boolean }).statsOnly === true;
     if (!clientId || !range || !["7d", "30d", "mtd"].includes(range)) {
       return new Response(
         JSON.stringify({ error: "Missing or invalid clientId / range" }),
@@ -521,6 +527,38 @@ Deno.serve(async (req) => {
       heyreach: heyreachStats,
       smartlead: smartleadStats,
     };
+
+    // ---- statsOnly short-circuit ----
+    // Persist the new numbers + range/timestamp, then return. No Claude call,
+    // no checklist mutation. analysis_text is left exactly as it was — the
+    // UI's "AI summary" and Priorities sections continue showing the last
+    // full-Generate output, which is the explicit decoupling the spec calls
+    // out (header label tracks most-recent refresh; AI text tracks
+    // most-recent full Generate).
+    if (statsOnly) {
+      const { error: statsUpdateErr } = await supabase
+        .from("client_analysis")
+        .update({
+          stats_snapshot: stats,
+          last_generated_at: new Date().toISOString(),
+          last_range: range,
+        })
+        .eq("id", clientId);
+      if (statsUpdateErr) {
+        logStep("client_analysis stats-only update failed", {
+          error: statsUpdateErr.message,
+        });
+        throw new Error("Failed to persist stats");
+      }
+      logStep("statsOnly persisted", { range });
+      return new Response(
+        JSON.stringify({ stats, statsOnly: true }),
+        {
+          status: 200,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
+      );
+    }
 
     // ---- Claude ----
     const { analysis, priorities } = await callClaude(

@@ -1,8 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import ReactMarkdown from 'react-markdown';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
@@ -17,6 +19,7 @@ import {
   AlertTriangle,
   Percent,
   Pencil,
+  Trash2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
@@ -336,6 +339,118 @@ function DataAnalysisDetail({
     },
   });
 
+  // ---- Stats-only refresh (range tabs + mount auto-fire) ------------------
+  // Calls generate-client-analysis with statsOnly:true. The edge function
+  // updates stats_snapshot + last_generated_at + last_range; analysis_text
+  // and checklist are left untouched (the decoupling the spec calls out).
+  const statsRefreshMutation = useMutation({
+    mutationFn: async (newRange: Range) => {
+      const { data, error } = await supabase.functions.invoke(
+        'generate-client-analysis',
+        { body: { clientId, range: newRange, statsOnly: true } },
+      );
+      if (error) throw new Error(error.message);
+      if (data && typeof data === 'object' && 'error' in data && data.error) {
+        throw new Error(String(data.error));
+      }
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['client_analysis', clientId] });
+      queryClient.invalidateQueries({ queryKey: ['client_analysis', 'list'] });
+    },
+    onError: (err: Error) => toast.error(`Stats refresh failed: ${err.message}`),
+  });
+
+  // Auto-refresh on mount + on every range change. Fires once per (clientId,
+  // range) tuple — landing on the detail view triggers an initial refresh;
+  // clicking a range tab triggers another. Never auto-runs Claude.
+  useEffect(() => {
+    if (!clientId) return;
+    statsRefreshMutation.mutate(range);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clientId, range]);
+
+  // ---- Editable AI summary ------------------------------------------------
+  const [editingAnalysis, setEditingAnalysis] = useState(false);
+  const [draftAnalysis, setDraftAnalysis] = useState('');
+
+  const saveAnalysisMutation = useMutation({
+    mutationFn: async (text: string) => {
+      const { error } = await supabase
+        .from('client_analysis')
+        .update({ analysis_text: text })
+        .eq('id', clientId);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      toast.success('Summary saved');
+      setEditingAnalysis(false);
+      queryClient.invalidateQueries({ queryKey: ['client_analysis', clientId] });
+    },
+    onError: (err: Error) => toast.error(`Save failed: ${err.message}`),
+  });
+
+  // ---- Editable priorities ------------------------------------------------
+  // Add a new manual item (source='manual' — never touched by Regenerate's
+  // additive merge, same persistence guarantee as a checked-off generated
+  // item).
+  const addPriorityMutation = useMutation({
+    mutationFn: async (text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed) throw new Error('Empty priority');
+      const items = detailQuery.data?.checklist ?? [];
+      const maxSort = items.reduce(
+        (m, it) => Math.max(m, it.sort_order ?? 0),
+        0,
+      );
+      const { error } = await supabase
+        .from('client_checklist_items')
+        .insert({
+          client_analysis_id: clientId,
+          text: trimmed,
+          source: 'manual',
+          done: false,
+          sort_order: maxSort + 1,
+        });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['client_analysis', clientId] });
+    },
+    onError: (err: Error) => toast.error(`Add failed: ${err.message}`),
+  });
+
+  const updatePriorityMutation = useMutation({
+    mutationFn: async ({ id, text }: { id: string; text: string }) => {
+      const trimmed = text.trim();
+      if (!trimmed) throw new Error('Empty priority');
+      const { error } = await supabase
+        .from('client_checklist_items')
+        .update({ text: trimmed })
+        .eq('id', id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['client_analysis', clientId] });
+    },
+    onError: (err: Error) => toast.error(`Edit failed: ${err.message}`),
+  });
+
+  const deletePriorityMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase
+        .from('client_checklist_items')
+        .delete()
+        .eq('id', id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['client_analysis', clientId] });
+    },
+    onError: (err: Error) => toast.error(`Delete failed: ${err.message}`),
+  });
+
   if (detailQuery.isLoading) {
     return (
       <div className="flex justify-center py-12">
@@ -416,42 +531,142 @@ function DataAnalysisDetail({
         </div>
       </div>
 
-      {/* Stats */}
+      {/* Stats — subtle "Refreshing…" indicator while statsOnly is in
+          flight, dim the cards so the user sees something is happening
+          without blocking interaction. */}
       {!stats ? (
         <Card className="border-dashed">
           <CardContent className="py-10 text-center text-muted-foreground">
-            No stats yet. Pick a range and click {row.last_generated_at ? 'Regenerate' : 'Generate'}.
+            {statsRefreshMutation.isPending ? (
+              <span className="inline-flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading stats for {range}…
+              </span>
+            ) : (
+              <>No stats yet. Pick a range and click {row.last_generated_at ? 'Regenerate' : 'Generate'}.</>
+            )}
           </CardContent>
         </Card>
       ) : (
-        <StatsGrid stats={stats} showLinkedIn={showLinkedIn} showEmail={showEmail} />
+        <div className="relative">
+          {statsRefreshMutation.isPending && (
+            <div className="absolute -top-2 right-0 z-10 flex items-center gap-1 text-xs text-muted-foreground bg-background/80 backdrop-blur px-2 py-1 rounded border">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Refreshing {range}…
+            </div>
+          )}
+          <div
+            className={
+              statsRefreshMutation.isPending
+                ? 'opacity-60 transition-opacity'
+                : 'transition-opacity'
+            }
+          >
+            <StatsGrid
+              stats={stats}
+              showLinkedIn={showLinkedIn}
+              showEmail={showEmail}
+            />
+          </div>
+        </div>
       )}
 
       {/* Per-campaign bar chart — between cards and AI summary per spec.
           Pulls its own data from synced_campaigns and self-hides if the
-          client has no scope set. */}
+          client has no scope set. Note: not range-scoped (cumulative
+          platform totals), so it does NOT react to range tab changes. */}
       <CampaignBarChart
         heyreachAccountIds={row.heyreach_account_ids ?? []}
         smartleadCampaignIds={row.smartlead_campaign_ids ?? []}
       />
 
-      {/* Analysis */}
-      {row.analysis_text && (
-        <Card>
-          <CardContent className="pt-6 prose prose-sm dark:prose-invert max-w-none">
-            <ReactMarkdown>{row.analysis_text}</ReactMarkdown>
-          </CardContent>
-        </Card>
-      )}
+      {/* Performance Summary — editable. Pencil flips the card into a
+          textarea; Save persists analysis_text; Cancel discards the draft.
+          Empty state still offers Edit so an operator can write a summary
+          without ever calling AI. */}
+      <Card>
+        <CardContent className="pt-6 space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold">Performance Summary</h3>
+            {!editingAnalysis && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => {
+                  setDraftAnalysis(row.analysis_text ?? '');
+                  setEditingAnalysis(true);
+                }}
+              >
+                <Pencil className="mr-1 h-3 w-3" /> Edit
+              </Button>
+            )}
+          </div>
+          {editingAnalysis ? (
+            <div className="space-y-3">
+              <Textarea
+                value={draftAnalysis}
+                onChange={(e) => setDraftAnalysis(e.target.value)}
+                rows={Math.max(
+                  10,
+                  Math.min(22, draftAnalysis.split('\n').length + 2),
+                )}
+                className="font-mono text-sm"
+                placeholder="Write your performance summary in markdown…"
+                disabled={saveAnalysisMutation.isPending}
+              />
+              <div className="flex justify-end gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setEditingAnalysis(false)}
+                  disabled={saveAnalysisMutation.isPending}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() => saveAnalysisMutation.mutate(draftAnalysis)}
+                  disabled={saveAnalysisMutation.isPending}
+                >
+                  {saveAnalysisMutation.isPending && (
+                    <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                  )}
+                  Save
+                </Button>
+              </div>
+            </div>
+          ) : row.analysis_text ? (
+            <div className="prose prose-sm dark:prose-invert max-w-none">
+              <ReactMarkdown>{row.analysis_text}</ReactMarkdown>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              No summary yet. Click <strong>Edit</strong> to write one manually,
+              or <strong>Generate</strong> to create one with AI.
+            </p>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Responders — below the AI summary per spec. SHOW-ALL for the user
           (not filtered by campaigns; agent_leads has no reliable campaign id). */}
       <RespondersList />
 
-      {/* Checklist */}
+      {/* Checklist (Priorities) — fully editable: toggle/add/edit/delete.
+          AddManual items are source='manual' and never touched by
+          Regenerate's additive merge, so they survive AI runs unchanged. */}
       <ChecklistSection
         items={checklist}
         onToggle={(id, done) => toggleMutation.mutate({ id, done })}
+        onAdd={(text) => addPriorityMutation.mutate(text)}
+        onUpdate={(id, text) => updatePriorityMutation.mutate({ id, text })}
+        onDelete={(id) => deletePriorityMutation.mutate(id)}
+        isMutating={
+          addPriorityMutation.isPending ||
+          updatePriorityMutation.isPending ||
+          deletePriorityMutation.isPending
+        }
       />
     </div>
   );
@@ -569,46 +784,194 @@ function StatsGrid({
 // CHECKLIST
 // ============================================================================
 
+interface ChecklistSectionProps {
+  items: ChecklistItem[];
+  onToggle: (id: string, done: boolean) => void;
+  onAdd: (text: string) => void;
+  onUpdate: (id: string, text: string) => void;
+  onDelete: (id: string) => void;
+  isMutating: boolean;
+}
+
 function ChecklistSection({
   items,
   onToggle,
-}: {
-  items: ChecklistItem[];
-  onToggle: (id: string, done: boolean) => void;
-}) {
-  if (items.length === 0) {
-    return (
-      <Card className="border-dashed">
-        <CardContent className="py-8 text-center text-muted-foreground text-sm">
-          No to-dos yet. Generate an analysis to populate priorities.
-        </CardContent>
-      </Card>
-    );
-  }
+  onAdd,
+  onUpdate,
+  onDelete,
+  isMutating,
+}: ChecklistSectionProps) {
+  // All editing state is local to the component — only the resolved
+  // operations bubble up to the parent's mutations.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editText, setEditText] = useState('');
+  const [showAdd, setShowAdd] = useState(false);
+  const [newText, setNewText] = useState('');
+
+  const startEdit = (id: string, text: string) => {
+    setEditingId(id);
+    setEditText(text);
+  };
+
+  const saveEdit = () => {
+    const t = editText.trim();
+    if (t && editingId) {
+      onUpdate(editingId, t);
+    }
+    setEditingId(null);
+    setEditText('');
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditText('');
+  };
+
+  const commitAdd = () => {
+    const t = newText.trim();
+    if (t) onAdd(t);
+    setNewText('');
+    setShowAdd(false);
+  };
+
+  const cancelAdd = () => {
+    setNewText('');
+    setShowAdd(false);
+  };
+
   return (
     <Card>
       <CardContent className="pt-6">
-        <h3 className="text-sm font-semibold mb-3">Priorities</h3>
-        <ul className="space-y-2">
-          {items.map((it) => (
-            <li key={it.id} className="flex items-start gap-3">
-              <Checkbox
-                id={`checklist-${it.id}`}
-                checked={it.done}
-                onCheckedChange={(checked) => onToggle(it.id, !!checked)}
-                className="mt-0.5"
-              />
-              <label
-                htmlFor={`checklist-${it.id}`}
-                className={`text-sm flex-1 cursor-pointer ${
-                  it.done ? 'line-through text-muted-foreground' : ''
-                }`}
-              >
-                {it.text}
-              </label>
-            </li>
-          ))}
-        </ul>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold">Priorities</h3>
+          {!showAdd && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() => setShowAdd(true)}
+              disabled={isMutating}
+            >
+              <Plus className="mr-1 h-3 w-3" /> Add priority
+            </Button>
+          )}
+        </div>
+
+        {items.length === 0 && !showAdd ? (
+          <p className="text-sm text-muted-foreground text-center py-4">
+            No priorities yet. Generate to populate, or use{' '}
+            <strong>Add priority</strong>.
+          </p>
+        ) : (
+          <ul className="space-y-1">
+            {items.map((it) => {
+              const isEditing = editingId === it.id;
+              return (
+                <li
+                  key={it.id}
+                  className="group flex items-start gap-2 rounded px-1 py-1 hover:bg-accent/30 transition-colors"
+                >
+                  <Checkbox
+                    id={`checklist-${it.id}`}
+                    checked={it.done}
+                    onCheckedChange={(checked) => onToggle(it.id, !!checked)}
+                    className="mt-1"
+                    disabled={isEditing}
+                  />
+
+                  {isEditing ? (
+                    <div className="flex-1 flex items-center gap-2">
+                      <Input
+                        value={editText}
+                        onChange={(e) => setEditText(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') saveEdit();
+                          if (e.key === 'Escape') cancelEdit();
+                        }}
+                        autoFocus
+                        className="h-7 text-sm"
+                      />
+                      <Button size="sm" className="h-7 text-xs" onClick={saveEdit}>
+                        Save
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 text-xs"
+                        onClick={cancelEdit}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  ) : (
+                    <>
+                      <label
+                        htmlFor={`checklist-${it.id}`}
+                        className={`text-sm flex-1 cursor-pointer pt-0.5 ${
+                          it.done ? 'line-through text-muted-foreground' : ''
+                        }`}
+                      >
+                        {it.text}
+                      </label>
+                      <div className="opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity flex gap-0.5 shrink-0">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 w-6 p-0"
+                          onClick={() => startEdit(it.id, it.text)}
+                          aria-label="Edit priority"
+                        >
+                          <Pencil className="h-3 w-3" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 w-6 p-0 text-muted-foreground hover:text-destructive"
+                          onClick={() => onDelete(it.id)}
+                          aria-label="Delete priority"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    </>
+                  )}
+                </li>
+              );
+            })}
+
+            {showAdd && (
+              <li className="flex items-center gap-2 pt-2 mt-1 border-t">
+                <Input
+                  value={newText}
+                  onChange={(e) => setNewText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') commitAdd();
+                    if (e.key === 'Escape') cancelAdd();
+                  }}
+                  placeholder="New priority…"
+                  autoFocus
+                  className="h-7 text-sm"
+                />
+                <Button
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={commitAdd}
+                  disabled={!newText.trim()}
+                >
+                  Add
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={cancelAdd}
+                >
+                  Cancel
+                </Button>
+              </li>
+            )}
+          </ul>
+        )}
       </CardContent>
     </Card>
   );
