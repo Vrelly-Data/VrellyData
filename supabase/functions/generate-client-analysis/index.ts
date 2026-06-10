@@ -63,21 +63,20 @@ const logStep = (step: string, details?: unknown) => {
 
 // ---- Range resolution ------------------------------------------------------
 // All ranges resolved in UTC. The Smartlead /analytics-by-date endpoint caps
-// the span at 30 days; 7d/30d fit by construction. For mtd we clamp the
-// start to max(firstOfMonth, endDate - 30 days) so the last days of 31-day
-// months don't produce a 31-day span and get rejected by Smartlead. Net
-// effect: mtd reports the calendar month-to-date when feasible, and the
-// last 30 days when the month is too long (Jan/Mar/May/Jul/Aug/Oct/Dec
-// on day 31 only).
+// the span at 30 days; 7d/30d/last_week fit by construction. For mtd we
+// clamp the start to max(firstOfMonth, endDate - 30 days) so the last days
+// of 31-day months don't produce a 31-day span and get rejected by
+// Smartlead. last_week is exactly Monday 00:00 to Sunday 23:59:59 UTC of
+// the PREVIOUS calendar week — the natural weekly-cadence default.
 
-type Range = "7d" | "30d" | "mtd";
+type Range = "7d" | "30d" | "mtd" | "last_week";
 
 const MAX_SPAN_MS = 30 * 24 * 60 * 60 * 1000;
 
 function resolveRange(range: Range): { startDate: Date; endDate: Date } {
   const now = new Date();
-  const endDate = now;
   let startDate: Date;
+  let endDate: Date = now;
   switch (range) {
     case "7d":
       startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
@@ -94,6 +93,27 @@ function resolveRange(range: Range): { startDate: Date; endDate: Date } {
       startDate = firstOfMonth.getTime() < earliestAllowed.getTime()
         ? earliestAllowed
         : firstOfMonth;
+      break;
+    }
+    case "last_week": {
+      // Monday-as-week-start. getUTCDay(): Sun=0, Mon=1, …, Sat=6.
+      // daysToThisMonday: 0 if today is Monday, 6 if Sunday — back-distance
+      // to THIS week's Monday (or today if Monday). Then subtract 7 to
+      // land on the PREVIOUS week's Monday at 00:00:00 UTC.
+      const day = now.getUTCDay();
+      const daysToThisMonday = (day + 6) % 7;
+      const thisMonday = new Date(Date.UTC(
+        now.getUTCFullYear(),
+        now.getUTCMonth(),
+        now.getUTCDate() - daysToThisMonday,
+      ));
+      const lastMonday = new Date(thisMonday);
+      lastMonday.setUTCDate(lastMonday.getUTCDate() - 7);
+      const lastSunday = new Date(thisMonday);
+      lastSunday.setUTCDate(lastSunday.getUTCDate() - 1);
+      lastSunday.setUTCHours(23, 59, 59, 999);
+      startDate = lastMonday;
+      endDate = lastSunday;
       break;
     }
   }
@@ -432,7 +452,11 @@ Deno.serve(async (req) => {
     // detail-view mount so numbers stay current without spending an AI call.
     const statsOnly =
       (body as { statsOnly?: boolean }).statsOnly === true;
-    if (!clientId || !range || !["7d", "30d", "mtd"].includes(range)) {
+    if (
+      !clientId ||
+      !range ||
+      !["7d", "30d", "mtd", "last_week"].includes(range)
+    ) {
       return new Response(
         JSON.stringify({ error: "Missing or invalid clientId / range" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
@@ -570,20 +594,33 @@ Deno.serve(async (req) => {
       stats,
     );
 
-    // ---- Persist parent ----
-    const { error: updateErr } = await supabase
-      .from("client_analysis")
-      .update({
+    // ---- Persist snapshot ----
+    // Each full Generate INSERTs a new row in client_analysis_snapshots —
+    // never overwrites an existing one. The legacy client_analysis row's
+    // analysis_text / stats_snapshot / last_generated_at / last_range fields
+    // are intentionally NOT updated here (the legacy CHECK on last_range
+    // only allows 7d/30d/mtd, and the snapshot table is now the source of
+    // truth). client_analysis becomes per-client metadata only.
+    const { data: insertedSnap, error: insertSnapErr } = await supabase
+      .from("client_analysis_snapshots")
+      .insert({
+        client_id: clientId,
+        user_id: user.id,
         analysis_text: analysis,
         stats_snapshot: stats,
-        last_generated_at: new Date().toISOString(),
-        last_range: range,
+        range,
+        period_start: toYMD(startDate),
+        period_end: toYMD(endDate),
       })
-      .eq("id", clientId);
-    if (updateErr) {
-      logStep("client_analysis update failed", { error: updateErr.message });
-      throw new Error("Failed to persist analysis");
+      .select("id")
+      .single();
+    if (insertSnapErr || !insertedSnap) {
+      logStep("client_analysis_snapshots insert failed", {
+        error: insertSnapErr?.message,
+      });
+      throw new Error("Failed to persist analysis snapshot");
     }
+    const snapshotId = insertedSnap.id as string;
 
     // ---- Merge checklist (additive only) ----
     const { data: existing } = await supabase
@@ -629,6 +666,7 @@ Deno.serve(async (req) => {
 
     return new Response(
       JSON.stringify({
+        snapshot_id: snapshotId,
         analysis,
         stats,
         checklist: finalChecklist ?? [],

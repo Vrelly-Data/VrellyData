@@ -8,6 +8,13 @@ import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
   ArrowLeft,
   Loader2,
   Plus,
@@ -20,6 +27,7 @@ import {
   Percent,
   Pencil,
   Trash2,
+  History,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
@@ -30,16 +38,21 @@ import {
 import { CampaignBarChart } from './CampaignBarChart';
 import { RespondersList } from './RespondersList';
 
-type Range = '7d' | '30d' | 'mtd';
+type Range = '7d' | '30d' | 'mtd' | 'last_week';
 
 interface ClientListRow {
   id: string;
   display_name: string;
   last_generated_at: string | null;
-  last_range: Range | null;
+  last_range: string | null;
   slug: string;
 }
 
+// Per-client metadata. The legacy analysis_text / stats_snapshot /
+// last_generated_at / last_range columns on client_analysis are still
+// present in the schema (kept around for potential later deprecation) but
+// the snapshot-based UI no longer reads them — selected snapshot drives
+// stats + summary display.
 interface ClientFullRow {
   id: string;
   user_id: string;
@@ -47,10 +60,16 @@ interface ClientFullRow {
   slug: string;
   heyreach_account_ids: number[];
   smartlead_campaign_ids: string[];
+}
+
+interface SnapshotRow {
+  id: string;
   analysis_text: string | null;
   stats_snapshot: StatsSnapshot | null;
-  last_generated_at: string | null;
-  last_range: Range | null;
+  range: Range;
+  period_start: string;
+  period_end: string;
+  created_at: string;
 }
 
 interface ChecklistItem {
@@ -60,6 +79,7 @@ interface ChecklistItem {
   done_at: string | null;
   source: 'generated' | 'manual';
   sort_order: number;
+  created_at: string | null;
 }
 
 interface StatsSnapshot {
@@ -216,6 +236,7 @@ export function DataAnalysisTab() {
 
 interface DetailQueryResult {
   row: ClientFullRow;
+  snapshots: SnapshotRow[];
   checklist: ChecklistItem[];
 }
 
@@ -229,41 +250,64 @@ function DataAnalysisDetail({
   onEdit: (editing: ClientAnalysisEditingState) => void;
 }) {
   const queryClient = useQueryClient();
-  // Default the range selector to whatever was last generated, or 30d as a
-  // conservative default. The selector is independent of stats_snapshot.range
-  // until Regenerate is clicked.
-  const [range, setRange] = useState<Range>('30d');
+  // Default range for the NEXT Generate. Last week is the weekly-cadence
+  // default per the spec. Range no longer controls the displayed snapshot
+  // (that's `selectedSnapshotId` below) — it's strictly the parameter that
+  // gets passed to the edge function when the operator clicks Generate.
+  const [range, setRange] = useState<Range>('last_week');
+
+  // Which historical snapshot the user is viewing. Auto-syncs to the most
+  // recent on initial load + when a new one is generated. Null only when
+  // the client has zero snapshots (first-run state).
+  const [selectedSnapshotId, setSelectedSnapshotId] =
+    useState<string | null>(null);
 
   const detailQuery = useQuery({
     queryKey: ['client_analysis', clientId],
     queryFn: async (): Promise<DetailQueryResult> => {
-      const [rowRes, itemsRes] = await Promise.all([
+      const [rowRes, snapsRes, itemsRes] = await Promise.all([
         supabase
           .from('client_analysis')
           .select(
-            'id, user_id, display_name, slug, heyreach_account_ids, smartlead_campaign_ids, analysis_text, stats_snapshot, last_generated_at, last_range',
+            'id, user_id, display_name, slug, heyreach_account_ids, smartlead_campaign_ids',
           )
           .eq('id', clientId)
           .single(),
         supabase
+          .from('client_analysis_snapshots')
+          .select(
+            'id, analysis_text, stats_snapshot, range, period_start, period_end, created_at',
+          )
+          .eq('client_id', clientId)
+          .order('created_at', { ascending: false }),
+        supabase
           .from('client_checklist_items')
-          .select('id, text, done, done_at, source, sort_order')
+          .select('id, text, done, done_at, source, sort_order, created_at')
           .eq('client_analysis_id', clientId)
           .order('sort_order', { ascending: true }),
       ]);
       if (rowRes.error) throw rowRes.error;
+      if (snapsRes.error) throw snapsRes.error;
       if (itemsRes.error) throw itemsRes.error;
       return {
         row: rowRes.data as ClientFullRow,
+        snapshots: (snapsRes.data ?? []) as unknown as SnapshotRow[],
         checklist: (itemsRes.data ?? []) as ChecklistItem[],
       };
     },
   });
 
-  // Sync the range selector to whatever was last generated, once, on first
-  // successful load. After that the user owns the selector.
-  // (Cheap effect-substitute: derive default from data, useState seed.)
-  // Note: we leave manual selector changes alone — no auto-revert.
+  // Auto-select the most recent snapshot once data loads. Doesn't override
+  // an existing selection — if the user clicked into an older snapshot and
+  // we re-fetch (e.g. after edit), keep them on the one they were reading.
+  useEffect(() => {
+    const snaps = detailQuery.data?.snapshots;
+    if (!snaps || snaps.length === 0) return;
+    if (selectedSnapshotId && snaps.some((s) => s.id === selectedSnapshotId)) {
+      return;
+    }
+    setSelectedSnapshotId(snaps[0].id);
+  }, [detailQuery.data?.snapshots, selectedSnapshotId]);
 
   const generateMutation = useMutation({
     mutationFn: async () => {
@@ -278,6 +322,7 @@ function DataAnalysisDetail({
         throw new Error(String(data.error));
       }
       return data as {
+        snapshot_id: string;
         analysis: string;
         stats: StatsSnapshot;
         checklist: ChecklistItem[];
@@ -287,11 +332,13 @@ function DataAnalysisDetail({
     onSuccess: (data) => {
       toast.success(
         data.inserted_priorities > 0
-          ? `Analysis updated — ${data.inserted_priorities} new ${
+          ? `New snapshot saved — ${data.inserted_priorities} new ${
               data.inserted_priorities === 1 ? 'priority' : 'priorities'
             } added`
-          : 'Analysis updated (no new priorities)',
+          : 'New snapshot saved (no new priorities)',
       );
+      // Jump to the snapshot we just created so the user sees fresh output.
+      if (data.snapshot_id) setSelectedSnapshotId(data.snapshot_id);
       queryClient.invalidateQueries({ queryKey: ['client_analysis', clientId] });
       queryClient.invalidateQueries({ queryKey: ['client_analysis', 'list'] });
     },
@@ -339,48 +386,21 @@ function DataAnalysisDetail({
     },
   });
 
-  // ---- Stats-only refresh (range tabs + mount auto-fire) ------------------
-  // Calls generate-client-analysis with statsOnly:true. The edge function
-  // updates stats_snapshot + last_generated_at + last_range; analysis_text
-  // and checklist are left untouched (the decoupling the spec calls out).
-  const statsRefreshMutation = useMutation({
-    mutationFn: async (newRange: Range) => {
-      const { data, error } = await supabase.functions.invoke(
-        'generate-client-analysis',
-        { body: { clientId, range: newRange, statsOnly: true } },
-      );
-      if (error) throw new Error(error.message);
-      if (data && typeof data === 'object' && 'error' in data && data.error) {
-        throw new Error(String(data.error));
-      }
-      return data;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['client_analysis', clientId] });
-      queryClient.invalidateQueries({ queryKey: ['client_analysis', 'list'] });
-    },
-    onError: (err: Error) => toast.error(`Stats refresh failed: ${err.message}`),
-  });
-
-  // Auto-refresh on mount + on every range change. Fires once per (clientId,
-  // range) tuple — landing on the detail view triggers an initial refresh;
-  // clicking a range tab triggers another. Never auto-runs Claude.
-  useEffect(() => {
-    if (!clientId) return;
-    statsRefreshMutation.mutate(range);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clientId, range]);
-
   // ---- Editable AI summary ------------------------------------------------
+  // Edits target the SELECTED snapshot's analysis_text, not client_analysis.
+  // Each snapshot is independently editable; navigating to another snapshot
+  // shows that snapshot's text. Per spec, this is a per-snapshot edit, not
+  // a per-client one.
   const [editingAnalysis, setEditingAnalysis] = useState(false);
   const [draftAnalysis, setDraftAnalysis] = useState('');
 
   const saveAnalysisMutation = useMutation({
     mutationFn: async (text: string) => {
+      if (!selectedSnapshotId) throw new Error('No snapshot selected');
       const { error } = await supabase
-        .from('client_analysis')
+        .from('client_analysis_snapshots')
         .update({ analysis_text: text })
-        .eq('id', clientId);
+        .eq('id', selectedSnapshotId);
       if (error) throw error;
     },
     onSuccess: () => {
@@ -475,8 +495,11 @@ function DataAnalysisDetail({
     );
   }
 
-  const { row, checklist } = detailQuery.data;
-  const stats = row.stats_snapshot;
+  const { row, snapshots, checklist } = detailQuery.data;
+  const selectedSnapshot: SnapshotRow | null = selectedSnapshotId
+    ? snapshots.find((s) => s.id === selectedSnapshotId) ?? null
+    : snapshots[0] ?? null;
+  const stats = selectedSnapshot?.stats_snapshot ?? null;
   const showLinkedIn = (row.heyreach_account_ids ?? []).length > 0;
   const showEmail = (row.smartlead_campaign_ids ?? []).length > 0;
 
@@ -490,15 +513,16 @@ function DataAnalysisDetail({
           </Button>
           <h2 className="text-xl font-semibold">{row.display_name}</h2>
           <p className="text-xs text-muted-foreground">
-            {row.last_generated_at
-              ? `Last generated ${new Date(row.last_generated_at).toLocaleString()} (${row.last_range})`
-              : 'Not yet generated'}
+            {snapshots.length === 0
+              ? 'No analyses yet. Pick a range and Generate to create the first one.'
+              : `${snapshots.length} ${snapshots.length === 1 ? 'snapshot' : 'snapshots'} saved`}
           </p>
         </div>
 
         <div className="flex items-center gap-3">
           <Tabs value={range} onValueChange={(v) => setRange(v as Range)}>
             <TabsList>
+              <TabsTrigger value="last_week">Last week</TabsTrigger>
               <TabsTrigger value="7d">7d</TabsTrigger>
               <TabsTrigger value="30d">30d</TabsTrigger>
               <TabsTrigger value="mtd">MTD</TabsTrigger>
@@ -526,75 +550,86 @@ function DataAnalysisDetail({
             ) : (
               <Sparkles className="mr-2 h-4 w-4" />
             )}
-            {row.last_generated_at ? 'Regenerate' : 'Generate'}
+            {snapshots.length === 0 ? 'Generate' : 'Generate new snapshot'}
           </Button>
         </div>
       </div>
 
-      {/* Stats — subtle "Refreshing…" indicator while statsOnly is in
-          flight, dim the cards so the user sees something is happening
-          without blocking interaction. */}
-      {!stats ? (
-        <Card className="border-dashed">
-          <CardContent className="py-10 text-center text-muted-foreground">
-            {statsRefreshMutation.isPending ? (
-              <span className="inline-flex items-center gap-2">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Loading stats for {range}…
+      {/* Snapshot picker — drives the stats + summary display below.
+          Hidden until the client has at least one snapshot. */}
+      {snapshots.length > 0 && (
+        <Card>
+          <CardContent className="py-3 flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-2 text-sm">
+              <History className="h-4 w-4 text-muted-foreground" />
+              <span className="text-muted-foreground">Showing snapshot:</span>
+              <Select
+                value={selectedSnapshotId ?? snapshots[0].id}
+                onValueChange={(v) => setSelectedSnapshotId(v)}
+              >
+                <SelectTrigger className="w-auto min-w-[14rem] h-8">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {snapshots.map((s) => (
+                    <SelectItem key={s.id} value={s.id}>
+                      {formatSnapshotLabel(s.period_start, s.period_end)} ({s.range})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            {selectedSnapshot && (
+              <span className="text-xs text-muted-foreground">
+                Generated {new Date(selectedSnapshot.created_at).toLocaleString()}
               </span>
-            ) : (
-              <>No stats yet. Pick a range and click {row.last_generated_at ? 'Regenerate' : 'Generate'}.</>
             )}
           </CardContent>
         </Card>
+      )}
+
+      {/* Stats — driven by the selected snapshot's stats_snapshot. Snapshots
+          are point-in-time; no live refresh. To see fresh numbers, Generate. */}
+      {!stats ? (
+        <Card className="border-dashed">
+          <CardContent className="py-10 text-center text-muted-foreground">
+            {snapshots.length === 0
+              ? 'No stats yet. Pick a range and click Generate.'
+              : 'Selected snapshot has no stats data.'}
+          </CardContent>
+        </Card>
       ) : (
-        <div className="relative">
-          {statsRefreshMutation.isPending && (
-            <div className="absolute -top-2 right-0 z-10 flex items-center gap-1 text-xs text-muted-foreground bg-background/80 backdrop-blur px-2 py-1 rounded border">
-              <Loader2 className="h-3 w-3 animate-spin" />
-              Refreshing {range}…
-            </div>
-          )}
-          <div
-            className={
-              statsRefreshMutation.isPending
-                ? 'opacity-60 transition-opacity'
-                : 'transition-opacity'
-            }
-          >
-            <StatsGrid
-              stats={stats}
-              showLinkedIn={showLinkedIn}
-              showEmail={showEmail}
-            />
-          </div>
-        </div>
+        <StatsGrid
+          stats={stats}
+          showLinkedIn={showLinkedIn}
+          showEmail={showEmail}
+        />
       )}
 
       {/* Per-campaign bar chart — between cards and AI summary per spec.
-          Pulls its own data from synced_campaigns and self-hides if the
-          client has no scope set. Note: not range-scoped (cumulative
-          platform totals), so it does NOT react to range tab changes. */}
+          Pulls its own data from synced_campaigns; cumulative platform-side
+          totals, NOT snapshot-scoped (synced_campaigns has no time window).
+          Same caveat as before — labelled accordingly in the chart itself. */}
       <CampaignBarChart
         heyreachAccountIds={row.heyreach_account_ids ?? []}
         smartleadCampaignIds={row.smartlead_campaign_ids ?? []}
       />
 
-      {/* Performance Summary — editable. Pencil flips the card into a
-          textarea; Save persists analysis_text; Cancel discards the draft.
-          Empty state still offers Edit so an operator can write a summary
-          without ever calling AI. */}
+      {/* Performance Summary — editable, persists to the SELECTED snapshot.
+          Each snapshot has its own analysis_text; navigating to another
+          snapshot shows that one's text. Empty card still offers Edit so an
+          operator can write summaries for snapshots that have none yet. */}
       <Card>
         <CardContent className="pt-6 space-y-3">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold">Performance Summary</h3>
-            {!editingAnalysis && (
+            {!editingAnalysis && selectedSnapshot && (
               <Button
                 variant="ghost"
                 size="sm"
                 className="h-7 text-xs"
                 onClick={() => {
-                  setDraftAnalysis(row.analysis_text ?? '');
+                  setDraftAnalysis(selectedSnapshot.analysis_text ?? '');
                   setEditingAnalysis(true);
                 }}
               >
@@ -602,7 +637,11 @@ function DataAnalysisDetail({
               </Button>
             )}
           </div>
-          {editingAnalysis ? (
+          {!selectedSnapshot ? (
+            <p className="text-sm text-muted-foreground">
+              No snapshots yet. Generate to create the first one.
+            </p>
+          ) : editingAnalysis ? (
             <div className="space-y-3">
               <Textarea
                 value={draftAnalysis}
@@ -636,14 +675,14 @@ function DataAnalysisDetail({
                 </Button>
               </div>
             </div>
-          ) : row.analysis_text ? (
+          ) : selectedSnapshot.analysis_text ? (
             <div className="prose prose-sm dark:prose-invert max-w-none">
-              <ReactMarkdown>{row.analysis_text}</ReactMarkdown>
+              <ReactMarkdown>{selectedSnapshot.analysis_text}</ReactMarkdown>
             </div>
           ) : (
             <p className="text-sm text-muted-foreground">
-              No summary yet. Click <strong>Edit</strong> to write one manually,
-              or <strong>Generate</strong> to create one with AI.
+              No summary for this snapshot. Click <strong>Edit</strong> to write
+              one manually.
             </p>
           )}
         </CardContent>
@@ -781,6 +820,34 @@ function StatsGrid({
 }
 
 // ============================================================================
+// HELPERS
+// ============================================================================
+
+// "Jun 2–Jun 8" / "May 26–Jun 1" / "Jun 1" (single-day MTD). Dates stored as
+// PG DATE columns (UTC midnight); formatting in UTC keeps Jun-2 from sliding
+// to Jun-1 for operators west of London.
+function formatSnapshotLabel(start: string, end: string): string {
+  const opts: Intl.DateTimeFormatOptions = {
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC',
+  };
+  const startMD = new Date(start).toLocaleDateString('en-US', opts);
+  const endMD = new Date(end).toLocaleDateString('en-US', opts);
+  if (startMD === endMD) return startMD;
+  return `${startMD}–${endMD}`;
+}
+
+// Compact "Jun 8" formatter for the per-priority added-date stamp. Falls
+// back to empty string for null/invalid input so the JSX can short-circuit.
+function formatItemDate(iso: string | null): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+// ============================================================================
 // CHECKLIST
 // ============================================================================
 
@@ -842,13 +909,18 @@ function ChecklistSection({
   return (
     <Card>
       <CardContent className="pt-6">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-semibold">Priorities</h3>
+        <div className="flex items-start justify-between mb-3 gap-3">
+          <div>
+            <h3 className="text-sm font-semibold">Priorities</h3>
+            <p className="text-xs text-muted-foreground">
+              Running list — shared across all snapshots, not point-in-time.
+            </p>
+          </div>
           {!showAdd && (
             <Button
               variant="ghost"
               size="sm"
-              className="h-7 text-xs"
+              className="h-7 text-xs shrink-0"
               onClick={() => setShowAdd(true)}
               disabled={isMutating}
             >
@@ -913,6 +985,14 @@ function ChecklistSection({
                       >
                         {it.text}
                       </label>
+                      {it.created_at && (
+                        <span
+                          className="text-[10px] text-muted-foreground pt-1 whitespace-nowrap shrink-0"
+                          title={new Date(it.created_at).toLocaleString()}
+                        >
+                          Added {formatItemDate(it.created_at)}
+                        </span>
+                      )}
                       <div className="opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity flex gap-0.5 shrink-0">
                         <Button
                           variant="ghost"
