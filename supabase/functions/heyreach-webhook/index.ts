@@ -337,6 +337,17 @@ Deno.serve(async (req) => {
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
+    // campaign_external_id is spread CONDITIONALLY (null-clobber guard).
+    // PostgREST builds the ON CONFLICT DO UPDATE SET clause only from keys
+    // present in the values object — omitting the key means it's not in the
+    // SET clause, so the existing row's value is preserved on update. On a
+    // brand-new INSERT with no value, the column defaults to NULL (which is
+    // the right "unknown" state). Net effect:
+    //   * first reply with a campaignId  → attribution written
+    //   * later reply WITHOUT a campaignId → existing attribution preserved
+    //   * later reply with a DIFFERENT campaignId → attribution overwritten
+    //     (this last case is rare; reusing the same prospect across two
+    //     campaigns isn't common but the spec is "set", not "first-wins").
     const { data: upsertedLead, error: upsertError } = await supabase
       .from("agent_leads")
       .upsert(
@@ -355,6 +366,9 @@ Deno.serve(async (req) => {
           heyreach_conversation_id: conversationId,
           heyreach_account_id: accountId ? Number(accountId) : null,
           linkedin_url: linkedinUrlForKey,
+          ...(campaignExternalId
+            ? { campaign_external_id: campaignExternalId }
+            : {}),
         },
         { onConflict: "user_id,linkedin_url" },
       )
