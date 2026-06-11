@@ -32,6 +32,7 @@ import ResetPassword from "./pages/ResetPassword";
 import ChoosePlan from "./pages/ChoosePlan";
 import CheckoutSuccess from "./pages/CheckoutSuccess";
 import AgentPage from "./pages/Agent";
+import PublicClientReport from "./pages/PublicClientReport";
 
 const queryClient = new QueryClient();
 
@@ -69,6 +70,10 @@ const App = () => (
                 <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
                 <Route path="/billing" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
                 <Route path="/admin" element={<AdminRoute><Admin /></AdminRoute>} />
+                {/* Public client report — NO ProtectedRoute, NO
+                    SubscriptionGuard, no admin shell. Pulls everything from
+                    the token via the public get-client-report function. */}
+                <Route path="/r/:token" element={<PublicClientReport />} />
                 {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
                 <Route path="*" element={<NotFound />} />
               </Routes>

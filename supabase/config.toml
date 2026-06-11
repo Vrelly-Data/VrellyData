@@ -1,5 +1,12 @@
 project_id = "srartzeqcbxbytfixeiv"
 
+# Public client-report endpoint — explicitly disables JWT verification so
+# anyone with the token can read. Companion admin function
+# create-report-token is intentionally NOT listed here, so it keeps the
+# default verify_jwt = true and stays admin-gated.
+[functions.get-client-report]
+verify_jwt = false
+
 [functions.admin-delete-user]
 verify_jwt = false
 

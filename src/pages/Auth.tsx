@@ -37,20 +37,40 @@ export default function Auth() {
 
   useEffect(() => {
     if (user) {
-      navigate('/dashboard');
+      // If signup/signin happened with a plan param (set by ChoosePlan.tsx
+      // when a logged-out visitor clicked a plan), bounce them back to
+      // /pricing with autocheckout params so the checkout fires automatically.
+      const planParam = searchParams.get('plan');
+      if (planParam) {
+        const interval = searchParams.get('interval') ?? 'monthly';
+        navigate(
+          `/pricing?autocheckout=${encodeURIComponent(planParam)}&interval=${encodeURIComponent(interval)}`,
+        );
+      } else {
+        navigate('/dashboard');
+      }
     }
-  }, [user, navigate]);
+  }, [user, navigate, searchParams]);
 
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
+
+    // Preserve plan/interval across the email-confirmation roundtrip so the
+    // /pricing autocheckout effect fires when they land back after clicking
+    // the confirmation link.
+    const planParam = searchParams.get('plan');
+    const interval = searchParams.get('interval') ?? 'monthly';
+    const emailRedirectTo = planParam
+      ? `${window.location.origin}/pricing?autocheckout=${encodeURIComponent(planParam)}&interval=${encodeURIComponent(interval)}`
+      : `${window.location.origin}/dashboard`;
 
     const { error } = await supabase.auth.signUp({
       email,
       password,
       options: {
         data: { name },
-        emailRedirectTo: `${window.location.origin}/dashboard`,
+        emailRedirectTo,
       },
     });
 
