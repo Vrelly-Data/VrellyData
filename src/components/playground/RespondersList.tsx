@@ -69,26 +69,20 @@ function intentPriority(intent: string | null | undefined): number {
   }
 }
 
-// Compact relative-time formatter. Inline so we don't drag in date-fns just
-// for this — the precision we need (m/h/d/mo/y) is trivial to compute.
-function relativeTime(iso: string | null | undefined): string {
+// Absolute response-date formatter ("Jun 3, 2026"). Replaces the previous
+// "Xd ago" relative formatter — clients reading the public report want an
+// anchored point in time, not a moving target. Returns "" for null /
+// invalid input so the calling span renders nothing rather than
+// "Invalid Date".
+function formatResponseDate(iso: string | null | undefined): string {
   if (!iso) return '';
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return '';
-  const ms = Date.now() - date.getTime();
-  if (ms < 0) return 'just now';
-  const sec = Math.floor(ms / 1000);
-  if (sec < 60) return 'just now';
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  const days = Math.floor(hr / 24);
-  if (days < 30) return `${days}d ago`;
-  const months = Math.floor(days / 30);
-  if (months < 12) return `${months}mo ago`;
-  const years = Math.floor(months / 12);
-  return `${years}y ago`;
+  return date.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
 }
 
 // LinkedIn leads often have null company/title. Build the "role · company"
@@ -132,9 +126,18 @@ interface RespondersListProps {
 
 export { type ResponderRow };
 
+// Default-collapsed row count. Picked to surface the most-relevant few
+// responders (the existing sort puts interested + recent at the top)
+// without overwhelming a client opening their report on mobile.
+const COLLAPSED_ROW_COUNT = 4;
+
 export function RespondersList({ data }: RespondersListProps = {}) {
   const { user } = useAuthStore();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // Independent from per-row thread expansion. Same component instance
+  // serves both admin tab and public report — each mount gets its own
+  // collapsed default; not persisted across navigations.
+  const [showAll, setShowAll] = useState(false);
   const isDataMode = data !== undefined;
 
   const query = useQuery({
@@ -212,16 +215,37 @@ export function RespondersList({ data }: RespondersListProps = {}) {
             No responses yet.
           </p>
         ) : (
-          <ul className="space-y-2">
-            {sorted.map((r) => (
-              <ResponderRowView
-                key={r.id}
-                lead={r}
-                expanded={expanded.has(r.id)}
-                onToggle={() => toggle(r.id)}
-              />
-            ))}
-          </ul>
+          <>
+            <ul className="space-y-2">
+              {(showAll
+                ? sorted
+                : sorted.slice(0, COLLAPSED_ROW_COUNT)
+              ).map((r) => (
+                <ResponderRowView
+                  key={r.id}
+                  lead={r}
+                  expanded={expanded.has(r.id)}
+                  onToggle={() => toggle(r.id)}
+                />
+              ))}
+            </ul>
+            {/* Show-more/less only renders when there are enough rows to
+                hide. Same control for admin and public — the state is
+                local to each component instance. */}
+            {sorted.length > COLLAPSED_ROW_COUNT && (
+              <div className="pt-2 flex justify-center">
+                <button
+                  type="button"
+                  onClick={() => setShowAll((v) => !v)}
+                  className="text-xs font-medium text-primary hover:underline focus:outline-none focus-visible:underline"
+                >
+                  {showAll
+                    ? 'Show less'
+                    : `Show all ${sorted.length} responses`}
+                </button>
+              </div>
+            )}
+          </>
         )}
       </CardContent>
     </Card>
@@ -278,7 +302,7 @@ function ResponderRowView({
           )}
         </div>
         <span className="text-xs text-muted-foreground whitespace-nowrap shrink-0">
-          {relativeTime(lead.last_reply_at)}
+          {formatResponseDate(lead.last_reply_at)}
         </span>
       </div>
 
