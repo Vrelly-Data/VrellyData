@@ -52,21 +52,13 @@ interface ResponderRow {
 // Sort + display helpers
 // ---------------------------------------------------------------------------
 
-function intentPriority(intent: string | null | undefined): number {
-  switch (intent) {
-    case 'interested':
-      return 0;
-    case 'unknown':
-    case null:
-    case undefined:
-    case '':
-      return 1;
-    case 'not_interested':
-      return 2;
-    default:
-      // unknown intent string — sort between unknown and not_interested
-      return 1;
-  }
+// Parse a timestamp string to ms-since-epoch, returning null for missing or
+// unparseable input. Used by the sort comparator below to push null /
+// invalid rows to the bottom of the list.
+function parseReplyTime(iso: string | null | undefined): number | null {
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  return Number.isNaN(t) ? null : t;
 }
 
 // Absolute response-date formatter ("Jun 3, 2026"). Replaces the previous
@@ -167,11 +159,15 @@ export function RespondersList({ data }: RespondersListProps = {}) {
   const sorted = useMemo(() => {
     const source = isDataMode ? data ?? [] : query.data ?? [];
     return source.slice().sort((a, b) => {
-      const ap = intentPriority(a.intent);
-      const bp = intentPriority(b.intent);
-      if (ap !== bp) return ap - bp;
-      const at = a.last_reply_at ? new Date(a.last_reply_at).getTime() : 0;
-      const bt = b.last_reply_at ? new Date(b.last_reply_at).getTime() : 0;
+      // Pure recency desc. Intent no longer affects ordering (the badges
+      // still render per-row exactly as before). Rows with a null or
+      // unparseable last_reply_at fall to the bottom — after every dated
+      // row — and keep stable order among themselves.
+      const at = parseReplyTime(a.last_reply_at);
+      const bt = parseReplyTime(b.last_reply_at);
+      if (at === null && bt === null) return 0;
+      if (at === null) return 1;
+      if (bt === null) return -1;
       return bt - at;
     });
   }, [query.data, isDataMode, data]);
