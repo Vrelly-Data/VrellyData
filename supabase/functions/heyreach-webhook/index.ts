@@ -14,6 +14,74 @@ function getCorsHeaders(req: Request) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// reply_thread merge — guarantees no message dropped between the partial
+// (built from event.recent_messages, has the just-arrived prospect reply)
+// and the canonical (GetChatroom — has full history but is eventually
+// consistent against the webhook and can lag the very reply that triggered
+// the webhook).
+//
+// Merge is strictly additive: every entry from EITHER source either matches
+// an existing entry (deduped) or is appended. A lagging GetChatroom can no
+// longer remove a reply the partial already reported.
+// ---------------------------------------------------------------------------
+
+type ThreadEntry = {
+  role: string;
+  content: string;
+  timestamp: string;
+  channel: string;
+};
+
+// Same-message tolerance: identical message body can differ slightly in
+// timestamp between recent_messages.creation_time (webhook payload) and
+// GetChatroom.createdAt (canonical). 2 minutes is generous enough for clock
+// skew + propagation delay without conflating two distinct rapid-fire
+// messages.
+const MERGE_TS_TOLERANCE_MS = 120_000;
+
+// True when two thread entries represent the same logical LinkedIn message.
+// When timestamps don't parse, we deliberately return false — a false
+// duplicate (cosmetic noise) is acceptable; a false dedup (dropping a
+// reply) is not.
+function sameMessage(a: ThreadEntry, b: ThreadEntry): boolean {
+  if ((a.content ?? "").trim() !== (b.content ?? "").trim()) return false;
+  if (a.role !== b.role) return false;
+  const at = new Date(a.timestamp).getTime();
+  const bt = new Date(b.timestamp).getTime();
+  if (Number.isNaN(at) || Number.isNaN(bt)) return false;
+  return Math.abs(at - bt) <= MERGE_TS_TOLERANCE_MS;
+}
+
+function mergeReplyThreads(
+  canonical: ThreadEntry[],
+  partial: ThreadEntry[],
+): ThreadEntry[] {
+  // Base = canonical (richer history). Append any partial entry that isn't
+  // already represented. This is the strictly-additive guarantee: every
+  // distinct partial message ends up in `merged` either by surviving the
+  // dedup as a canonical match, or by being pushed.
+  const merged: ThreadEntry[] = canonical.slice();
+  for (const p of partial) {
+    if (!merged.some((m) => sameMessage(m, p))) {
+      merged.push(p);
+    }
+  }
+  // Chronological order. Unparseable-timestamp entries fall to the end so
+  // they don't get anchored at the start of the conversation.
+  merged.sort((a, b) => {
+    const at = new Date(a.timestamp).getTime();
+    const bt = new Date(b.timestamp).getTime();
+    const aOk = !Number.isNaN(at);
+    const bOk = !Number.isNaN(bt);
+    if (!aOk && !bOk) return 0;
+    if (!aOk) return 1;
+    if (!bOk) return -1;
+    return at - bt;
+  });
+  return merged;
+}
+
 Deno.serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
 
@@ -423,23 +491,52 @@ Deno.serve(async (req) => {
           );
 
           if (fullReplyThread.length > 0) {
+            // STRICTLY-ADDITIVE MERGE (bug fix).
+            //
+            // Previously this branch did `.update({ reply_thread:
+            // fullReplyThread })` unconditionally — overwriting the partial
+            // we just upserted with GetChatroom's canonical thread. That
+            // silently dropped the just-arrived reply whenever GetChatroom
+            // lagged behind webhook delivery (eventually-consistent
+            // upstream). See the diagnosis attached to this commit.
+            //
+            // Now we MERGE: canonical first, then any partial entry not
+            // already represented (sameMessage compares trimmed content +
+            // role + timestamps within MERGE_TS_TOLERANCE_MS). Result is
+            // sorted chronologically. A lagging GetChatroom can no longer
+            // drop a reply — every entry from `replyThread` survives.
+            const canonicalLen = fullReplyThread.length;
+            const mergedThread = mergeReplyThreads(
+              fullReplyThread,
+              replyThread,
+            );
+
             const { error: threadUpdateErr } = await supabase
               .from("agent_leads")
-              .update({ reply_thread: fullReplyThread })
+              .update({ reply_thread: mergedThread })
               .eq("id", upsertedLead.id);
 
             if (threadUpdateErr) {
               console.warn(
-                `[heyreach-webhook] Full-thread UPDATE failed for lead ${upsertedLead.id}:`,
+                `[heyreach-webhook] Merged-thread UPDATE failed for lead ${upsertedLead.id}:`,
                 threadUpdateErr,
               );
+              // Keep the partial that's already in the row from the upsert.
+              // Signal to classify-reply (below) to use the partial too.
               fullReplyThread = null;
             } else {
+              // Propagate the merged thread to classify-reply so it sees
+              // the same view of history that's now persisted on the row.
+              fullReplyThread = mergedThread;
+              const addedFromPartial = mergedThread.length - canonicalLen;
               console.log(
-                `[heyreach-webhook] Synced full thread (${fullReplyThread.length} msgs) for lead ${upsertedLead.id}`,
+                `[heyreach-webhook] Merged thread written for lead ${upsertedLead.id} (canonical=${canonicalLen}, partial=${replyThread.length}, added_from_partial=${addedFromPartial}, merged=${mergedThread.length})`,
               );
             }
           } else {
+            // GetChatroom returned an empty messages array. Don't overwrite —
+            // the partial we wrote at upsert (which has the new reply) is
+            // already in the row. Signal classify-reply to use it.
             fullReplyThread = null;
           }
         }
