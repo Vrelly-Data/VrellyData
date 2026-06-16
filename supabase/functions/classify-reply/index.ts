@@ -2,6 +2,12 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 console.log('classify-reply starting');
 
+// Anthropic model — overridable via env so a future retirement doesn't
+// require a code change. Fallback is the current Sonnet generation
+// (claude-sonnet-4-6). Set ANTHROPIC_MODEL in Supabase secrets to override
+// without redeploying logic.
+const MODEL = Deno.env.get('ANTHROPIC_MODEL') ?? 'claude-sonnet-4-6';
+
 // === Email reply preprocessing =============================================
 // Aggressive HTML / quoted-chain / signature stripping for email channel.
 // Idempotent: works on already-plain-text input (HTML detection check),
@@ -149,7 +155,7 @@ async function callAnthropicJSON(opts: {
 }> {
   const t0 = Date.now();
   const base = {
-    model: 'claude-sonnet-4-20250514',
+    model: MODEL,
     max_tokens: opts.maxTokens ?? 1000,
     temperature: opts.temperature,
     system: opts.systemPrompt,
@@ -698,7 +704,7 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
           lead_name: leadName,
           lead_company: leadCompany,
           channel,
-          model: 'claude-sonnet-4-20250514',
+          model: MODEL,
           prompt_version: promptVersion,
           temperature: 0,
           system_prompt_hash: call1SystemPromptHash,
@@ -962,7 +968,7 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
         lead_name: leadName,
         lead_company: leadCompany,
         channel,
-        model: 'claude-sonnet-4-20250514',
+        model: MODEL,
         prompt_version: promptVersion,
         temperature: 0.5,
         system_prompt_hash: call2SystemPromptHash,
