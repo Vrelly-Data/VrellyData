@@ -5,34 +5,72 @@
 // pass a StatsSnapshot in the exact shape generate-client-analysis returns
 // — admin pulls it from client_analysis_snapshots, public pulls it from
 // the get-client-report payload.
+//
+// Card set (fixed order — admin and public render identically):
+//   1. Connection Requests Sent  ← stats.totals.connections_sent (HeyReach)
+//   2. Connections Accepted      ← stats.totals.connections_accepted (HeyReach)
+//                                  + connection_accept_rate_pct subtitle
+//   3. LinkedIn Messages Sent    ← stats.heyreach.sent (channel split)
+//   4. Emails Sent               ← stats.smartlead.totals.sent (channel split)
+//   5. Replies                   ← stats.totals.replies + reply_rate_pct subtitle
+//   6. Bounces                   ← stats.totals.bounces + bounce_rate_pct subtitle
+//
+// A Smartlead-only client sees 0 on the three LinkedIn cards (and vice versa)
+// rather than the old "show/hide by integration" behaviour — keeping the
+// grid layout stable across clients reads more cleanly on the public report.
 
 import { Card, CardContent } from '@/components/ui/card';
 import {
-  Send,
   MessageSquare,
   Linkedin,
   Mail,
   AlertTriangle,
-  Percent,
+  UserPlus,
+  UserCheck,
 } from 'lucide-react';
 
+// All numeric fields are marked optional so a missing key on an older
+// snapshot renders as 0 / "—" rather than NaN / "undefined". The shape
+// generate-client-analysis writes today populates every key as a number
+// (or null for rates); this only matters at the edges (snapshots created
+// before a given field was added, or upstream API failures that left a
+// field unwritten).
 export interface StatsSnapshot {
   range: string;
   start_date: string;
   end_date: string;
   totals: {
-    sent: number;
-    replies: number;
-    reply_rate_pct: number | null;
-    connections_sent: number;
-    connections_accepted: number;
-    connection_accept_rate_pct: number | null;
-    opens: number;
-    open_rate_pct: number | null;
-    clicks: number;
-    click_rate_pct: number | null;
-    bounces: number;
-    bounce_rate_pct: number | null;
+    sent?: number;
+    replies?: number;
+    reply_rate_pct?: number | null;
+    connections_sent?: number;
+    connections_accepted?: number;
+    connection_accept_rate_pct?: number | null;
+    opens?: number;
+    open_rate_pct?: number | null;
+    clicks?: number;
+    click_rate_pct?: number | null;
+    bounces?: number;
+    bounce_rate_pct?: number | null;
+  };
+  // Per-platform breakdowns at the top level, used for the channel-split
+  // cards (LinkedIn Messages Sent / Emails Sent). Optional — older
+  // snapshots predating the snapshot-history rewrite may not have them.
+  heyreach?: {
+    sent?: number;
+    replies?: number;
+    connections_sent?: number;
+    connections_accepted?: number;
+  };
+  smartlead?: {
+    totals?: {
+      sent?: number;
+      replies?: number;
+      opens?: number;
+      clicks?: number;
+      bounces?: number;
+    };
+    per_campaign?: unknown[];
   };
 }
 
@@ -66,18 +104,22 @@ export function fmtNum(n: number): string {
   return n.toLocaleString();
 }
 
-export function fmtPct(n: number | null): string {
+// Accepts undefined as well as null so a missing rate field renders "—".
+// `n == null` is truthy for both via loose equality.
+export function fmtPct(n: number | null | undefined): string {
   return n == null ? '—' : `${n.toFixed(1)}%`;
 }
 
 export function StatsGrid({
   stats,
-  showLinkedIn,
-  showEmail,
 }: {
   stats: StatsSnapshot;
-  showLinkedIn: boolean;
-  showEmail: boolean;
+  // Legacy props — retained as optional no-ops so the existing call sites
+  // in DataAnalysisTab and PublicClientReport don't need to change.
+  // The new card set always renders all 6 cards in a fixed order; a client
+  // missing one channel just sees 0s on that channel's cards.
+  showLinkedIn?: boolean;
+  showEmail?: boolean;
 }) {
   const t = stats.totals;
   return (
@@ -86,55 +128,50 @@ export function StatsGrid({
         {stats.start_date} → {stats.end_date} ({stats.range})
       </p>
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        {/* 1. Connection Requests Sent (LinkedIn outbound invitations) */}
         <StatCard
-          title="Messages sent"
-          value={fmtNum(t.sent)}
-          icon={<Send className="h-5 w-5 text-primary" />}
-          subtitle="Email + LinkedIn DMs"
+          title="Connection Requests Sent"
+          value={fmtNum(t?.connections_sent ?? 0)}
+          icon={<UserPlus className="h-5 w-5 text-primary" />}
         />
+
+        {/* 2. Connections Accepted (LinkedIn invitations accepted) */}
+        <StatCard
+          title="Connections Accepted"
+          value={fmtNum(t?.connections_accepted ?? 0)}
+          icon={<UserCheck className="h-5 w-5 text-primary" />}
+          subtitle={`${fmtPct(t?.connection_accept_rate_pct)} accepted`}
+        />
+
+        {/* 3. LinkedIn Messages Sent (channel split — HeyReach only) */}
+        <StatCard
+          title="LinkedIn Messages Sent"
+          value={fmtNum(stats.heyreach?.sent ?? 0)}
+          icon={<Linkedin className="h-5 w-5 text-primary" />}
+        />
+
+        {/* 4. Emails Sent (channel split — Smartlead only) */}
+        <StatCard
+          title="Emails Sent"
+          value={fmtNum(stats.smartlead?.totals?.sent ?? 0)}
+          icon={<Mail className="h-5 w-5 text-primary" />}
+        />
+
+        {/* 5. Replies (combined, with reply-rate subtitle) */}
         <StatCard
           title="Replies"
-          value={fmtNum(t.replies)}
+          value={fmtNum(t?.replies ?? 0)}
           icon={<MessageSquare className="h-5 w-5 text-primary" />}
-          subtitle={fmtPct(t.reply_rate_pct) + ' reply rate'}
+          subtitle={`${fmtPct(t?.reply_rate_pct)} reply rate`}
         />
-        {showLinkedIn && (
-          <StatCard
-            title="Connections accepted"
-            value={fmtNum(t.connections_accepted)}
-            icon={<Linkedin className="h-5 w-5 text-primary" />}
-            subtitle={
-              fmtPct(t.connection_accept_rate_pct) +
-              ' of ' +
-              fmtNum(t.connections_sent) +
-              ' sent'
-            }
-          />
-        )}
-        {showEmail && (
-          <StatCard
-            title="Opens"
-            value={fmtNum(t.opens)}
-            icon={<Mail className="h-5 w-5 text-primary" />}
-            subtitle={fmtPct(t.open_rate_pct) + ' open rate'}
-          />
-        )}
-        {showEmail && (
-          <StatCard
-            title="Clicks"
-            value={fmtNum(t.clicks)}
-            icon={<Percent className="h-5 w-5 text-primary" />}
-            subtitle={fmtPct(t.click_rate_pct) + ' click rate'}
-          />
-        )}
-        {showEmail && (
-          <StatCard
-            title="Bounces"
-            value={fmtNum(t.bounces)}
-            icon={<AlertTriangle className="h-5 w-5 text-primary" />}
-            subtitle={fmtPct(t.bounce_rate_pct) + ' bounce rate'}
-          />
-        )}
+
+        {/* 6. Bounces (email deliverability, with bounce-rate subtitle) */}
+        <StatCard
+          title="Bounces"
+          value={fmtNum(t?.bounces ?? 0)}
+          icon={<AlertTriangle className="h-5 w-5 text-primary" />}
+          subtitle={`${fmtPct(t?.bounce_rate_pct)} bounce rate`}
+        />
       </div>
     </div>
   );
