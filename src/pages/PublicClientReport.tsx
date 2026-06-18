@@ -32,7 +32,11 @@ import { Loader2, History } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import vrellyLogo from '@/assets/vrelly-logo.png';
 import { StatsGrid, type StatsSnapshot } from '@/components/playground/StatsGrid';
-import { CampaignBarChart, type ChartDatum } from '@/components/playground/CampaignBarChart';
+import {
+  CampaignBarChart,
+  isActiveCampaign,
+  type ChartDatum,
+} from '@/components/playground/CampaignBarChart';
 import {
   RespondersList,
   type ResponderRow,
@@ -211,25 +215,29 @@ export default function PublicClientReport() {
           relevant. */}
       <CampaignBarChart
         data={[
+          // LinkedIn rows: 4 metrics. Same shape as the admin tab — single
+          // source of truth lives in CampaignBarChart's isActiveCampaign +
+          // the ChartDatum type.
           ...(selectedSnapshot?.stats_snapshot?.heyreach?.per_campaign ?? []).map(
             (c): ChartDatum => ({
               name: c.name,
               source: 'heyreach',
-              sent: c.sent ?? 0,
-              opens: 0,
-              replies: c.replies ?? 0,
+              linkedin_sent: c.sent ?? 0,
+              linkedin_replies: c.replies ?? 0,
+              linkedin_connections_sent: c.connections_sent ?? 0,
+              linkedin_connections_accepted: c.connections_accepted ?? 0,
             }),
           ),
+          // Email rows: 2 metrics. No connection concept on email.
           ...(selectedSnapshot?.stats_snapshot?.smartlead?.per_campaign ?? []).map(
             (c): ChartDatum => ({
               name: c.name ?? c.campaign_id,
               source: 'smartlead',
-              sent: c.sent ?? 0,
-              opens: c.opens ?? 0,
-              replies: c.replies ?? 0,
+              email_sent: c.sent ?? 0,
+              email_replies: c.replies ?? 0,
             }),
           ),
-        ].filter((c) => c.sent > 0 || c.replies > 0 || c.opens > 0)}
+        ].filter(isActiveCampaign)}
         range={selectedSnapshot?.range}
         partial={
           selectedSnapshot?.stats_snapshot?.heyreach?.per_campaign_partial ===

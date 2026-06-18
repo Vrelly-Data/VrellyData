@@ -36,7 +36,7 @@ import {
   NewClientAnalysisDialog,
   type ClientAnalysisEditingState,
 } from './NewClientAnalysisDialog';
-import { CampaignBarChart } from './CampaignBarChart';
+import { CampaignBarChart, isActiveCampaign } from './CampaignBarChart';
 import { RespondersList } from './RespondersList';
 import { StatsGrid, type StatsSnapshot } from './StatsGrid';
 import { ShareReportDialog } from './ShareReportDialog';
@@ -721,25 +721,31 @@ function DataAnalysisDetail({
           range than the snapshot was generated for. */}
       <CampaignBarChart
         data={[
+          // LinkedIn rows: 4 metrics. linkedin_* dataKeys populated;
+          // email_* left undefined so Recharts renders no email bars
+          // for these rows.
           ...(selectedSnapshot?.stats_snapshot?.heyreach?.per_campaign ?? []).map(
             (c) => ({
               name: c.name,
               source: 'heyreach',
-              sent: c.sent ?? 0,
-              opens: 0, // LinkedIn has no opens metric — bar collapses to 0.
-              replies: c.replies ?? 0,
+              linkedin_sent: c.sent ?? 0,
+              linkedin_replies: c.replies ?? 0,
+              linkedin_connections_sent: c.connections_sent ?? 0,
+              linkedin_connections_accepted: c.connections_accepted ?? 0,
             }),
           ),
+          // Email rows: 2 metrics. email_* dataKeys populated; linkedin_*
+          // left undefined — email has no connection concept, so those
+          // bars are absent (not zero-height) for these rows.
           ...(selectedSnapshot?.stats_snapshot?.smartlead?.per_campaign ?? []).map(
             (c) => ({
               name: c.name ?? c.campaign_id,
               source: 'smartlead',
-              sent: c.sent ?? 0,
-              opens: c.opens ?? 0,
-              replies: c.replies ?? 0,
+              email_sent: c.sent ?? 0,
+              email_replies: c.replies ?? 0,
             }),
           ),
-        ].filter((c) => c.sent > 0 || c.replies > 0 || c.opens > 0)}
+        ].filter(isActiveCampaign)}
         range={selectedSnapshot?.range}
         selectedRange={range}
         partial={

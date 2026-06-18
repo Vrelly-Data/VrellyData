@@ -26,12 +26,40 @@ import {
 } from 'recharts';
 import { Card, CardContent } from '@/components/ui/card';
 
+// Platform-specific dataKeys so a single Recharts BarChart can render
+// different metric sets per row. LinkedIn rows populate the linkedin_*
+// fields and leave email_* undefined; Smartlead rows do the opposite.
+// Recharts skips a Bar for any row whose value for that dataKey is
+// undefined — no zero-height bar, no broken layout — which is how the
+// 4-bars-for-LinkedIn / 2-bars-for-email shape lands cleanly.
 export interface ChartDatum {
   name: string;
   source: string;
-  sent: number;
-  opens: number;
-  replies: number;
+  // LinkedIn (heyreach) — present only on source === 'heyreach' rows.
+  linkedin_sent?: number;
+  linkedin_replies?: number;
+  linkedin_connections_sent?: number;
+  linkedin_connections_accepted?: number;
+  // Email (smartlead) — present only on source === 'smartlead' rows.
+  // No connection concept on email; only sent + replies.
+  email_sent?: number;
+  email_replies?: number;
+}
+
+// Single source of truth for the zero-activity filter, exported so both
+// callers (DataAnalysisTab + PublicClientReport) share the same predicate.
+// LinkedIn requires the broader OR — a campaign that only sent connection
+// requests is still active and should NOT be filtered out.
+export function isActiveCampaign(c: ChartDatum): boolean {
+  if (c.source === 'heyreach') {
+    return (
+      (c.linkedin_sent ?? 0) > 0 ||
+      (c.linkedin_replies ?? 0) > 0 ||
+      (c.linkedin_connections_sent ?? 0) > 0 ||
+      (c.linkedin_connections_accepted ?? 0) > 0
+    );
+  }
+  return (c.email_sent ?? 0) > 0 || (c.email_replies ?? 0) > 0;
 }
 
 export interface CampaignBarChartProps {
@@ -57,13 +85,27 @@ function truncateName(name: string, max = 18): string {
   return name.slice(0, max - 1) + '…';
 }
 
-// Match the existing stat-card iconography colours roughly: blue for sent
-// volume, amber for opens, emerald for replies. These also read well in
-// both light and dark mode on the existing card backgrounds.
+// Platform color-coded palette. LinkedIn = blue family (four distinct
+// shades, monotonic from "connection request" to "accepted"); Email =
+// green + amber. Distinct enough that "blue area = LinkedIn,
+// green/amber area = email" reads at a glance on the grouped bars.
 const COLORS = {
-  sent: '#3b82f6',
-  opens: '#f59e0b',
-  replies: '#10b981',
+  linkedin_sent:                 '#3b82f6', // blue-500
+  linkedin_replies:              '#1d4ed8', // blue-700 (darker — replies are heavier outcome)
+  linkedin_connections_sent:     '#93c5fd', // blue-300 (lighter — request is the lightest outcome)
+  linkedin_connections_accepted: '#1e40af', // blue-800 (darkest — best LinkedIn outcome)
+  email_sent:                    '#10b981', // emerald-500
+  email_replies:                 '#f59e0b', // amber-500
+};
+
+// Human-readable legend / tooltip labels keyed by the chart dataKey.
+const LABELS: Record<string, string> = {
+  linkedin_sent:                 'Messages sent (LinkedIn)',
+  linkedin_replies:              'Replies (LinkedIn)',
+  linkedin_connections_sent:     'Connection requests sent',
+  linkedin_connections_accepted: 'Connection requests accepted',
+  email_sent:                    'Emails sent',
+  email_replies:                 'Replies (Email)',
 };
 
 export function CampaignBarChart({
@@ -73,10 +115,16 @@ export function CampaignBarChart({
   partial,
 }: CampaignBarChartProps) {
   // Stable order: largest "sent" first so the eye lands on the biggest
-  // bar. Falls back to name when sent ties (cheap deterministic sort).
+  // bar. Different platforms have different "sent" fields — LinkedIn uses
+  // linkedin_sent, Smartlead uses email_sent; either may be undefined on
+  // the row, so we coalesce to 0 for the sort. Falls back to name on tie.
   const chartData = useMemo<ChartDatum[]>(
     () =>
-      data.slice().sort((a, b) => b.sent - a.sent || a.name.localeCompare(b.name)),
+      data.slice().sort((a, b) => {
+        const av = a.linkedin_sent ?? a.email_sent ?? 0;
+        const bv = b.linkedin_sent ?? b.email_sent ?? 0;
+        return bv - av || a.name.localeCompare(b.name);
+      }),
     [data],
   );
 
@@ -114,8 +162,9 @@ export function CampaignBarChart({
             Per-campaign performance{range ? ` (${range})` : ''}
           </h3>
           <p className="text-xs text-muted-foreground">
-            Sent, opens (email), and replies per campaign for the selected
-            snapshot's date range.
+            LinkedIn campaigns (blue): messages sent, replies, connection
+            requests sent + accepted. Email campaigns (green / amber):
+            emails sent + replies. Snapshot's date range.
           </p>
           {rangeMismatch && (
             <p className="text-xs text-muted-foreground italic mt-1">
@@ -161,19 +210,49 @@ export function CampaignBarChart({
                 cursor={{ fill: 'hsl(var(--accent) / 0.3)' }}
                 formatter={(value: number, name: string) => [
                   value.toLocaleString(),
-                  name.charAt(0).toUpperCase() + name.slice(1),
+                  LABELS[name] ?? name,
                 ]}
                 labelFormatter={(label: string) => label}
               />
               <Legend
                 wrapperStyle={{ fontSize: 12 }}
-                formatter={(value: string) =>
-                  value.charAt(0).toUpperCase() + value.slice(1)
-                }
+                formatter={(value: string) => LABELS[value] ?? value}
               />
-              <Bar dataKey="sent" fill={COLORS.sent} radius={[3, 3, 0, 0]} />
-              <Bar dataKey="opens" fill={COLORS.opens} radius={[3, 3, 0, 0]} />
-              <Bar dataKey="replies" fill={COLORS.replies} radius={[3, 3, 0, 0]} />
+              {/* Six Bars (one per dataKey). A row whose source doesn't
+                  populate a given dataKey has `undefined` for that key;
+                  Recharts skips the bar entirely — no zero-height stub,
+                  no broken axis. Net effect: LinkedIn rows get 4 bars,
+                  Smartlead rows get 2 bars, all sharing the same x-axis. */}
+              <Bar
+                dataKey="linkedin_connections_sent"
+                fill={COLORS.linkedin_connections_sent}
+                radius={[3, 3, 0, 0]}
+              />
+              <Bar
+                dataKey="linkedin_connections_accepted"
+                fill={COLORS.linkedin_connections_accepted}
+                radius={[3, 3, 0, 0]}
+              />
+              <Bar
+                dataKey="linkedin_sent"
+                fill={COLORS.linkedin_sent}
+                radius={[3, 3, 0, 0]}
+              />
+              <Bar
+                dataKey="linkedin_replies"
+                fill={COLORS.linkedin_replies}
+                radius={[3, 3, 0, 0]}
+              />
+              <Bar
+                dataKey="email_sent"
+                fill={COLORS.email_sent}
+                radius={[3, 3, 0, 0]}
+              />
+              <Bar
+                dataKey="email_replies"
+                fill={COLORS.email_replies}
+                radius={[3, 3, 0, 0]}
+              />
             </BarChart>
           </ResponsiveContainer>
         </div>
