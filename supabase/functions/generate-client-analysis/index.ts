@@ -647,11 +647,20 @@ Deno.serve(async (req) => {
 
     // ---- Pre-fetch synced_campaigns (single query, both platforms) ----
     // Used for:
-    //   * HR campaign scoping — filter by raw_data.linkedInAccountIds
+    //   * HR campaign scoping — filter by raw_data.campaignAccountIds
     //     intersection with client.heyreach_account_ids. The picker stores
     //     ACCOUNT ids, not campaign ids, so we derive in-scope campaigns
     //     via the existing linked-account relationship surfaced on every
     //     HR campaign row by sync-heyreach-campaigns.
+    //
+    //     FIELD-NAME NOTE: HeyReach's /campaign/GetAll response uses
+    //     `campaignAccountIds` (verified against prod data — confirmed
+    //     present on real rows; the previously-tried `linkedInAccountIds`
+    //     and `accountIds` are NOT in the payload, so the original filter
+    //     silently returned zero matches and the chart never showed any
+    //     LinkedIn campaigns). The fallback chain below tries the correct
+    //     name first, then the two legacy guesses, so any historical row
+    //     that does happen to carry the old field name still scopes.
     //   * SL display names for per_campaign[] entries — so the chart
     //     x-axis reads "Campaign A" instead of "11234".
     const { data: allSynced } = await supabase
@@ -673,9 +682,14 @@ Deno.serve(async (req) => {
     const hrInScope = syncedRows
       .filter((c) => {
         if (c.source !== "heyreach") return false;
+        // Fallback chain: campaignAccountIds is the real HeyReach field
+        // name; linkedInAccountIds and accountIds are legacy guesses kept
+        // as defensive fallbacks for any historical row.
         const linked =
+          (c.raw_data?.campaignAccountIds as unknown) ??
           (c.raw_data?.linkedInAccountIds as unknown) ??
-          (c.raw_data?.accountIds as unknown);
+          (c.raw_data?.accountIds as unknown) ??
+          [];
         if (!Array.isArray(linked)) return false;
         return linked.some((id) => hrAccountSet.has(Number(id)));
       })
