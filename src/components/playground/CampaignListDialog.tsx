@@ -7,6 +7,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useSyncedCampaigns, SyncedCampaign } from '@/hooks/useSyncedCampaigns';
+import { ACTIVE_STATUSES } from '@/hooks/usePlaygroundStats';
 import { Loader2, Users, Send, MessageSquare } from 'lucide-react';
 
 interface CampaignListDialogProps {
@@ -62,8 +63,21 @@ export function CampaignListDialog({ open, onOpenChange, title, statusFilter }: 
   const { data: campaigns, isLoading, error } = useSyncedCampaigns();
 
   const filteredCampaigns = campaigns?.filter(campaign => {
+    // No filter → show all (e.g. dialogFilter === 'all' from the caller).
     if (!statusFilter) return true;
-    return campaign.status?.toLowerCase() === statusFilter.toLowerCase();
+    const campaignStatus = campaign.status?.toLowerCase() ?? '';
+    // 'active' is a BUCKET, not a single status value. The Active
+    // Campaigns card counts every campaign whose status is in
+    // ACTIVE_STATUSES (active / paused / in_progress / starting /
+    // scheduled), so the modal must match the same set — otherwise
+    // HeyReach-synced rows (`in_progress`) are counted by the card but
+    // hidden from the modal, which was the original bug.
+    if (statusFilter.toLowerCase() === 'active') {
+      return ACTIVE_STATUSES.includes(campaignStatus);
+    }
+    // Any other statusFilter value falls through to strict equality —
+    // preserves the original behaviour for future per-status callers.
+    return campaignStatus === statusFilter.toLowerCase();
   }) ?? [];
 
   return (

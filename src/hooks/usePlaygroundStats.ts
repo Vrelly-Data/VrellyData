@@ -1,6 +1,24 @@
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 
+// Single source of truth for the "active" status bucket on the Data
+// Playground dashboard. Used here to compute the Active Campaigns count
+// AND by CampaignListDialog to filter the drill-down list, so the card
+// number and the modal list can't disagree.
+//
+// Why a set, not a single value: each sync function normalises its
+// platform's status field differently (HeyReach writes 'in_progress',
+// Reply.io writes 'active', Smartlead writes 'in_progress' too, etc.).
+// "Running but not yet finished" is the operator's mental model — and
+// that's a set of lowercased status values, not a single literal.
+export const ACTIVE_STATUSES: readonly string[] = [
+  'active',
+  'paused',
+  'in_progress',
+  'starting',
+  'scheduled',
+];
+
 export interface PlaygroundStats {
   totalMessagesSent: number;
   totalReplies: number;
@@ -111,11 +129,10 @@ export function usePlaygroundStats() {
             linkedinCampaignCount++;
           }
         }
-        // Count campaigns that are still running. Includes HeyReach-native
-        // statuses (in_progress, starting, scheduled) alongside the Reply.io
-        // conventions (active, paused) — lowercased at write time by each sync.
-        const runningStatuses = ['active', 'paused', 'in_progress', 'starting', 'scheduled'];
-        if (runningStatuses.includes(campaign.status?.toLowerCase() || '')) {
+        // Count campaigns that are still running. Membership in
+        // ACTIVE_STATUSES (exported above) — same set the modal uses, so
+        // count and drill-down can't drift.
+        if (ACTIVE_STATUSES.includes(campaign.status?.toLowerCase() || '')) {
           activeCampaigns++;
         }
       });
