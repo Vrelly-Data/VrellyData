@@ -708,7 +708,17 @@ function DataAnalysisDetail({
       {/* Per-campaign bar chart — range-scoped to the SELECTED snapshot.
           Both HR and SL per_campaign data come from the snapshot's
           stats_snapshot; no separate synced_campaigns fetch. The chart is
-          purely presentational. */}
+          purely presentational.
+
+          Zero-activity filter: drop any campaign with sent === 0 AND
+          replies === 0 AND opens === 0 in the snapshot's range. Dead /
+          test / dormant campaigns drop out cleanly. Applied here so the
+          chart receives pre-filtered data; chart's empty-state message
+          covers the "everything was inactive" case.
+
+          selectedRange passes the local picker state so the chart can
+          show a mismatch caption when the operator previews a different
+          range than the snapshot was generated for. */}
       <CampaignBarChart
         data={[
           ...(selectedSnapshot?.stats_snapshot?.heyreach?.per_campaign ?? []).map(
@@ -729,8 +739,9 @@ function DataAnalysisDetail({
               replies: c.replies ?? 0,
             }),
           ),
-        ]}
+        ].filter((c) => c.sent > 0 || c.replies > 0 || c.opens > 0)}
         range={selectedSnapshot?.range}
+        selectedRange={range}
         partial={
           selectedSnapshot?.stats_snapshot?.heyreach?.per_campaign_partial ===
           true

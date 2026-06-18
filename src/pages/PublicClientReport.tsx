@@ -203,8 +203,39 @@ export default function PublicClientReport() {
       {/* Stats grid */}
       <StatsBlock snapshot={selectedSnapshot} />
 
-      {/* Bar chart — data prop mode, no internal fetch. */}
-      {campaigns.length > 0 && <CampaignBarChart data={campaigns} />}
+      {/* Bar chart — range-scoped per-campaign data, derived from the
+          selected snapshot's per_campaign arrays. Same source the admin
+          tab uses, same zero-activity filter (drop campaigns with no
+          sent/opens/replies). No selectedRange prop here: the public
+          report has no range switcher, so a mismatch caption is never
+          relevant. */}
+      <CampaignBarChart
+        data={[
+          ...(selectedSnapshot?.stats_snapshot?.heyreach?.per_campaign ?? []).map(
+            (c): ChartDatum => ({
+              name: c.name,
+              source: 'heyreach',
+              sent: c.sent ?? 0,
+              opens: 0,
+              replies: c.replies ?? 0,
+            }),
+          ),
+          ...(selectedSnapshot?.stats_snapshot?.smartlead?.per_campaign ?? []).map(
+            (c): ChartDatum => ({
+              name: c.name ?? c.campaign_id,
+              source: 'smartlead',
+              sent: c.sent ?? 0,
+              opens: c.opens ?? 0,
+              replies: c.replies ?? 0,
+            }),
+          ),
+        ].filter((c) => c.sent > 0 || c.replies > 0 || c.opens > 0)}
+        range={selectedSnapshot?.range}
+        partial={
+          selectedSnapshot?.stats_snapshot?.heyreach?.per_campaign_partial ===
+          true
+        }
+      />
 
       {/* Performance Summary (read-only markdown) */}
       <Card>

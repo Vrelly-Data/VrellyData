@@ -36,9 +36,16 @@ export interface ChartDatum {
 
 export interface CampaignBarChartProps {
   data: ChartDatum[];
-  // Range label for the header (e.g. "last_week", "7d"). Optional so a
-  // caller that's mid-load can omit it; absent → no parenthetical.
+  // The SNAPSHOT's range label — shown in the header parenthetical
+  // ("Per-campaign performance (last_week)"). Optional so a caller that's
+  // mid-load can omit it.
   range?: string;
+  // The currently-SELECTED preview range from the range tabs. Only the
+  // admin tab has a range switcher; the public report omits this. When
+  // present AND different from `range`, the chart shows a small caption
+  // making the mismatch visible to the operator: cards live-refresh on
+  // tab click but the chart reads from the saved snapshot.
+  selectedRange?: string;
   // True when at least one HR per-campaign upstream call failed. Drives a
   // small muted note below the chart so the client knows the picture is
   // partial without us silently lying.
@@ -59,7 +66,12 @@ const COLORS = {
   replies: '#10b981',
 };
 
-export function CampaignBarChart({ data, range, partial }: CampaignBarChartProps) {
+export function CampaignBarChart({
+  data,
+  range,
+  selectedRange,
+  partial,
+}: CampaignBarChartProps) {
   // Stable order: largest "sent" first so the eye lands on the biggest
   // bar. Falls back to name when sent ties (cheap deterministic sort).
   const chartData = useMemo<ChartDatum[]>(
@@ -68,8 +80,30 @@ export function CampaignBarChart({ data, range, partial }: CampaignBarChartProps
     [data],
   );
 
+  // Mismatch caption — only shows when both ranges are present and differ.
+  // Admin previews a different range than the snapshot was generated for:
+  // cards live-refresh, chart can't. The caption is honest about that.
+  const rangeMismatch = !!(
+    range && selectedRange && selectedRange !== range
+  );
+
+  // Empty state — either the client has no in-scope campaigns yet, or
+  // everything was filtered out as zero-activity by the caller. Same
+  // friendly message either way; the mismatch caption (if active) still
+  // shows so a curious operator knows what's going on.
   if (chartData.length === 0) {
-    return null;
+    return (
+      <Card className="border-dashed">
+        <CardContent className="py-10 text-center text-muted-foreground text-sm space-y-2">
+          <p>No campaign activity in this range.</p>
+          {rangeMismatch && (
+            <p className="text-xs italic">
+              Chart reflects the saved {range} snapshot — Generate to update to {selectedRange}.
+            </p>
+          )}
+        </CardContent>
+      </Card>
+    );
   }
 
   return (
@@ -83,6 +117,11 @@ export function CampaignBarChart({ data, range, partial }: CampaignBarChartProps
             Sent, opens (email), and replies per campaign for the selected
             snapshot's date range.
           </p>
+          {rangeMismatch && (
+            <p className="text-xs text-muted-foreground italic mt-1">
+              Chart reflects the saved {range} snapshot — Generate to update to {selectedRange}.
+            </p>
+          )}
         </div>
 
         {/* Height scales with row count so a 1-2-campaign client doesn't
