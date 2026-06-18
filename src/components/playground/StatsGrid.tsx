@@ -54,13 +54,31 @@ export interface StatsSnapshot {
     bounce_rate_pct?: number | null;
   };
   // Per-platform breakdowns at the top level, used for the channel-split
-  // cards (LinkedIn Messages Sent / Emails Sent). Optional — older
-  // snapshots predating the snapshot-history rewrite may not have them.
+  // cards (LinkedIn Messages Sent / Emails Sent) AND the per-campaign bar
+  // chart. Optional — older snapshots predating the snapshot-history
+  // rewrite may not have them; older snapshots predating the per-campaign
+  // HR addition may have heyreach without per_campaign[].
   heyreach?: {
     sent?: number;
     replies?: number;
     connections_sent?: number;
     connections_accepted?: number;
+    // Range-scoped per-campaign breakdown (added by the per-campaign
+    // GetOverallStats loop). Empty array means either (a) the client has
+    // no HR campaigns in scope, or (b) every per-campaign call failed
+    // (partial flag below disambiguates).
+    per_campaign?: Array<{
+      campaign_id: string;
+      name: string;
+      sent: number;
+      replies: number;
+      connections_sent: number;
+      connections_accepted: number;
+    }>;
+    // True when at least one per-campaign call failed. Aggregate fields
+    // above stay correct regardless because they come from the
+    // unaffected account-level call.
+    per_campaign_partial?: boolean;
   };
   smartlead?: {
     totals?: {
@@ -70,7 +88,17 @@ export interface StatsSnapshot {
       clicks?: number;
       bounces?: number;
     };
-    per_campaign?: unknown[];
+    per_campaign?: Array<{
+      campaign_id: string;
+      // Display name resolved server-side from synced_campaigns. Falls
+      // back to campaign_id when the campaign hasn't been synced yet.
+      name?: string;
+      sent?: number;
+      replies?: number;
+      opens?: number;
+      clicks?: number;
+      bounces?: number;
+    }>;
   };
 }
 

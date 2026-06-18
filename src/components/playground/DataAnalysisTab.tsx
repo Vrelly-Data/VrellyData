@@ -705,13 +705,36 @@ function DataAnalysisDetail({
         </div>
       )}
 
-      {/* Per-campaign bar chart — between cards and AI summary per spec.
-          Pulls its own data from synced_campaigns; cumulative platform-side
-          totals, NOT snapshot-scoped (synced_campaigns has no time window).
-          Same caveat as before — labelled accordingly in the chart itself. */}
+      {/* Per-campaign bar chart — range-scoped to the SELECTED snapshot.
+          Both HR and SL per_campaign data come from the snapshot's
+          stats_snapshot; no separate synced_campaigns fetch. The chart is
+          purely presentational. */}
       <CampaignBarChart
-        heyreachAccountIds={row.heyreach_account_ids ?? []}
-        smartleadCampaignIds={row.smartlead_campaign_ids ?? []}
+        data={[
+          ...(selectedSnapshot?.stats_snapshot?.heyreach?.per_campaign ?? []).map(
+            (c) => ({
+              name: c.name,
+              source: 'heyreach',
+              sent: c.sent ?? 0,
+              opens: 0, // LinkedIn has no opens metric — bar collapses to 0.
+              replies: c.replies ?? 0,
+            }),
+          ),
+          ...(selectedSnapshot?.stats_snapshot?.smartlead?.per_campaign ?? []).map(
+            (c) => ({
+              name: c.name ?? c.campaign_id,
+              source: 'smartlead',
+              sent: c.sent ?? 0,
+              opens: c.opens ?? 0,
+              replies: c.replies ?? 0,
+            }),
+          ),
+        ]}
+        range={selectedSnapshot?.range}
+        partial={
+          selectedSnapshot?.stats_snapshot?.heyreach?.per_campaign_partial ===
+          true
+        }
       />
 
       {/* Performance Summary — editable, persists to the SELECTED snapshot.

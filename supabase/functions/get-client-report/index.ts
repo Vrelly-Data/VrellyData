@@ -75,23 +75,6 @@ function notFound(): Response {
   });
 }
 
-// Same defensive numeric extraction shape used by generate-client-analysis
-// and the bar-chart component for synced_campaigns.stats.
-function pickNumber(
-  obj: Record<string, unknown> | null | undefined,
-  keys: string[],
-): number {
-  if (!obj) return 0;
-  for (const k of keys) {
-    const v = obj[k];
-    if (typeof v === "number" && Number.isFinite(v)) return v;
-    if (typeof v === "string" && v.trim() !== "" && !Number.isNaN(Number(v))) {
-      return Number(v);
-    }
-  }
-  return 0;
-}
-
 interface ClientRow {
   id: string;
   user_id: string;
@@ -140,62 +123,13 @@ async function fetchResponders(
   return data ?? [];
 }
 
-interface SyncedCampaignRow {
-  id: string;
-  name: string | null;
-  source: string;
-  external_campaign_id: string;
-  stats: Record<string, unknown> | null;
-  raw_data: Record<string, unknown> | null;
-}
-
-async function fetchBarChartCampaigns(
-  supabase: Supabase,
-  client: ClientRow,
-): Promise<unknown[]> {
-  const slIds = client.smartlead_campaign_ids ?? [];
-  const hrAccounts = client.heyreach_account_ids ?? [];
-  if (slIds.length === 0 && hrAccounts.length === 0) return [];
-
-  // Fetch all linked campaigns and filter in-process. Same shape as
-  // CampaignBarChart on the client side — set sizes are small, cheaper
-  // than crafting a JSONB intersection query for the HeyReach side.
-  const { data, error } = await supabase
-    .from("synced_campaigns")
-    .select("id, name, source, external_campaign_id, stats, raw_data")
-    .eq("is_linked", true);
-  if (error) {
-    logStep("synced_campaigns fetch failed", { error: error.message });
-    return [];
-  }
-
-  const slSet = new Set(slIds);
-  const hrSet = new Set(hrAccounts.map(Number));
-  const rows = (data ?? []) as unknown as SyncedCampaignRow[];
-
-  const inScope = rows.filter((c) => {
-    if (c.source === "smartlead") {
-      return slSet.has(c.external_campaign_id);
-    }
-    if (c.source === "heyreach") {
-      const linked =
-        (c.raw_data?.linkedInAccountIds as unknown) ??
-        (c.raw_data?.accountIds as unknown);
-      if (!Array.isArray(linked)) return false;
-      return linked.some((id) => hrSet.has(Number(id)));
-    }
-    return false;
-  });
-
-  // Bar-chart projection: same shape as CampaignBarChart's ChartDatum.
-  return inScope.map((c) => ({
-    name: c.name || "Unnamed",
-    source: c.source,
-    sent: pickNumber(c.stats, ["sent", "delivered"]),
-    opens: pickNumber(c.stats, ["opens", "opened"]),
-    replies: pickNumber(c.stats, ["replies", "replied"]),
-  }));
-}
+// fetchBarChartCampaigns + SyncedCampaignRow + pickNumber removed:
+// after the snapshot-history rewrite + per-campaign-stats addition, every
+// snapshot carries its own stats_snapshot.heyreach.per_campaign[] +
+// stats_snapshot.smartlead.per_campaign[]. The public report's frontend
+// derives the chart data from the SELECTED snapshot — same code path as
+// the admin tab — so we no longer need a server-side synced_campaigns
+// projection here.
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -272,7 +206,7 @@ Deno.serve(async (req) => {
 
     // Parallel fetch the four data blocks; each is independent and any
     // single failure shouldn't take down the whole response.
-    const [snapsRes, prioritiesRes, responders, campaigns] = await Promise.all([
+    const [snapsRes, prioritiesRes, responders] = await Promise.all([
       supabase
         .from("client_analysis_snapshots")
         .select(
@@ -286,7 +220,6 @@ Deno.serve(async (req) => {
         .eq("client_analysis_id", client.id)
         .order("sort_order", { ascending: true }),
       fetchResponders(supabase, client),
-      fetchBarChartCampaigns(supabase, client),
     ]);
 
     if (snapsRes.error) {
@@ -302,7 +235,6 @@ Deno.serve(async (req) => {
         snapshots: snapsRes.data ?? [],
         priorities: prioritiesRes.data ?? [],
         responders,
-        campaigns,
       }),
       {
         status: 200,

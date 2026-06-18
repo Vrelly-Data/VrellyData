@@ -191,6 +191,10 @@ async function fetchHeyReachStats(
 
 interface SmartleadCampaignStats {
   campaign_id: string;
+  // Display name resolved from synced_campaigns; falls back to campaign_id
+  // when the campaign hasn't been synced yet (rare — admin picker pulls
+  // from the same table).
+  name: string;
   sent: number;
   replies: number;
   opens: number;
@@ -203,6 +207,7 @@ async function fetchSmartleadStats(
   campaignIds: string[],
   startDate: Date,
   endDate: Date,
+  nameLookup: Map<string, string>,
 ): Promise<{ totals: Record<string, number>; per_campaign: SmartleadCampaignStats[] }> {
   if (campaignIds.length === 0) {
     return {
@@ -266,6 +271,7 @@ async function fetchSmartleadStats(
 
       per_campaign.push({
         campaign_id: id,
+        name: nameLookup.get(id) ?? id,
         sent: campaignSent,
         replies: campaignReplies,
         opens: campaignOpens,
@@ -291,6 +297,140 @@ async function fetchSmartleadStats(
     totals: { sent, replies, opens, clicks, bounces },
     per_campaign,
   };
+}
+
+// ---- HeyReach per-campaign (range-scoped) --------------------------------
+// Adds range-scoped per-campaign breakdown to stats_snapshot.heyreach so the
+// bar chart can show LinkedIn campaigns alongside Smartlead campaigns. The
+// account-level fetchHeyReachStats above is kept as belt-and-suspenders —
+// the stat cards still read its aggregate numbers, and a total per-campaign
+// failure cascade can't make the cards lie.
+//
+// Concurrency strategy (deliberately conservative on first deploy):
+//   * BATCH_SIZE = 3 (NOT 5). HeyReach's actual rate limit isn't documented;
+//     we have no observed data because the previous loop in
+//     sync-heyreach-campaigns ran serially with a 300ms inter-call sleep.
+//     If logs come back clean across a few real Generates we can bump to 5
+//     (math in the design doc shows comfortable headroom either way).
+//   * 200ms sleep BETWEEN batches; NO inter-call sleep WITHIN a batch.
+//   * Promise.allSettled isolates a per-campaign failure to that one entry.
+//   * 429 → single retry after 500ms. No backoff cascade — if a campaign
+//     429s twice it gets omitted; the rest of the batch continues.
+//
+// Failure handling: per spec, omit failed campaigns from per_campaign[]
+// entirely (a zero-bar is misleading; absence is honest). Track a partial
+// flag so the chart can surface "some campaigns' data was unavailable".
+
+interface HrPerCampaign {
+  campaign_id: string;
+  name: string;
+  sent: number;
+  replies: number;
+  connections_sent: number;
+  connections_accepted: number;
+}
+
+async function fetchOneHrCampaign(
+  apiKey: string,
+  campaign: { external_campaign_id: string; name: string },
+  startDate: Date,
+  endDate: Date,
+): Promise<HrPerCampaign> {
+  const body = JSON.stringify({
+    accountIds: [],
+    campaignIds: [Number(campaign.external_campaign_id)],
+    startDate: startDate.toISOString(),
+    endDate: endDate.toISOString(),
+  });
+
+  const fetchOnce = () =>
+    fetch(`${HEYREACH_API}/stats/GetOverallStats`, {
+      method: "POST",
+      headers: {
+        "X-API-KEY": apiKey,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body,
+    });
+
+  let res = await fetchOnce();
+  logStep("HR per-campaign call", {
+    campaign_id: campaign.external_campaign_id,
+    status: res.status,
+  });
+
+  // Single 429 retry after a 500ms wait. NOT a cascade — if the second
+  // call also 429s, we throw and Promise.allSettled records the rejection.
+  if (res.status === 429) {
+    await new Promise((r) => setTimeout(r, 500));
+    res = await fetchOnce();
+    logStep("HR per-campaign 429 retry", {
+      campaign_id: campaign.external_campaign_id,
+      status: res.status,
+    });
+  }
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    throw new Error(`HTTP ${res.status}: ${errText.slice(0, 200)}`);
+  }
+
+  const json = await res.json();
+  const overall = (json?.overallStats ?? {}) as Record<string, number>;
+
+  return {
+    campaign_id: campaign.external_campaign_id,
+    name: campaign.name,
+    sent: Number(overall.messagesSent ?? 0),
+    replies: Number(overall.totalMessageReplies ?? 0),
+    connections_sent: Number(overall.connectionsSent ?? 0),
+    connections_accepted: Number(overall.connectionsAccepted ?? 0),
+  };
+}
+
+async function fetchHeyReachPerCampaign(
+  apiKey: string,
+  campaigns: Array<{ external_campaign_id: string; name: string }>,
+  startDate: Date,
+  endDate: Date,
+): Promise<{ per_campaign: HrPerCampaign[]; partial: boolean }> {
+  if (campaigns.length === 0) {
+    return { per_campaign: [], partial: false };
+  }
+
+  const BATCH_SIZE = 3;
+  const INTER_BATCH_SLEEP_MS = 200;
+
+  const per_campaign: HrPerCampaign[] = [];
+  let anyFailed = false;
+
+  for (let i = 0; i < campaigns.length; i += BATCH_SIZE) {
+    const batch = campaigns.slice(i, i + BATCH_SIZE);
+
+    const results = await Promise.allSettled(
+      batch.map((c) => fetchOneHrCampaign(apiKey, c, startDate, endDate)),
+    );
+
+    for (let j = 0; j < results.length; j++) {
+      const r = results[j];
+      if (r.status === "fulfilled") {
+        per_campaign.push(r.value);
+      } else {
+        anyFailed = true;
+        logStep("HR per-campaign failed (omitted from chart)", {
+          campaign_id: batch[j].external_campaign_id,
+          error: String(r.reason).slice(0, 200),
+        });
+      }
+    }
+
+    if (i + BATCH_SIZE < campaigns.length) {
+      await new Promise((r) => setTimeout(r, INTER_BATCH_SLEEP_MS));
+    }
+  }
+
+  return { per_campaign, partial: anyFailed };
 }
 
 // ---- Claude ---------------------------------------------------------------
@@ -505,7 +645,56 @@ Deno.serve(async (req) => {
     const smartleadKey =
       (integrations ?? []).find((r) => r.platform === "smartlead")?.api_key_encrypted ?? null;
 
+    // ---- Pre-fetch synced_campaigns (single query, both platforms) ----
+    // Used for:
+    //   * HR campaign scoping — filter by raw_data.linkedInAccountIds
+    //     intersection with client.heyreach_account_ids. The picker stores
+    //     ACCOUNT ids, not campaign ids, so we derive in-scope campaigns
+    //     via the existing linked-account relationship surfaced on every
+    //     HR campaign row by sync-heyreach-campaigns.
+    //   * SL display names for per_campaign[] entries — so the chart
+    //     x-axis reads "Campaign A" instead of "11234".
+    const { data: allSynced } = await supabase
+      .from("synced_campaigns")
+      .select("source, external_campaign_id, name, raw_data")
+      .eq("is_linked", true)
+      .in("source", ["heyreach", "smartlead"]);
+
+    const syncedRows = (allSynced ?? []) as Array<{
+      source: string;
+      external_campaign_id: string;
+      name: string;
+      raw_data: Record<string, unknown> | null;
+    }>;
+
+    const hrAccountSet = new Set(
+      (clientRow.heyreach_account_ids ?? []).map(Number),
+    );
+    const hrInScope = syncedRows
+      .filter((c) => {
+        if (c.source !== "heyreach") return false;
+        const linked =
+          (c.raw_data?.linkedInAccountIds as unknown) ??
+          (c.raw_data?.accountIds as unknown);
+        if (!Array.isArray(linked)) return false;
+        return linked.some((id) => hrAccountSet.has(Number(id)));
+      })
+      .map((c) => ({
+        external_campaign_id: c.external_campaign_id,
+        name: c.name,
+      }));
+
+    const slNameLookup = new Map<string, string>();
+    for (const c of syncedRows) {
+      if (c.source === "smartlead") {
+        slNameLookup.set(c.external_campaign_id, c.name);
+      }
+    }
+
     // ---- Fetch ----
+    // Account-level HR call PRESERVED (belt-and-suspenders). The stat
+    // cards read these aggregate numbers; per-campaign failure can't
+    // make them lie.
     const heyreachStats = heyreachKey
       ? await fetchHeyReachStats(
           heyreachKey,
@@ -515,12 +704,25 @@ Deno.serve(async (req) => {
         )
       : { sent: 0, replies: 0, connections_sent: 0, connections_accepted: 0 };
 
+    // New: range-scoped HR per-campaign breakdown. Bounded concurrency
+    // (batch_size=3, 200ms inter-batch, allSettled, 429 single retry) —
+    // see fetchHeyReachPerCampaign for the rationale.
+    const heyreachPerCampaign = heyreachKey
+      ? await fetchHeyReachPerCampaign(
+          heyreachKey,
+          hrInScope,
+          startDate,
+          endDate,
+        )
+      : { per_campaign: [], partial: false };
+
     const smartleadStats = smartleadKey
       ? await fetchSmartleadStats(
           smartleadKey,
           clientRow.smartlead_campaign_ids ?? [],
           startDate,
           endDate,
+          slNameLookup,
         )
       : { totals: { sent: 0, replies: 0, opens: 0, clicks: 0, bounces: 0 }, per_campaign: [] };
 
@@ -548,7 +750,11 @@ Deno.serve(async (req) => {
         bounces: smartleadStats.totals.bounces,
         bounce_rate_pct: pct(smartleadStats.totals.bounces, smartleadStats.totals.sent),
       },
-      heyreach: heyreachStats,
+      heyreach: {
+        ...heyreachStats,
+        per_campaign: heyreachPerCampaign.per_campaign,
+        per_campaign_partial: heyreachPerCampaign.partial,
+      },
       smartlead: smartleadStats,
     };
 

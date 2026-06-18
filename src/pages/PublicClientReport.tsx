@@ -67,7 +67,9 @@ interface PublicReport {
   snapshots: PublicReportSnapshot[];
   priorities: PublicReportPriority[];
   responders: ResponderRow[];
-  campaigns: ChartDatum[];
+  // campaigns[] field removed from the payload — the chart now derives
+  // its data from the SELECTED snapshot's stats_snapshot.heyreach.per_campaign
+  // + smartlead.per_campaign, same as the admin tab does. Range-scoped.
 }
 
 // ----------------------------------------------------------------------------
@@ -159,8 +161,7 @@ export default function PublicClientReport() {
   }
 
   // ---- LOADED -------------------------------------------------------------
-  const { client, snapshots, priorities, responders, campaigns } =
-    reportQuery.data;
+  const { client, snapshots, priorities, responders } = reportQuery.data;
   const selectedSnapshot =
     snapshots.find((s) => s.id === selectedSnapshotId) ?? snapshots[0] ?? null;
 
