@@ -14,12 +14,28 @@ function getCorsHeaders(req: Request) {
   };
 }
 
-// V3 API for sequences (includes teamId for workspace filtering)
-const REPLY_API_V3 = "https://api.reply.io/v3";
-// V1 API for campaigns list (includes inline stats per campaign)
-const REPLY_API_V1 = "https://api.reply.io/v1";
+// ---------------------------------------------------------------------------
+// Reply.io v3 (deprecated v1/v2 code removed).
+//
+// Auth is now Bearer; the old X-API-Key header is gone. v3 returns sequences
+// directly from /v3/sequences with teamId inline, so the X-Reply-Team-Id
+// header (a v1-era request scoping mechanism) is also gone — we filter
+// client-side on seq.teamId === replyTeamId.
+//
+// Pagination: ?top=N per request, paged via &skip=offset, response carries
+// items[] + hasMore. Workspace keys typically return all sequences in one or
+// two pages.
+//
+// Stats fetching is intentionally NOT included here (was the old V1
+// /campaigns sidecar). Step 3 will add the /v3/reporting/* endpoints to
+// generate-client-analysis; until then sync only writes campaign metadata
+// (name/status) and preserves any stats already on the row (LinkedIn /
+// email CSV uploads).
+// ---------------------------------------------------------------------------
 
-// LinkedIn fields - preserved from CSV uploads, never overwritten by sync
+const REPLY_API_V3 = "https://api.reply.io/v3";
+
+// LinkedIn fields - preserved from CSV uploads, never overwritten by sync.
 const LINKEDIN_FIELDS = [
   'linkedinMessagesSent',
   'linkedinConnectionsSent',
@@ -29,7 +45,7 @@ const LINKEDIN_FIELDS = [
   'linkedinDataUploadedAt',
 ];
 
-// Email CSV upload fields - preserved from CSV uploads, never overwritten by sync
+// Email CSV upload fields - preserved from CSV uploads, never overwritten by sync.
 const EMAIL_UPLOAD_FIELDS = [
   'emailDataSource',
   'emailDataUploadedAt',
@@ -43,227 +59,102 @@ const EMAIL_UPLOAD_FIELDS = [
   'autoReplied',
 ];
 
-// V3 Sequence structure (replaces V1 Campaign)
+// v3 Sequence — the canonical Reply.io v3 object that replaces the v1
+// Campaign. teamId is the workspace scope (we filter on it below).
 interface ReplyioSequence {
   id: number;
   name: string;
-  status: string;        // "Active", "Paused", "Finished", "Archived"
-  teamId: number;        // Workspace ID - this is what we need for filtering!
-  ownerId?: number;
+  status: string;         // "Active" / "Paused" / "Finished" / "Archived"
+  teamId?: number;        // Workspace ID — undefined on some edge rows
+  ownerUserId?: number;
+  ownerId?: number;       // legacy alias, kept defensively
   created?: string;
   isArchived?: boolean;
 }
 
-// V3 status is already a string, just lowercase it
+interface V3SequencesPage {
+  items?: ReplyioSequence[];
+  hasMore?: boolean;
+}
+
+// v3 returns status as a lowercase-friendly string already; just normalize.
 function normalizeStatus(status: unknown): string {
-  if (typeof status === 'string') {
-    return status.toLowerCase();
-  }
-  return 'unknown';
+  return typeof status === 'string' ? status.toLowerCase() : 'unknown';
 }
 
-async function fetchFromReplyioV3(endpoint: string, apiKey: string, teamId?: string) {
-  const headers: Record<string, string> = {
-    // Reply requires strict header casing
-    "X-API-Key": apiKey,
-    "Accept": "application/json",
-    "Content-Type": "application/json",
-  };
-
-  if (teamId) {
-    headers["X-Reply-Team-Id"] = teamId;
-  }
-
-  const response = await fetch(`${REPLY_API_V3}${endpoint}`, { headers });
-
+// Bearer-authed v3 fetcher.
+async function fetchV3<T = unknown>(endpoint: string, apiKey: string): Promise<T> {
+  const response = await fetch(`${REPLY_API_V3}${endpoint}`, {
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Accept": "application/json",
+      "Content-Type": "application/json",
+    },
+  });
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`Reply.io V3 API error (${response.status}): ${errorText}`);
+    throw new Error(`Reply.io v3 API error (${response.status}): ${errorText}`);
   }
-
-  return response.json();
+  return response.json() as Promise<T>;
 }
 
-async function fetchFromReplyioV1(endpoint: string, apiKey: string, teamId?: string) {
-  const headers: Record<string, string> = {
-    // Reply requires strict header casing
-    "X-API-Key": apiKey,
-    "Accept": "application/json",
-    "Content-Type": "application/json",
-  };
-
-  if (teamId) {
-    headers["X-Reply-Team-Id"] = teamId;
-  }
-
-  const response = await fetch(`${REPLY_API_V1}${endpoint}`, { headers });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Reply.io V1 API error (${response.status}): ${errorText}`);
-  }
-
-  return response.json();
-}
-
-// Retry wrapper with exponential backoff for rate limiting
-async function fetchWithRetryV3(
-  endpoint: string, 
-  apiKey: string, 
-  teamId?: string, 
-  maxRetries: number = 3
-): Promise<unknown> {
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      return await fetchFromReplyioV3(endpoint, apiKey, teamId);
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      
-      if (errorMessage.includes("Too much requests") && attempt < maxRetries) {
-        const waitTime = 5000 * attempt;
-        console.log(`Rate limited on ${endpoint}, waiting ${waitTime/1000}s before retry ${attempt}/${maxRetries}`);
-        await new Promise(resolve => setTimeout(resolve, waitTime));
-        continue;
-      }
-      throw error;
-    }
-  }
-  throw new Error(`Max retries exceeded for ${endpoint}`);
-}
-
-async function fetchWithRetryV1(
-  endpoint: string, 
-  apiKey: string, 
-  teamId?: string, 
-  maxRetries: number = 3
-): Promise<unknown> {
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      return await fetchFromReplyioV1(endpoint, apiKey, teamId);
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      
-      if (errorMessage.includes("Too much requests") && attempt < maxRetries) {
-        const waitTime = 5000 * attempt;
-        console.log(`Rate limited on ${endpoint}, waiting ${waitTime/1000}s before retry ${attempt}/${maxRetries}`);
-        await new Promise(resolve => setTimeout(resolve, waitTime));
-        continue;
-      }
-      throw error;
-    }
-  }
-  throw new Error(`Max retries exceeded for ${endpoint}`);
-}
-
-// Extract stats from a V1 campaign list object (stats are inline in the list response)
-function extractStatsFromV1Campaign(campaign: Record<string, unknown>): Record<string, number> {
-  return {
-    sent: (campaign.deliveriesCount as number) || 0,
-    delivered: (campaign.deliveriesCount as number) || 0,
-    opens: (campaign.opensCount as number) || 0,
-    replies: (campaign.repliesCount as number) || 0,
-    bounces: (campaign.bouncesCount as number) || 0,
-    optedOut: (campaign.optOutsCount as number) || 0,
-    outOfOffice: (campaign.outOfOfficeCount as number) || 0,
-    peopleCount: (campaign.peopleCount as number) || 0,
-    peopleFinished: (campaign.peopleFinished as number) || 0,
-    peopleActive: (campaign.peopleActive as number) || 0,
-    peoplePaused: (campaign.peoplePaused as number) || 0,
-  };
-}
-
-// Fetch all campaigns from V1 list endpoint (paginated), returns a map keyed by campaign ID
-async function fetchAllCampaignsV1(
+// Exponential backoff for 429s. Same shape as the previous helper —
+// only the underlying fetcher changed.
+async function fetchV3WithRetry<T = unknown>(
+  endpoint: string,
   apiKey: string,
-  teamId?: string,
-  pageSize: number = 100
-): Promise<Map<number, Record<string, unknown>>> {
-  const campaignMap = new Map<number, Record<string, unknown>>();
-  let page = 1;
-  let hasMore = true;
-
-  while (hasMore) {
-    const data = await fetchWithRetryV1(`/campaigns?limit=${pageSize}&page=${page}`, apiKey, teamId);
-    const campaigns = (Array.isArray(data) ? data : []) as Record<string, unknown>[];
-
-    for (const c of campaigns) {
-      const id = c.id as number;
-      if (id) campaignMap.set(id, c);
-    }
-
-    console.log(`  V1 campaigns page ${page}: fetched ${campaigns.length}, total: ${campaignMap.size}`);
-
-    hasMore = campaigns.length === pageSize;
-    page++;
-
-    if (page > 100) {
-      console.warn(`Reached page limit (100) for V1 campaigns`);
-      break;
-    }
-
-    if (hasMore) {
-      await new Promise(resolve => setTimeout(resolve, 500));
+  maxRetries: number = 3,
+): Promise<T> {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await fetchV3<T>(endpoint, apiKey);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      const isRateLimit = msg.includes("Too much requests") || msg.includes("(429)");
+      if (isRateLimit && attempt < maxRetries) {
+        const waitMs = 5000 * attempt;
+        console.log(`Rate limited on ${endpoint}, waiting ${waitMs / 1000}s before retry ${attempt}/${maxRetries}`);
+        await new Promise(r => setTimeout(r, waitMs));
+        continue;
+      }
+      throw error;
     }
   }
-
-  return campaignMap;
+  throw new Error(`Max retries exceeded for ${endpoint}`);
 }
 
-// Paginated fetch helper for V3 API
-async function fetchAllPaginated<T>(
-  endpoint: string, 
-  apiKey: string, 
-  resultKey: string,
-  teamId?: string,
-  pageSize: number = 100
-): Promise<T[]> {
-  let allResults: T[] = [];
-  let page = 1;
-  let hasMore = true;
-  
-  while (hasMore) {
-    const separator = endpoint.includes('?') ? '&' : '?';
-    const url = `${endpoint}${separator}limit=${pageSize}&page=${page}`;
-    
-    const response = await fetchWithRetryV3(url, apiKey, teamId) as Record<string, unknown>;
-    const results = (response[resultKey] || response || []) as T[];
-    
-    if (!Array.isArray(results)) {
-      console.warn(`Expected array for ${resultKey}, got:`, typeof results);
+// Walk /v3/sequences with top + skip until hasMore=false or we get a short
+// read. Safety cap at 10k to bound a runaway loop (typical workspace has
+// dozens, not thousands).
+async function fetchAllSequencesV3(
+  apiKey: string,
+  pageSize: number = 100,
+): Promise<ReplyioSequence[]> {
+  const all: ReplyioSequence[] = [];
+  let skip = 0;
+  for (let page = 1; page <= 100; page++) {
+    const url = `/sequences?top=${pageSize}&skip=${skip}`;
+    const resp = await fetchV3WithRetry<V3SequencesPage>(url, apiKey);
+    const items = Array.isArray(resp.items) ? resp.items : [];
+    if (items.length === 0) break;
+    all.push(...items);
+    console.log(`  /sequences page ${page} (skip=${skip}): fetched ${items.length}, total ${all.length}`);
+    if (resp.hasMore === false) break;
+    if (items.length < pageSize) break; // defensive: short read means end
+    skip += items.length;
+    if (all.length > 10000) {
+      console.warn(`Reached safety cap (10k sequences); stopping pagination`);
       break;
     }
-    
-    allResults = [...allResults, ...results];
-    
-    const info = response.info as { hasMore?: boolean } | undefined;
-    hasMore = info?.hasMore || 
-              (response.hasMore as boolean) || 
-              (results.length === pageSize);
-    
-    console.log(`  Page ${page}: fetched ${results.length} ${resultKey}, total: ${allResults.length}`);
-    
-    page++;
-    
-    if (page > 100) {
-      console.warn(`Reached page limit (100) for ${endpoint}`);
-      break;
-    }
-    
-    if (hasMore) {
-      await new Promise(resolve => setTimeout(resolve, 500));
-    }
+    await new Promise(r => setTimeout(r, 300));
   }
-  
-  return allResults;
+  return all;
 }
 
 // NOTE: Contact sync was intentionally removed from this function.
-// Rationale: syncing contacts for many campaigns can exceed request time limits,
-// causing the client to see "Failed to fetch" even though the backend keeps working.
-//
-// Contacts are synced per-campaign via the separate `sync-reply-contacts` function.
-// That function also updates per-campaign stats like peopleCount + replies.
-
+// Rationale: syncing contacts for many campaigns can exceed request time
+// limits. Contacts + per-campaign stats are synced via the separate
+// `sync-reply-contacts` function.
 
 Deno.serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
@@ -276,8 +167,7 @@ Deno.serve(async (req) => {
   let authHeader: string | null = null;
   let campaignsProcessed = 0;
   let campaignsFailed = 0;
-  let totalContactsSynced = 0;
-  
+
   try {
     authHeader = req.headers.get("Authorization");
     if (!authHeader) {
@@ -287,14 +177,13 @@ Deno.serve(async (req) => {
     const body = await req.json();
     integrationId = body.integrationId;
 
-    // Check for internal service-role call via x-agent-key
+    // Internal service-role call via x-agent-key vs user JWT — unchanged.
     const agentKey = req.headers.get("x-agent-key");
     const expectedAgentKey = Deno.env.get("AGENT_API_KEY");
     const isInternalCall = !!(agentKey && expectedAgentKey && agentKey === expectedAgentKey);
 
     let supabase;
     if (isInternalCall) {
-      // Internal call from auto-sync: use service role client (bypasses RLS)
       const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
       supabase = createClient(
         Deno.env.get("SUPABASE_URL") ?? "",
@@ -302,7 +191,6 @@ Deno.serve(async (req) => {
       );
       console.log("Using service role client (internal auto-sync call)");
     } else {
-      // Frontend call: use user JWT (RLS enforced)
       supabase = createClient(
         Deno.env.get("SUPABASE_URL") ?? "",
         Deno.env.get("SUPABASE_ANON_KEY") ?? "",
@@ -330,63 +218,48 @@ Deno.serve(async (req) => {
 
     const apiKey = integration.api_key_encrypted;
     const teamId = integration.team_id;
-    const replyTeamId = integration.reply_team_id;
+    const replyTeamId = integration.reply_team_id; // workspace scope, set at integration-create time
 
     await supabase
       .from("outbound_integrations")
       .update({ sync_status: "syncing", sync_error: null })
       .eq("id", integrationId);
 
-    console.log(`Starting sync for integration ${integrationId}${replyTeamId ? ` (workspace: ${replyTeamId})` : ''}`);
+    console.log(`Starting v3 sync for integration ${integrationId}${replyTeamId ? ` (workspace: ${replyTeamId})` : ''}`);
 
-    // Fetch sequences from V3 API (includes teamId for filtering)
-    let sequences: ReplyioSequence[] = [];
+    // Fetch every sequence the key can see, then filter to this workspace.
+    // Workspace keys (the normal case) return a single workspace's sequences
+    // — the filter is a no-op. Agency keys would return multiple teams; the
+    // filter drops the rest.
+    let sequences: ReplyioSequence[];
     try {
-      sequences = await fetchAllPaginated<ReplyioSequence>(
-        "/sequences",
-        apiKey,
-        "items",
-        replyTeamId || undefined
-      );
-      console.log(`Fetched ${sequences.length} total sequences from Reply.io V3`);
-      
-      // Filter by workspace teamId
-      if (replyTeamId) {
-        const teamIdNum = parseInt(replyTeamId, 10);
-        const originalCount = sequences.length;
-        
-        sequences = sequences.filter(seq => {
-          if (seq.teamId === undefined) {
-            console.log(`Sequence ${seq.id} (${seq.name}) has no teamId, excluding`);
-            return false;
-          }
-          return seq.teamId === teamIdNum;
-        });
-        
-        console.log(`After workspace filter: ${sequences.length}/${originalCount} sequences belong to workspace ${replyTeamId}`);
-      }
-      
-      // Filter out archived sequences
-      sequences = sequences.filter(seq => !seq.isArchived);
-      console.log(`After archive filter: ${sequences.length} active sequences`);
-      
+      sequences = await fetchAllSequencesV3(apiKey);
+      console.log(`Fetched ${sequences.length} total sequences from Reply.io v3`);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       console.error("Failed to fetch sequences:", err);
       throw new Error(`Failed to fetch sequences: ${errorMessage}`);
     }
 
-    // Fetch all campaigns from V1 list endpoint (stats are inline)
-    console.log(`Fetching V1 campaigns list for inline stats...`);
-    let v1CampaignMap = new Map<number, Record<string, unknown>>();
-    try {
-      v1CampaignMap = await fetchAllCampaignsV1(apiKey, replyTeamId || undefined);
-      console.log(`Fetched ${v1CampaignMap.size} campaigns from V1 list endpoint`);
-    } catch (err) {
-      console.warn(`Could not fetch V1 campaigns list, stats will be empty:`, err);
+    if (replyTeamId) {
+      const wanted = parseInt(replyTeamId, 10);
+      const before = sequences.length;
+      sequences = sequences.filter(seq => {
+        if (seq.teamId === undefined) {
+          console.log(`Sequence ${seq.id} (${seq.name}) has no teamId, excluding`);
+          return false;
+        }
+        return seq.teamId === wanted;
+      });
+      console.log(`After workspace filter (teamId=${wanted}): ${sequences.length}/${before}`);
     }
 
-    // Process each sequence - map inline stats and sync
+    // Drop archived sequences — Reply.io shows them in lists but they're
+    // not actionable for sync purposes.
+    const beforeArchive = sequences.length;
+    sequences = sequences.filter(seq => !seq.isArchived);
+    console.log(`After archive filter: ${sequences.length}/${beforeArchive} active`);
+
     const syncedCampaignIds: { internal: string; external: string }[] = [];
 
     for (const sequence of sequences) {
@@ -396,11 +269,12 @@ Deno.serve(async (req) => {
           campaignsFailed++;
           continue;
         }
-        
+
         console.log(`Processing sequence: ${sequence.name} (ID: ${sequence.id})`);
 
-        // DEDUPLICATION FIX: Check for ANY existing campaign with this external_id for this team
-        // (not scoped to integration_id to catch orphaned duplicates from previous syncs)
+        // Dedupe: pick the OLDEST existing row for this (team, external_id)
+        // — not scoped to integration_id so we catch orphaned dupes from
+        // earlier syncs. Same pattern as the v1 version.
         const { data: existingCampaigns } = await supabase
           .from("synced_campaigns")
           .select("id, stats, is_linked, integration_id")
@@ -408,22 +282,21 @@ Deno.serve(async (req) => {
           .eq("external_campaign_id", String(sequence.id))
           .order("created_at", { ascending: true });
 
-        // Use the FIRST existing campaign (oldest) to prevent duplicates
-        const existingCampaign = existingCampaigns && existingCampaigns.length > 0 
-          ? existingCampaigns[0] 
+        const existingCampaign = existingCampaigns && existingCampaigns.length > 0
+          ? existingCampaigns[0]
           : null;
-        
-        // Log if we found duplicates (for debugging)
+
         if (existingCampaigns && existingCampaigns.length > 1) {
           console.log(`Found ${existingCampaigns.length} duplicate campaigns for ${sequence.id}, using oldest: ${existingCampaign?.id}`);
         }
 
         const existingStats = (existingCampaign?.stats as Record<string, unknown>) || {};
-        
-        // Preserve is_linked: if campaign exists, keep user's choice; if new, default to true
+
+        // Preserve is_linked: if campaign exists, keep user's choice; if
+        // new, default to true (matches v1 behavior).
         const isLinked = existingCampaign ? existingCampaign.is_linked : true;
 
-        // Preserve LinkedIn fields from existing stats
+        // Preserve LinkedIn fields from existing stats.
         const linkedinStats: Record<string, unknown> = {};
         for (const field of LINKEDIN_FIELDS) {
           if (existingStats[field] !== undefined) {
@@ -431,72 +304,41 @@ Deno.serve(async (req) => {
           }
         }
 
-        // Preserve email CSV upload fields from existing stats
+        // Preserve email CSV upload fields from existing stats.
         const emailUploadStats: Record<string, unknown> = {};
-        const hasEmailUpload = existingStats.emailDataSource === 'csv_upload';
         for (const field of EMAIL_UPLOAD_FIELDS) {
           if (existingStats[field] !== undefined) {
             emailUploadStats[field] = existingStats[field];
           }
         }
 
-        // Extract stats from V1 campaigns list (already fetched in bulk)
-        const v1Campaign = v1CampaignMap.get(sequence.id);
-        const apiStats = v1Campaign
-          ? extractStatsFromV1Campaign(v1Campaign)
-          : { sent: 0, delivered: 0, opens: 0, replies: 0, bounces: 0, optedOut: 0, outOfOffice: 0, peopleCount: 0, peopleFinished: 0, peopleActive: 0, peoplePaused: 0 };
-
-        if (!v1Campaign) {
-          console.warn(`  No V1 campaign data found for sequence ${sequence.id}, stats will be zero`);
-        }
-        console.log(`  Stats: sent=${apiStats.sent}, replies=${apiStats.replies}, opens=${apiStats.opens}`);
-
-        // Extract existing values for fallback logic
-        const existingPeopleCount = existingStats.peopleCount as number | undefined;
-        const existingSent = existingStats.sent as number | undefined;
-        const existingDelivered = existingStats.delivered as number | undefined;
-        const existingReplies = existingStats.replies as number | undefined;
-
-        // For sent/delivered/replies: if we have email upload data and the API returns 0,
-        // prefer the uploaded values (the API often can't retrieve these stats)
-        let finalSent = apiStats.sent || existingSent || 0;
-        let finalDelivered = apiStats.delivered || existingDelivered || 0;
-        let finalReplies = apiStats.replies || existingReplies || 0;
-
-        if (hasEmailUpload) {
-          // If API returns 0 but we have existing uploaded values, keep the uploaded values
-          if (!apiStats.sent && existingSent) finalSent = existingSent;
-          if (!apiStats.delivered && existingDelivered) finalDelivered = existingDelivered;
-          if (!apiStats.replies && existingReplies) finalReplies = existingReplies;
-          console.log(`  Email upload detected - preserving uploaded stats: sent=${finalSent}, delivered=${finalDelivered}, replies=${finalReplies}`);
-        }
-
-        // Merge: preserve existing stats, overlay API data, preserve LinkedIn + email upload stats
-        const mergedStats = {
-          ...existingStats,      // Preserve ALL existing stats
-          ...apiStats,           // Overlay with fresh API data (if available)
-          ...linkedinStats,      // Preserve LinkedIn fields from CSV uploads
-          ...emailUploadStats,   // Preserve email upload fields from CSV uploads
-          sent: finalSent,
-          delivered: finalDelivered,
-          replies: finalReplies,
-          // Keep peopleCount separate - it represents contacts enrolled, not emails sent
-          peopleCount: apiStats.peopleCount || existingPeopleCount || 0,
-          // Preserve replyTeamId from V3 sequence data
-          replyTeamId: sequence.teamId || (existingStats.replyTeamId as number) || undefined,
+        // Step 2 scope: no API stats fetched. We keep existing stats as-is
+        // (LinkedIn + CSV upload values are preserved). Step 3 will overlay
+        // fresh /v3/reporting numbers via generate-client-analysis.
+        const mergedStats: Record<string, unknown> = {
+          ...existingStats,
+          ...linkedinStats,
+          ...emailUploadStats,
+          // Keep replyTeamId fresh on the row for downstream reporting.
+          replyTeamId: sequence.teamId ?? (existingStats.replyTeamId as number | undefined) ?? undefined,
         };
 
-        // Update existing campaign or insert new one
-        // Use the existing campaign's ID if it exists to prevent duplicates
+        // Update vs insert — using the oldest existing row's ID preserves
+        // the campaign UUID across syncs (contacts/sequences/etc. all FK
+        // to it).
         let upsertedCampaignId: string | null = null;
         let campaignError: { message: string } | null = null;
-        
+
         if (existingCampaign) {
-          // UPDATE existing campaign (preserves the same UUID for contacts)
+          // UPDATE existing campaign. Setting source: 'reply_io' here
+          // ALSO fixes any row that was mislabeled by the prior v1 sync
+          // (which omitted source, defaulting to 'heyreach' via the
+          // column default — the diagnosed bug).
           const { error } = await supabase
             .from("synced_campaigns")
             .update({
-              integration_id: integrationId, // Update to current integration
+              integration_id: integrationId,
+              source: 'reply_io',
               name: String(sequence.name || 'Unnamed Sequence'),
               status: normalizeStatus(sequence.status),
               stats: mergedStats,
@@ -505,7 +347,7 @@ Deno.serve(async (req) => {
               updated_at: new Date().toISOString(),
             })
             .eq("id", existingCampaign.id);
-          
+
           if (error) {
             campaignError = error;
           } else {
@@ -513,12 +355,15 @@ Deno.serve(async (req) => {
             console.log(`Updated existing campaign ${existingCampaign.id} for sequence ${sequence.id}`);
           }
         } else {
-          // INSERT new campaign
+          // INSERT new campaign — source MUST be explicit. The column
+          // default is 'heyreach' (legacy), so omitting it silently
+          // mislabels.
           const { data, error } = await supabase
             .from("synced_campaigns")
             .insert({
               integration_id: integrationId,
               team_id: teamId,
+              source: 'reply_io',
               external_campaign_id: String(sequence.id),
               name: String(sequence.name || 'Unnamed Sequence'),
               status: normalizeStatus(sequence.status),
@@ -528,7 +373,7 @@ Deno.serve(async (req) => {
             })
             .select("id")
             .single();
-          
+
           if (error) {
             campaignError = error;
           } else {
@@ -544,18 +389,16 @@ Deno.serve(async (req) => {
         }
 
         campaignsProcessed++;
-        
-        // Track for contact sync
+
         if (upsertedCampaignId) {
           syncedCampaignIds.push({
             internal: upsertedCampaignId,
             external: String(sequence.id),
           });
         }
-        
-        // Small delay between campaigns for rate limiting
+
         await new Promise(resolve => setTimeout(resolve, 200));
-        
+
       } catch (sequenceError) {
         console.error(`Error processing sequence ${sequence.id}:`, sequenceError);
         campaignsFailed++;
@@ -564,12 +407,9 @@ Deno.serve(async (req) => {
 
     console.log(`Campaign sync complete: ${campaignsProcessed}/${sequences.length} sequences`);
 
-    // NOTE: Contact sync is handled separately via `sync-reply-contacts`
-
-    // Update integration status
     const finalStatus = campaignsFailed > 0 && campaignsProcessed === 0 ? "error" : "synced";
-    const syncError = campaignsFailed > 0 
-      ? `Synced ${campaignsProcessed}/${sequences.length} sequences (${campaignsFailed} failed)` 
+    const syncError = campaignsFailed > 0
+      ? `Synced ${campaignsProcessed}/${sequences.length} sequences (${campaignsFailed} failed)`
       : null;
 
     await supabase
