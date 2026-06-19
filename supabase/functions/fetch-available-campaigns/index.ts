@@ -156,10 +156,15 @@ Deno.serve(async (req) => {
       teamFiltered = false;
       effectiveTeamId = null;
     } else if (replyTeamId) {
+      // Workspace-vs-agency filter — see sync-reply-campaigns for the full
+      // rationale. Workspace keys return seq.teamId === null (the key is
+      // the isolation boundary); agency keys tag each row with its teamId.
+      // Include when teamId is null/undefined (workspace case) OR matches
+      // (agency case); only EXCLUDE when teamId is present and non-matching.
       effectiveTeamId = replyTeamId;
       const wanted = parseInt(replyTeamId, 10);
       const before = allSequences.length;
-      scopedSequences = allSequences.filter(seq => seq.teamId === wanted);
+      scopedSequences = allSequences.filter(seq => seq.teamId == null || seq.teamId === wanted);
       teamFiltered = true;
       console.log(`Filtered to workspace teamId=${wanted}: ${scopedSequences.length}/${before}`);
     } else {

@@ -242,14 +242,22 @@ Deno.serve(async (req) => {
     }
 
     if (replyTeamId) {
+      // Workspace-vs-agency filter. Workspace keys (the normal case) return
+      // sequences with teamId === null because the KEY itself is the
+      // isolation boundary — there's no peer team to disambiguate from.
+      // Agency keys return seq.teamId populated per-row, and we filter to
+      // the requested team. So: include a sequence iff its teamId is
+      // null/undefined (workspace case, key already scoped) OR matches the
+      // configured workspace (agency case). Only EXCLUDE when teamId is
+      // present AND non-matching.
       const wanted = parseInt(replyTeamId, 10);
       const before = sequences.length;
       sequences = sequences.filter(seq => {
-        if (seq.teamId === undefined) {
-          console.log(`Sequence ${seq.id} (${seq.name}) has no teamId, excluding`);
-          return false;
+        const keep = seq.teamId == null || seq.teamId === wanted;
+        if (!keep) {
+          console.log(`Sequence ${seq.id} (${seq.name}) teamId=${seq.teamId} ≠ ${wanted}, excluding`);
         }
-        return seq.teamId === wanted;
+        return keep;
       });
       console.log(`After workspace filter (teamId=${wanted}): ${sequences.length}/${before}`);
     }
