@@ -1124,6 +1124,16 @@ Deno.serve(async (req) => {
         connections_sent: totalConnectionsSent,
         connections_accepted: totalConnectionsAccepted,
         connection_accept_rate_pct: pct(totalConnectionsAccepted, totalConnectionsSent),
+        // Channel-split totals so the StatsGrid's "LinkedIn Messages Sent"
+        // and "Emails Sent" cards stay source-agnostic — mirrors the
+        // connections_sent / connections_accepted / opens / bounces
+        // pattern (those have summed across HR + RI / SL + RI from the
+        // start). Before these existed, the cards read heyreach.sent /
+        // smartlead.totals.sent directly, which under-reported every
+        // Reply.io-only client (CYPR's "LinkedIn Messages Sent" showed
+        // 0 instead of 658).
+        linkedin_messages_sent: heyreachStats.sent + replyIoStats.linkedin.sent,
+        email_sent: smartleadStats.totals.sent + replyIoStats.email.totals.sent,
         opens: totalOpens,
         open_rate_pct: pct(totalOpens, totalEmailSent),
         clicks: totalClicks,

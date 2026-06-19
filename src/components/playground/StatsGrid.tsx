@@ -6,14 +6,26 @@
 // — admin pulls it from client_analysis_snapshots, public pulls it from
 // the get-client-report payload.
 //
-// Card set (fixed order — admin and public render identically):
-//   1. Connection Requests Sent  ← stats.totals.connections_sent (HeyReach)
-//   2. Connections Accepted      ← stats.totals.connections_accepted (HeyReach)
+// Card set (fixed order — admin and public render identically). All six
+// cards read from stats.totals — source-agnostic by construction so any
+// new LinkedIn / email provider (HR, Reply.io LinkedIn channel, future)
+// folds in via the totals merge in generate-client-analysis, not via a
+// per-platform field read.
+//   1. Connection Requests Sent  ← totals.connections_sent          (HR + RI.linkedin)
+//   2. Connections Accepted      ← totals.connections_accepted      (HR + RI.linkedin)
 //                                  + connection_accept_rate_pct subtitle
-//   3. LinkedIn Messages Sent    ← stats.heyreach.sent (channel split)
-//   4. Emails Sent               ← stats.smartlead.totals.sent (channel split)
-//   5. Replies                   ← stats.totals.replies + reply_rate_pct subtitle
-//   6. Bounces                   ← stats.totals.bounces + bounce_rate_pct subtitle
+//   3. LinkedIn Messages Sent    ← totals.linkedin_messages_sent    (HR + RI.linkedin)
+//   4. Emails Sent               ← totals.email_sent                (SL + RI.email)
+//   5. Replies                   ← totals.replies                   (HR + SL + RI.linkedin + RI.email)
+//                                  + reply_rate_pct subtitle
+//   6. Bounces                   ← totals.bounces                   (SL + RI.email)
+//                                  + bounce_rate_pct subtitle
+//
+// Cards 3 + 4 retain a fallback chain to the legacy per-platform fields
+// (heyreach.sent / smartlead.totals.sent) so snapshots created before the
+// channel-split totals existed continue to render HR/SL numbers
+// correctly. They'll under-report Reply.io contribution until re-Generate,
+// which is the honest behavior (the old snapshot didn't see Reply.io).
 //
 // A Smartlead-only client sees 0 on the three LinkedIn cards (and vice versa)
 // rather than the old "show/hide by integration" behaviour — keeping the
@@ -46,6 +58,12 @@ export interface StatsSnapshot {
     connections_sent?: number;
     connections_accepted?: number;
     connection_accept_rate_pct?: number | null;
+    // Channel-split totals — populated by generate-client-analysis with
+    // HR.sent + RI.linkedin.sent and SL.sent + RI.email.totals.sent
+    // respectively. Optional because older snapshots predate them; cards
+    // 3 + 4 fall back to the per-platform fields when these are missing.
+    linkedin_messages_sent?: number;
+    email_sent?: number;
     opens?: number;
     open_rate_pct?: number | null;
     clicks?: number;
@@ -214,17 +232,21 @@ export function StatsGrid({
           subtitle={`${fmtPct(t?.connection_accept_rate_pct)} accepted`}
         />
 
-        {/* 3. LinkedIn Messages Sent (channel split — HeyReach only) */}
+        {/* 3. LinkedIn Messages Sent — source-agnostic via totals.
+            Fallback to heyreach.sent for snapshots created before
+            linkedin_messages_sent existed (those will under-report any
+            Reply.io contribution until re-Generate). */}
         <StatCard
           title="LinkedIn Messages Sent"
-          value={fmtNum(stats.heyreach?.sent ?? 0)}
+          value={fmtNum(t?.linkedin_messages_sent ?? stats.heyreach?.sent ?? 0)}
           icon={<Linkedin className="h-5 w-5 text-primary" />}
         />
 
-        {/* 4. Emails Sent (channel split — Smartlead only) */}
+        {/* 4. Emails Sent — same pattern. Fallback to smartlead.totals.sent
+            for older snapshots. */}
         <StatCard
           title="Emails Sent"
-          value={fmtNum(stats.smartlead?.totals?.sent ?? 0)}
+          value={fmtNum(t?.email_sent ?? stats.smartlead?.totals?.sent ?? 0)}
           icon={<Mail className="h-5 w-5 text-primary" />}
         />
 
