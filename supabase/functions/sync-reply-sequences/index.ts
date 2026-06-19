@@ -52,7 +52,10 @@ async function fetchWithRetry(
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       const headers: Record<string, string> = {
-        "X-Api-Key": apiKey,
+        // Reply.io v3 Bearer — same pattern as sync-reply-campaigns' fetchV3
+        // (Step 2 conversion). The endpoint at /v3/sequences/{id}/steps is
+        // already on v3, so this is auth-only — no path or shape change.
+        "Authorization": `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       };
       
