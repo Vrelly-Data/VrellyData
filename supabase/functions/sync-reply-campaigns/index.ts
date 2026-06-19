@@ -26,11 +26,25 @@ function getCorsHeaders(req: Request) {
 // items[] + hasMore. Workspace keys typically return all sequences in one or
 // two pages.
 //
-// Stats fetching is intentionally NOT included here (was the old V1
-// /campaigns sidecar). Step 3 will add the /v3/reporting/* endpoints to
-// generate-client-analysis; until then sync only writes campaign metadata
-// (name/status) and preserves any stats already on the row (LinkedIn /
-// email CSV uploads).
+// Stats (Step 3a): per-sequence POST /v3/reporting/{linkedin,emails}/overview
+// routed by the channel column written in Step 2.6.
+//   * channel='linkedin'     → /reporting/linkedin/overview
+//   * channel='email'        → /reporting/emails/overview (plural path)
+//   * channel='multichannel' → BOTH calls, merged
+//   * channel=null           → skip (Step 2.6's classifier refused to
+//                               guess; we honor that here)
+//
+// Failure isolation: a per-sequence reporting failure (rate-limit
+// exhaust, transient 5xx) leaves THAT sequence's existing stats
+// unchanged but does NOT fail the whole sync.
+//
+// Dashboard parity: the Messages Breakdown tooltip's LinkedIn section
+// reads outbound_integrations.stats_cache (NOT per-campaign stats), so
+// we ALSO aggregate the per-sequence linkedin* values into stats_cache
+// at end of sync — mirrors sync-heyreach-campaigns:210-219.
+//
+// Step 3b will add the /v3/reporting/* calls to generate-client-analysis
+// for the client report's stats_snapshot.reply_io section.
 // ---------------------------------------------------------------------------
 
 const REPLY_API_V3 = "https://api.reply.io/v3";
@@ -169,6 +183,117 @@ async function fetchSequenceStepsV3(
   return Array.isArray(resp) ? (resp as ReplyioStep[]) : [];
 }
 
+// ---- Step 3a: reporting helpers ------------------------------------------
+
+// Defensive numeric extraction — mirrors fetchSmartleadStats' pickNumber
+// pattern (generate-client-analysis:132-142). Tries each candidate key in
+// order, returning the first numeric value found; 0 if none match.
+function pickNumber(obj: Record<string, unknown>, keys: string[]): number {
+  for (const k of keys) {
+    const v = obj[k];
+    if (typeof v === 'number' && Number.isFinite(v)) return v;
+    if (typeof v === 'string' && v.trim() !== '' && !Number.isNaN(Number(v))) {
+      return Number(v);
+    }
+  }
+  return 0;
+}
+
+// Reply.io's 429 responses include Retry-After in seconds. Capped at 30s
+// to bound a worst-case wait; defaults to 2s if the header is missing or
+// non-numeric.
+function parseRetryAfter(header: string | null): number {
+  if (!header) return 2;
+  const n = Number(header);
+  if (Number.isFinite(n) && n > 0) return Math.min(n, 30);
+  return 2;
+}
+
+// POST /v3/reporting/{channel}/overview for a single sequence. One retry
+// on 429 honoring Retry-After. All other non-OK statuses throw with the
+// truncated body for log forensics.
+//
+//   'linkedin' → /reporting/linkedin/overview (singular path)
+//   'email'    → /reporting/emails/overview  (plural — Reply.io's own
+//                                              routing convention)
+async function fetchReplyIoReporting(
+  channel: 'linkedin' | 'email',
+  sequenceExternalId: number,
+  apiKey: string,
+): Promise<Record<string, unknown>> {
+  const path = channel === 'linkedin'
+    ? '/reporting/linkedin/overview'
+    : '/reporting/emails/overview';
+  const body = JSON.stringify({
+    filters: {
+      dateRangePreset: 'lastMonth',
+      sequenceIds: [sequenceExternalId],
+    },
+  });
+  const headers = {
+    "Authorization": `Bearer ${apiKey}`,
+    "Accept": "application/json",
+    "Content-Type": "application/json",
+  };
+  const doFetch = () => fetch(`${REPLY_API_V3}${path}`, { method: 'POST', headers, body });
+
+  let res = await doFetch();
+  if (res.status === 429) {
+    const wait = parseRetryAfter(res.headers.get('Retry-After'));
+    console.log(`  reporting/${channel} 429 on seq ${sequenceExternalId}, retrying after ${wait}s`);
+    await new Promise(r => setTimeout(r, wait * 1000));
+    res = await doFetch();
+  }
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`reporting/${channel} ${res.status}: ${errText.slice(0, 200)}`);
+  }
+
+  const json = await res.json().catch(() => ({}));
+  return (json && typeof json === 'object') ? json as Record<string, unknown> : {};
+}
+
+// Shape a /reporting/linkedin/overview response into the per-row stats
+// fields the dashboard reads. Source-agnostic keys (sent, replies) are
+// populated so the CampaignsTable columns show real LinkedIn numbers
+// instead of '-' (HR's pattern, which we're improving on). LinkedIn-
+// specific keys mirror sync-heyreach-campaigns' stats_cache shape so
+// the Messages Breakdown tooltip aggregates cleanly across HR + Reply.io.
+//
+// Per Step 3a spec: sent = messagesSent ONLY (does NOT include
+// connectionsSent — connection requests are reported separately in
+// linkedinConnectionsSent and aren't conceptually "messages").
+function formatLinkedinStats(raw: Record<string, unknown>): Record<string, number> {
+  const messagesSent        = pickNumber(raw, ['messagesSent']);
+  const replied             = pickNumber(raw, ['replied']);
+  const connectionsSent     = pickNumber(raw, ['connectionsSent']);
+  const connectionsAccepted = pickNumber(raw, ['connectionsAccepted']);
+  return {
+    sent: messagesSent,
+    replies: replied,
+    linkedinMessagesSent: messagesSent,
+    linkedinReplies: replied,
+    linkedinConnectionsSent: connectionsSent,
+    linkedinConnectionsAccepted: connectionsAccepted,
+  };
+}
+
+// Shape a /reporting/emails/overview response into the per-row stats
+// fields the dashboard reads. Keys mirror sync-smartlead-campaigns'
+// per-row stats EXACTLY so the same dashboard cells work without any
+// per-platform branch.
+function formatEmailStats(raw: Record<string, unknown>): Record<string, number> {
+  return {
+    // delivered ≈ "successfully sent" — same semantic as SL's `sent`.
+    sent: pickNumber(raw, ['delivered']),
+    opens: pickNumber(raw, ['opened']),
+    replies: pickNumber(raw, ['replied']),
+    bounces: pickNumber(raw, ['bounced']),
+    peopleCount: pickNumber(raw, ['contacted']),
+  };
+}
+
 // Walk /v3/sequences with top + skip until hasMore=false or we get a short
 // read. Safety cap at 10k to bound a runaway loop (typical workspace has
 // dozens, not thousands).
@@ -250,7 +375,7 @@ Deno.serve(async (req) => {
 
     const { data: integration, error: integrationError } = await supabase
       .from("outbound_integrations")
-      .select("id, team_id, api_key_encrypted, platform, reply_team_id")
+      .select("id, team_id, api_key_encrypted, platform, reply_team_id, stats_cache")
       .eq("id", integrationId)
       .single();
 
@@ -316,6 +441,33 @@ Deno.serve(async (req) => {
 
     const syncedCampaignIds: { internal: string; external: string }[] = [];
 
+    // Step 3a: per-sync aggregators + tripwires.
+    //
+    // loggedLinkedinKeys / loggedEmailKeys — log the first /reporting
+    // response's top-level keys ONCE per sync. The response fields are
+    // verified against CYPR but logging is a cheap tripwire if Reply.io
+    // changes the shape later (same idea as fetchSmartleadStats'
+    // analyticsKeysLogged flag).
+    //
+    // cacheLinkedin* — running sum across this integration's linkedin +
+    // multichannel sequences. Folded into outbound_integrations.stats_cache
+    // after the loop so the Messages Breakdown tooltip sees Reply.io
+    // contribution alongside HR's.
+    //
+    // linkedinEligibleCount — how many sequences we ATTEMPTED LinkedIn
+    // reporting for. Drives the post-loop stats_cache write decision:
+    // 0 means no linkedin/multichannel sequences exist, so leave cache
+    // untouched; >0 means write the sums even if some calls failed
+    // (zeros are honest — "we couldn't get data this sync" — and the
+    // next successful sync overwrites).
+    let loggedLinkedinKeys = false;
+    let loggedEmailKeys = false;
+    let cacheLinkedinMessagesSent = 0;
+    let cacheLinkedinReplies = 0;
+    let cacheLinkedinConnectionsSent = 0;
+    let cacheLinkedinConnectionsAccepted = 0;
+    let linkedinEligibleCount = 0;
+
     for (const sequence of sequences) {
       try {
         if (!sequence.id || !sequence.name) {
@@ -366,17 +518,6 @@ Deno.serve(async (req) => {
           }
         }
 
-        // Step 2 scope: no API stats fetched. We keep existing stats as-is
-        // (LinkedIn + CSV upload values are preserved). Step 3 will overlay
-        // fresh /v3/reporting numbers via generate-client-analysis.
-        const mergedStats: Record<string, unknown> = {
-          ...existingStats,
-          ...linkedinStats,
-          ...emailUploadStats,
-          // Keep replyTeamId fresh on the row for downstream reporting.
-          replyTeamId: sequence.teamId ?? (existingStats.replyTeamId as number | undefined) ?? undefined,
-        };
-
         // Per-sequence channel classification. Reply.io is the only
         // multichannel platform we sync — HR and SL hardcode their channel
         // at the sync site, but a Reply.io sequence can be LinkedIn-only,
@@ -395,6 +536,92 @@ Deno.serve(async (req) => {
           const msg = stepsErr instanceof Error ? stepsErr.message : String(stepsErr);
           console.warn(`  Failed to fetch steps for sequence ${sequence.id}, leaving channel unchanged: ${msg}`);
         }
+
+        // Step 3a: route reporting fetch by channel. Per-channel failures
+        // are isolated — a 429 on the linkedin call for a multichannel
+        // sequence still lets us write the email half. A pure-channel
+        // failure leaves THIS row's existing stats untouched and the
+        // loop continues to the next sequence.
+        let linkedinRaw: Record<string, unknown> | null = null;
+        let emailRaw: Record<string, unknown> | null = null;
+
+        if (classifiedChannel === 'linkedin' || classifiedChannel === 'multichannel') {
+          linkedinEligibleCount++;
+          try {
+            linkedinRaw = await fetchReplyIoReporting('linkedin', sequence.id, apiKey);
+            if (!loggedLinkedinKeys) {
+              console.log(`[reporting/linkedin] first-call response keys for seq ${sequence.id}:`, Object.keys(linkedinRaw));
+              loggedLinkedinKeys = true;
+            }
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            console.warn(`  reporting/linkedin failed for seq ${sequence.id}, leaving existing stats: ${msg}`);
+          }
+        }
+
+        if (classifiedChannel === 'email' || classifiedChannel === 'multichannel') {
+          try {
+            emailRaw = await fetchReplyIoReporting('email', sequence.id, apiKey);
+            if (!loggedEmailKeys) {
+              console.log(`[reporting/emails] first-call response keys for seq ${sequence.id}:`, Object.keys(emailRaw));
+              loggedEmailKeys = true;
+            }
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            console.warn(`  reporting/emails failed for seq ${sequence.id}, leaving existing stats: ${msg}`);
+          }
+        }
+
+        // Compose the reporting stats overlay. Multichannel merges both
+        // shapes per spec: linkedin's keys verbatim + email's source-
+        // agnostic keys, with `sent` and `replies` SUMMED across channels.
+        let reportingStats: Record<string, unknown> = {};
+        if (linkedinRaw) {
+          const li = formatLinkedinStats(linkedinRaw);
+          reportingStats = { ...li, reply_io_raw_linkedin_reporting: linkedinRaw };
+          // Accumulate into the integration-level stats_cache write.
+          cacheLinkedinMessagesSent       += li.linkedinMessagesSent;
+          cacheLinkedinReplies            += li.linkedinReplies;
+          cacheLinkedinConnectionsSent    += li.linkedinConnectionsSent;
+          cacheLinkedinConnectionsAccepted += li.linkedinConnectionsAccepted;
+        }
+        if (emailRaw) {
+          const em = formatEmailStats(emailRaw);
+          if (linkedinRaw) {
+            // Multichannel — overlay email metrics on top of LI's. `sent`
+            // and `replies` SUM across channels so the dashboard reflects
+            // total outreach volume; the LI-prefixed keys stay isolated
+            // for the LinkedIn tooltip aggregation.
+            reportingStats = {
+              ...reportingStats,
+              sent:    ((reportingStats.sent    as number | undefined) ?? 0) + em.sent,
+              replies: ((reportingStats.replies as number | undefined) ?? 0) + em.replies,
+              opens:       em.opens,
+              bounces:     em.bounces,
+              peopleCount: em.peopleCount,
+              reply_io_raw_email_reporting: emailRaw,
+            };
+          } else {
+            // Pure email.
+            reportingStats = { ...em, reply_io_raw_email_reporting: emailRaw };
+          }
+        }
+
+        // Compose mergedStats. Spread order matters:
+        //   existingStats         — baseline (everything currently there)
+        //   reportingStats        — overlay fresh API stats (Step 3a)
+        //   linkedinStats         — re-overlay user-curated CSV uploads
+        //                            (these WIN over fresh API numbers —
+        //                            same precedence the v1 sync had)
+        //   emailUploadStats      — re-overlay CSV email uploads
+        //   replyTeamId           — pinned fresh from sequence.teamId
+        const mergedStats: Record<string, unknown> = {
+          ...existingStats,
+          ...reportingStats,
+          ...linkedinStats,
+          ...emailUploadStats,
+          replyTeamId: sequence.teamId ?? (existingStats.replyTeamId as number | undefined) ?? undefined,
+        };
 
         // Update vs insert — using the oldest existing row's ID preserves
         // the campaign UUID across syncs (contacts/sequences/etc. all FK
@@ -492,6 +719,32 @@ Deno.serve(async (req) => {
       ? `Synced ${campaignsProcessed}/${sequences.length} sequences (${campaignsFailed} failed)`
       : null;
 
+    // Step 3a: fold LinkedIn aggregates into outbound_integrations.stats_cache
+    // so the Messages Breakdown tooltip (usePlaygroundStats:182-188) sees
+    // Reply.io's LinkedIn contribution alongside HR's. Only write when at
+    // least one linkedin/multichannel sequence was processed — if none were
+    // eligible this sync, leave the prior stats_cache alone rather than
+    // wiping it.
+    //
+    // The spread preserves any other keys an existing stats_cache might
+    // carry (future-proofs for non-linkedin keys); the linkedin* keys are
+    // replaced wholesale with this sync's aggregates (zeros included —
+    // honest "no data fetched" when all per-sequence reporting failed).
+    let statsCachePatch: Record<string, unknown> | null = null;
+    if (linkedinEligibleCount > 0) {
+      const existingStatsCache =
+        (integration.stats_cache as Record<string, unknown> | null) ?? {};
+      statsCachePatch = {
+        ...existingStatsCache,
+        linkedinMessagesSent: cacheLinkedinMessagesSent,
+        linkedinReplies: cacheLinkedinReplies,
+        linkedinConnectionsSent: cacheLinkedinConnectionsSent,
+        linkedinConnectionsAccepted: cacheLinkedinConnectionsAccepted,
+        cached_at: new Date().toISOString(),
+      };
+      console.log(`stats_cache linkedin sums: messagesSent=${cacheLinkedinMessagesSent}, replies=${cacheLinkedinReplies}, connectionsSent=${cacheLinkedinConnectionsSent}, connectionsAccepted=${cacheLinkedinConnectionsAccepted} (over ${linkedinEligibleCount} eligible sequences)`);
+    }
+
     await supabase
       .from("outbound_integrations")
       .update({
@@ -499,6 +752,7 @@ Deno.serve(async (req) => {
         sync_error: syncError,
         last_synced_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
+        ...(statsCachePatch ? { stats_cache: statsCachePatch } : {}),
       })
       .eq("id", integrationId);
 
