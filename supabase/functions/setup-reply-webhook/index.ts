@@ -14,10 +14,54 @@ function getCorsHeaders(req: Request) {
   };
 }
 
-// Reply.io V2 API
-const WEBHOOK_API_BASE = 'https://api.reply.io/api/v2/webhooks';
+// ---------------------------------------------------------------------------
+// Reply.io v3 webhooks (deprecated v2 /api/v2/webhooks removed — Foundation
+// phase 5/6, paired with reply-webhook #4 in the same commit).
+//
+// Auth: X-Api-Key → Authorization: Bearer (template from 8a37994 et al).
+//
+// Endpoints:
+//   v2 GET  /api/v2/webhooks         → v3 GET    /v3/webhooks
+//   v2 POST /api/v2/webhooks         → v3 POST   /v3/webhooks
+//   v2 DELETE /api/v2/webhooks/{id}  → v3 DELETE /v3/webhooks/{id}
+//
+// Schema mapping (probed live against the dev API key, 2026-06-19 —
+// 4 test webhooks created + deleted to confirm):
+//
+//   v2 request                          → v3 request
+//   ──────────────────────────────────────────────────────────────
+//   { event: 'email_replied',          | { eventType: 'email_replied',
+//     url: '...',                      |   url: '...',
+//     payload: {                       |   payloadConfig: {
+//       includeEmailText,              |     includeEmailText,
+//       includeProspectCustomFields,   |     includeProspectCustomFields,
+//       includeEmailUrl,               |     includeEmailUrl,
+//     }}                               |   }}
+//
+//   v2 GET response:                    v3 GET response:
+//     Array<{id, url, event, ...}>       { items: [...], hasMore: bool }
+//
+//   v3 POST 201 response shape:
+//     { id: number (numeric, NOT string), eventType, url, scope: 'personal',
+//       enabled: true, createdAt: timestamp, payloadConfig: {...} }
+//
+//   v3 DELETE returns HTTP 204 No Content.
+//
+// Event-type vocabulary (verified from docs.reply.io/llms-full.txt):
+// snake_case names — IDENTICAL to v2. All 5 of our ALL_EVENT_TYPES map 1:1
+// to v3, no vocab change needed.
+//
+// Idempotency: same delete-then-create pattern as the v2 version. Lists
+// webhooks via /v3/webhooks (items[]/hasMore envelope — different from
+// v2's raw array), iterates to find ones pointing at our reply-webhook
+// URL, deletes each, then registers fresh subscriptions for all 5 events.
+// ---------------------------------------------------------------------------
 
-// Events to subscribe to (one API call each)
+const WEBHOOK_API_BASE = 'https://api.reply.io/v3/webhooks';
+
+// Events to subscribe to (one API call each). Vocabulary identical to v2
+// per docs.reply.io/llms-full.txt; the snake_case names map 1:1 to the
+// v3 eventType enum.
 const ALL_EVENT_TYPES = [
   'email_replied',
   'linkedin_message_replied',
@@ -30,6 +74,21 @@ const ALL_EVENT_TYPES = [
 function keyFingerprint(key: string): string {
   if (!key || key.length < 4) return '****';
   return `****${key.slice(-4)}`;
+}
+
+interface V3WebhooksPage {
+  items?: Array<{ id?: number | string; url?: string; eventType?: string }>;
+  hasMore?: boolean;
+}
+
+interface V3WebhookCreated {
+  id: number;
+  eventType: string;
+  url: string;
+  scope?: string;
+  enabled?: boolean;
+  createdAt?: string;
+  payloadConfig?: Record<string, boolean>;
 }
 
 Deno.serve(async (req) => {
@@ -107,25 +166,40 @@ Deno.serve(async (req) => {
 
     console.log('API key fingerprint:', keyFingerprint(apiKey));
 
-    // Step 1: Delete existing webhooks that point to our endpoint
+    // Bearer auth headers for all v3 calls below.
+    const v3AuthHeaders = {
+      'Authorization': `Bearer ${apiKey}`,
+      'Accept': 'application/json',
+      'Content-Type': 'application/json',
+    };
+
+    // Step 1: Delete existing webhooks that point at our reply-webhook
+    // URL. v3 list response is an items[]/hasMore envelope (NOT the raw
+    // array v2 returned). We paginate through it to ensure cleanup is
+    // complete even when an integration has many webhooks.
     console.log('Fetching existing webhooks to clean up duplicates...');
     try {
-      const listResponse = await fetch(WEBHOOK_API_BASE, {
-        method: 'GET',
-        headers: { 'x-api-key': apiKey },
-      });
-
-      if (listResponse.ok) {
-        const existingWebhooks = await listResponse.json();
-        const webhooksArray = Array.isArray(existingWebhooks) ? existingWebhooks : [];
+      let skip = 0;
+      const pageSize = 100;
+      for (let page = 1; page <= 50; page++) {
+        const listResponse = await fetch(`${WEBHOOK_API_BASE}?top=${pageSize}&skip=${skip}`, {
+          method: 'GET',
+          headers: v3AuthHeaders,
+        });
+        if (!listResponse.ok) {
+          console.log('Could not list existing webhooks, status:', listResponse.status);
+          break;
+        }
+        const payload = (await listResponse.json()) as V3WebhooksPage;
+        const webhooksArray = Array.isArray(payload.items) ? payload.items : [];
 
         for (const wh of webhooksArray) {
-          if (wh.url && wh.url.includes('reply-webhook') && wh.id) {
+          if (wh.url && wh.url.includes('reply-webhook') && wh.id !== undefined) {
             console.log('Deleting existing webhook:', wh.id, wh.url);
             try {
               const delRes = await fetch(`${WEBHOOK_API_BASE}/${wh.id}`, {
                 method: 'DELETE',
-                headers: { 'x-api-key': apiKey },
+                headers: v3AuthHeaders,
               });
               console.log('Delete response status:', delRes.status);
             } catch (e) {
@@ -133,14 +207,21 @@ Deno.serve(async (req) => {
             }
           }
         }
-      } else {
-        console.log('Could not list existing webhooks, status:', listResponse.status);
+
+        if (payload.hasMore === false) break;
+        if (webhooksArray.length < pageSize) break;
+        skip += webhooksArray.length;
       }
     } catch (e) {
       console.log('Failed to list existing webhooks, continuing:', e);
     }
 
-    // Step 2: Register one webhook per event type
+    // Step 2: Register one webhook per event type. v3 field names:
+    //   eventType    (was 'event' in v2)
+    //   url          (unchanged)
+    //   payloadConfig (was 'payload' in v2 — v3 silently DROPS the v2
+    //                  'payload' key, defaulting all flags to false,
+    //                  which is why we use 'payloadConfig' here)
     const webhookUrl = `${supabaseUrl}/functions/v1/reply-webhook`;
     console.log('Webhook URL:', webhookUrl);
 
@@ -152,14 +233,11 @@ Deno.serve(async (req) => {
 
       const response = await fetch(WEBHOOK_API_BASE, {
         method: 'POST',
-        headers: {
-          'x-api-key': apiKey,
-          'Content-Type': 'application/json',
-        },
+        headers: v3AuthHeaders,
         body: JSON.stringify({
-          event: eventType,
+          eventType,
           url: webhookUrl,
-          payload: {
+          payloadConfig: {
             includeEmailUrl: false,
             includeEmailText: true,
             includeProspectCustomFields: true,
@@ -168,13 +246,13 @@ Deno.serve(async (req) => {
       });
 
       const responseText = await response.text();
-      console.log(`V2 response for ${eventType}:`, response.status, responseText.slice(0, 300));
+      console.log(`v3 response for ${eventType}: ${response.status} ${responseText.slice(0, 300)}`);
 
       if (response.ok || response.status === 201) {
         try {
-          const data = JSON.parse(responseText);
-          if (data.id) {
-            createdIds.push(data.id.toString());
+          const data = JSON.parse(responseText) as V3WebhookCreated;
+          if (data.id !== undefined && data.id !== null) {
+            createdIds.push(String(data.id));
           }
         } catch {
           console.log('Could not parse response as JSON for', eventType);
@@ -205,7 +283,10 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Step 3: Store webhook IDs and update status
+    // Step 3: Store webhook IDs and update status. webhook_subscription_id
+    // is a comma-joined list of all created webhook ids (same format as
+    // the v2 path used) — kept stable so any downstream readers don't
+    // need updating.
     const { error: updateError } = await supabase
       .from('outbound_integrations')
       .update({

@@ -6,7 +6,51 @@ const corsHeaders = {
     'authorization, x-client-info, apikey, content-type',
 };
 
-// V2 PascalCase → snake_case event type mapping
+// ---------------------------------------------------------------------------
+// Reply.io v3 webhook receiver (Foundation phase 4/6, paired with
+// setup-reply-webhook #5 in the same commit).
+//
+// The v3 PAYLOAD SHAPE Reply.io fires at us is UNVERIFIED — we registered
+// v3 webhooks via /v3/webhooks in #5 but haven't received a real fire yet.
+// Two safeguards:
+//
+//   1. Defensive multi-path extraction below: for each field we care about
+//      (eventType, teamId, contact email, etc.) we try the v2 path first,
+//      then likely v3 paths, then top-level. The pick() helper short-
+//      circuits on the first non-empty value. If v3 keeps any v2 path
+//      identical, we use it; if v3 renames, we fall through to the v3
+//      candidate.
+//
+//   2. First-call payload logger (gated on the module-scope flag
+//      loggedFirstPayloadShape) dumps the FULL top-level structure +
+//      one-level-deep keys for every nested object. Fires once per
+//      worker process lifetime on the first non-OPTIONS POST. Tightens
+//      the parser after we read the live shape from POST /v3/webhooks/{id}/test.
+//
+// Event-name vocabulary: v2 used PascalCase event.event.type (e.g.
+// 'EmailReplied') which we mapped to snake_case. v3 webhook docs use
+// snake_case directly. EVENT_TYPE_MAP still handles the v2 PascalCase
+// in case v3 keeps emitting it; the snake_case path is the new primary.
+// ---------------------------------------------------------------------------
+
+// Module-scope tripwire: log full payload structure ONCE per worker
+// process on the first non-OPTIONS POST. Tightens the parser after live
+// shape capture.
+let loggedFirstPayloadShape = false;
+
+// Pick the first non-empty value across candidate paths. Falsy =
+// undefined / null / empty string. Used to make the parser defensive
+// across the unknown v3 vs known v2 shape.
+function pick<T>(...candidates: (T | undefined | null)[]): T | undefined {
+  for (const c of candidates) {
+    if (c !== undefined && c !== null && c !== '') return c;
+  }
+  return undefined;
+}
+
+// V2 PascalCase → snake_case event type mapping (preserved — v3 may
+// send snake_case directly, but we fall through this map for v2-shaped
+// payloads.)
 const EVENT_TYPE_MAP: Record<string, string> = {
   EmailReplied: 'email_replied',
   LinkedinMessageReplied: 'linkedin_message_replied',
@@ -22,35 +66,167 @@ Deno.serve(async (req) => {
   }
 
   try {
-    // Parse the V2 payload
+    // Parse the webhook payload. Shape is one of:
+    //   * v2 (legacy): { event: { type: 'EmailReplied', TeamId, UserId },
+    //                    contact_fields: { email, first_name, ... },
+    //                    sequence_fields: { id }, reply_text, ... }
+    //   * v3 (unverified): unknown shape — first-call logger dumps the
+    //                      structure so we can confirm.
     const event = await req.json();
-    console.log('Received V2 webhook payload:', JSON.stringify(event).substring(0, 500));
 
-    const rawEventType = event.event?.type || '';
+    // First-call shape log: dumps the full top-level structure + the
+    // keys of every nested object so we can identify the v3 layout the
+    // moment the first real fire arrives. Module-scope guard means this
+    // runs at most once per worker process — won't spam logs.
+    if (!loggedFirstPayloadShape) {
+      const top = event as Record<string, unknown>;
+      const topKeys = top && typeof top === 'object' ? Object.keys(top) : [];
+      const nestedShape: Record<string, string | string[]> = {};
+      for (const k of topKeys) {
+        const v = top[k];
+        if (v && typeof v === 'object' && !Array.isArray(v)) {
+          nestedShape[k] = Object.keys(v as Record<string, unknown>);
+        } else if (Array.isArray(v)) {
+          nestedShape[k] = `Array(len=${v.length})`;
+        } else {
+          nestedShape[k] = typeof v;
+        }
+      }
+      console.log('[reply-webhook] first-call payload top-level keys:', topKeys);
+      console.log('[reply-webhook] first-call payload nested shape:', JSON.stringify(nestedShape));
+      console.log('[reply-webhook] first-call payload preview (1KB):', JSON.stringify(event).substring(0, 1024));
+      loggedFirstPayloadShape = true;
+    } else {
+      console.log('Received webhook payload:', JSON.stringify(event).substring(0, 500));
+    }
+
+    // ── Defensive field extraction across v2 + likely v3 paths ──
+    // Each pick() chain: v2 path first, then v3-candidate paths, then
+    // top-level fallbacks. First-call log surfaces the actual structure;
+    // tighten these after the test-fire confirms shapes.
+
+    // Event type — v2: event.event.type (PascalCase); v3: likely
+    // event.eventType or top-level event.type (snake_case)
+    const rawEventType = String(
+      pick(
+        event.event?.type,
+        event.eventType,
+        event.event_type,
+        event.type,
+      ) ?? ''
+    );
+    // Normalize through the v2 PascalCase map (no-op when input is already snake_case)
     const eventType = EVENT_TYPE_MAP[rawEventType] || rawEventType;
-    const teamId = event.event?.TeamId?.toString() || '';
-    const userId = event.event?.UserId?.toString() || '';
 
-    // Contact fields
-    const contactEmail = event.contact_fields?.email || '';
-    const firstName = event.contact_fields?.first_name || '';
-    const lastName = event.contact_fields?.last_name || '';
-    const fullName = event.contact_fields?.full_name || `${firstName} ${lastName}`.trim();
-    const linkedinUrl = event.contact_fields?.linkedin_profile_url || '';
-    const company = event.contact_fields?.company || '';
-    const jobTitle = event.contact_fields?.title || '';
-    const contactId = event.contact_fields?.id?.toString() || '';
+    // Team ID — v2: event.event.TeamId (PascalCase, nested); v3: any of
+    // event.teamId / event.team_id / event.event.teamId
+    const teamId = String(
+      pick(
+        event.event?.TeamId,
+        event.teamId,
+        event.team_id,
+        event.event?.teamId,
+      ) ?? ''
+    );
 
-    // Channel detection
+    // User ID (informational only — used in the no-match log)
+    const userId = String(
+      pick(
+        event.event?.UserId,
+        event.userId,
+        event.user_id,
+        event.event?.userId,
+      ) ?? ''
+    );
+
+    // Contact fields. v2 nested under contact_fields; v3 likely under
+    // contact or top-level.
+    const contactEmail = String(
+      pick(
+        event.contact_fields?.email,
+        event.contact?.email,
+        event.email,
+      ) ?? ''
+    );
+    const firstName = String(
+      pick(
+        event.contact_fields?.first_name,
+        event.contact?.firstName,
+        event.contact?.first_name,
+        event.firstName,
+      ) ?? ''
+    );
+    const lastName = String(
+      pick(
+        event.contact_fields?.last_name,
+        event.contact?.lastName,
+        event.contact?.last_name,
+        event.lastName,
+      ) ?? ''
+    );
+    const fullName = String(
+      pick(
+        event.contact_fields?.full_name,
+        event.contact?.fullName,
+        event.contact?.full_name,
+      ) ?? `${firstName} ${lastName}`.trim()
+    );
+    const linkedinUrl = String(
+      pick(
+        event.contact_fields?.linkedin_profile_url,
+        event.contact_fields?.linkedinUrl,
+        event.contact?.linkedInUrl,
+        event.contact?.linkedinUrl,
+        event.contact?.linkedin_profile_url,
+      ) ?? ''
+    );
+    const company = String(
+      pick(
+        event.contact_fields?.company,
+        event.contact?.company,
+      ) ?? ''
+    );
+    const jobTitle = String(
+      pick(
+        event.contact_fields?.title,
+        event.contact?.title,
+      ) ?? ''
+    );
+    const contactId = String(
+      pick(
+        event.contact_fields?.id,
+        event.contact?.id,
+        event.contactId,
+      ) ?? ''
+    );
+
+    // Channel detection — derive from the normalized event type.
     const channel = rawEventType.toLowerCase().includes('linkedin') ? 'linkedin' : 'email';
 
-    // Reply text
-    const replyText = event.reply_text || event.reply_message_url || `${channel} reply received`;
+    // Reply text — v2 uses event.reply_text / event.reply_message_url
+    // (top-level). v3 candidates added defensively; if none present,
+    // fall back to the channel descriptor (preserved v2 behavior).
+    const replyText = String(
+      pick(
+        event.reply_text,
+        event.replyText,
+        event.reply_message_url,
+        event.replyMessageUrl,
+        event.message,
+      ) ?? `${channel} reply received`
+    );
 
-    // Campaign ID
-    const campaignId = event.sequence_fields?.id?.toString() || '';
+    // Campaign ID — v2: event.sequence_fields.id; v3: likely
+    // event.sequenceId or top-level
+    const campaignId = String(
+      pick(
+        event.sequence_fields?.id,
+        event.sequenceId,
+        event.sequence?.id,
+      ) ?? ''
+    );
 
-    console.log(`V2 webhook: event=${eventType} teamId=${teamId} email=${contactEmail} campaign=${campaignId}`);
+    console.log(`webhook parsed: event=${eventType} teamId=${teamId} email=${contactEmail} campaign=${campaignId}`);
 
     // Initialize Supabase
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
