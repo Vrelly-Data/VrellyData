@@ -5,9 +5,17 @@ export interface SyncedCampaign {
   id: string;
   name: string;
   status: string | null;
-  // Platform tag: 'heyreach' (LinkedIn) | 'smartlead' (email) | 'reply_io' (email).
-  // Drives the channel badge in CampaignsTable.
+  // Platform tag: 'heyreach' | 'smartlead' | 'reply_io'. Used for grouping
+  // and "where did this row come from" — but NOT for channel determination
+  // (Reply.io is multichannel). Use `channel` for that.
   source: string | null;
+  // Channel: 'linkedin' | 'email' | 'multichannel' | null. Written at sync
+  // time by each sync function — HR/SL hardcode it (single-channel
+  // platforms); sync-reply-campaigns derives it per-sequence from the
+  // step types. Drives the channel badge in CampaignsTable. NULL on
+  // Reply.io rows that haven't been re-synced since the 20260619130000
+  // migration, or on sequences with neither email nor linkedIn steps.
+  channel: string | null;
   stats: {
     peopleCount?: number;
     sent?: number;
@@ -28,7 +36,7 @@ export function useSyncedCampaigns(onlyLinked: boolean = true) {
     queryFn: async (): Promise<SyncedCampaign[]> => {
       let query = supabase
         .from('synced_campaigns')
-        .select('id, name, status, source, stats, updated_at, external_campaign_id, is_linked');
+        .select('id, name, status, source, channel, stats, updated_at, external_campaign_id, is_linked');
 
       // Filter to only linked campaigns if requested
       if (onlyLinked) {

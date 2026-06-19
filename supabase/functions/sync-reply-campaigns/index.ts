@@ -77,9 +77,43 @@ interface V3SequencesPage {
   hasMore?: boolean;
 }
 
+// One step from GET /v3/sequences/{id}/steps. We only need `type` for
+// channel classification — Reply.io's step.type values are camelCase:
+// 'email' / 'linkedIn' / 'condition' / 'task' / 'call' / 'sms' /
+// 'whatsApp' / 'zapier' (verified against CYPR seq 1704210).
+interface ReplyioStep {
+  id?: number;
+  type?: string;
+}
+
 // v3 returns status as a lowercase-friendly string already; just normalize.
 function normalizeStatus(status: unknown): string {
   return typeof status === 'string' ? status.toLowerCase() : 'unknown';
+}
+
+// Classify a sequence as 'linkedin' / 'email' / 'multichannel' / null
+// based on which outreach step types are present. Structural steps
+// (condition / task) and out-of-scope channels (call / sms / whatsApp /
+// zapier) are IGNORED — they don't change whether the sequence is a
+// LinkedIn or email play.
+//
+// 'linkedIn' is the exact camelCase Reply.io returns (verified on
+// CYPR data — 14 linkedIn + 3 condition for seq 1704210).
+//
+// Returns null when the sequence has neither email nor linkedIn steps
+// (e.g. a pure-condition skeleton); we refuse to guess in that case so
+// the UI shows "no badge" rather than a wrong one.
+function classifyChannel(steps: ReplyioStep[]): string | null {
+  let hasEmail = false;
+  let hasLinkedIn = false;
+  for (const step of steps) {
+    if (step.type === 'email') hasEmail = true;
+    else if (step.type === 'linkedIn') hasLinkedIn = true;
+  }
+  if (hasEmail && hasLinkedIn) return 'multichannel';
+  if (hasLinkedIn) return 'linkedin';
+  if (hasEmail) return 'email';
+  return null;
 }
 
 // Bearer-authed v3 fetcher.
@@ -121,6 +155,18 @@ async function fetchV3WithRetry<T = unknown>(
     }
   }
   throw new Error(`Max retries exceeded for ${endpoint}`);
+}
+
+// Fetch the steps of a single sequence for channel classification.
+// /v3/sequences/{id}/steps returns a DIRECT ARRAY (not wrapped in items[])
+// — verified against the live CYPR API and matches what
+// sync-reply-sequences already consumes.
+async function fetchSequenceStepsV3(
+  sequenceId: number,
+  apiKey: string,
+): Promise<ReplyioStep[]> {
+  const resp = await fetchV3WithRetry<unknown>(`/sequences/${sequenceId}/steps`, apiKey);
+  return Array.isArray(resp) ? (resp as ReplyioStep[]) : [];
 }
 
 // Walk /v3/sequences with top + skip until hasMore=false or we get a short
@@ -331,6 +377,25 @@ Deno.serve(async (req) => {
           replyTeamId: sequence.teamId ?? (existingStats.replyTeamId as number | undefined) ?? undefined,
         };
 
+        // Per-sequence channel classification. Reply.io is the only
+        // multichannel platform we sync — HR and SL hardcode their channel
+        // at the sync site, but a Reply.io sequence can be LinkedIn-only,
+        // email-only, or mixed, and the /v3/sequences list response carries
+        // no channel hint. So we pay one extra API call per sequence to
+        // inspect its steps. `classifiedChannel === undefined` means the
+        // steps fetch failed (rate-limit exhaust, transient error); we
+        // preserve the existing channel value on UPDATE in that case rather
+        // than clobbering it with null.
+        let classifiedChannel: string | null | undefined = undefined;
+        try {
+          const steps = await fetchSequenceStepsV3(sequence.id, apiKey);
+          classifiedChannel = classifyChannel(steps);
+          console.log(`  channel: ${classifiedChannel ?? '(null — no email/linkedIn steps)'}`);
+        } catch (stepsErr) {
+          const msg = stepsErr instanceof Error ? stepsErr.message : String(stepsErr);
+          console.warn(`  Failed to fetch steps for sequence ${sequence.id}, leaving channel unchanged: ${msg}`);
+        }
+
         // Update vs insert — using the oldest existing row's ID preserves
         // the campaign UUID across syncs (contacts/sequences/etc. all FK
         // to it).
@@ -352,6 +417,9 @@ Deno.serve(async (req) => {
               stats: mergedStats,
               raw_data: sequence,
               is_linked: isLinked,
+              // Only write channel when classification succeeded —
+              // undefined means "leave the existing column value alone".
+              ...(classifiedChannel !== undefined ? { channel: classifiedChannel } : {}),
               updated_at: new Date().toISOString(),
             })
             .eq("id", existingCampaign.id);
@@ -378,6 +446,10 @@ Deno.serve(async (req) => {
               stats: mergedStats,
               raw_data: sequence,
               is_linked: isLinked,
+              // null on classification failure — new row has no existing
+              // value to preserve, so explicit NULL is the honest default
+              // ("we don't know yet"). Next sync will re-classify.
+              channel: classifiedChannel ?? null,
             })
             .select("id")
             .single();

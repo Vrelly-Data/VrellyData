@@ -922,6 +922,17 @@ export function ChannelBadge({ channel }: { channel: string }) {
       </Badge>
     );
   }
+  if (channel === 'multichannel') {
+    // Reply.io sequences with both linkedIn and email steps. Single badge
+    // with both icons + the combined label, neutral border so it doesn't
+    // visually claim to be "primarily" either channel.
+    return (
+      <Badge variant="outline" className="text-xs border-purple-300 text-purple-700 dark:text-purple-400">
+        <Linkedin className="h-3 w-3 mr-1" />
+        <Mail className="h-3 w-3 mr-1" /> LinkedIn + Email
+      </Badge>
+    );
+  }
   return null;
 }
 

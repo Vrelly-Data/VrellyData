@@ -426,6 +426,10 @@ Deno.serve(async (req) => {
             status: normalizedStatus,
             raw_status: rawStatus,
             source: "smartlead",
+            // Smartlead is email-only by construction. Hardcoded so the
+            // channel column is correct without any per-row detection.
+            // See 20260619130000 migration header.
+            channel: "email",
             stats,
             raw_data: c,
             is_linked: true,

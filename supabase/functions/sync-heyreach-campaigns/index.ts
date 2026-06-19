@@ -158,6 +158,10 @@ Deno.serve(async (req) => {
                 stats,
                 raw_data: campaign,
                 is_linked: true,
+                // HeyReach is LinkedIn-only by construction. Hardcoded so
+                // the channel column is correct without any per-row
+                // detection. See 20260619130000 migration header.
+                channel: 'linkedin',
               }, {
                 onConflict: 'integration_id,external_campaign_id',
               });

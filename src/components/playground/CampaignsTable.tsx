@@ -10,14 +10,6 @@ import { Loader2, Link2, Info } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { ChannelBadge } from '@/components/agent/LeadDetailPanel';
 
-// Maps synced_campaigns.source → ChannelBadge channel string.
-// HeyReach is LinkedIn-native; Smartlead and Reply.io are both email outreach.
-function sourceToChannel(source: string | null | undefined): string | null {
-  if (source === 'heyreach') return 'linkedin';
-  if (source === 'smartlead' || source === 'reply_io') return 'email';
-  return null;
-}
-
 // Keys used by the filter pills. 'in_progress' is the canonical key for the
 // "Active" pill; Reply.io's `active` status is treated as synonymous so both
 // sync conventions group under one label instead of fragmenting.
@@ -228,7 +220,10 @@ export function CampaignsTable() {
               </TableRow>
             ) : (
               filteredCampaigns.map((campaign) => {
-                const channel = sourceToChannel(campaign.source);
+                // Channel is now written at sync time by each sync function
+                // (see 20260619130000 migration + Step 2.6). Reply.io rows
+                // not yet re-synced will be null and render no badge.
+                const channel = campaign.channel;
                 return (
                   <TableRow key={campaign.id}>
                     <TableCell className="font-medium max-w-[340px]">
