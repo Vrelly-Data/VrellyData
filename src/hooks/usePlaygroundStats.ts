@@ -54,10 +54,14 @@ export function usePlaygroundStats() {
   return useQuery({
     queryKey: ['playground-stats'],
     queryFn: async (): Promise<PlaygroundStats> => {
-      // Fetch campaigns - only linked ones (excludes CSV import duplicates)
+      // Fetch campaigns - only linked ones (excludes CSV import duplicates).
+      // channel is pulled so the email accumulators below can be gated to
+      // email/multichannel rows. Without the gate, Reply.io LinkedIn rows
+      // (which carry sent:messagesSent for the dashboard Sent column)
+      // would silently pollute the "Emails Sent" tooltip number.
       const { data: campaigns, error: campaignsError } = await supabase
         .from('synced_campaigns')
-        .select('id, status, stats')
+        .select('id, status, stats, channel')
         .eq('is_linked', true);
 
       if (campaignsError) throw campaignsError;
@@ -101,29 +105,46 @@ export function usePlaygroundStats() {
       // First pass: collect campaign stats
       campaigns?.forEach((campaign) => {
         const stats = campaign.stats as Record<string, number> | null;
+        // synced_campaigns.channel was added in the 20260619130000 migration
+        // and is missing from the auto-generated types.ts; assert here so
+        // TS sees the field without a project-wide type regeneration.
+        const channel =
+          (campaign as { channel?: string | null }).channel ?? null;
         if (stats) {
           // Use sent/delivered from campaign stats (populated by V3 API)
           const sent = stats.sent || stats.delivered || 0;
           const replies = stats.replies || 0;
-          
+
           totalContacts += stats.peopleCount || 0;
           totalPeopleFinished += stats.peopleFinished || 0;
           totalPeopleCount += stats.peopleCount || 0;
           outOfOfficeCount += stats.outOfOffice || 0;
-          
-          // Track email-specific metrics from campaign stats
-          emailDeliveries += sent;
-          emailReplies += replies;
-          emailOpens += stats.opens || 0;
-          emailBounced += stats.bounced || 0;
-          emailClicked += stats.clicked || 0;
-          
-          // LinkedIn metrics from webhooks/CSV
-          linkedinMessagesSent += stats.linkedinMessagesSent || 0;
-          linkedinConnectionsSent += stats.linkedinConnectionsSent || 0;
-          linkedinConnectionsAccepted += stats.linkedinConnectionsAccepted || 0;
-          linkedinReplies += stats.linkedinReplies || 0;
-          
+
+          // Email metrics — channel-gated (Bug 2 fix). Reply.io LinkedIn
+          // rows write sent:messagesSent so the dashboard Sent column
+          // shows real numbers (Step 3a); without this gate that value
+          // would silently inflate emailDeliveries here. null/linkedin
+          // channels contribute 0 to email metrics (no email outreach).
+          // HeyReach (channel='linkedin') is unaffected — its rows wrote
+          // no sent/opens/etc. at the top level anyway, so this gate
+          // changes nothing for HR. Smartlead (channel='email') still
+          // counts as before.
+          if (channel === 'email' || channel === 'multichannel') {
+            emailDeliveries += sent;
+            emailReplies += replies;
+            emailOpens += stats.opens || 0;
+            emailBounced += stats.bounced || 0;
+            emailClicked += stats.clicked || 0;
+          }
+
+          // (Bug 1 fix) LinkedIn metrics are NO LONGER summed per-campaign
+          // here. Single source is outbound_integrations.stats_cache below
+          // (Path B). Reply.io was the only platform writing BOTH per-row
+          // linkedin* keys AND stats_cache linkedin* sums, producing a 2x
+          // double-count in CYPR's tooltip. HR writes only stats_cache,
+          // SL writes neither — reading from stats_cache alone keeps all
+          // three platforms single-counted.
+
           // Identify LinkedIn-focused campaigns (have people but no email deliveries)
           if (sent === 0 && (stats.peopleCount || 0) > 0) {
             linkedinCampaignCount++;
