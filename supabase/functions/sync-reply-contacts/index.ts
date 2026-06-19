@@ -32,13 +32,38 @@ function getCorsHeaders(req: Request) {
 // Same behavioral output as the old per-sequence endpoint; different API
 // surface to get there.
 //
-// Engagement-flag uncertainty: the old endpoint returned a nested `status:
-// { replied, opened, ... }` object thanks to `additionalColumns=Status`.
-// /v3/contacts may not include engagement flags inline — per llms.txt there's
-// a separate GET /v3/contacts/{id}/statuses endpoint. The spike confirmed
-// only `isOptedOut` as top-level. Defensive extraction below reads from BOTH
-// top-level v3 fields AND the legacy `status` nested object, with a
-// first-call key log so we surface the actual shape on deploy.
+// ROSTER-ONLY MODE (Option A — engagement preservation).
+// ------------------------------------------------------
+// CONFIRMED live against CYPR: /v3/contacts returns NO engagement flags. The
+// 30 top-level keys (id, email, ..., isOptedOut, sequences, ...) include
+// callStatus / meetingStatus / phoneStatus / isOptedOut but OMIT replied,
+// opened, clicked, bounced, finished, delivered. There is no `status:{}`
+// nested object either. Per llms.txt, engagement lives on a separate
+// GET /v3/contacts/{id}/statuses endpoint (would require N extra calls
+// per sync).
+//
+// To avoid silently regressing engagement data (writing all-false would
+// clobber webhook-populated state in synced_contacts.engagement_data AND
+// zero-out synced_campaigns.stats.{sent,replies,opens,bounces}), this
+// function now writes only what v3 actually supplies:
+//
+//   * synced_contacts row: writes the people-roster fields (email, name,
+//     company, linkedin_url, etc.) but OMITS engagement_data and status.
+//     On INSERT the column defaults apply (engagement_data={}, status=NULL).
+//     On UPDATE, PostgREST preserves the existing engagement_data and
+//     status verbatim — webhook-populated replied/bounced/opened state
+//     survives.
+//   * synced_campaigns.stats: updates peopleCount only. Spread preserves
+//     existing sent/replies/opens/bounces/etc. (webhook + prior-sync
+//     values stay put).
+//
+// Trade-off: this function no longer refreshes engagement data on demand
+// — engagement comes from webhooks (reply-webhook updates engagement_data
+// + status on incoming events) and from synced_campaigns' platform-level
+// reporting calls (Step 3a sync-reply-campaigns writes
+// per-row stats.sent/replies/etc. via /v3/reporting). A future phase
+// could add a per-contact /v3/contacts/{id}/statuses fetch behind a
+// flag; for now, "people roster" is what this function does.
 //
 // Field-name remaps (verified from live spike):
 //   addingDate   ← was addedTime / addedAt
@@ -472,17 +497,15 @@ Deno.serve(async (req) => {
       console.log(`Processing batch ${batchNumber}/${totalBatches} (${batch.length} contacts)`);
 
       const records = batch.map(contact => {
-        const engagementData = {
-          replied: contact.replied,
-          bounced: contact.bounced,
-          opened: contact.opened,
-          clicked: contact.clicked,
-          optedOut: contact.optedOut,
-          finished: contact.finished,
-          delivered: contact.delivered,
-          addedAt: contact.addedAt,
-        };
-
+        // ROSTER-ONLY: deliberately omit `engagement_data` and `status`
+        // from the record. v3 /contacts doesn't supply engagement flags
+        // (see file header). PostgREST upsert preserves these columns'
+        // existing values on UPDATE; INSERTs get the column defaults
+        // (engagement_data={}, status=NULL). Webhook-populated state
+        // (reply-webhook writes engagement_data + status on inbound
+        // events) survives. mapContactStatus / engagementData helpers
+        // are retained for the future per-contact /v3/contacts/{id}/statuses
+        // enrichment path but currently unused here.
         return {
           campaign_id: campaignId,
           team_id: teamId,
@@ -492,8 +515,8 @@ Deno.serve(async (req) => {
           last_name: contact.lastName || null,
           company: contact.company || null,
           job_title: contact.title || null,
-          status: mapContactStatus(contact),
-          engagement_data: engagementData,
+          // status: omitted — see comment above
+          // engagement_data: omitted — see comment above
           custom_fields: {},
           raw_data: contact.rawData,
           updated_at: new Date().toISOString(),
@@ -572,7 +595,11 @@ Deno.serve(async (req) => {
 
     const peopleCount = verifiedCount || contacts.length;
 
-    // Get existing campaign stats to preserve LinkedIn metrics
+    // ROSTER-ONLY stats update — peopleCount ONLY. v3 /contacts doesn't
+    // give us engagement counts (sent/replies/opens/bounces); writing
+    // computed zeros here would clobber values populated by webhooks +
+    // Step 3a's reporting fetch in sync-reply-campaigns. The spread
+    // preserves every existing key.
     const { data: existingCampaign } = await serviceClient
       .from("synced_campaigns")
       .select("stats")
@@ -581,19 +608,12 @@ Deno.serve(async (req) => {
 
     const existingStats = (existingCampaign?.stats as Record<string, unknown>) || {};
 
-    // Update campaign stats with computed values from contacts.
-    // Preserve LinkedIn CSV fields (liConnectionsSent, liMessagesReplied, etc.).
     const updatedStats = {
       ...existingStats,
       peopleCount,
-      // Email stats computed from contacts
-      sent: engagementStats.deliveredCount,
-      delivered: engagementStats.deliveredCount,
-      replies: engagementStats.repliesCount,
-      opens: engagementStats.opensCount,
-      clicks: engagementStats.clicksCount,
-      bounces: engagementStats.bouncesCount,
-      optedOut: engagementStats.optedOutCount,
+      // sent / delivered / replies / opens / clicks / bounces / optedOut
+      // INTENTIONALLY NOT WRITTEN — preserved from existingStats so
+      // webhook + Step 3a reporting numbers stay intact.
     };
 
     await serviceClient
@@ -605,7 +625,7 @@ Deno.serve(async (req) => {
       .eq("id", campaignId);
 
     console.log(`Contacts sync complete: ${contactsSynced} synced, ${contactsFailed} failed`);
-    console.log(`Campaign stats updated: sent=${engagementStats.deliveredCount}, replies=${engagementStats.repliesCount}`);
+    console.log(`Campaign stats updated: peopleCount=${peopleCount} (engagement counts preserved from prior values)`);
 
     // --- Agent Leads Population Block ---
     // Populate agent_leads for replied contacts so the Agent inbox
@@ -777,19 +797,12 @@ Deno.serve(async (req) => {
         contactsFailed,
         verifiedCount: peopleCount,
         source: "v3_contacts",
-        engagementStats: {
-          delivered: engagementStats.deliveredCount,
-          replies: engagementStats.repliesCount,
-          opens: engagementStats.opensCount,
-          clicks: engagementStats.clicksCount,
-          bounces: engagementStats.bouncesCount,
-        },
-        campaignStats: {
-          peopleCount,
-          sent: engagementStats.deliveredCount,
-          delivered: engagementStats.deliveredCount,
-          replies: engagementStats.repliesCount,
-        },
+        // Roster-only mode (Option A engagement preservation). Engagement
+        // counts are intentionally omitted from the response because v3
+        // /contacts doesn't supply them — see file header. Downstream
+        // engagement reads should go through synced_contacts.engagement_data
+        // (webhook-populated) or synced_campaigns.stats (Step 3a reporting).
+        mode: "roster_only",
         agentLeadsCreated,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
