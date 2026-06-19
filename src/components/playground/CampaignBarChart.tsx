@@ -50,8 +50,18 @@ export interface ChartDatum {
 // callers (DataAnalysisTab + PublicClientReport) share the same predicate.
 // LinkedIn requires the broader OR — a campaign that only sent connection
 // requests is still active and should NOT be filtered out.
+//
+// Source values:
+//   'heyreach'            → LinkedIn rows from HeyReach sync
+//   'reply_io_linkedin'   → LinkedIn rows from Reply.io reporting (Step 3b)
+//   'smartlead'           → email rows from Smartlead sync
+//   'reply_io_email'      → email rows from Reply.io reporting (Step 3b)
+// HR and Reply.io LinkedIn rows populate the same linkedin_* dataKeys
+// (so they render in the same blue family); Smartlead and Reply.io email
+// rows populate the same email_* dataKeys (green + amber). The source
+// discriminator just routes which "is active?" predicate applies.
 export function isActiveCampaign(c: ChartDatum): boolean {
-  if (c.source === 'heyreach') {
+  if (c.source === 'heyreach' || c.source === 'reply_io_linkedin') {
     return (
       (c.linkedin_sent ?? 0) > 0 ||
       (c.linkedin_replies ?? 0) > 0 ||

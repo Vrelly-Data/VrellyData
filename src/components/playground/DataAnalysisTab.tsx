@@ -738,6 +738,20 @@ function DataAnalysisDetail({
               linkedin_connections_accepted: c.connections_accepted ?? 0,
             }),
           ),
+          // Reply.io LinkedIn rows — same 4 LI metrics + dataKeys as HR,
+          // so they render in the same blue family. source discriminates
+          // for isActiveCampaign + any future per-platform legend. Optional
+          // chain: older snapshots predating Step 3b have no reply_io key.
+          ...(selectedSnapshot?.stats_snapshot?.reply_io?.linkedin?.per_campaign ?? []).map(
+            (c) => ({
+              name: c.name ?? c.campaign_id,
+              source: 'reply_io_linkedin',
+              linkedin_sent: c.sent ?? 0,
+              linkedin_replies: c.replies ?? 0,
+              linkedin_connections_sent: c.connections_sent ?? 0,
+              linkedin_connections_accepted: c.connections_accepted ?? 0,
+            }),
+          ),
           // Email rows: 2 metrics. email_* dataKeys populated; linkedin_*
           // left undefined — email has no connection concept, so those
           // bars are absent (not zero-height) for these rows.
@@ -749,12 +763,23 @@ function DataAnalysisDetail({
               email_replies: c.replies ?? 0,
             }),
           ),
+          // Reply.io email rows — same email_* dataKeys as Smartlead, so
+          // they render in the same green/amber palette.
+          ...(selectedSnapshot?.stats_snapshot?.reply_io?.email?.per_campaign ?? []).map(
+            (c) => ({
+              name: c.name ?? c.campaign_id,
+              source: 'reply_io_email',
+              email_sent: c.sent ?? 0,
+              email_replies: c.replies ?? 0,
+            }),
+          ),
         ].filter(isActiveCampaign)}
         range={selectedSnapshot?.range}
         selectedRange={range}
         partial={
-          selectedSnapshot?.stats_snapshot?.heyreach?.per_campaign_partial ===
-          true
+          selectedSnapshot?.stats_snapshot?.heyreach?.per_campaign_partial === true ||
+          selectedSnapshot?.stats_snapshot?.reply_io?.linkedin?.per_campaign_partial === true ||
+          selectedSnapshot?.stats_snapshot?.reply_io?.email?.per_campaign_partial === true
         }
       />
 
