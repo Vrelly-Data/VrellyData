@@ -100,6 +100,49 @@ export interface StatsSnapshot {
       bounces?: number;
     }>;
   };
+  // Step 3b: Reply.io contribution, split by channel because a single
+  // Reply.io workspace can contain LinkedIn-only, email-only, AND
+  // multichannel sequences. linkedin.per_campaign[] + email.per_campaign[]
+  // each have their own partial flags so a transient failure on one
+  // channel doesn't poison the other. Optional — older snapshots predating
+  // Step 3b won't have this key, and snapshots for clients with no
+  // reply_io_integration_id set in the picker also won't.
+  reply_io?: {
+    linkedin?: {
+      sent?: number;
+      replies?: number;
+      connections_sent?: number;
+      connections_accepted?: number;
+      per_campaign?: Array<{
+        campaign_id: string;
+        name?: string;
+        sent?: number;
+        replies?: number;
+        connections_sent?: number;
+        connections_accepted?: number;
+      }>;
+      per_campaign_partial?: boolean;
+    };
+    email?: {
+      totals?: {
+        sent?: number;
+        replies?: number;
+        opens?: number;
+        clicks?: number;
+        bounces?: number;
+      };
+      per_campaign?: Array<{
+        campaign_id: string;
+        name?: string;
+        sent?: number;
+        replies?: number;
+        opens?: number;
+        clicks?: number;
+        bounces?: number;
+      }>;
+      per_campaign_partial?: boolean;
+    };
+  };
 }
 
 interface StatCardProps {

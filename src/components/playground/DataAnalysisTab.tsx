@@ -63,6 +63,9 @@ interface ClientFullRow {
   slug: string;
   heyreach_account_ids: number[];
   smartlead_campaign_ids: string[];
+  // Step 3b: single FK to a Reply.io outbound_integrations row. Null when
+  // the client has no Reply.io workspace.
+  reply_io_integration_id: string | null;
 }
 
 interface SnapshotRow {
@@ -279,7 +282,7 @@ function DataAnalysisDetail({
         supabase
           .from('client_analysis')
           .select(
-            'id, user_id, display_name, slug, heyreach_account_ids, smartlead_campaign_ids',
+            'id, user_id, display_name, slug, heyreach_account_ids, smartlead_campaign_ids, reply_io_integration_id',
           )
           .eq('id', clientId)
           .single(),
@@ -597,6 +600,7 @@ function DataAnalysisDetail({
                 displayName: row.display_name,
                 heyreachAccountIds: row.heyreach_account_ids ?? [],
                 smartleadCampaignIds: row.smartlead_campaign_ids ?? [],
+                replyIoIntegrationId: row.reply_io_integration_id,
               })
             }
           >

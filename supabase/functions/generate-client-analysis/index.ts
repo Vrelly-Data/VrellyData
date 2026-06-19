@@ -55,6 +55,7 @@ function getCorsHeaders(req: Request) {
 
 const HEYREACH_API = "https://api.heyreach.io/api/public";
 const SMARTLEAD_API_BASE = "https://server.smartlead.ai/api/v1";
+const REPLY_API_V3 = "https://api.reply.io/v3";
 
 const logStep = (step: string, details?: unknown) => {
   const detailsStr = details ? ` - ${JSON.stringify(details)}` : "";
@@ -433,6 +434,290 @@ async function fetchHeyReachPerCampaign(
   return { per_campaign, partial: anyFailed };
 }
 
+// ---- Reply.io (range-scoped per-campaign) --------------------------------
+// Mirrors the fetchHeyReachPerCampaign pattern exactly: BATCH_SIZE=3,
+// 200ms inter-batch, Promise.allSettled per batch, 429 single-retry
+// honoring Retry-After. Per-channel partial flags are SEPARATE so a
+// failed linkedin call for a multichannel sequence doesn't poison the
+// email side's flag.
+//
+// Multichannel sequences generate TWO tasks (one per channel) with the
+// same external_campaign_id; the per_campaign[] arrays end up with the
+// sequence's campaign_id duplicated across linkedin + email, which is the
+// honest representation — the bar chart can render the two as separate
+// bars with channel-distinct colors.
+//
+// channel=null sequences are skipped (Step 2.6's classifier refused to
+// guess; we honor that here too).
+
+// Map our app's range vocab to Reply.io's dateRangePreset values.
+// 'lastMonth' is verified live (single confirmed example); the other
+// presets follow Reply.io's documented camelCase convention. If a preset
+// is rejected, the per-campaign call fails and the partial flag captures
+// it — the rest of the report still completes.
+function rangeToReplyPreset(range: Range): string {
+  switch (range) {
+    case "7d": return "last7Days";
+    case "30d": return "last30Days";
+    case "mtd": return "thisMonth";
+    case "last_week": return "lastWeek";
+  }
+}
+
+// Retry-After parser — seconds, capped at 30, defaults to 2 if missing.
+function parseRetryAfterSeconds(header: string | null): number {
+  if (!header) return 2;
+  const n = Number(header);
+  if (Number.isFinite(n) && n > 0) return Math.min(n, 30);
+  return 2;
+}
+
+interface ReplyIoTask {
+  campaign_id: string;   // external_campaign_id (Reply.io sequence id as string)
+  name: string;
+  channel: "linkedin" | "email";
+}
+
+interface ReplyIoLinkedinPerCampaign {
+  campaign_id: string;
+  name: string;
+  sent: number;                  // = messagesSent (per Step 3a convention)
+  replies: number;               // = replied
+  connections_sent: number;
+  connections_accepted: number;
+}
+
+interface ReplyIoEmailPerCampaign {
+  campaign_id: string;
+  name: string;
+  sent: number;                  // = delivered
+  replies: number;               // = replied
+  opens: number;                 // = opened
+  clicks: number;                // not returned by Reply.io email reporting; 0
+  bounces: number;               // = bounced
+}
+
+// One per-channel reporting call with 429 single-retry. Mirrors
+// fetchOneHrCampaign's shape; throws on non-OK so Promise.allSettled
+// records the rejection per-task.
+async function fetchOneReplyIoTask(
+  apiKey: string,
+  task: ReplyIoTask,
+  dateRangePreset: string,
+): Promise<Record<string, unknown>> {
+  const path = task.channel === "linkedin"
+    ? "/reporting/linkedin/overview"
+    : "/reporting/emails/overview";
+  const body = JSON.stringify({
+    filters: {
+      dateRangePreset,
+      sequenceIds: [Number(task.campaign_id)],
+    },
+  });
+  const headers = {
+    "Authorization": `Bearer ${apiKey}`,
+    "Accept": "application/json",
+    "Content-Type": "application/json",
+  };
+  const doFetch = () => fetch(`${REPLY_API_V3}${path}`, {
+    method: "POST",
+    headers,
+    body,
+  });
+
+  let res = await doFetch();
+  logStep("Reply.io reporting call", {
+    channel: task.channel,
+    campaign_id: task.campaign_id,
+    status: res.status,
+  });
+
+  if (res.status === 429) {
+    const wait = parseRetryAfterSeconds(res.headers.get("Retry-After"));
+    await new Promise((r) => setTimeout(r, wait * 1000));
+    res = await doFetch();
+    logStep("Reply.io reporting 429 retry", {
+      channel: task.channel,
+      campaign_id: task.campaign_id,
+      status: res.status,
+    });
+  }
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    throw new Error(`HTTP ${res.status}: ${errText.slice(0, 200)}`);
+  }
+
+  const json = await res.json();
+  return (json && typeof json === "object")
+    ? json as Record<string, unknown>
+    : {};
+}
+
+async function fetchReplyIoStats(
+  apiKey: string,
+  campaigns: Array<{ external_campaign_id: string; name: string; channel: string | null }>,
+  range: Range,
+): Promise<{
+  linkedin: {
+    sent: number;
+    replies: number;
+    connections_sent: number;
+    connections_accepted: number;
+    per_campaign: ReplyIoLinkedinPerCampaign[];
+    per_campaign_partial: boolean;
+  };
+  email: {
+    totals: { sent: number; replies: number; opens: number; clicks: number; bounces: number };
+    per_campaign: ReplyIoEmailPerCampaign[];
+    per_campaign_partial: boolean;
+  };
+}> {
+  const empty = {
+    linkedin: {
+      sent: 0, replies: 0, connections_sent: 0, connections_accepted: 0,
+      per_campaign: [] as ReplyIoLinkedinPerCampaign[],
+      per_campaign_partial: false,
+    },
+    email: {
+      totals: { sent: 0, replies: 0, opens: 0, clicks: 0, bounces: 0 },
+      per_campaign: [] as ReplyIoEmailPerCampaign[],
+      per_campaign_partial: false,
+    },
+  };
+
+  if (campaigns.length === 0) return empty;
+
+  // Flatten: multichannel sequences produce 2 tasks (one per channel).
+  // Pure-channel sequences produce 1 task. channel=null sequences are
+  // skipped entirely.
+  const tasks: ReplyIoTask[] = [];
+  for (const c of campaigns) {
+    if (c.channel === "linkedin" || c.channel === "multichannel") {
+      tasks.push({ campaign_id: c.external_campaign_id, name: c.name, channel: "linkedin" });
+    }
+    if (c.channel === "email" || c.channel === "multichannel") {
+      tasks.push({ campaign_id: c.external_campaign_id, name: c.name, channel: "email" });
+    }
+  }
+
+  if (tasks.length === 0) return empty;
+
+  const BATCH_SIZE = 3;
+  const INTER_BATCH_SLEEP_MS = 200;
+  const dateRangePreset = rangeToReplyPreset(range);
+
+  const linkedinPerCampaign: ReplyIoLinkedinPerCampaign[] = [];
+  const emailPerCampaign: ReplyIoEmailPerCampaign[] = [];
+  let linkedinPartial = false;
+  let emailPartial = false;
+
+  // First-call key tripwire per channel per invocation (same idea as
+  // sync-reply-campaigns' loggedLinkedinKeys / loggedEmailKeys).
+  let loggedLinkedinKeys = false;
+  let loggedEmailKeys = false;
+
+  for (let i = 0; i < tasks.length; i += BATCH_SIZE) {
+    const batch = tasks.slice(i, i + BATCH_SIZE);
+    const results = await Promise.allSettled(
+      batch.map((t) => fetchOneReplyIoTask(apiKey, t, dateRangePreset)),
+    );
+
+    for (let j = 0; j < results.length; j++) {
+      const r = results[j];
+      const task = batch[j];
+
+      if (r.status === "fulfilled") {
+        const raw = r.value;
+        if (task.channel === "linkedin") {
+          if (!loggedLinkedinKeys) {
+            logStep("Reply.io /reporting/linkedin first-call keys", {
+              keys: Object.keys(raw),
+            });
+            loggedLinkedinKeys = true;
+          }
+          linkedinPerCampaign.push({
+            campaign_id: task.campaign_id,
+            name: task.name,
+            sent: pickNumber(raw, ["messagesSent"]),
+            replies: pickNumber(raw, ["replied"]),
+            connections_sent: pickNumber(raw, ["connectionsSent"]),
+            connections_accepted: pickNumber(raw, ["connectionsAccepted"]),
+          });
+        } else {
+          if (!loggedEmailKeys) {
+            logStep("Reply.io /reporting/emails first-call keys", {
+              keys: Object.keys(raw),
+            });
+            loggedEmailKeys = true;
+          }
+          emailPerCampaign.push({
+            campaign_id: task.campaign_id,
+            name: task.name,
+            sent: pickNumber(raw, ["delivered"]),
+            replies: pickNumber(raw, ["replied"]),
+            opens: pickNumber(raw, ["opened"]),
+            clicks: 0, // /reporting/emails/overview doesn't return clicks
+            bounces: pickNumber(raw, ["bounced"]),
+          });
+        }
+      } else {
+        if (task.channel === "linkedin") {
+          linkedinPartial = true;
+          logStep("Reply.io reporting/linkedin per-campaign failed (omitted)", {
+            campaign_id: task.campaign_id,
+            error: String(r.reason).slice(0, 200),
+          });
+        } else {
+          emailPartial = true;
+          logStep("Reply.io reporting/emails per-campaign failed (omitted)", {
+            campaign_id: task.campaign_id,
+            error: String(r.reason).slice(0, 200),
+          });
+        }
+      }
+    }
+
+    if (i + BATCH_SIZE < tasks.length) {
+      await new Promise((r) => setTimeout(r, INTER_BATCH_SLEEP_MS));
+    }
+  }
+
+  // Aggregate totals from per_campaign[]. Failed campaigns are OMITTED
+  // (matches HR pattern — partial flag is the signal, not zero bars).
+  let liSent = 0, liReplies = 0, liConnSent = 0, liConnAcc = 0;
+  for (const p of linkedinPerCampaign) {
+    liSent     += p.sent;
+    liReplies  += p.replies;
+    liConnSent += p.connections_sent;
+    liConnAcc  += p.connections_accepted;
+  }
+  let emSent = 0, emReplies = 0, emOpens = 0, emClicks = 0, emBounces = 0;
+  for (const p of emailPerCampaign) {
+    emSent    += p.sent;
+    emReplies += p.replies;
+    emOpens   += p.opens;
+    emClicks  += p.clicks;
+    emBounces += p.bounces;
+  }
+
+  return {
+    linkedin: {
+      sent: liSent,
+      replies: liReplies,
+      connections_sent: liConnSent,
+      connections_accepted: liConnAcc,
+      per_campaign: linkedinPerCampaign,
+      per_campaign_partial: linkedinPartial,
+    },
+    email: {
+      totals: { sent: emSent, replies: emReplies, opens: emOpens, clicks: emClicks, bounces: emBounces },
+      per_campaign: emailPerCampaign,
+      per_campaign_partial: emailPartial,
+    },
+  };
+}
+
 // ---- Claude ---------------------------------------------------------------
 
 interface ClaudeResult {
@@ -610,7 +895,7 @@ Deno.serve(async (req) => {
 
     const { data: clientRow, error: clientErr } = await supabase
       .from("client_analysis")
-      .select("id, user_id, display_name, heyreach_account_ids, smartlead_campaign_ids")
+      .select("id, user_id, display_name, heyreach_account_ids, smartlead_campaign_ids, reply_io_integration_id")
       .eq("id", clientId)
       .maybeSingle();
 
@@ -635,15 +920,27 @@ Deno.serve(async (req) => {
     // (still allows the run to complete with whatever does work).
     const { data: integrations } = await supabase
       .from("outbound_integrations")
-      .select("platform, api_key_encrypted, is_active, created_by")
+      .select("id, platform, api_key_encrypted, is_active, created_by")
       .eq("created_by", user.id)
       .eq("is_active", true)
-      .in("platform", ["heyreach", "smartlead"]);
+      .in("platform", ["heyreach", "smartlead", "reply.io"]);
 
     const heyreachKey =
       (integrations ?? []).find((r) => r.platform === "heyreach")?.api_key_encrypted ?? null;
     const smartleadKey =
       (integrations ?? []).find((r) => r.platform === "smartlead")?.api_key_encrypted ?? null;
+    // Reply.io scope is per-integration (one workspace per row), so we
+    // look up the SPECIFIC integration the client picker selected — not
+    // "first active reply.io" like HR/SL. If the picker is unset or the
+    // referenced integration is no longer active, replyIoKey stays null
+    // and the Reply.io branch becomes a no-op.
+    const replyIoKey = clientRow.reply_io_integration_id
+      ? ((integrations ?? []).find(
+          (r) =>
+            r.platform === "reply.io" &&
+            r.id === clientRow.reply_io_integration_id,
+        )?.api_key_encrypted ?? null)
+      : null;
 
     // ---- Pre-fetch synced_campaigns (single query, both platforms) ----
     // Used for:
@@ -665,15 +962,17 @@ Deno.serve(async (req) => {
     //     x-axis reads "Campaign A" instead of "11234".
     const { data: allSynced } = await supabase
       .from("synced_campaigns")
-      .select("source, external_campaign_id, name, raw_data")
+      .select("source, external_campaign_id, name, raw_data, channel, integration_id")
       .eq("is_linked", true)
-      .in("source", ["heyreach", "smartlead"]);
+      .in("source", ["heyreach", "smartlead", "reply_io"]);
 
     const syncedRows = (allSynced ?? []) as Array<{
       source: string;
       external_campaign_id: string;
       name: string;
       raw_data: Record<string, unknown> | null;
+      channel: string | null;
+      integration_id: string | null;
     }>;
 
     const hrAccountSet = new Set(
@@ -704,6 +1003,26 @@ Deno.serve(async (req) => {
         slNameLookup.set(c.external_campaign_id, c.name);
       }
     }
+
+    // Reply.io scope: every reply_io row whose integration_id matches the
+    // picker's selection. Channel passed through so fetchReplyIoStats can
+    // route per-row to /reporting/linkedin or /reporting/emails (or both
+    // for multichannel). Empty when the picker is unset, the integration
+    // was deleted, or none of the workspace's linked sequences are picker-
+    // scoped — Reply.io branch then no-ops cleanly.
+    const replyIoInScope = clientRow.reply_io_integration_id
+      ? syncedRows
+          .filter(
+            (c) =>
+              c.source === "reply_io" &&
+              c.integration_id === clientRow.reply_io_integration_id,
+          )
+          .map((c) => ({
+            external_campaign_id: c.external_campaign_id,
+            name: c.name,
+            channel: c.channel,
+          }))
+      : [];
 
     // ---- Fetch ----
     // Account-level HR call PRESERVED (belt-and-suspenders). The stat
@@ -740,9 +1059,52 @@ Deno.serve(async (req) => {
         )
       : { totals: { sent: 0, replies: 0, opens: 0, clicks: 0, bounces: 0 }, per_campaign: [] };
 
+    // Reply.io per-campaign reporting. Routed per-row by channel — see
+    // fetchReplyIoStats for the bounded-concurrency + partial-flag details
+    // (mirrors fetchHeyReachPerCampaign exactly). When replyIoKey is null
+    // OR replyIoInScope is empty, returns the all-zero shape so the totals
+    // merge below stays neutral.
+    const replyIoStats = replyIoKey
+      ? await fetchReplyIoStats(replyIoKey, replyIoInScope, range)
+      : {
+          linkedin: {
+            sent: 0, replies: 0, connections_sent: 0, connections_accepted: 0,
+            per_campaign: [], per_campaign_partial: false,
+          },
+          email: {
+            totals: { sent: 0, replies: 0, opens: 0, clicks: 0, bounces: 0 },
+            per_campaign: [], per_campaign_partial: false,
+          },
+        };
+
     // ---- Merge ----
-    const totalSent = heyreachStats.sent + smartleadStats.totals.sent;
-    const totalReplies = heyreachStats.replies + smartleadStats.totals.replies;
+    // Reply.io contributions fold into the cross-platform totals alongside
+    // HR/SL. Linkedin metrics from Reply.io (sent / replies / connections_*)
+    // sum with HR's; email metrics (sent / replies / opens / clicks /
+    // bounces) sum with SL's. Per-channel breakdowns stay separated in
+    // stats_snapshot.{heyreach, smartlead, reply_io}.
+    const totalSent =
+      heyreachStats.sent +
+      smartleadStats.totals.sent +
+      replyIoStats.linkedin.sent +
+      replyIoStats.email.totals.sent;
+    const totalReplies =
+      heyreachStats.replies +
+      smartleadStats.totals.replies +
+      replyIoStats.linkedin.replies +
+      replyIoStats.email.totals.replies;
+    const totalConnectionsSent =
+      heyreachStats.connections_sent + replyIoStats.linkedin.connections_sent;
+    const totalConnectionsAccepted =
+      heyreachStats.connections_accepted + replyIoStats.linkedin.connections_accepted;
+    const totalOpens = smartleadStats.totals.opens + replyIoStats.email.totals.opens;
+    const totalClicks = smartleadStats.totals.clicks + replyIoStats.email.totals.clicks;
+    const totalBounces = smartleadStats.totals.bounces + replyIoStats.email.totals.bounces;
+    // Denominator for email-rate fields: SL.sent + RI.email.sent. Using
+    // total email volume keeps the open/click/bounce rates honest — pure
+    // email volume, not muddied by LinkedIn outreach.
+    const totalEmailSent = smartleadStats.totals.sent + replyIoStats.email.totals.sent;
+
     const stats = {
       range,
       start_date: toYMD(startDate),
@@ -751,18 +1113,15 @@ Deno.serve(async (req) => {
         sent: totalSent,
         replies: totalReplies,
         reply_rate_pct: pct(totalReplies, totalSent),
-        connections_sent: heyreachStats.connections_sent,
-        connections_accepted: heyreachStats.connections_accepted,
-        connection_accept_rate_pct: pct(
-          heyreachStats.connections_accepted,
-          heyreachStats.connections_sent,
-        ),
-        opens: smartleadStats.totals.opens,
-        open_rate_pct: pct(smartleadStats.totals.opens, smartleadStats.totals.sent),
-        clicks: smartleadStats.totals.clicks,
-        click_rate_pct: pct(smartleadStats.totals.clicks, smartleadStats.totals.sent),
-        bounces: smartleadStats.totals.bounces,
-        bounce_rate_pct: pct(smartleadStats.totals.bounces, smartleadStats.totals.sent),
+        connections_sent: totalConnectionsSent,
+        connections_accepted: totalConnectionsAccepted,
+        connection_accept_rate_pct: pct(totalConnectionsAccepted, totalConnectionsSent),
+        opens: totalOpens,
+        open_rate_pct: pct(totalOpens, totalEmailSent),
+        clicks: totalClicks,
+        click_rate_pct: pct(totalClicks, totalEmailSent),
+        bounces: totalBounces,
+        bounce_rate_pct: pct(totalBounces, totalEmailSent),
       },
       heyreach: {
         ...heyreachStats,
@@ -770,6 +1129,7 @@ Deno.serve(async (req) => {
         per_campaign_partial: heyreachPerCampaign.partial,
       },
       smartlead: smartleadStats,
+      reply_io: replyIoStats,
     };
 
     // ---- statsOnly short-circuit ----

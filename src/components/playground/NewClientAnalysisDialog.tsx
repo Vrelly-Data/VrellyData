@@ -13,10 +13,22 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Loader2, Linkedin, Mail } from 'lucide-react';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Loader2, Linkedin, Mail, MessageSquare } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuthStore } from '@/stores/authStore';
 import { toast } from 'sonner';
+
+// Sentinel used by the Reply.io Select to represent "no Reply.io workspace
+// linked to this client". Radix Select requires non-empty string values, so
+// we map "none" ↔ null at the boundary.
+const REPLY_IO_NONE = 'none';
 
 // Shape of the pre-fill data the dialog needs when reopened in edit mode.
 // Provided by DataAnalysisTab's detail view.
@@ -25,6 +37,11 @@ export interface ClientAnalysisEditingState {
   displayName: string;
   heyreachAccountIds: number[];
   smartleadCampaignIds: string[];
+  // Step 3b: optional single Reply.io workspace FK. Null = client has no
+  // Reply.io. Unlike HR/SL which are arrays of account/campaign IDs,
+  // Reply.io is workspace-scoped (one workspace = one key = one
+  // outbound_integrations row), so the picker stores one FK.
+  replyIoIntegrationId: string | null;
 }
 
 interface NewClientAnalysisDialogProps {
@@ -88,6 +105,7 @@ export function NewClientAnalysisDialog({
   const [displayName, setDisplayName] = useState('');
   const [heyreachSelected, setHeyreachSelected] = useState<Set<number>>(new Set());
   const [smartleadSelected, setSmartleadSelected] = useState<Set<string>>(new Set());
+  const [replyIoIntegrationId, setReplyIoIntegrationId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   // Pre-fill on (re)open when in edit mode. Reset to blank when transitioning
@@ -98,10 +116,12 @@ export function NewClientAnalysisDialog({
       setDisplayName(editing.displayName);
       setHeyreachSelected(new Set(editing.heyreachAccountIds));
       setSmartleadSelected(new Set(editing.smartleadCampaignIds));
+      setReplyIoIntegrationId(editing.replyIoIntegrationId);
     } else {
       setDisplayName('');
       setHeyreachSelected(new Set());
       setSmartleadSelected(new Set());
+      setReplyIoIntegrationId(null);
     }
   }, [open, editing]);
 
@@ -139,6 +159,27 @@ export function NewClientAnalysisDialog({
     staleTime: 60_000,
   });
 
+  // Reply.io is workspace-scoped — one workspace ⇄ one API key ⇄ one
+  // outbound_integrations row (enforced by the partial unique index in the
+  // 20260619120000 migration). So the picker lists active reply.io
+  // integration rows and writes the chosen one's id to
+  // client_analysis.reply_io_integration_id.
+  const replyIoIntegrationsQuery = useQuery({
+    queryKey: ['client-analysis-options', 'reply-io-integrations'],
+    queryFn: async (): Promise<{ id: string; name: string | null }[]> => {
+      const { data, error } = await supabase
+        .from('outbound_integrations')
+        .select('id, name')
+        .eq('platform', 'reply.io')
+        .eq('is_active', true)
+        .order('name', { ascending: true });
+      if (error) throw error;
+      return (data ?? []) as { id: string; name: string | null }[];
+    },
+    enabled: open,
+    staleTime: 60_000,
+  });
+
   const smartleadCampaigns = useMemo(
     () =>
       (smartleadCampaignsQuery.data ?? [])
@@ -153,6 +194,11 @@ export function NewClientAnalysisDialog({
         .slice()
         .sort((a, b) => accountDisplayName(a).localeCompare(accountDisplayName(b))),
     [heyreachAccountsQuery.data],
+  );
+
+  const replyIoIntegrations = useMemo(
+    () => replyIoIntegrationsQuery.data ?? [],
+    [replyIoIntegrationsQuery.data],
   );
 
   // Slug preview only shown on create — edit doesn't regenerate it.
@@ -189,8 +235,14 @@ export function NewClientAnalysisDialog({
       toast.error('Display name is required');
       return;
     }
-    if (heyreachSelected.size === 0 && smartleadSelected.size === 0) {
-      toast.error('Pick at least one LinkedIn account or email campaign');
+    if (
+      heyreachSelected.size === 0 &&
+      smartleadSelected.size === 0 &&
+      !replyIoIntegrationId
+    ) {
+      toast.error(
+        'Pick at least one LinkedIn account, email campaign, or Reply.io workspace',
+      );
       return;
     }
 
@@ -203,6 +255,7 @@ export function NewClientAnalysisDialog({
             display_name: trimmedName,
             heyreach_account_ids: Array.from(heyreachSelected),
             smartlead_campaign_ids: Array.from(smartleadSelected),
+            reply_io_integration_id: replyIoIntegrationId,
           })
           .eq('id', editing!.clientId);
         if (error) {
@@ -222,6 +275,7 @@ export function NewClientAnalysisDialog({
             slug,
             heyreach_account_ids: Array.from(heyreachSelected),
             smartlead_campaign_ids: Array.from(smartleadSelected),
+            reply_io_integration_id: replyIoIntegrationId,
             synced_campaign_ids: [],
           })
           .select('id')
@@ -244,7 +298,9 @@ export function NewClientAnalysisDialog({
   };
 
   const optionsLoading =
-    heyreachAccountsQuery.isLoading || smartleadCampaignsQuery.isLoading;
+    heyreachAccountsQuery.isLoading ||
+    smartleadCampaignsQuery.isLoading ||
+    replyIoIntegrationsQuery.isLoading;
 
   return (
     <Dialog
@@ -337,6 +393,59 @@ export function NewClientAnalysisDialog({
               />
             ))}
           </Section>
+
+          {/* Reply.io workspace — single Select (one workspace per client).
+              Unlike HR/SL multi-pick, Reply.io's scope IS the workspace, so
+              the picker is just "which workspace is this client?" + a None
+              option. Selecting None unlinks any prior workspace. */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label className="flex items-center gap-2 text-sm font-medium">
+                <MessageSquare className="h-4 w-4" />
+                Reply.io workspace
+              </Label>
+              {replyIoIntegrations.length > 0 && (
+                <span className="text-xs text-muted-foreground">
+                  {replyIoIntegrationId ? '1 selected' : 'none selected'}
+                </span>
+              )}
+            </div>
+
+            {replyIoIntegrationsQuery.isLoading ? (
+              <div className="flex justify-center py-4 border rounded-md bg-muted/30">
+                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+              </div>
+            ) : replyIoIntegrationsQuery.error ? (
+              <p className="text-xs text-destructive border rounded-md p-3 bg-destructive/5">
+                Failed to load: {(replyIoIntegrationsQuery.error as Error).message}
+              </p>
+            ) : replyIoIntegrations.length === 0 ? (
+              <p className="text-xs text-muted-foreground border border-dashed rounded-md p-3">
+                No active Reply.io integrations. Add one via the Integrations
+                tab first if this client uses Reply.io.
+              </p>
+            ) : (
+              <Select
+                value={replyIoIntegrationId ?? REPLY_IO_NONE}
+                onValueChange={(v) =>
+                  setReplyIoIntegrationId(v === REPLY_IO_NONE ? null : v)
+                }
+                disabled={submitting}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="None" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={REPLY_IO_NONE}>None (no Reply.io)</SelectItem>
+                  {replyIoIntegrations.map((i) => (
+                    <SelectItem key={i.id} value={i.id}>
+                      {i.name ?? `Workspace ${i.id.slice(0, 8)}…`}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
         </div>
 
         <DialogFooter className="pt-2">
@@ -353,7 +462,9 @@ export function NewClientAnalysisDialog({
               submitting ||
               !displayName.trim() ||
               optionsLoading ||
-              (heyreachSelected.size === 0 && smartleadSelected.size === 0)
+              (heyreachSelected.size === 0 &&
+                smartleadSelected.size === 0 &&
+                !replyIoIntegrationId)
             }
           >
             {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
