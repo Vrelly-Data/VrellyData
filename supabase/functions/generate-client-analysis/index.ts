@@ -450,18 +450,20 @@ async function fetchHeyReachPerCampaign(
 // channel=null sequences are skipped (Step 2.6's classifier refused to
 // guess; we honor that here too).
 
-// Map our app's range vocab to Reply.io's dateRangePreset values.
-// 'lastMonth' is verified live (single confirmed example); the other
-// presets follow Reply.io's documented camelCase convention. If a preset
-// is rejected, the per-campaign call fails and the partial flag captures
-// it — the rest of the report still completes.
-function rangeToReplyPreset(range: Range): string {
-  switch (range) {
-    case "7d": return "last7Days";
-    case "30d": return "last30Days";
-    case "mtd": return "thisMonth";
-    case "last_week": return "lastWeek";
-  }
+// Reply.io's /v3/reporting/* filters accept EITHER `dateRangePreset`
+// (only lastWeek/lastMonth/lastYear/allTime — verified live; presets
+// like last7Days/last30Days/thisMonth return 400 "invalid format") OR
+// explicit `from`/`to` ISO datetimes. We use from/to so the Reply.io
+// window matches HR/SL exactly within the same report — all three
+// platforms cover the identical period regardless of which range
+// preset the admin picked.
+//
+// Verified format (live API, 2026-06-19): "YYYY-MM-DDTHH:mm:ssZ" — no
+// milliseconds, trailing Z literal. JavaScript's Date.toISOString()
+// returns "...Z" with .SSS milliseconds; we strip those so the request
+// matches the verified-good shape exactly.
+function toReplyIoISO(d: Date): string {
+  return d.toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
 // Retry-After parser — seconds, capped at 30, defaults to 2 if missing.
@@ -503,14 +505,16 @@ interface ReplyIoEmailPerCampaign {
 async function fetchOneReplyIoTask(
   apiKey: string,
   task: ReplyIoTask,
-  dateRangePreset: string,
+  fromISO: string,
+  toISO: string,
 ): Promise<Record<string, unknown>> {
   const path = task.channel === "linkedin"
     ? "/reporting/linkedin/overview"
     : "/reporting/emails/overview";
   const body = JSON.stringify({
     filters: {
-      dateRangePreset,
+      from: fromISO,
+      to: toISO,
       sequenceIds: [Number(task.campaign_id)],
     },
   });
@@ -557,7 +561,8 @@ async function fetchOneReplyIoTask(
 async function fetchReplyIoStats(
   apiKey: string,
   campaigns: Array<{ external_campaign_id: string; name: string; channel: string | null }>,
-  range: Range,
+  startDate: Date,
+  endDate: Date,
 ): Promise<{
   linkedin: {
     sent: number;
@@ -605,7 +610,10 @@ async function fetchReplyIoStats(
 
   const BATCH_SIZE = 3;
   const INTER_BATCH_SLEEP_MS = 200;
-  const dateRangePreset = rangeToReplyPreset(range);
+  // Match HR/SL window EXACTLY — same Date bounds resolveRange returned,
+  // formatted in the explicit ISO shape the API expects.
+  const fromISO = toReplyIoISO(startDate);
+  const toISO = toReplyIoISO(endDate);
 
   const linkedinPerCampaign: ReplyIoLinkedinPerCampaign[] = [];
   const emailPerCampaign: ReplyIoEmailPerCampaign[] = [];
@@ -620,7 +628,7 @@ async function fetchReplyIoStats(
   for (let i = 0; i < tasks.length; i += BATCH_SIZE) {
     const batch = tasks.slice(i, i + BATCH_SIZE);
     const results = await Promise.allSettled(
-      batch.map((t) => fetchOneReplyIoTask(apiKey, t, dateRangePreset)),
+      batch.map((t) => fetchOneReplyIoTask(apiKey, t, fromISO, toISO)),
     );
 
     for (let j = 0; j < results.length; j++) {
@@ -1065,7 +1073,7 @@ Deno.serve(async (req) => {
     // OR replyIoInScope is empty, returns the all-zero shape so the totals
     // merge below stays neutral.
     const replyIoStats = replyIoKey
-      ? await fetchReplyIoStats(replyIoKey, replyIoInScope, range)
+      ? await fetchReplyIoStats(replyIoKey, replyIoInScope, startDate, endDate)
       : {
           linkedin: {
             sent: 0, replies: 0, connections_sent: 0, connections_accepted: 0,
