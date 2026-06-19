@@ -79,18 +79,21 @@ interface V3ContactsPage {
   hasMore?: boolean;
 }
 
-// Activity shape is UNVERIFIED. All optionals; first-call logger surfaces
-// the actual field names so we can tighten this after one live test.
+// V3 activity shape — verified live via probe against CYPR. Top-level
+// keys: id, date, activityType, sourceType, userName, userId, content.
+// `content` is an OBJECT (not a string like v1 body). The reply-specific
+// `activityType` enum value is unknown — dev workspace contains only
+// CSV-imported leads with MoveToCampaign + Creation activities, no real
+// engagement. Defensive substring matching below + runtime logging will
+// surface the reply value the first time this runs against prod data.
 interface V3Activity {
   id?: number | string;
-  type?: string;             // candidate names — first-call log confirms
-  direction?: string;
-  body?: string;
-  text?: string;
-  message?: string;
-  date?: string;
-  createdAt?: string;
-  occurredAt?: string;
+  date?: string;                                              // timestamp (verified)
+  activityType?: string;                                      // v3 discriminator (replaces v1 type/direction)
+  sourceType?: string;                                        // workspace source (CsvImport / etc.)
+  content?: string | Record<string, unknown> | unknown;       // v3: OBJECT not string
+  userId?: number;
+  userName?: unknown;                                         // observed as object — not used
 }
 
 // Bearer-authed v3 fetcher — identical to sync-reply-contacts' fetchV3.
@@ -190,25 +193,28 @@ async function fetchContactActivitiesV3(
   }
 
   // First-call shape log — prints once per worker process lifetime,
-  // gated on a non-empty activities array (we need a sample object).
+  // gated on a non-empty activities array. Surfaces the activityType
+  // distribution + content sub-keys so we can identify the reply-specific
+  // vocabulary the first time this fires against a workspace with real
+  // email replies. (Dev workspace only had CsvImport/MoveToCampaign/
+  // Creation lifecycle events — no reply activityType values seen.)
   if (!loggedFirstActivityShape && activities.length > 0) {
     const first = activities[0] as Record<string, unknown>;
     console.log(`[/v3/contacts/{id}/activities] first-call envelope: ${envelope} (sample contactId=${contactId}, len=${activities.length})`);
     console.log(`[/v3/contacts/{id}/activities] first activity top-level keys:`, Object.keys(first));
 
-    // Field-name presence check — tells us which candidates v3 actually
-    // uses for type/direction/body/timestamp.
-    const fieldCheck = {
-      type: first.type !== undefined ? `present="${first.type}"` : 'ABSENT',
-      direction: first.direction !== undefined ? `present="${first.direction}"` : 'ABSENT',
-      body: first.body !== undefined ? `present(${typeof first.body})` : 'ABSENT',
-      text: first.text !== undefined ? `present(${typeof first.text})` : 'ABSENT',
-      message: first.message !== undefined ? `present(${typeof first.message})` : 'ABSENT',
-      date: first.date !== undefined ? `present(${typeof first.date})` : 'ABSENT',
-      createdAt: first.createdAt !== undefined ? `present(${typeof first.createdAt})` : 'ABSENT',
-      occurredAt: first.occurredAt !== undefined ? `present(${typeof first.occurredAt})` : 'ABSENT',
-    };
-    console.log(`[/v3/contacts/{id}/activities] field-name check:`, fieldCheck);
+    const activityTypes = [...new Set(activities.map(a => String((a as Record<string, unknown>).activityType ?? '(absent)')))];
+    const sourceTypes = [...new Set(activities.map(a => String((a as Record<string, unknown>).sourceType ?? '(absent)')))];
+    console.log(`[/v3/contacts/{id}/activities] activityType values in batch:`, activityTypes);
+    console.log(`[/v3/contacts/{id}/activities] sourceType values in batch:`, sourceTypes);
+
+    // If content is an object, log its sub-keys so we know which
+    // child field carries the message body.
+    if (first.content && typeof first.content === 'object') {
+      console.log(`[/v3/contacts/{id}/activities] first activity content sub-keys:`, Object.keys(first.content));
+    } else {
+      console.log(`[/v3/contacts/{id}/activities] first activity content typeof:`, typeof first.content);
+    }
 
     loggedFirstActivityShape = true;
   }
@@ -413,21 +419,58 @@ Deno.serve(async (req) => {
               try {
                 const activities = await fetchContactActivitiesV3(externalId, apiKey);
 
-                // Defensive incoming-direction predicate — accept any of
-                // the v1 conventions plus reasonable v3 candidates.
+                // Defensive incoming-reply predicate. v3 uses
+                // `activityType` (PascalCase enum) as the discriminator;
+                // the exact reply-specific value is unknown from dev
+                // (which only had MoveToCampaign + Creation). Substring
+                // match on lowercased value catches likely candidates:
+                // "EmailReply", "LinkedInMessageReply", "ReceivedMessage",
+                // "ReplyReceived", etc.
                 const isIncoming = (a: V3Activity): boolean => {
-                  const t = a.type;
-                  const d = a.direction;
-                  if (t === 'reply' || t === 'incoming') return true;
-                  if (d === 'incoming' || d === 'inbound' || d === 'in') return true;
+                  const at = String(a.activityType ?? '').toLowerCase();
+                  if (at.includes('reply')) return true;
+                  if (at.includes('incoming')) return true;
+                  if (at.includes('received')) return true;
+                  if (at.includes('inbound')) return true;
                   return false;
                 };
+                // v3 content is an OBJECT (probe confirmed). Inner shape
+                // unknown — try common sub-keys before falling back. If
+                // none match, return empty string (drops the activity
+                // from the thread rather than writing `[object Object]`).
                 const getBody = (a: V3Activity): string => {
-                  return (a.body ?? a.text ?? a.message ?? '') as string;
+                  const c = a.content;
+                  if (typeof c === 'string') return c;
+                  if (c && typeof c === 'object') {
+                    const obj = c as Record<string, unknown>;
+                    return String(
+                      obj.text ?? obj.body ?? obj.html ?? obj.message ?? obj.content ?? '',
+                    );
+                  }
+                  return '';
                 };
+                // v3 only exposes `date` (verified). createdAt /
+                // occurredAt are absent — kept as defensive fallbacks
+                // in case Reply.io adds them later.
                 const getTs = (a: V3Activity): string | null => {
-                  return (a.date ?? a.createdAt ?? a.occurredAt ?? null) as string | null;
+                  const x = a as unknown as Record<string, unknown>;
+                  return (
+                    (a.date ??
+                      (x.createdAt as string | undefined) ??
+                      (x.occurredAt as string | undefined) ??
+                      null) as string | null
+                  );
                 };
+
+                // Surface the activityType distribution when we couldn't
+                // find any incoming reply but activities exist — primary
+                // signal that the reply-specific enum value differs from
+                // our substring guesses. Once a real prod run hits this
+                // log, we update isIncoming() with the exact value.
+                if (activities.length > 0 && !activities.some(isIncoming)) {
+                  const types = [...new Set(activities.map(a => String(a.activityType ?? '(absent)')))];
+                  console.warn(`[poll-reply-inbox] No incoming-reply activityType match for contact ${externalId} (${activities.length} activities); activityTypes seen:`, types);
+                }
 
                 const replyActivities = activities
                   .filter(isIncoming)
