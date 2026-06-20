@@ -199,19 +199,31 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
   }
   const [showConfirm, setShowConfirm] = useState(false);
 
+  // Channel/source discriminators (positive identifier — replaces the
+  // earlier inference from smartlead_lead_id / heyreach_conversation_id
+  // presence). agent_leads.source is set at every creation site (see
+  // commit 747c5d3 + the 20260620120000 migration backfill).
+  //
+  // Degradation when lead.source is null/undefined (shouldn't happen
+  // post-migration; defensive for the brief migration-apply→deploy gap
+  // OR future writes via paths not covered by the 6 updated functions):
+  // ALL four discriminators evaluate false → hasSendHandler is false →
+  // Approve&Send button disabled, handleApprove falls into the
+  // "No send handler configured" toast. Safe-fail: operator sees a
+  // clear error, never a wrong-channel send.
   const isLinkedIn = lead.channel === 'linkedin';
-  // Email-send dispatch: smartlead_lead_id presence is the reliable signal
-  // for "this lead came from Smartlead" — `channel === 'email'` alone isn't
-  // enough because Reply.io's reply-webhook also writes channel='email'.
-  const isSmartleadEmail = lead.channel === 'email' && !!lead.smartlead_lead_id;
-  const isReplyIoEmail = lead.channel === 'email' && !lead.smartlead_lead_id;
-  const hasEmailSendHandler = isSmartleadEmail || isReplyIoEmail;
+  const isHeyReachLinkedIn = isLinkedIn && lead.source === 'heyreach';
+  const isReplyIoLinkedIn = isLinkedIn && lead.source === 'reply_io';
+  const isSmartleadEmail = lead.channel === 'email' && lead.source === 'smartlead';
+  const isReplyIoEmail = lead.channel === 'email' && lead.source === 'reply_io';
+  const hasSendHandler = isSmartleadEmail || isReplyIoEmail || isReplyIoLinkedIn;
 
-  // A LinkedIn lead with no HeyReach conversation id is a cold inbound —
+  // A HeyReach LinkedIn lead with no conversation id is a cold inbound —
   // HeyReach's SendMessage requires a tracked conversation, so the direct
   // Send Message button has nothing to send to. Add to Campaign still
-  // works (it creates the conversation by enrolling the lead).
-  const isColdInboundLinkedIn = isLinkedIn && !(lead as any).heyreach_conversation_id;
+  // works (it creates the conversation by enrolling the lead). Scoped to
+  // HeyReach only — Reply.io LinkedIn never falls into this block.
+  const isColdInboundLinkedIn = isHeyReachLinkedIn && !(lead as any).heyreach_conversation_id;
 
   const handleStageChange = (newStage: string) => {
     if (newStage === lead.pipeline_stage) return;
@@ -261,7 +273,7 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
       return;
     }
 
-    if (isReplyIoEmail) {
+    if (isReplyIoEmail || isReplyIoLinkedIn) {
       sendReply.mutate(
         {
           leadId: lead.id,
@@ -270,14 +282,30 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
         },
         {
           onSuccess: () => {
-            toast({ title: 'Reply sent via Reply.io ✓' });
+            toast({
+              title: isReplyIoLinkedIn
+                ? 'Reply sent via Reply.io LinkedIn ✓'
+                : 'Reply sent via Reply.io ✓',
+            });
           },
           onError: (err: any) => {
             const msg = err?.message || 'Failed to send reply';
-            if (msg.includes('No campaign mapped')) {
+            // Channel-mismatch is the new safety-check error from
+            // send-agent-reply (commit ee07c2a). Surface it with a
+            // distinct toast so the operator knows to fix Settings,
+            // not retry.
+            if (msg.includes('Channel mismatch')) {
+              toast({
+                title: 'Channel mismatch',
+                description: msg,
+                variant: 'destructive',
+              });
+            } else if (msg.includes('No campaign mapped')) {
               toast({
                 title: 'Campaign not configured',
-                description: 'Set up Campaign Rules in Agent Settings to enable sending.',
+                description: `Set up Campaign Rules for the ${
+                  isReplyIoLinkedIn ? 'LinkedIn' : 'email'
+                } channel in Agent Settings.`,
                 variant: 'destructive',
               });
             } else {
@@ -604,8 +632,11 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
           </div>
         )}
 
-        {/* Draft response (email leads only — LinkedIn uses the HeyReach Actions block below) */}
-        {showDraft && !isLinkedIn && lead.inbox_status === 'draft_ready' && (
+        {/* Draft response + Approve&Send. Renders for ANY lead that has a
+            working send handler — Smartlead email, Reply.io email, and
+            Reply.io LinkedIn. Only HeyReach LinkedIn leads (which use the
+            separate HeyReach Actions block below) are excluded. */}
+        {showDraft && !isHeyReachLinkedIn && lead.inbox_status === 'draft_ready' && (
           <div className="space-y-2 border rounded-lg p-3">
             <div className="flex items-center justify-between">
               <h4 className="text-sm font-medium">Draft Response</h4>
@@ -637,7 +668,7 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
                 disabled={
                   sendReply.isPending ||
                   sendSmartleadEmail.isPending ||
-                  !hasEmailSendHandler
+                  !hasSendHandler
                 }
               >
                 {sendReply.isPending || sendSmartleadEmail.isPending ? (
@@ -658,8 +689,12 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
           </div>
         )}
 
-        {/* LinkedIn actions (powered by HeyReach under the hood) */}
-        {isLinkedIn && (
+        {/* LinkedIn Actions block — HeyReach-only by construction. Reply.io
+            LinkedIn leads (source='reply_io') flow through the Draft block
+            above; this block must NEVER catch a Reply.io lead because the
+            HeyReach Send Message / Add to Campaign actions would talk to
+            the wrong platform (cross-contamination). */}
+        {isHeyReachLinkedIn && (
           <div className="space-y-4 border rounded-lg p-3">
             <h4 className="text-sm font-medium text-muted-foreground">LinkedIn Actions</h4>
             <Textarea
@@ -881,9 +916,9 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
             <AlertDialogDescription>
               {isSmartleadEmail
                 ? 'This will send via Smartlead email.'
-                : lead.channel === 'linkedin'
-                  ? 'This will send the message via your Reply.io LinkedIn campaign. Make sure you have a campaign mapped for this intent in Settings.'
-                  : 'This will send via your Reply.io email campaign.'}
+                : isReplyIoLinkedIn
+                  ? 'This will send via your Reply.io LinkedIn sequence configured for this intent (linkedin column in Campaign Rules).'
+                  : 'This will send via your Reply.io email sequence configured for this intent (email column in Campaign Rules).'}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

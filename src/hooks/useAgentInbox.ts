@@ -11,6 +11,16 @@ export interface AgentLead {
   email: string;
   linkedin_url: string;
   channel: 'email' | 'linkedin';
+  // Source platform — positive identifier set at every agent_leads
+  // creation site (heyreach-webhook / poll-heyreach-inbox → 'heyreach';
+  // smartlead-webhook → 'smartlead'; reply-webhook / poll-reply-inbox /
+  // sync-reply-contacts → 'reply_io'). Backfilled on pre-existing rows
+  // by the 20260620120000 migration. Optional in the type because the
+  // backfill+forward-write deploy is two steps; any row that escapes
+  // both is exposed as undefined to the UI (LeadDetailPanel's
+  // discriminators all evaluate false in that case → safe fallthrough
+  // to "no send handler", never a wrong-channel send).
+  source?: 'heyreach' | 'smartlead' | 'reply_io' | string | null;
   pipeline_stage: string;
   inbox_status: string;
   intent: string;
