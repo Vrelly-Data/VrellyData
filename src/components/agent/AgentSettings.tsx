@@ -48,6 +48,49 @@ const platformLabel = (p: string): string => PLATFORM_LABELS[p.toLowerCase()] ??
 const platformAbbr = (p: string): string =>
   PLATFORM_ABBR[p.toLowerCase()] ?? p.slice(0, 2).toUpperCase();
 
+// Campaign Rules — channel×intent matrix. Mirrors the edge function's
+// nested-first / flat-fallback resolver in send-agent-reply (commit ee07c2a).
+const CHANNEL_KEYS = ['linkedin', 'email'] as const;
+type ChannelKey = (typeof CHANNEL_KEYS)[number];
+type CampaignRules = Record<ChannelKey, Record<string, string>>;
+const EMPTY_RULES: CampaignRules = { linkedin: {}, email: {} };
+
+// Old shape: { interested: 'id', ... } (pre-multichannel, implicitly LinkedIn
+// because the only column the UI ever showed was tied to HeyReach/LinkedIn).
+// New shape: { linkedin: { interested: 'id' }, email: { ... } }.
+// On detect-old-shape, migrate flat values into the linkedin column — that's
+// the safe historical default. Operator re-selects per-channel afterwards.
+function normalizeCampaignRules(raw: unknown): CampaignRules {
+  if (!raw || typeof raw !== 'object') return { linkedin: {}, email: {} };
+  const rules = raw as Record<string, unknown>;
+  const entries = Object.entries(rules);
+  // Nested shape when every non-null top-level value is an object.
+  const isNested =
+    entries.length === 0 ||
+    entries.every(([, v]) => v !== null && typeof v === 'object' && !Array.isArray(v));
+  if (isNested) {
+    return {
+      linkedin: { ...((rules.linkedin as Record<string, string> | undefined) ?? {}) },
+      email: { ...((rules.email as Record<string, string> | undefined) ?? {}) },
+    };
+  }
+  const linkedin: Record<string, string> = {};
+  for (const [k, v] of entries) {
+    if (typeof v === 'string' && v) linkedin[k] = v;
+  }
+  return { linkedin, email: {} };
+}
+
+// Filter for which column a sequence row belongs in. null and 'multichannel'
+// surface in BOTH columns — null is the unknown/legacy bucket, multichannel
+// is genuinely both. Anything else must match exactly.
+function sequenceMatchesChannel(seqChannel: string | null | undefined, column: ChannelKey): boolean {
+  const ch = (seqChannel ?? '').toLowerCase();
+  if (!ch) return true;
+  if (ch === 'multichannel') return true;
+  return ch === column;
+}
+
 export function AgentSettings() {
   const { data: config, isLoading } = useAgentConfig();
   const upsertConfig = useUpsertAgentConfig();
@@ -111,7 +154,7 @@ export function AgentSettings() {
 
       const { data, error } = await (supabase as any)
         .from('synced_campaigns')
-        .select('id, name, external_campaign_id, integration_id')
+        .select('id, name, external_campaign_id, integration_id, channel')
         .in('integration_id', intRows.map((i: any) => i.id))
         .order('name', { ascending: true });
 
@@ -121,6 +164,7 @@ export function AgentSettings() {
         name: c.name,
         external_campaign_id: c.external_campaign_id,
         platform: platformById.get(c.integration_id) ?? 'unknown',
+        channel: (c.channel as string | null) ?? null,
       }));
     },
   });
@@ -145,7 +189,7 @@ export function AgentSettings() {
     reply_api_key: '',
     mode: 'copilot',
     is_active: false,
-    campaign_rules: {} as Record<string, string>,
+    campaign_rules: EMPTY_RULES as CampaignRules,
   });
 
   useEffect(() => {
@@ -167,7 +211,7 @@ export function AgentSettings() {
         reply_api_key: config.reply_api_key ?? '',
         mode: config.mode ?? 'copilot',
         is_active: config.is_active ?? false,
-        campaign_rules: (config as any).campaign_rules ?? {},
+        campaign_rules: normalizeCampaignRules((config as any).campaign_rules),
       });
     }
   }, [config]);
@@ -482,14 +526,15 @@ export function AgentSettings() {
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-xs text-muted-foreground">
-            Each campaign should have a LinkedIn message step using {'{{message}}'} as the message body. Vrelly will automatically populate this with the agent's drafted response.
+            Each sequence's first step should use {'{{message}}'} as the body — Vrelly populates it with the agent's drafted reply. Pick a sequence per channel × intent; the agent routes each lead to the column that matches its source platform. Sequences with channel = multichannel (or unset) appear in both columns.
           </p>
           <div className="border rounded-lg overflow-hidden">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b bg-muted/50">
                   <th className="text-left p-3 font-medium">Intent</th>
-                  <th className="text-left p-3 font-medium">Action</th>
+                  <th className="text-left p-3 font-medium">LinkedIn sequence</th>
+                  <th className="text-left p-3 font-medium">Email sequence</th>
                 </tr>
               </thead>
               <tbody>
@@ -500,40 +545,67 @@ export function AgentSettings() {
                 ].map((row) => (
                   <tr key={row.key} className="border-b last:border-0">
                     <td className="p-3">{row.label}</td>
-                    <td className="p-3">
-                      <Select
-                        value={formData.campaign_rules[row.key] || ''}
-                        onValueChange={(v) =>
-                          setFormData((prev) => ({
-                            ...prev,
-                            campaign_rules: { ...prev.campaign_rules, [row.key]: v },
-                          }))
-                        }
-                      >
-                        <SelectTrigger className="w-full h-8 text-xs">
-                          <SelectValue placeholder="Select a campaign..." />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {(ruleCampaigns ?? []).map((c: any) => (
-                            <SelectItem key={c.id} value={c.external_campaign_id} className="text-xs">
-                              <span className="font-mono text-[10px] text-muted-foreground mr-1.5">
-                                [{platformAbbr(c.platform)}]
-                              </span>
-                              {c.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </td>
+                    {CHANNEL_KEYS.map((channel) => {
+                      const options = (ruleCampaigns ?? []).filter((c: any) =>
+                        sequenceMatchesChannel(c.channel, channel),
+                      );
+                      const currentId = formData.campaign_rules[channel]?.[row.key] ?? '';
+                      return (
+                        <td key={channel} className="p-3">
+                          <Select
+                            value={currentId}
+                            onValueChange={(v) =>
+                              // Critical: only touch this channel's column. Spread the
+                              // OTHER channel's object through unchanged so editing
+                              // LinkedIn can never clobber Email and vice versa.
+                              setFormData((prev) => ({
+                                ...prev,
+                                campaign_rules: {
+                                  ...prev.campaign_rules,
+                                  [channel]: {
+                                    ...(prev.campaign_rules[channel] ?? {}),
+                                    [row.key]: v,
+                                  },
+                                },
+                              }))
+                            }
+                          >
+                            <SelectTrigger className="w-full h-8 text-xs">
+                              <SelectValue placeholder="Select a sequence..." />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {options.length === 0 ? (
+                                <div className="px-2 py-1.5 text-[11px] text-muted-foreground">
+                                  No {channel} sequences synced yet.
+                                </div>
+                              ) : (
+                                options.map((c: any) => (
+                                  <SelectItem
+                                    key={c.id}
+                                    value={c.external_campaign_id}
+                                    className="text-xs"
+                                  >
+                                    <span className="font-mono text-[10px] text-muted-foreground mr-1.5">
+                                      [{platformAbbr(c.platform)}]
+                                    </span>
+                                    {c.name}
+                                  </SelectItem>
+                                ))
+                              )}
+                            </SelectContent>
+                          </Select>
+                        </td>
+                      );
+                    })}
                   </tr>
                 ))}
                 <tr className="border-b last:border-0">
                   <td className="p-3">Not interested</td>
-                  <td className="p-3 text-xs text-muted-foreground">Mark as dead</td>
+                  <td className="p-3 text-xs text-muted-foreground" colSpan={2}>Mark as dead</td>
                 </tr>
                 <tr className="border-b last:border-0">
                   <td className="p-3">Meeting booked</td>
-                  <td className="p-3 text-xs text-muted-foreground">Remove from sequences</td>
+                  <td className="p-3 text-xs text-muted-foreground" colSpan={2}>Remove from sequences</td>
                 </tr>
               </tbody>
             </table>
