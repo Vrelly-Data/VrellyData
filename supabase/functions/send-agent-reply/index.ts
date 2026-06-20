@@ -29,11 +29,11 @@ function getCorsHeaders(req: Request) {
 //     POST /v1/actions/pushtocampaign  body={campaignId,email,forcePush:false}
 //
 //   v3 (4 calls in steady state — schema is stricter):
-//     1. GET  /v3/custom-fields    → ensure 'message' field is registered
+//     1. GET  /v3/custom-fields    → ensure 'custom_message' field is registered
 //        [POST /v3/custom-fields  → create if missing — idempotent]
 //     2. POST /v3/contacts         → create (returns 201+id) OR 400 if exists
 //        [GET /v3/contacts?email=X → if 400, look up existing id]
-//     3. PATCH /v3/contacts/{id}   → write customFields:[{name:'message',value:draft}]
+//     3. PATCH /v3/contacts/{id}   → write customFields:[{name:'custom_message',value:draft}]
 //     4. POST /v3/contacts/{id}/move-to-sequence  → triggers the actual send
 //
 // Behavioral gotchas — discovered via live probing against dev workspace
@@ -61,7 +61,7 @@ function getCorsHeaders(req: Request) {
 //      silently drops both POST AND PATCH writes when the named field
 //      isn't registered. The pre-flight ensureMessageCustomField() call
 //      below makes the workspace schema requirement self-healing — first
-//      call per workspace creates the 'message' field; subsequent calls
+//      call per workspace creates the 'custom_message' field; subsequent calls
 //      no-op.
 //
 //   E. v3 GET /v3/contacts/{id} returns customFields as
@@ -81,8 +81,8 @@ function getCorsHeaders(req: Request) {
 // Preserved (per Foundation-phase scope):
 //   * campaign_rules[intent] → sequenceId mapping (same intent enum,
 //     same lookup, same 'dead'/'remove' special-case stage transitions)
-//   * Draft message injection via the 'message' custom field
-//     (Reply.io campaign first-step template references {{message}})
+//   * Draft message injection via the 'custom_message' custom field
+//     (Reply.io campaign first-step template references {{custom_message}})
 //   * agent_leads update on success
 //   * agent_activity insert with metadata
 //   * Error handling shape — 502 on Reply.io failures
@@ -100,7 +100,7 @@ const INTENT_STAGE_MAP: Record<string, string> = {
 
 // Defensive strip — classify-reply already sanitizes `{...}` wrappers but
 // a stale draft may still carry braces. Applied at the send boundary so
-// Reply.io's `message` custom field never expands to a brace-wrapped
+// Reply.io's `custom_message` custom field never expands to a brace-wrapped
 // message in the campaign template.
 function stripBraceWrapper(s: string): string {
   if (!s) return s;
@@ -170,7 +170,7 @@ function authHeaders(apiKey: string): Record<string, string> {
   };
 }
 
-// Ensure the 'message' custom field exists in the Reply.io workspace.
+// Ensure the 'custom_message' custom field exists in the Reply.io workspace.
 // Idempotent: GET list first; only POST if missing. Required because v3
 // silently drops customFields writes when the named field isn't registered
 // (probes E + G3 both showed empty customFields when field was absent).
@@ -182,18 +182,18 @@ async function ensureMessageCustomField(apiKey: string): Promise<void> {
     throw new Error(`Failed to list custom fields: ${listRes.status} ${(await listRes.text()).slice(0, 200)}`);
   }
   const fields = (await listRes.json()) as CustomFieldListItem[];
-  if (Array.isArray(fields) && fields.some((f) => f.title === 'message')) {
+  if (Array.isArray(fields) && fields.some((f) => f.title === 'custom_message')) {
     return; // already registered
   }
   const createRes = await fetch(`${REPLY_API_V3}/custom-fields`, {
     method: 'POST',
     headers: authHeaders(apiKey),
-    body: JSON.stringify({ title: 'message', fieldType: 'text' }),
+    body: JSON.stringify({ title: 'custom_message', fieldType: 'text' }),
   });
   if (!createRes.ok) {
-    throw new Error(`Failed to create 'message' custom field: ${createRes.status} ${(await createRes.text()).slice(0, 200)}`);
+    throw new Error(`Failed to create 'custom_message' custom field: ${createRes.status} ${(await createRes.text()).slice(0, 200)}`);
   }
-  console.log('[send-agent-reply] registered missing custom field "message" in workspace');
+  console.log('[send-agent-reply] registered missing custom field "custom_message" in workspace');
 }
 
 // Look up an existing contact by email — used when POST /v3/contacts
@@ -246,7 +246,7 @@ async function createOrFindContact(
   throw new Error(`Reply.io contact create failed: ${createRes.status}: ${errText.slice(0, 300)}`);
 }
 
-// PATCH the contact's 'message' custom field with the draft text.
+// PATCH the contact's 'custom_message' custom field with the draft text.
 // v3 PATCH uses {name, value} (NOT {key, value} like POST).
 async function setMessageCustomField(
   contactId: number,
@@ -257,7 +257,7 @@ async function setMessageCustomField(
     method: 'PATCH',
     headers: authHeaders(apiKey),
     body: JSON.stringify({
-      customFields: [{ name: 'message', value: draftText }],
+      customFields: [{ name: 'custom_message', value: draftText }],
     }),
   });
   if (!resp.ok) {
@@ -473,7 +473,7 @@ Deno.serve(async (req) => {
       }
     }
 
-    // 5. Pre-flight: ensure 'message' custom field is registered. v3
+    // 5. Pre-flight: ensure 'custom_message' custom field is registered. v3
     // silently drops customFields writes when the named field isn't in
     // /v3/custom-fields. Idempotent: GET-then-POST-if-missing.
     try {
@@ -520,7 +520,7 @@ Deno.serve(async (req) => {
     }
 
     // 8. Move contact to sequence — THE SEND TRIGGER. Reply.io's
-    // sequence first step renders the {{message}} merge tag with the
+    // sequence first step renders the {{custom_message}} merge tag with the
     // value we just PATCHed.
     try {
       await moveContactToSequence(contactId, parseInt(campaignId, 10), apiKey);
