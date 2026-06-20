@@ -379,6 +379,7 @@ Deno.serve(async (req) => {
                 linkedin_url: contact.linkedInUrl || '',
                 company: contact.company || '',
                 channel,
+                source: 'reply_io',
                 pipeline_stage: 'replied',
                 inbox_status: 'pending',
                 last_reply_at: lastReplyDate || new Date().toISOString(),

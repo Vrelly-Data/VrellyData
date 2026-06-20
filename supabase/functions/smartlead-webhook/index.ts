@@ -413,6 +413,7 @@ Deno.serve(async (req) => {
       email_address: emailForKey,
       full_name: fullName,
       channel: "email",
+      source: "smartlead",
       smartlead_lead_id: smartleadLeadId,
       smartlead_campaign_id: smartleadCampaignId,
       smartlead_email_stats_id: smartleadEmailStatsId,

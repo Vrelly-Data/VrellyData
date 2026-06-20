@@ -273,6 +273,7 @@ Deno.serve(async (req) => {
                 reply_thread: replyThread.length > 0 ? replyThread : undefined,
                 inbox_status: 'pending',
                 channel: 'linkedin',
+                source: 'heyreach',
                 heyreach_conversation_id: conversationId,
                 heyreach_account_id: linkedInAccountId,
               };

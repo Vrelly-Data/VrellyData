@@ -402,6 +402,7 @@ Deno.serve(async (req) => {
               last_reply_text: engagement.lastReplyText as string,
               inbox_status: 'pending',
               channel: 'email',
+              source: 'reply_io',
             }, { onConflict: 'user_id,external_id' })
             .then(({ error: leadsErr }) => {
               if (leadsErr) console.error('agent_leads upsert error:', leadsErr);
@@ -482,6 +483,7 @@ Deno.serve(async (req) => {
               company,
               job_title: jobTitle,
               channel,
+              source: 'reply_io',
               pipeline_stage: 'replied',
               inbox_status: 'pending',
               last_reply_at: new Date().toISOString(),

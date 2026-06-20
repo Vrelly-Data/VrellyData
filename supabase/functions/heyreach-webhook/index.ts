@@ -431,6 +431,7 @@ Deno.serve(async (req) => {
           reply_thread: replyThread,
           inbox_status: "pending",
           channel: "linkedin",
+          source: "heyreach",
           heyreach_conversation_id: conversationId,
           heyreach_account_id: accountId ? Number(accountId) : null,
           linkedin_url: linkedinUrlForKey,

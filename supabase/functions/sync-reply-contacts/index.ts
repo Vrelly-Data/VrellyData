@@ -569,6 +569,7 @@ Deno.serve(async (req) => {
           last_reply_text: c.engagement_data.lastReplyText,
           inbox_status: "pending",
           channel: "email",
+          source: "reply_io",
         }));
 
       if (agentLeadRows.length > 0) {
@@ -699,6 +700,7 @@ Deno.serve(async (req) => {
                       company,
                       job_title: jobTitle,
                       channel,
+                      source: "reply_io",
                       pipeline_stage: "replied",
                       inbox_status: "pending",
                       last_reply_at: lastReplyAt,
