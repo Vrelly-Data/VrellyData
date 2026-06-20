@@ -107,6 +107,50 @@ function stripBraceWrapper(s: string): string {
   return s.trim().replace(/^\{+/, '').replace(/\}+$/, '').trim();
 }
 
+// Resolve campaign_rules → sequence id with nested-first, flat-fallback
+// lookup. campaign_rules supports TWO valid shapes:
+//
+//   FLAT (legacy HeyReach/Smartlead and pre-multichannel Reply.io):
+//     { interested: '123', out_of_office: '456' }
+//
+//   NESTED (Reply.io multichannel, new):
+//     { linkedin: { interested: '123' }, email: { interested: '456' } }
+//
+// The lookup tries the channel-scoped path first (campaign_rules[channel]
+// [intent]); on miss, falls back to the flat shape (campaign_rules[intent]).
+// This guarantees existing flat configs resolve IDENTICALLY to the
+// pre-change behavior — critical for the no-regression promise to HR/SL
+// and pre-existing Reply.io email configs.
+//
+// Returns undefined when neither path matches; the caller then surfaces
+// the existing "No campaign mapped for this intent" 400.
+//
+// Edge cases:
+//   * channel = '' or null → channel-scoped lookup skipped → flat fallback
+//   * campaign_rules[channel] exists but not as an object (e.g. operator
+//     wrote 'interested' as the channel key by mistake) → guarded by the
+//     typeof object && !Array.isArray check → falls through to flat
+//   * The special sentinels 'dead' / 'remove' work in both shapes —
+//     they're just string values that the caller switches on.
+function resolveCampaignRule(
+  campaignRules: Record<string, unknown>,
+  channel: string | null | undefined,
+  intent: string,
+): string | undefined {
+  // 1. Channel-scoped (new nested shape) — only if channel is non-empty
+  if (channel) {
+    const channelScoped = campaignRules[channel];
+    if (channelScoped && typeof channelScoped === 'object' && !Array.isArray(channelScoped)) {
+      const id = (channelScoped as Record<string, unknown>)[intent];
+      if (typeof id === 'string' && id.length > 0) return id;
+    }
+  }
+  // 2. Flat (legacy shape) — identical resolution to pre-change behavior
+  const flatId = campaignRules[intent];
+  if (typeof flatId === 'string' && flatId.length > 0) return flatId;
+  return undefined;
+}
+
 interface CustomFieldListItem {
   id: number;
   title: string;
@@ -319,7 +363,7 @@ Deno.serve(async (req) => {
     // 3. Fetch Reply.io integration
     const { data: integration, error: intError } = await supabase
       .from('outbound_integrations')
-      .select('api_key_encrypted, reply_team_id')
+      .select('id, api_key_encrypted, reply_team_id')
       .eq('created_by', userId)
       .eq('platform', 'reply.io')
       .eq('is_active', true)
@@ -338,8 +382,15 @@ Deno.serve(async (req) => {
     // 4. Get campaign_id (now sequence_id in v3 terms) from campaign_rules.
     // The picker UI still stores these as 'campaignId'; rename happens
     // at the v3 API boundary below where we pass it as `sequenceId`.
-    const campaignRules = agentConfig.campaign_rules || {};
-    const campaignId = campaignRules[intent];
+    //
+    // Lookup is channel-aware (multichannel-Reply.io requirement): tries
+    // campaign_rules[lead.channel][intent] first, then falls back to flat
+    // campaign_rules[intent] for back-compat with HeyReach/Smartlead
+    // configs and pre-existing Reply.io email configs. See
+    // resolveCampaignRule() for the exact contract.
+    const campaignRules = (agentConfig.campaign_rules || {}) as Record<string, unknown>;
+    const leadChannel = (lead.channel as string | null | undefined) ?? '';
+    const campaignId = resolveCampaignRule(campaignRules, leadChannel, intent);
 
     if (campaignId === 'dead') {
       await supabase
@@ -370,6 +421,56 @@ Deno.serve(async (req) => {
         status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
+    }
+
+    // 4b. Channel-match safety check — refuse to send if the configured
+    // sequence is the wrong channel for this lead. This is the hard-stop
+    // that prevents an operator misconfig from silently sending (e.g.) an
+    // email reply via a LinkedIn sequence.
+    //
+    // FAIL-OPEN semantics (back-compat — never produce a false block):
+    //   * Sequence not found in synced_campaigns       → skip check
+    //     (operator picked an external sequence before syncing, OR the
+    //     sequence belongs to a different integration)
+    //   * synced_campaigns.channel IS NULL             → skip check
+    //     (legacy data: HR/SL rows pre-Step-2.6 backfill; Reply.io rows
+    //     not yet re-synced. The check would 4xx every send on these
+    //     workspaces, which is worse than the mismatch risk.)
+    //   * synced_campaigns.channel === 'multichannel'  → skip check
+    //     (Reply.io multichannel sequences accept either inbound channel
+    //     by design — the sequence's first step picks the actual
+    //     outbound channel.)
+    // Only blocks when channel is BOTH known AND single-channel AND
+    // different from the lead's channel.
+    //
+    // Scope: matched by integration_id (NOT team_id) so we never look at
+    // a sequence belonging to a different Reply.io integration that
+    // happens to share the team_id.
+    {
+      const { data: targetCampaign } = await supabase
+        .from('synced_campaigns')
+        .select('channel')
+        .eq('external_campaign_id', campaignId)
+        .eq('integration_id', integration.id)
+        .maybeSingle();
+
+      const seqChannel = (targetCampaign?.channel as string | null | undefined) ?? null;
+      if (
+        seqChannel &&
+        seqChannel !== 'multichannel' &&
+        leadChannel &&
+        seqChannel !== leadChannel
+      ) {
+        return new Response(
+          JSON.stringify({
+            error: `Channel mismatch: lead is ${leadChannel} but configured sequence ${campaignId} is ${seqChannel}. Update campaign rules in Agent Settings to set a ${leadChannel} sequence for "${intent}".`,
+          }),
+          {
+            status: 400,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          },
+        );
+      }
     }
 
     // 5. Pre-flight: ensure 'message' custom field is registered. v3
