@@ -24,7 +24,12 @@ interface ReplyStep {
   delayInMinutes?: number;
   waitInMinutes?: number;    // Used by Condition steps to define wait time
   executionMode?: string;
-  message?: string;          // LinkedIn message content
+  message?: string;          // LinkedIn message content (legacy/top-level — absent in live v3; body lives on variants[])
+  variants?: Array<{         // v3 A/B variants — body lives here for BOTH channels:
+    message?: string;        //   LinkedIn step body
+    subject?: string;        //   email step subject
+    body?: string;           //   email step body
+  }>;
   actionType?: string;       // LinkedIn action type (Connect, Message, InMail)
   templates?: Array<{
     id: number;
@@ -181,18 +186,36 @@ Deno.serve(async (req) => {
         let stepType = step.type?.toLowerCase() || 'email';
 
         if (isLinkedIn) {
-          // LinkedIn steps: message is at step level (can be empty for Connect steps)
-          if (step.message && step.message.trim()) {
-            bodyHtml = step.message;
+          // LinkedIn message body lives at step.variants[0].message in the
+          // live v3 response (A/B variants — first is fine). The top-level
+          // step.message that the old code read is absent in v3, so it wrote
+          // null. Read variants[0].message primarily; keep step.message only
+          // as a defensive fallback. Pure action steps (viewProfile /
+          // followProfile / condition) carry NO variants → bodyHtml stays
+          // null, which is correct (nothing to copy).
+          const variantMessage = step.variants?.[0]?.message;
+          const linkedInBody =
+            variantMessage && variantMessage.trim()
+              ? variantMessage
+              : step.message && step.message.trim()
+                ? step.message
+                : null;
+          if (linkedInBody) {
+            bodyHtml = linkedInBody;
           }
           // More specific step type based on actionType
           if (step.actionType) {
             stepType = `linkedin_${step.actionType.toLowerCase()}`;
           }
-        } else if (template?.body) {
-          // Email template content
-          bodyHtml = template.body;
-          subject = template.subject || null;
+        } else {
+          // Email step body lives at step.variants[0].{subject,body} in the
+          // live v3 response — the SAME variants[] array the LinkedIn branch
+          // uses, just reading .subject/.body instead of .message. The legacy
+          // templates[0] array is absent in v3 (so the old `template.body`
+          // read wrote null). Read variants[0] FIRST, fall back to templates[0]
+          // for back-compat with any sequence that does populate templates[].
+          subject = step.variants?.[0]?.subject ?? template?.subject ?? null;
+          bodyHtml = step.variants?.[0]?.body ?? template?.body ?? null;
         }
 
         const bodyText = bodyHtml ? stripHtml(bodyHtml) : null;
