@@ -20,17 +20,21 @@ function getCorsHeaders(req: Request) {
 // Auth swap: X-API-Key → Authorization: Bearer (matches sync-reply-sequences
 // 8a37994 + sync-reply-campaigns Step 2 8c8cd38).
 //
-// Endpoint swap: was a dual v3+v1 dance:
-//   v3 PRIMARY:  /v3/sequences/{id}/contacts/extended?additionalColumns=Status
-//   v1 FALLBACK: /v1/campaigns/{id}/people
-// Now v3-only via plain /v3/contacts. The old /sequences/{id}/contacts/extended
-// path wasn't in the v3 doc index (llms.txt) — likely a legacy alias.
+// Endpoint history:
+//   - Original: dual dance — v3 /sequences/{id}/contacts/extended (PRIMARY,
+//     limit/offset + additionalColumns=Status) with /v1/campaigns/{id}/people
+//     fallback.
+//   - 0939c1d regressed this to workspace-wide /v3/contacts + client-side
+//     sequences[] filter. That matched 0 (plain /v3/contacts omits per-contact
+//     sequence membership) AND rate-limited paging all 14k+ contacts.
+//   - Now: server-side scoped /v3/sequences/{id}/contacts (top/skip, Bearer).
+//     The /extended suffix is a v1-era route that 404s on v3 ("No endpoint
+//     matches"); the correct v3 route is /contacts with no suffix (verified
+//     200 against a live dev sequence id).
 //
-// Scope handling: /v3/contacts is workspace-wide (NOT campaign-scoped). We
-// fetch all workspace contacts, then filter client-side by `sequences[]` so
-// only this sequence's contacts feed the downstream synced_contacts write.
-// Same behavioral output as the old per-sequence endpoint; different API
-// surface to get there.
+// Scope handling: /v3/sequences/{id}/contacts is natively sequence-scoped, so
+// every returned contact already belongs to this sequence — no client-side
+// filter needed. external_campaign_id holds the Reply.io sequence id.
 //
 // ROSTER-ONLY MODE (Option A — engagement preservation).
 // ------------------------------------------------------
@@ -94,9 +98,10 @@ interface V3Contact {
   lists?: Array<unknown>;
   addingDate?: string;                                       // not addedTime / addedAt
 
-  // DEFENSIVE — engagement flag location uncertain on plain /v3/contacts.
-  // First-call key log in fetchAllContactsV3 will surface what's actually
-  // there. v3ToUnified() reads via ?? chain across top-level and nested.
+  // DEFENSIVE — engagement flag location uncertain across v3 endpoints.
+  // First-call key log in fetchSequenceContactsV3 will surface what's
+  // actually there. v3ToUnified() reads via ?? chain across top-level
+  // and nested.
   status?: {
     status?: string;
     replied?: boolean;
@@ -210,40 +215,53 @@ async function fetchV3WithRetry<T = unknown>(
   throw new Error(`Max retries exceeded for ${endpoint}`);
 }
 
-// Walk /v3/contacts with top + skip until hasMore=false or short read.
-// Same pagination pattern as sync-reply-campaigns' fetchAllSequencesV3.
-// Safety cap at 100k contacts to bound a runaway loop on huge workspaces.
+// Fetch contacts for ONE sequence via the v3 endpoint:
+//   GET /v3/sequences/{id}/contacts  (items[]/hasMore, top + skip).
 //
-// First-call key log: prints the top-level keys of the first contact +
-// (if present) the nested status object's keys. Tripwire for shape
-// changes / engagement-flag discovery — once per sync invocation.
-async function fetchAllContactsV3(
+// Replaces the prior workspace-wide /v3/contacts fetch + client-side
+// isInSequence() filter, which matched 0 contacts (plain /v3/contacts does
+// not return per-contact sequence membership in the {id}/bare-number shape
+// isInSequence expected) and paged all 14k+ workspace contacts to skip=10000
+// (rate-limited) on every sync. This endpoint is natively sequence-scoped, so
+// we only walk the contacts in THIS sequence — fixing both the zero-match and
+// the rate-limiting at once. Same {items[], hasMore} envelope + top/skip
+// convention as sync-reply-campaigns' fetchAllSequencesV3.
+//
+// NOTE: the path is /contacts, NOT /contacts/extended — the latter is a
+// v1-era route that 404s ("No endpoint matches") on v3. Verified 200 against
+// a live dev sequence id before shipping.
+//
+// First-call key log: prints the top-level keys of the first contact —
+// tripwire to confirm the endpoint's field names match the v3ToUnified()
+// remaps (company / linkedInUrl / status{}). Once per sync.
+async function fetchSequenceContactsV3(
   apiKey: string,
+  sequenceId: string,
   pageSize: number = 100,
 ): Promise<V3Contact[]> {
   const all: V3Contact[] = [];
   let skip = 0;
   let loggedFirstKeys = false;
   for (let page = 1; page <= 1000; page++) {
-    const url = `/contacts?top=${pageSize}&skip=${skip}`;
+    const url = `/sequences/${sequenceId}/contacts?top=${pageSize}&skip=${skip}`;
     const resp = await fetchV3WithRetry<V3ContactsPage>(url, apiKey);
     const items = Array.isArray(resp.items) ? resp.items : [];
 
     if (!loggedFirstKeys && items[0]) {
       const first = items[0] as unknown as Record<string, unknown>;
-      console.log(`[/v3/contacts] first-call top-level keys:`, Object.keys(first));
+      console.log(`[/v3/sequences/${sequenceId}/contacts] first-call top-level keys:`, Object.keys(first));
       const status = first.status;
       if (status && typeof status === "object") {
-        console.log(`[/v3/contacts] first-call status nested keys:`, Object.keys(status));
+        console.log(`[/v3/sequences/${sequenceId}/contacts] first-call status nested keys:`, Object.keys(status));
       } else {
-        console.log(`[/v3/contacts] first-call status: ${status === undefined ? "(absent)" : typeof status}`);
+        console.log(`[/v3/sequences/${sequenceId}/contacts] first-call status: ${status === undefined ? "(absent)" : typeof status}`);
       }
       loggedFirstKeys = true;
     }
 
     if (items.length === 0) break;
     all.push(...items);
-    console.log(`  /contacts page ${page} (skip=${skip}): fetched ${items.length}, total ${all.length}`);
+    console.log(`  seq ${sequenceId} page ${page} (skip=${skip}): fetched ${items.length}, total ${all.length}`);
     if (resp.hasMore === false) break;
     if (items.length < pageSize) break;
     skip += items.length;
@@ -254,24 +272,6 @@ async function fetchAllContactsV3(
     await new Promise(r => setTimeout(r, 300));
   }
   return all;
-}
-
-// Filter to contacts that belong to a specific sequence. sequences[] entries
-// may be primitive ids OR {id} objects depending on whether v3 ever inlines
-// the sequence — defensive on both shapes.
-function isInSequence(contact: V3Contact, sequenceId: number): boolean {
-  const seqs = contact.sequences ?? [];
-  if (!Array.isArray(seqs)) return false;
-  for (const s of seqs) {
-    if (typeof s === "number" && s === sequenceId) return true;
-    if (typeof s === "string" && Number(s) === sequenceId) return true;
-    if (typeof s === "object" && s !== null) {
-      const sid = (s as Record<string, unknown>).id;
-      if (typeof sid === "number" && sid === sequenceId) return true;
-      if (typeof sid === "string" && Number(sid) === sequenceId) return true;
-    }
-  }
-  return false;
 }
 
 // Convert v3 contact to unified format. Field-name remaps:
@@ -455,19 +455,13 @@ Deno.serve(async (req) => {
 
     console.log(`Syncing contacts for campaign ${externalCampaignId} via v3`);
 
-    // Fetch ALL workspace contacts via /v3/contacts, then filter client-side
-    // by sequences[] to scope to this campaign. Per-sequence server-side
-    // scoping isn't documented for plain /v3/contacts; the old endpoint
-    // (/v3/sequences/{id}/contacts/extended) was campaign-scoped natively
-    // but isn't in the v3 doc index.
-    const allWorkspaceContacts = await fetchAllContactsV3(apiKey);
-    console.log(`Fetched ${allWorkspaceContacts.length} total workspace contacts`);
-
-    const sequenceIdNum = parseInt(externalCampaignId, 10);
-    const sequenceContacts = Number.isFinite(sequenceIdNum)
-      ? allWorkspaceContacts.filter((c) => isInSequence(c, sequenceIdNum))
-      : [];
-    console.log(`After sequences[] filter (sequenceId=${sequenceIdNum}): ${sequenceContacts.length} contacts`);
+    // Fetch contacts for THIS sequence directly via the v3
+    // /v3/sequences/{id}/contacts endpoint (server-side scoped).
+    // external_campaign_id is the Reply.io sequence id (written as
+    // String(sequence.id) by sync-reply-campaigns). No client-side filter
+    // needed — every returned contact is already in this sequence.
+    const sequenceContacts = await fetchSequenceContactsV3(apiKey, externalCampaignId);
+    console.log(`Fetched ${sequenceContacts.length} contacts for sequence ${externalCampaignId}`);
 
     // Convert to unified format + dedupe by email (lowercase).
     const contactsMap = new Map<string, UnifiedContact>();

@@ -290,6 +290,12 @@ Deno.serve(async (req) => {
 
     let totalProcessed = 0;
     let totalNew = 0;
+    let totalMirrored = 0;
+
+    // Statuses that represent human/agent progress. We NEVER overwrite these
+    // back to pending/mirrored — i.e. a dismissed or sent lead is not
+    // resurrected into the actionable inbox by a re-poll.
+    const PROTECTED_STATUSES = ['draft_ready', 'approved', 'sent', 'dismissed'];
 
     for (const integration of integrations ?? []) {
       try {
@@ -336,18 +342,21 @@ Deno.serve(async (req) => {
             // non-reply false positives as the cost of v3 compatibility.
             const lastReplyDate = contact.lastModifiedAt || contact.createdAt || null;
 
-            // Skip if reply is older than 7 days (recency window unchanged
-            // from v1 behavior).
-            if (lastReplyDate && lastReplyDate < sevenDaysAgo) {
-              continue;
-            }
+            // ALL-TIME MIRRORING: we no longer skip old replies. Recency now
+            // only decides ACTIONABILITY (inbox_status), not whether the row
+            // is mirrored. Recent (≤7d) → 'pending' (shows in the agent
+            // inbox); older → 'mirrored' (data-only, non-actionable). A null
+            // date is treated as recent, preserving prior behavior.
+            const isRecentReply = !lastReplyDate || lastReplyDate >= sevenDaysAgo;
 
             const externalId = String(contact.id);
 
             // Dedupe against existing agent_leads by timestamp similarity.
+            // Also read inbox_status so we can preserve progressed leads
+            // (see PROTECTED_STATUSES) instead of resurrecting them.
             const { data: existingLead } = await supabase
               .from('agent_leads')
-              .select('id, last_reply_at')
+              .select('id, last_reply_at, inbox_status')
               .eq('user_id', userId)
               .eq('external_id', externalId)
               .maybeSingle();
@@ -362,6 +371,15 @@ Deno.serve(async (req) => {
                 }
               }
             }
+
+            // Target inbox_status. A human/agent-progressed lead
+            // (draft_ready/approved/sent/dismissed) is preserved verbatim so a
+            // re-poll never drags it back to pending or mirrored. Otherwise
+            // recency decides: recent → 'pending', old → 'mirrored'.
+            const targetInboxStatus =
+              existingLead && PROTECTED_STATUSES.includes(existingLead.inbox_status)
+                ? existingLead.inbox_status
+                : (isRecentReply ? 'pending' : 'mirrored');
 
             totalProcessed++;
 
@@ -381,7 +399,7 @@ Deno.serve(async (req) => {
                 channel,
                 source: 'reply_io',
                 pipeline_stage: 'replied',
-                inbox_status: 'pending',
+                inbox_status: targetInboxStatus,
                 last_reply_at: lastReplyDate || new Date().toISOString(),
                 last_reply_text: '',
               }, {
@@ -397,6 +415,17 @@ Deno.serve(async (req) => {
             }
 
             if (upsertedLead) {
+              // Old (mirrored) replies are data-only: skip the activity-feed
+              // entry and the per-contact reply-text backfill. The backfill is
+              // N API calls per contact, so doing it for all-time history
+              // would be a rate-limit storm — and a years-old "reply detected"
+              // activity entry dated now would be misleading. Only recent /
+              // actionable replies get the full treatment.
+              if (!isRecentReply) {
+                totalMirrored++;
+                continue;
+              }
+
               totalNew++;
 
               // Log activity
@@ -527,9 +556,9 @@ Deno.serve(async (req) => {
       }
     }
 
-    console.log(`[poll-reply-inbox] Done. Processed: ${totalProcessed}, New leads: ${totalNew}`);
+    console.log(`[poll-reply-inbox] Done. Processed: ${totalProcessed}, New leads: ${totalNew}, Mirrored: ${totalMirrored}`);
 
-    return new Response(JSON.stringify({ success: true, processed: totalProcessed, new: totalNew }), {
+    return new Response(JSON.stringify({ success: true, processed: totalProcessed, new: totalNew, mirrored: totalMirrored }), {
       status: 200,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
