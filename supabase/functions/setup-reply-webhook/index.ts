@@ -237,6 +237,10 @@ Deno.serve(async (req) => {
         body: JSON.stringify({
           eventType,
           url: webhookUrl,
+          // 'team' (not the API default 'personal') so webhooks fire for ALL
+          // team members' reply activity, not just the API key owner's. The
+          // key owner is the team owner, which Reply.io requires for team scope.
+          scope: 'team',
           payloadConfig: {
             includeEmailUrl: false,
             includeEmailText: true,
