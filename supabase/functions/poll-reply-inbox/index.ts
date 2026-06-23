@@ -141,10 +141,11 @@ async function fetchV3WithRetry<T = unknown>(
 async function fetchAllRepliedContactsV3(
   apiKey: string,
   pageSize: number = 100,
+  maxPages: number = 2,
 ): Promise<V3Contact[]> {
   const all: V3Contact[] = [];
   let skip = 0;
-  for (let page = 1; page <= 1000; page++) {
+  for (let page = 1; page <= maxPages; page++) {
     const url = `/contacts?status=replied&top=${pageSize}&skip=${skip}`;
     const resp = await fetchV3WithRetry<V3ContactsPage>(url, apiKey);
     const items = Array.isArray(resp.items) ? resp.items : [];
@@ -332,7 +333,7 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+        const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
         for (const contact of repliedContacts) {
           try {
@@ -344,10 +345,10 @@ Deno.serve(async (req) => {
 
             // ALL-TIME MIRRORING: we no longer skip old replies. Recency now
             // only decides ACTIONABILITY (inbox_status), not whether the row
-            // is mirrored. Recent (≤7d) → 'pending' (shows in the agent
+            // is mirrored. Recent (≤24h) → 'pending' (shows in the agent
             // inbox); older → 'mirrored' (data-only, non-actionable). A null
             // date is treated as recent, preserving prior behavior.
-            const isRecentReply = !lastReplyDate || lastReplyDate >= sevenDaysAgo;
+            const isRecentReply = !lastReplyDate || lastReplyDate >= oneDayAgo;
 
             const externalId = String(contact.id);
 
