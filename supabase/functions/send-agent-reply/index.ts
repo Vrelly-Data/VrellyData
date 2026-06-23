@@ -320,7 +320,7 @@ Deno.serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     );
 
-    const { leadId, draftResponse: rawDraft, intent } = await req.json();
+    const { leadId, draftResponse: rawDraft, intent, campaignId: bodyCampaignId } = await req.json();
     const draftResponse = stripBraceWrapper(String(rawDraft ?? ''));
 
     if (!leadId || !draftResponse || !intent) {
@@ -390,7 +390,19 @@ Deno.serve(async (req) => {
     // resolveCampaignRule() for the exact contract.
     const campaignRules = (agentConfig.campaign_rules || {}) as Record<string, unknown>;
     const leadChannel = (lead.channel as string | null | undefined) ?? '';
-    const campaignId = resolveCampaignRule(campaignRules, leadChannel, intent);
+
+    // Operator-picked campaign (Reply.io Actions → "Add to Campaign") overrides
+    // intent routing: when the request body carries a non-empty campaignId, use
+    // it DIRECTLY as the sequence id and skip resolveCampaignRule entirely (the
+    // `??` short-circuits), which also bypasses the dead/remove/"No campaign
+    // mapped" branches below (the operator id is a real sequence id, never those
+    // sentinels). The 4b channel-match safety check STILL runs against it.
+    // Absent/empty body.campaignId → unchanged intent-routing behavior.
+    const operatorCampaignId =
+      typeof bodyCampaignId === 'string' && bodyCampaignId.trim()
+        ? bodyCampaignId.trim()
+        : null;
+    const campaignId = operatorCampaignId ?? resolveCampaignRule(campaignRules, leadChannel, intent);
 
     if (campaignId === 'dead') {
       await supabase

@@ -40,7 +40,7 @@ import {
 } from '@/hooks/useSmartlead';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 export type { AgentLead };
 
@@ -106,9 +106,11 @@ function useSendAgentReply() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ leadId, draftResponse, intent }: { leadId: string; draftResponse: string; intent: string }) => {
+    mutationFn: async ({ leadId, draftResponse, intent, campaignId }: { leadId: string; draftResponse: string; intent: string; campaignId?: string }) => {
       const { data, error } = await supabase.functions.invoke('send-agent-reply', {
-        body: { leadId, draftResponse, intent },
+        // campaignId is forwarded only when set (operator picked a campaign);
+        // absent → send-agent-reply keeps its intent-routing behavior.
+        body: { leadId, draftResponse, intent, ...(campaignId ? { campaignId } : {}) },
       });
       if (error) throw new Error(error.message || 'Failed to send reply');
       if (data?.error) throw new Error(data.error);
@@ -139,6 +141,43 @@ function useSendSmartleadEmail() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['agent-inbox'] });
       queryClient.invalidateQueries({ queryKey: ['agent-activity'] });
+    },
+  });
+}
+
+// Reply.io campaigns (sequences) for the operator-picked "Add to Campaign"
+// dropdown in the Reply.io Actions block. Mirrors useHeyReachCampaigns'
+// integration→synced_campaigns filter pattern, scoped to platform 'reply.io'.
+// Defined in-file alongside the other Reply.io send hooks.
+interface ReplyCampaign {
+  id: string;
+  name: string;
+  status: string | null;
+  external_campaign_id: string;
+}
+
+function useReplyCampaigns() {
+  return useQuery({
+    queryKey: ['reply-campaigns'],
+    queryFn: async (): Promise<ReplyCampaign[]> => {
+      const { data: integrations, error: intError } = await supabase
+        .from('outbound_integrations')
+        .select('id')
+        .eq('platform', 'reply.io');
+
+      if (intError) throw intError;
+      if (!integrations?.length) return [];
+
+      const integrationIds = integrations.map((i) => i.id);
+
+      const { data, error } = await supabase
+        .from('synced_campaigns')
+        .select('id, name, status, external_campaign_id')
+        .in('integration_id', integrationIds)
+        .order('name', { ascending: true });
+
+      if (error) throw error;
+      return (data || []) as ReplyCampaign[];
     },
   });
 }
@@ -181,6 +220,10 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
   const addToCampaign = useAddToHeyReachCampaign();
   const { data: heyreachCampaigns = [], isLoading: campaignsLoading } = useHeyReachCampaigns();
   const [selectedCampaignId, setSelectedCampaignId] = useState('');
+
+  // Reply.io campaigns + operator-picked selection — parallel to heyreach above.
+  const { data: replyCampaigns = [], isLoading: replyCampaignsLoading } = useReplyCampaigns();
+  const [selectedReplyCampaignId, setSelectedReplyCampaignId] = useState('');
 
   // Smartlead Add to Campaign (for Email channel with smartlead_lead_id).
   // Filtering by integration platform (not synced_campaigns.source) mirrors
@@ -427,6 +470,42 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
     );
   };
 
+  // Reply.io add to campaign — operator picks the sequence explicitly. Routes
+  // through sendReply with an explicit campaignId (the sequence's
+  // external_campaign_id), which overrides intent routing in send-agent-reply.
+  // Mirrors handleAddToCampaign structurally but NEVER touches the HeyReach
+  // send hooks (no cross-platform contamination for Reply.io leads).
+  const handleAddToReplyCampaign = () => {
+    const campaign = replyCampaigns.find((c) => c.id === selectedReplyCampaignId);
+    if (!draftText.trim() || !campaign?.external_campaign_id) return;
+    sendReply.mutate(
+      {
+        leadId: lead.id,
+        draftResponse: draftText,
+        intent: lead.intent,
+        campaignId: campaign.external_campaign_id, // operator-picked — overrides intent routing
+      },
+      {
+        onSuccess: () => {
+          setSelectedReplyCampaignId('');
+          toast({
+            title: isReplyIoLinkedIn
+              ? 'Added to Reply.io LinkedIn sequence ✓'
+              : 'Added to Reply.io sequence ✓',
+          });
+        },
+        onError: (err: any) => {
+          const msg = err?.message || 'Failed to add to campaign';
+          if (msg.includes('Channel mismatch')) {
+            toast({ title: 'Channel mismatch', description: msg, variant: 'destructive' });
+          } else {
+            toast({ title: 'Error', description: msg, variant: 'destructive' });
+          }
+        },
+      }
+    );
+  };
+
   // Smartlead add to campaign — uses the Draft Response textarea content as
   // the personalized message (passed through to Smartlead's
   // {{first_touch_message}} custom field by the edge function).
@@ -636,7 +715,7 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
             working send handler — Smartlead email, Reply.io email, and
             Reply.io LinkedIn. Only HeyReach LinkedIn leads (which use the
             separate HeyReach Actions block below) are excluded. */}
-        {showDraft && !isHeyReachLinkedIn && lead.inbox_status === 'draft_ready' && (
+        {showDraft && !isHeyReachLinkedIn && !isReplyIoEmail && !isReplyIoLinkedIn && lead.inbox_status === 'draft_ready' && (
           <div className="space-y-2 border rounded-lg p-3">
             <div className="flex items-center justify-between">
               <h4 className="text-sm font-medium">Draft Response</h4>
@@ -767,6 +846,80 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
                 size="sm"
               >
                 {addToCampaign.isPending ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <UserPlus className="h-4 w-4" />
+                )}
+                Add to Campaign
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* Reply.io Actions — structural mirror of the HeyReach LinkedIn
+            Actions block above, but routed through sendReply (the Reply.io
+            send path) and NEVER the HeyReach hooks. Applies to BOTH Reply.io
+            channels (email + LinkedIn) since Reply.io now handles both; the
+            sequence's first step picks the actual outbound channel. This is
+            the SINGLE actions block for a Reply.io lead (the Draft + Approve
+            & Send block above is gated off for Reply.io). */}
+        {(isReplyIoEmail || isReplyIoLinkedIn) && (
+          <div className="space-y-4 border rounded-lg p-3">
+            <h4 className="text-sm font-medium text-muted-foreground">Reply.io Actions</h4>
+            <Textarea
+              value={draftText}
+              onChange={(e) => setDraftText(e.target.value)}
+              onBlur={() => {
+                if (draftText !== lead.draft_response) {
+                  updateLead.mutate({
+                    leadId: lead.id,
+                    updates: { draft_response: draftText },
+                  });
+                }
+              }}
+              placeholder={isReplyIoLinkedIn ? 'Write a LinkedIn message...' : 'Write an email reply...'}
+              rows={3}
+              className="text-sm"
+            />
+            {/* Direct send — reuses the existing Approve & Send confirm flow
+                (setShowConfirm → handleApprove → sendReply with intent
+                routing, no campaignId). */}
+            <Button
+              onClick={() => setShowConfirm(true)}
+              disabled={!draftText.trim() || sendReply.isPending}
+              className="w-full gap-2"
+              size="sm"
+            >
+              {sendReply.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Send className="h-4 w-4" />
+              )}
+              Send Reply
+            </Button>
+
+            <div className="border-t border-border pt-3">
+              <p className="text-xs font-medium text-muted-foreground mb-2">Add to Campaign</p>
+              <Select value={selectedReplyCampaignId} onValueChange={setSelectedReplyCampaignId}>
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue placeholder={replyCampaignsLoading ? 'Loading campaigns...' : 'Select a campaign'} />
+                </SelectTrigger>
+                <SelectContent>
+                  {replyCampaigns.map((campaign) => (
+                    <SelectItem key={campaign.id} value={campaign.id}>
+                      {campaign.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                onClick={handleAddToReplyCampaign}
+                disabled={!draftText.trim() || !selectedReplyCampaignId || sendReply.isPending}
+                variant="outline"
+                className="w-full mt-2 gap-2"
+                size="sm"
+              >
+                {sendReply.isPending ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
                   <UserPlus className="h-4 w-4" />
