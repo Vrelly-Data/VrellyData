@@ -208,14 +208,16 @@ Deno.serve(async (req) => {
             stepType = `linkedin_${step.actionType.toLowerCase()}`;
           }
         } else {
-          // Email step body lives at step.variants[0].{subject,body} in the
-          // live v3 response — the SAME variants[] array the LinkedIn branch
-          // uses, just reading .subject/.body instead of .message. The legacy
-          // templates[0] array is absent in v3 (so the old `template.body`
-          // read wrote null). Read variants[0] FIRST, fall back to templates[0]
-          // for back-compat with any sequence that does populate templates[].
+          // Email step body lives at step.variants[0].message in the live v3
+          // response — the SAME `message` field the LinkedIn branch reads,
+          // just with an additional `subject`. A v3 email variant is
+          // {id, message (the body HTML), subject, hasAttachments}; there is
+          // NO `.body` field (confirmed from live raw_data). The legacy
+          // templates[0] array is absent in v3. Read variants[0].message
+          // FIRST, then fall back to variants[0].body and templates[0].body
+          // for safety / any sequence that populates the legacy shapes.
           subject = step.variants?.[0]?.subject ?? template?.subject ?? null;
-          bodyHtml = step.variants?.[0]?.body ?? template?.body ?? null;
+          bodyHtml = step.variants?.[0]?.message ?? step.variants?.[0]?.body ?? template?.body ?? null;
         }
 
         const bodyText = bodyHtml ? stripHtml(bodyHtml) : null;
