@@ -191,6 +191,14 @@ async function ensureMessageCustomField(apiKey: string): Promise<void> {
     body: JSON.stringify({ title: 'custom_message', fieldType: 'text' }),
   });
   if (!createRes.ok) {
+    // A 409 customField.duplicateName means the field already exists — the
+    // list-check above missed it (title casing/whitespace/shape mismatch in
+    // the GET response), but the duplicate is the desired end state, so treat
+    // it as success rather than aborting the whole send with a 502.
+    if (createRes.status === 409) {
+      console.log("[send-agent-reply] 'custom_message' field already exists (409 duplicate) — treating as success");
+      return;
+    }
     throw new Error(`Failed to create 'custom_message' custom field: ${createRes.status} ${(await createRes.text()).slice(0, 200)}`);
   }
   console.log('[send-agent-reply] registered missing custom field "custom_message" in workspace');
@@ -548,13 +556,57 @@ Deno.serve(async (req) => {
     // 9. Update lead
     const pipelineStage = INTENT_STAGE_MAP[intent] || lead.pipeline_stage;
 
+    // Append the sent message to reply_thread so the Reply.io send reflects in
+    // the conversation thread, mirroring HeyReach (send-heyreach-message for the
+    // direct path, add-to-heyreach-campaign for the campaign-add path). Reply.io
+    // doesn't echo tracked outbound back to our webhook, so this is the only
+    // place the outgoing message lands in the thread. Read-then-write; small
+    // race window on concurrent sends to one lead, fine for this single-user flow.
+    const existingThread = Array.isArray(lead.reply_thread) ? lead.reply_thread : [];
+    const sentMessage = {
+      role: 'sender',
+      content: draftResponse,
+      timestamp: new Date().toISOString(),
+      channel: lead.channel,
+    };
+
+    // Base fields — unchanged from before; thread (+ optional last_campaign_name)
+    // are layered on per path below.
+    const leadUpdate: Record<string, unknown> = {
+      inbox_status: 'sent',
+      pipeline_stage: pipelineStage,
+      draft_approved: true,
+    };
+
+    if (operatorCampaignId) {
+      // CASE A — operator picked a campaign (Add to Campaign): mirror
+      // add-to-heyreach-campaign — append sender + system entries and record
+      // last_campaign_name. Campaign name is looked up the same way the 4b
+      // channel-check matched the sequence (external_campaign_id + integration).
+      const { data: namedCampaign } = await supabase
+        .from('synced_campaigns')
+        .select('name')
+        .eq('external_campaign_id', campaignId)
+        .eq('integration_id', integration.id)
+        .maybeSingle();
+      const campaignName = (namedCampaign?.name as string | null | undefined) ?? null;
+
+      const systemMessage = {
+        role: 'system',
+        content: `Added to campaign: ${campaignName ?? 'Unknown'}`,
+        timestamp: new Date().toISOString(),
+      };
+      leadUpdate.reply_thread = [...existingThread, sentMessage, systemMessage];
+      leadUpdate.last_campaign_name = campaignName;
+    } else {
+      // CASE B — direct Send Reply (intent-routed): mirror send-heyreach-message
+      // — append only the sender entry; leave last_campaign_name unchanged.
+      leadUpdate.reply_thread = [...existingThread, sentMessage];
+    }
+
     await supabase
       .from('agent_leads')
-      .update({
-        inbox_status: 'sent',
-        pipeline_stage: pipelineStage,
-        draft_approved: true,
-      })
+      .update(leadUpdate)
       .eq('id', leadId);
 
     // 10. Insert activity
