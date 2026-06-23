@@ -254,6 +254,45 @@ async function fetchReplyIoReporting(
   return (json && typeof json === 'object') ? json as Record<string, unknown> : {};
 }
 
+// Workspace-wide reporting overview — a SINGLE allTime call with NO
+// sequenceIds filter. Feeds outbound_integrations.stats_cache (the dashboard's
+// LinkedIn numbers), replacing the prior per-sequence lastMonth sums which
+// were wrong on two axes: (a) the window was lastMonth not allTime, and (b)
+// summing per-sequence reports double-counts/misattributes vs the true
+// workspace rollup. Same endpoint/auth/429 shape as fetchReplyIoReporting;
+// differs only in dateRangePreset:'allTime' and the absent sequenceIds filter.
+async function fetchReplyIoOverview(
+  channel: 'linkedin' | 'email',
+  apiKey: string,
+): Promise<Record<string, unknown>> {
+  const path = channel === 'linkedin'
+    ? '/reporting/linkedin/overview'
+    : '/reporting/emails/overview';
+  const body = JSON.stringify({
+    filters: { dateRangePreset: 'allTime' },
+  });
+  const headers = {
+    "Authorization": `Bearer ${apiKey}`,
+    "Accept": "application/json",
+    "Content-Type": "application/json",
+  };
+  const doFetch = () => fetch(`${REPLY_API_V3}${path}`, { method: 'POST', headers, body });
+
+  let res = await doFetch();
+  if (res.status === 429) {
+    const wait = parseRetryAfter(res.headers.get('Retry-After'));
+    console.log(`  overview/${channel} 429, retrying after ${wait}s`);
+    await new Promise(r => setTimeout(r, wait * 1000));
+    res = await doFetch();
+  }
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`overview/${channel} ${res.status}: ${errText.slice(0, 200)}`);
+  }
+  const json = await res.json().catch(() => ({}));
+  return (json && typeof json === 'object') ? json as Record<string, unknown> : {};
+}
+
 // Shape a /reporting/linkedin/overview response into the per-row stats
 // fields the dashboard reads. Source-agnostic keys (sent, replies) are
 // populated so the CampaignsTable columns show real LinkedIn numbers
@@ -449,11 +488,6 @@ Deno.serve(async (req) => {
     // changes the shape later (same idea as fetchSmartleadStats'
     // analyticsKeysLogged flag).
     //
-    // cacheLinkedin* — running sum across this integration's linkedin +
-    // multichannel sequences. Folded into outbound_integrations.stats_cache
-    // after the loop so the Messages Breakdown tooltip sees Reply.io
-    // contribution alongside HR's.
-    //
     // linkedinEligibleCount — how many sequences we ATTEMPTED LinkedIn
     // reporting for. Drives the post-loop stats_cache write decision:
     // 0 means no linkedin/multichannel sequences exist, so leave cache
@@ -462,10 +496,10 @@ Deno.serve(async (req) => {
     // next successful sync overwrites).
     let loggedLinkedinKeys = false;
     let loggedEmailKeys = false;
-    let cacheLinkedinMessagesSent = 0;
-    let cacheLinkedinReplies = 0;
-    let cacheLinkedinConnectionsSent = 0;
-    let cacheLinkedinConnectionsAccepted = 0;
+    // stats_cache.linkedin* now comes from a single workspace allTime overview
+    // call after the loop (see fetchReplyIoOverview) — NOT from per-sequence
+    // sums. linkedinEligibleCount still gates whether we make that overview
+    // call + write stats_cache (skip it for pure-email workspaces).
     let linkedinEligibleCount = 0;
 
     for (const sequence of sequences) {
@@ -579,11 +613,10 @@ Deno.serve(async (req) => {
         if (linkedinRaw) {
           const li = formatLinkedinStats(linkedinRaw);
           reportingStats = { ...li, reply_io_raw_linkedin_reporting: linkedinRaw };
-          // Accumulate into the integration-level stats_cache write.
-          cacheLinkedinMessagesSent       += li.linkedinMessagesSent;
-          cacheLinkedinReplies            += li.linkedinReplies;
-          cacheLinkedinConnectionsSent    += li.linkedinConnectionsSent;
-          cacheLinkedinConnectionsAccepted += li.linkedinConnectionsAccepted;
+          // NOTE: per-sequence LI stats feed synced_campaigns.stats above
+          // (the per-campaign bar chart / Sent columns). They NO LONGER feed
+          // stats_cache — the dashboard's workspace LinkedIn numbers come from
+          // the single allTime overview written after this loop.
         }
         if (emailRaw) {
           const em = formatEmailStats(emailRaw);
@@ -727,22 +760,35 @@ Deno.serve(async (req) => {
     // wiping it.
     //
     // The spread preserves any other keys an existing stats_cache might
-    // carry (future-proofs for non-linkedin keys); the linkedin* keys are
-    // replaced wholesale with this sync's aggregates (zeros included —
-    // honest "no data fetched" when all per-sequence reporting failed).
+    // carry; the linkedin* keys are replaced wholesale from a single
+    // workspace-wide allTime overview call (fetchReplyIoOverview) — the true
+    // rollup, not per-sequence lastMonth sums. On overview failure we leave
+    // the prior stats_cache untouched rather than wiping it to zeros.
     let statsCachePatch: Record<string, unknown> | null = null;
     if (linkedinEligibleCount > 0) {
-      const existingStatsCache =
-        (integration.stats_cache as Record<string, unknown> | null) ?? {};
-      statsCachePatch = {
-        ...existingStatsCache,
-        linkedinMessagesSent: cacheLinkedinMessagesSent,
-        linkedinReplies: cacheLinkedinReplies,
-        linkedinConnectionsSent: cacheLinkedinConnectionsSent,
-        linkedinConnectionsAccepted: cacheLinkedinConnectionsAccepted,
-        cached_at: new Date().toISOString(),
-      };
-      console.log(`stats_cache linkedin sums: messagesSent=${cacheLinkedinMessagesSent}, replies=${cacheLinkedinReplies}, connectionsSent=${cacheLinkedinConnectionsSent}, connectionsAccepted=${cacheLinkedinConnectionsAccepted} (over ${linkedinEligibleCount} eligible sequences)`);
+      let overviewLi: Record<string, number> | null = null;
+      try {
+        const rawOverview = await fetchReplyIoOverview('linkedin', apiKey);
+        console.log(`[reporting/linkedin] OVERVIEW (allTime, workspace) response keys:`, Object.keys(rawOverview));
+        overviewLi = formatLinkedinStats(rawOverview);
+      } catch (overviewErr) {
+        const msg = overviewErr instanceof Error ? overviewErr.message : String(overviewErr);
+        console.warn(`  linkedin allTime overview failed, leaving prior stats_cache: ${msg}`);
+      }
+
+      if (overviewLi) {
+        const existingStatsCache =
+          (integration.stats_cache as Record<string, unknown> | null) ?? {};
+        statsCachePatch = {
+          ...existingStatsCache,
+          linkedinMessagesSent: overviewLi.linkedinMessagesSent,
+          linkedinReplies: overviewLi.linkedinReplies,
+          linkedinConnectionsSent: overviewLi.linkedinConnectionsSent,
+          linkedinConnectionsAccepted: overviewLi.linkedinConnectionsAccepted,
+          cached_at: new Date().toISOString(),
+        };
+        console.log(`stats_cache linkedin OVERVIEW (allTime): messagesSent=${overviewLi.linkedinMessagesSent}, replies=${overviewLi.linkedinReplies}, connectionsSent=${overviewLi.linkedinConnectionsSent}, connectionsAccepted=${overviewLi.linkedinConnectionsAccepted}`);
+      }
     }
 
     await supabase
