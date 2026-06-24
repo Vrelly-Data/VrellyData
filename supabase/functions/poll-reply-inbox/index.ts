@@ -186,6 +186,46 @@ async function fetchThreadMessages(
   return all;
 }
 
+// Normalize a LinkedIn profile URL to a comparable key so the same person under
+// slightly different URLs dedupes. Returns null when there's no usable URL.
+//   https://www.linkedin.com/in/jasonmisztal/  →  linkedin.com/in/jasonmisztal
+function normalizeLinkedInUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  let s = String(url).trim().toLowerCase();
+  if (!s) return null;
+  s = s.replace(/^https?:\/\//, '');   // strip protocol
+  s = s.replace(/^www\./, '');         // strip leading www.
+  s = s.split('#')[0].split('?')[0];   // strip fragment + query
+  s = s.replace(/\/+$/, '');           // strip trailing slash(es)
+  return s || null;
+}
+
+function isGenmailEmail(email: string | null | undefined): boolean {
+  return String(email ?? '').trim().toLowerCase().endsWith('@genmail.com');
+}
+
+// Reply.io can return the same person as a real-email thread + a @genmail.com
+// placeholder thread. When two threads share a normalized LinkedIn URL, keep the
+// one with the most recent activity; tie-break to the non-genmail email.
+function pickLinkedInWinner(a: InboxThread, b: InboxThread): InboxThread {
+  const aDate = a.lastActivityDate || '';
+  const bDate = b.lastActivityDate || '';
+  if (aDate !== bDate) return aDate > bDate ? a : b;   // most recent wins
+  const aGen = isGenmailEmail(a.contact?.email);
+  const bGen = isGenmailEmail(b.contact?.email);
+  if (aGen !== bGen) return aGen ? b : a;              // prefer non-genmail
+  return a;                                            // stable
+}
+
+// Existing reply_io lead row shape used by the against-DB LinkedIn dedup.
+interface ExistingReplyLead {
+  id: string;
+  external_id: string | null;
+  linkedin_url: string | null;
+  inbox_status: string;
+  last_reply_at: string | null;
+}
+
 Deno.serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
 
@@ -301,7 +341,46 @@ Deno.serve(async (req) => {
         const normalizeChannel = (c: unknown): string =>
           String(c).toLowerCase() === 'linkedin' ? 'linkedin' : 'email';
 
+        // --- Dedup pass 1 (within this run): collapse threads that resolve to
+        // the same person by normalized LinkedIn URL (real-email vs @genmail.com
+        // placeholder). Keep one winner per LinkedIn key; threads with NO
+        // LinkedIn URL pass through untouched and fall back to (user_id,
+        // external_id) dedup — we never collapse different no-LinkedIn people.
+        const linkedInWinners = new Map<string, InboxThread>();
+        const threadsToProcess: InboxThread[] = [];
         for (const thread of inboxThreads) {
+          const key = normalizeLinkedInUrl(thread.contact?.linkedInProfileUrl);
+          if (!key) {
+            threadsToProcess.push(thread);
+            continue;
+          }
+          const prev = linkedInWinners.get(key);
+          linkedInWinners.set(key, prev ? pickLinkedInWinner(prev, thread) : thread);
+        }
+        threadsToProcess.push(...linkedInWinners.values());
+
+        // --- Dedup pass 2 (against the DB): one query for this user's existing
+        // reply_io leads, indexed by normalized LinkedIn URL. A thread whose
+        // contact matches an existing lead's LinkedIn URL UPDATEs that lead
+        // (even under a different external_id) instead of inserting a new row.
+        const { data: existingReplyLeads } = await supabase
+          .from('agent_leads')
+          .select('id, external_id, linkedin_url, inbox_status, last_reply_at')
+          .eq('user_id', userId)
+          .eq('source', 'reply_io');
+
+        const leadsByLinkedIn = new Map<string, ExistingReplyLead>();
+        for (const l of (existingReplyLeads ?? []) as ExistingReplyLead[]) {
+          const key = normalizeLinkedInUrl(l.linkedin_url);
+          if (!key) continue;
+          const prev = leadsByLinkedIn.get(key);
+          // Pre-existing duplicates: keep the most recently active one.
+          if (!prev || (l.last_reply_at || '') > (prev.last_reply_at || '')) {
+            leadsByLinkedIn.set(key, l);
+          }
+        }
+
+        for (const thread of threadsToProcess) {
           try {
             const contact = thread.contact ?? null;
             const externalId = String(thread.id);
@@ -346,15 +425,22 @@ Deno.serve(async (req) => {
             const isRecentReply = !lastReplyDate || lastReplyDate >= oneDayAgo;
             const replyText = latestInbound.body || '';
 
-            // Dedupe against existing agent_leads by timestamp similarity.
-            // Also read inbox_status so we can preserve progressed leads
-            // (see PROTECTED_STATUSES) instead of resurrecting them.
-            const { data: existingLead } = await supabase
-              .from('agent_leads')
-              .select('id, last_reply_at, inbox_status')
-              .eq('user_id', userId)
-              .eq('external_id', externalId)
-              .maybeSingle();
+            // Resolve the existing lead to dedupe against: prefer a normalized
+            // LinkedIn-URL match (collapses real-email vs @genmail.com
+            // duplicates, even under a different external_id), then fall back to
+            // the same-(user_id, external_id) lead for no-LinkedIn contacts.
+            const linkedInKey = normalizeLinkedInUrl(contact?.linkedInProfileUrl);
+            let existingLead: ExistingReplyLead | null =
+              linkedInKey ? (leadsByLinkedIn.get(linkedInKey) ?? null) : null;
+            if (!existingLead) {
+              const { data } = await supabase
+                .from('agent_leads')
+                .select('id, external_id, linkedin_url, inbox_status, last_reply_at')
+                .eq('user_id', userId)
+                .eq('external_id', externalId)
+                .maybeSingle();
+              existingLead = (data as ExistingReplyLead | null) ?? null;
+            }
 
             if (existingLead) {
               const existingReplyAt = existingLead.last_reply_at;
@@ -396,36 +482,79 @@ Deno.serve(async (req) => {
               fromName: m.fromName ?? null,
             }));
 
-            const { data: upsertedLead, error: upsertError } = await supabase
-              .from('agent_leads')
-              .upsert({
-                user_id: userId,
-                agent_config_id: agentConfig.id,
-                external_id: externalId,
-                full_name: fullName,
-                email: contact?.email || '',
-                linkedin_url: contact?.linkedInProfileUrl || '',
-                company,
-                channel,
-                source: 'reply_io',
-                pipeline_stage: 'replied',
-                inbox_status: targetInboxStatus,
-                last_reply_at: lastReplyDate || new Date().toISOString(),
-                last_reply_text: replyText,
-                reply_thread: replyThread,
-              }, {
-                onConflict: 'user_id,external_id',
-                ignoreDuplicates: false,
-              })
-              .select()
-              .single();
+            const nowIso = new Date().toISOString();
+            let writtenLeadId: string | null = null;
 
-            if (upsertError) {
-              console.error(`[poll-reply-inbox] Upsert error for ${externalId}:`, upsertError.message);
-              continue;
+            if (existingLead) {
+              // UPDATE the matched existing lead in place — refresh the reply
+              // fields per the normal rules, but DO NOT touch external_id /
+              // source / email / linkedin_url, so the real-email identity is
+              // preserved and no duplicate external_id row is created.
+              const { data: updated, error: updateError } = await supabase
+                .from('agent_leads')
+                .update({
+                  inbox_status: targetInboxStatus,
+                  last_reply_at: lastReplyDate || nowIso,
+                  last_reply_text: replyText,
+                  reply_thread: replyThread,
+                  updated_at: nowIso,
+                })
+                .eq('id', existingLead.id)
+                .select('id')
+                .single();
+
+              if (updateError) {
+                console.error(`[poll-reply-inbox] Update error for lead ${existingLead.id} (thread ${externalId}):`, updateError.message);
+                continue;
+              }
+              writtenLeadId = updated?.id ?? existingLead.id;
+            } else {
+              // INSERT a new lead (upsert keyed on user_id,external_id).
+              const { data: inserted, error: upsertError } = await supabase
+                .from('agent_leads')
+                .upsert({
+                  user_id: userId,
+                  agent_config_id: agentConfig.id,
+                  external_id: externalId,
+                  full_name: fullName,
+                  email: contact?.email || '',
+                  linkedin_url: contact?.linkedInProfileUrl || '',
+                  company,
+                  channel,
+                  source: 'reply_io',
+                  pipeline_stage: 'replied',
+                  inbox_status: targetInboxStatus,
+                  last_reply_at: lastReplyDate || nowIso,
+                  last_reply_text: replyText,
+                  reply_thread: replyThread,
+                }, {
+                  onConflict: 'user_id,external_id',
+                  ignoreDuplicates: false,
+                })
+                .select('id')
+                .single();
+
+              if (upsertError) {
+                console.error(`[poll-reply-inbox] Upsert error for ${externalId}:`, upsertError.message);
+                continue;
+              }
+              writtenLeadId = inserted?.id ?? null;
+
+              // Register the new lead under its LinkedIn key so a later thread
+              // in this same run with the same key UPDATEs it (defensive — the
+              // within-run pass already collapses same-key threads).
+              if (linkedInKey && writtenLeadId) {
+                leadsByLinkedIn.set(linkedInKey, {
+                  id: writtenLeadId,
+                  external_id: externalId,
+                  linkedin_url: contact?.linkedInProfileUrl || null,
+                  inbox_status: targetInboxStatus,
+                  last_reply_at: lastReplyDate || nowIso,
+                });
+              }
             }
 
-            if (upsertedLead) {
+            if (writtenLeadId) {
               // Only newly-actionable ('pending') threads get an activity-feed
               // entry; mirrored ones (we already replied, or PROTECTED) are
               // data-only.
@@ -440,7 +569,7 @@ Deno.serve(async (req) => {
               await supabase.from('agent_activity').insert({
                 user_id: userId,
                 agent_config_id: agentConfig.id,
-                lead_id: upsertedLead.id,
+                lead_id: writtenLeadId,
                 lead_name: fullName,
                 lead_company: company,
                 activity_type: 'reply_received',
