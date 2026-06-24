@@ -24,11 +24,15 @@ function getCorsHeaders(req: Request) {
 // missed LinkedIn connection replies entirely (~5 contacts vs the inbox's 970
 // threads), and the unbounded contact walk timed out the function.
 //
-// One agent_lead per THREAD: external_id = thread.id, reply text =
-// thread.bodyPreview, last_reply_at = thread.lastActivityDate, channel
-// normalized from "linkedIn"/"email" → 'linkedin'/'email'. Because the inbox
-// gives the reply preview directly, there is no per-contact /activities
-// backfill anymore.
+// One agent_lead per THREAD (external_id = thread.id). For each thread active
+// within the last 24h we fetch its FULL messages via
+// GET /v3/inbox/threads/{id}/messages — NOT thread.bodyPreview (truncated) —
+// which also carries `isOutbound` so we can tell a real prospect reply from our
+// own send. This fixes two bugs: (1) truncated reply text, and (2) outbound
+// sequence sends being counted as replies. Threads with NO inbound message are
+// skipped entirely; a thread is 'pending' (actionable) only when its LATEST
+// message is the inbound reply. last_reply_text/last_reply_at come from the
+// latest inbound message; reply_thread holds the full exchange.
 //
 // Pagination is capped (maxPages, default 2 ≈ 200 newest threads) so each poll
 // is fast and focused on NEW replies; frequent scheduled runs catch them as
@@ -70,6 +74,23 @@ interface InboxThread {
 
 interface InboxThreadsPage {
   items?: InboxThread[];
+  hasMore?: boolean;
+}
+
+// GET /v3/inbox/threads/{threadId}/messages item — the FULL message (not the
+// truncated thread.bodyPreview), with the isOutbound discriminator that lets us
+// tell a real prospect reply (false) from our own outbound send (true).
+// Messages come chronological (oldest first).
+interface InboxMessage {
+  date?: string;                                     // ISO8601
+  body?: string;                                     // FULL message text
+  fromName?: string;
+  isOutbound?: boolean;                              // true = our send, false = prospect reply
+  channel?: string;                                  // "linkedIn" | "email"
+}
+
+interface InboxMessagesPage {
+  items?: InboxMessage[];
   hasMore?: boolean;
 }
 
@@ -135,6 +156,32 @@ async function fetchInboxThreads(
     if (items.length < pageSize) break;
     skip += items.length;
     await new Promise(r => setTimeout(r, 300));
+  }
+  return all;
+}
+
+// Fetch the FULL messages of one thread (chronological, oldest first) via
+// GET /v3/inbox/threads/{threadId}/messages. Gives us full bodies + the
+// isOutbound flag (fixes truncation + outbound-counted-as-reply). Paginates
+// top/skip defensively (capped) in case a thread has >100 messages; most
+// threads are a single page, so no inter-page sleep is incurred in practice.
+async function fetchThreadMessages(
+  threadId: number,
+  apiKey: string,
+): Promise<InboxMessage[]> {
+  const pageSize = 100;
+  const all: InboxMessage[] = [];
+  let skip = 0;
+  for (let page = 1; page <= 10; page++) {   // hard cap: 1000 messages/thread
+    const url = `/inbox/threads/${threadId}/messages?top=${pageSize}&skip=${skip}`;
+    const resp = await fetchV3WithRetry<InboxMessagesPage>(url, apiKey);
+    const items = Array.isArray(resp.items) ? resp.items : [];
+    if (items.length === 0) break;
+    all.push(...items);
+    if (resp.hasMore === false) break;
+    if (items.length < pageSize) break;
+    skip += items.length;
+    await new Promise(r => setTimeout(r, 200));
   }
   return all;
 }
@@ -251,21 +298,53 @@ Deno.serve(async (req) => {
 
         const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
+        const normalizeChannel = (c: unknown): string =>
+          String(c).toLowerCase() === 'linkedin' ? 'linkedin' : 'email';
+
         for (const thread of inboxThreads) {
           try {
             const contact = thread.contact ?? null;
-            // lastActivityDate is the thread's reply timestamp (ISO8601).
-            const lastReplyDate = thread.lastActivityDate || null;
-
-            // ALL-TIME MIRRORING: we no longer skip old replies. Recency now
-            // only decides ACTIONABILITY (inbox_status), not whether the row
-            // is mirrored. Recent (≤24h) → 'pending' (shows in the agent
-            // inbox); older → 'mirrored' (data-only, non-actionable). A null
-            // date is treated as recent, preserving prior behavior.
-            const isRecentReply = !lastReplyDate || lastReplyDate >= oneDayAgo;
-
-            // external id = thread id (NOT contact id) — one lead per thread.
             const externalId = String(thread.id);
+            const threadActivity = thread.lastActivityDate || null;
+
+            // PERFORMANCE: only inspect threads active within the last 24h —
+            // those are the only candidates for an actionable reply, and the
+            // per-thread messages fetch is expensive. Older threads are skipped
+            // here WITHOUT the messages call (the webhook is the primary capture
+            // path; this poll is a 24h backstop). null date → treat as recent.
+            if (threadActivity && threadActivity < oneDayAgo) {
+              continue;
+            }
+
+            // Fetch the FULL message list for this thread (oldest → newest).
+            let messages: InboxMessage[];
+            try {
+              messages = await fetchThreadMessages(thread.id, apiKey);
+            } catch (msgErr) {
+              console.error(`[poll-reply-inbox] Failed to fetch messages for thread ${externalId}:`, msgErr);
+              continue;
+            }
+
+            // INBOUND = prospect reply (isOutbound === false). No inbound at all
+            // → this thread is outbound-only (we sent, nobody replied). SKIP it
+            // entirely — do not create/surface a lead. (Fixes outbound-counted-
+            // as-reply.)
+            const inbound = messages.filter((m) => m.isOutbound === false);
+            if (inbound.length === 0) {
+              continue;
+            }
+
+            const latestInbound = inbound[inbound.length - 1];
+            const latestMessage = messages[messages.length - 1];
+            // Actionable only when the most recent message in the thread IS the
+            // inbound reply (nothing outbound after it). If our send is latest,
+            // the thread's newest activity is our outbound — not a new reply.
+            const latestIsInbound = latestMessage ? latestMessage.isOutbound === false : true;
+
+            // last_reply_* derive from the latest INBOUND message (FULL body).
+            const lastReplyDate = latestInbound.date || threadActivity || null;
+            const isRecentReply = !lastReplyDate || lastReplyDate >= oneDayAgo;
+            const replyText = latestInbound.body || '';
 
             // Dedupe against existing agent_leads by timestamp similarity.
             // Also read inbox_status so we can preserve progressed leads
@@ -290,23 +369,32 @@ Deno.serve(async (req) => {
 
             // Target inbox_status. A human/agent-progressed lead
             // (draft_ready/approved/sent/dismissed) is preserved verbatim so a
-            // re-poll never drags it back to pending or mirrored. Otherwise
-            // recency decides: recent → 'pending', old → 'mirrored'.
+            // re-poll never drags it back. Otherwise: 'pending' (actionable)
+            // ONLY when the latest message is the inbound reply AND it's within
+            // 24h; everything else (we already replied, or older) → 'mirrored'.
             const targetInboxStatus =
               existingLead && PROTECTED_STATUSES.includes(existingLead.inbox_status)
                 ? existingLead.inbox_status
-                : (isRecentReply ? 'pending' : 'mirrored');
+                : (latestIsInbound && isRecentReply ? 'pending' : 'mirrored');
 
             totalProcessed++;
 
-            const fullName = contact?.fullName || 'Unknown';
+            const fullName = contact?.fullName || latestInbound.fromName || 'Unknown';
             const company = contact?.companyName || '';
-            // Reply.io inbox channel is "linkedIn" | "email"; normalize to the
-            // lowercase 'linkedin'/'email' convention the rest of the app uses
-            // (lead.channel === 'linkedin' discriminators + send-agent-reply's
-            // channel-match check). Storing "linkedIn" verbatim would break them.
-            const channel = String(thread.channel).toLowerCase() === 'linkedin' ? 'linkedin' : 'email';
-            const replyText = thread.bodyPreview || '';
+            // Reply.io channel is "linkedIn" | "email"; normalize to the
+            // lowercase 'linkedin'/'email' convention the rest of the app uses.
+            const channel = normalizeChannel(thread.channel);
+
+            // Full conversation thread — same shape the HeyReach path writes so
+            // the Conversation panel renders the exchange: inbound → 'prospect'
+            // (left), outbound → 'sender' (right); the renderer reads `timestamp`.
+            const replyThread = messages.map((m) => ({
+              role: m.isOutbound ? 'sender' : 'prospect',
+              content: m.body || '',
+              timestamp: m.date || new Date().toISOString(),
+              channel: normalizeChannel(m.channel ?? thread.channel),
+              fromName: m.fromName ?? null,
+            }));
 
             const { data: upsertedLead, error: upsertError } = await supabase
               .from('agent_leads')
@@ -324,6 +412,7 @@ Deno.serve(async (req) => {
                 inbox_status: targetInboxStatus,
                 last_reply_at: lastReplyDate || new Date().toISOString(),
                 last_reply_text: replyText,
+                reply_thread: replyThread,
               }, {
                 onConflict: 'user_id,external_id',
                 ignoreDuplicates: false,
@@ -337,10 +426,10 @@ Deno.serve(async (req) => {
             }
 
             if (upsertedLead) {
-              // Old (mirrored) replies are data-only: skip the activity-feed
-              // entry. The reply text already came from thread.bodyPreview in
-              // the upsert above, so there's no per-contact backfill to do.
-              if (!isRecentReply) {
+              // Only newly-actionable ('pending') threads get an activity-feed
+              // entry; mirrored ones (we already replied, or PROTECTED) are
+              // data-only.
+              if (targetInboxStatus !== 'pending') {
                 totalMirrored++;
                 continue;
               }
