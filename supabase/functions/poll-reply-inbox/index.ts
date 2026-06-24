@@ -14,86 +14,84 @@ function getCorsHeaders(req: Request) {
 }
 
 // ---------------------------------------------------------------------------
-// Reply.io v3 (deprecated v1 paths removed — Foundation phase 3/6).
+// Reply.io v3 — agent inbox backstop poll: catches replies the webhook missed.
+// Cron auth via x-agent-key, manual trigger via user JWT. Bearer-authed v3.
 //
-// Backstop poll for the agent inbox: catches replies the webhook missed.
-// Cron auth via x-agent-key, manual trigger via user JWT — unchanged.
+// Reply source: GET /v3/inbox/threads (top/skip, items[]/hasMore, newest-first
+// by lastActivityDate). This is the CORRECT source — it surfaces ALL reply
+// threads, email AND LinkedIn (incl. connection replies). The earlier
+// /v3/contacts?status=replied only returned contacts flagged 'replied' and
+// missed LinkedIn connection replies entirely (~5 contacts vs the inbox's 970
+// threads), and the unbounded contact walk timed out the function.
 //
-// Auth swap: X-Api-Key → Authorization: Bearer (matches the template
-// established in 8a37994 / 0939c1d / 7503756).
+// One agent_lead per THREAD (external_id = thread.id). For each thread active
+// within the last 24h we fetch its FULL messages via
+// GET /v3/inbox/threads/{id}/messages — NOT thread.bodyPreview (truncated) —
+// which also carries `isOutbound` so we can tell a real prospect reply from our
+// own send. This fixes two bugs: (1) truncated reply text, and (2) outbound
+// sequence sends being counted as replies. Threads with NO inbound message are
+// skipped entirely; a thread is 'pending' (actionable) only when its LATEST
+// message is the inbound reply. last_reply_text/last_reply_at come from the
+// latest inbound message; reply_thread holds the full exchange.
 //
-// Endpoint swaps:
-//   GET /v1/people?page=N&limit=100&status=replied
-//     → GET /v3/contacts?status=replied&top=100&skip=K  (items[]/hasMore)
-//   GET /v1/people/{id}/emailactivities
-//     → GET /v3/contacts/{id}/activities  (shape unverified — see below)
-//
-// Field-name remaps (verified from the live spike against CYPR):
-//   person.companyName       → contact.company
-//   person.linkedInProfile   → contact.linkedInUrl  (capital I-n)
-//   person.id                → contact.id (numeric, unchanged)
-//   person.email / firstName / lastName / title — same names, no remap
-//
-// `lastReplyDate` proxy: v3 /contacts response does NOT include a
-// per-contact "last replied" timestamp. The 30 verified top-level keys
-// have addingDate / createdAt / lastModifiedAt but no reply-specific
-// time. We use `lastModifiedAt` as the closest proxy for the 7-day
-// recency filter and the existing-lead-skip-by-time check. Tradeoff:
-// any contact modification (not just a reply) bumps lastModifiedAt, so
-// some non-reply changes may flow through to the re-classify path —
-// but the upsert + classify-reply are idempotent enough that this is
-// wasted work, not corruption. If precision matters, future work can
-// derive the real last-reply timestamp from /v3/contacts/{id}/activities.
-//
-// Activities endpoint shape (/v3/contacts/{id}/activities) is UNVERIFIED.
-// First call logs:
-//   * whether the response is a direct array or an envelope (items[])
-//   * the keys of the first activity object
-//   * a presence check across [type, direction, body, text, message,
-//     date, createdAt, occurredAt] so we can confirm the field names
-//     against live data before trusting the thread parse.
-// fetchContactActivitiesV3 then returns the unwrapped array; the loop
-// parses defensively with ?? chains across the candidate field names.
+// Pagination is capped (maxPages, default 2 ≈ 200 newest threads) so each poll
+// is fast and focused on NEW replies; frequent scheduled runs catch them as
+// they arrive. Recency (24h) decides ACTIONABILITY only (pending vs mirrored),
+// not whether a thread is mirrored.
 // ---------------------------------------------------------------------------
 
 const REPLY_API_V3 = 'https://api.reply.io/v3';
 
-interface V3Contact {
-  id: number;
-  email?: string;
-  firstName?: string;
-  lastName?: string;
-  // Verified field names from sync-reply-contacts spike:
-  company?: string;                                  // NOT companyName
-  linkedInUrl?: string;                              // NOT linkedInProfile
-  title?: string;
-  isOptedOut?: boolean;
-  addingDate?: string;
-  createdAt?: string;
-  lastModifiedAt?: string;                           // proxy for v1's lastReplyDate
-  sequences?: unknown[];
+interface InboxThreadContact {
+  id?: number | null;
+  ownerId?: number | null;
+  fullName?: string;
+  email?: string | null;
+  linkedInProfileUrl?: string | null;
+  companyName?: string | null;
+  title?: string | null;
+  isDeleted?: boolean;
 }
 
-interface V3ContactsPage {
-  items?: V3Contact[];
+// GET /v3/inbox/threads item. The Inbox is the correct reply source: it
+// surfaces ALL reply threads — email AND LinkedIn (incl. connection replies) —
+// whereas /v3/contacts?status=replied only returned contacts flagged 'replied'
+// (it missed LinkedIn connection replies: ~5 contacts vs the inbox's 970
+// threads). Threads are ordered lastActivityDate DESC (newest first).
+interface InboxThread {
+  id: number;
+  channel?: string;                                  // "email" | "linkedIn"
+  isRead?: boolean;
+  subject?: string | null;
+  bodyPreview?: string | null;                       // reply text preview
+  lastActivityDate?: string;                         // ISO8601 — reply timestamp
+  contact?: InboxThreadContact | null;
+  sequence?: { id: number; name: string } | null;
+  category?: { id: number; name: string } | null;    // e.g. "Interested" / "Not interested"
+  hasMeetingIntent?: boolean;
+  status?: { state?: string };
+}
+
+interface InboxThreadsPage {
+  items?: InboxThread[];
   hasMore?: boolean;
 }
 
-// V3 activity shape — verified live via probe against CYPR. Top-level
-// keys: id, date, activityType, sourceType, userName, userId, content.
-// `content` is an OBJECT (not a string like v1 body). The reply-specific
-// `activityType` enum value is unknown — dev workspace contains only
-// CSV-imported leads with MoveToCampaign + Creation activities, no real
-// engagement. Defensive substring matching below + runtime logging will
-// surface the reply value the first time this runs against prod data.
-interface V3Activity {
-  id?: number | string;
-  date?: string;                                              // timestamp (verified)
-  activityType?: string;                                      // v3 discriminator (replaces v1 type/direction)
-  sourceType?: string;                                        // workspace source (CsvImport / etc.)
-  content?: string | Record<string, unknown> | unknown;       // v3: OBJECT not string
-  userId?: number;
-  userName?: unknown;                                         // observed as object — not used
+// GET /v3/inbox/threads/{threadId}/messages item — the FULL message (not the
+// truncated thread.bodyPreview), with the isOutbound discriminator that lets us
+// tell a real prospect reply (false) from our own outbound send (true).
+// Messages come chronological (oldest first).
+interface InboxMessage {
+  date?: string;                                     // ISO8601
+  body?: string;                                     // FULL message text
+  fromName?: string;
+  isOutbound?: boolean;                              // true = our send, false = prospect reply
+  channel?: string;                                  // "linkedIn" | "email"
+}
+
+interface InboxMessagesPage {
+  items?: InboxMessage[];
+  hasMore?: boolean;
 }
 
 // Bearer-authed v3 fetcher — identical to sync-reply-contacts' fetchV3.
@@ -135,91 +133,57 @@ async function fetchV3WithRetry<T = unknown>(
   throw new Error(`Max retries exceeded for ${endpoint}`);
 }
 
-// Paginate /v3/contacts?status=replied with top + skip; same pattern as
-// sync-reply-contacts' fetchAllContactsV3. Stops on hasMore=false, short
-// read, or 100k safety cap. Bounded inter-page sleep so we don't hammer.
-async function fetchAllRepliedContactsV3(
+// Paginate GET /v3/inbox/threads with top + skip. The inbox is ordered
+// lastActivityDate DESC (newest first), so the first maxPages give us the
+// most-recent reply threads — which is all we need for fast, frequent polling
+// of NEW replies. Stops on hasMore=false, short read, or the maxPages cap.
+// Bounded inter-page sleep so we don't hammer the API.
+async function fetchInboxThreads(
   apiKey: string,
-  pageSize: number = 100,
-): Promise<V3Contact[]> {
-  const all: V3Contact[] = [];
+  maxPages: number = 2,
+): Promise<InboxThread[]> {
+  const pageSize = 100;
+  const all: InboxThread[] = [];
   let skip = 0;
-  for (let page = 1; page <= 1000; page++) {
-    const url = `/contacts?status=replied&top=${pageSize}&skip=${skip}`;
-    const resp = await fetchV3WithRetry<V3ContactsPage>(url, apiKey);
+  for (let page = 1; page <= maxPages; page++) {
+    const url = `/inbox/threads?top=${pageSize}&skip=${skip}`;
+    const resp = await fetchV3WithRetry<InboxThreadsPage>(url, apiKey);
     const items = Array.isArray(resp.items) ? resp.items : [];
     if (items.length === 0) break;
     all.push(...items);
-    console.log(`  /contacts?status=replied page ${page} (skip=${skip}): fetched ${items.length}, total ${all.length}`);
+    console.log(`  /inbox/threads page ${page} (skip=${skip}): fetched ${items.length}, total ${all.length}`);
     if (resp.hasMore === false) break;
     if (items.length < pageSize) break;
     skip += items.length;
-    if (all.length > 100000) {
-      console.warn(`Reached safety cap (100k contacts); stopping pagination`);
-      break;
-    }
     await new Promise(r => setTimeout(r, 300));
   }
   return all;
 }
 
-// Module-scope tripwire: log activity-response shape ONCE per worker
-// process. Fires on the first /v3/contacts/{id}/activities call that
-// returns a non-empty result. After we read this off a live dev run we
-// can tighten the defensive parsing (or replace it with verified field
-// names).
-let loggedFirstActivityShape = false;
-
-async function fetchContactActivitiesV3(
-  contactId: number | string,
+// Fetch the FULL messages of one thread (chronological, oldest first) via
+// GET /v3/inbox/threads/{threadId}/messages. Gives us full bodies + the
+// isOutbound flag (fixes truncation + outbound-counted-as-reply). Paginates
+// top/skip defensively (capped) in case a thread has >100 messages; most
+// threads are a single page, so no inter-page sleep is incurred in practice.
+async function fetchThreadMessages(
+  threadId: number,
   apiKey: string,
-): Promise<V3Activity[]> {
-  const resp = await fetchV3WithRetry<unknown>(`/contacts/${contactId}/activities?top=100`, apiKey);
-
-  // Discover envelope: direct array vs paginated object.
-  let activities: V3Activity[] = [];
-  let envelope: 'direct-array' | 'object-items' | 'object-activities' | 'object-emailActivities' | 'unknown';
-  if (Array.isArray(resp)) {
-    activities = resp as V3Activity[];
-    envelope = 'direct-array';
-  } else if (resp && typeof resp === 'object') {
-    const obj = resp as Record<string, unknown>;
-    if (Array.isArray(obj.items)) { activities = obj.items as V3Activity[]; envelope = 'object-items'; }
-    else if (Array.isArray(obj.activities)) { activities = obj.activities as V3Activity[]; envelope = 'object-activities'; }
-    else if (Array.isArray(obj.emailActivities)) { activities = obj.emailActivities as V3Activity[]; envelope = 'object-emailActivities'; }
-    else { envelope = 'unknown'; }
-  } else {
-    envelope = 'unknown';
+): Promise<InboxMessage[]> {
+  const pageSize = 100;
+  const all: InboxMessage[] = [];
+  let skip = 0;
+  for (let page = 1; page <= 10; page++) {   // hard cap: 1000 messages/thread
+    const url = `/inbox/threads/${threadId}/messages?top=${pageSize}&skip=${skip}`;
+    const resp = await fetchV3WithRetry<InboxMessagesPage>(url, apiKey);
+    const items = Array.isArray(resp.items) ? resp.items : [];
+    if (items.length === 0) break;
+    all.push(...items);
+    if (resp.hasMore === false) break;
+    if (items.length < pageSize) break;
+    skip += items.length;
+    await new Promise(r => setTimeout(r, 200));
   }
-
-  // First-call shape log — prints once per worker process lifetime,
-  // gated on a non-empty activities array. Surfaces the activityType
-  // distribution + content sub-keys so we can identify the reply-specific
-  // vocabulary the first time this fires against a workspace with real
-  // email replies. (Dev workspace only had CsvImport/MoveToCampaign/
-  // Creation lifecycle events — no reply activityType values seen.)
-  if (!loggedFirstActivityShape && activities.length > 0) {
-    const first = activities[0] as Record<string, unknown>;
-    console.log(`[/v3/contacts/{id}/activities] first-call envelope: ${envelope} (sample contactId=${contactId}, len=${activities.length})`);
-    console.log(`[/v3/contacts/{id}/activities] first activity top-level keys:`, Object.keys(first));
-
-    const activityTypes = [...new Set(activities.map(a => String((a as Record<string, unknown>).activityType ?? '(absent)')))];
-    const sourceTypes = [...new Set(activities.map(a => String((a as Record<string, unknown>).sourceType ?? '(absent)')))];
-    console.log(`[/v3/contacts/{id}/activities] activityType values in batch:`, activityTypes);
-    console.log(`[/v3/contacts/{id}/activities] sourceType values in batch:`, sourceTypes);
-
-    // If content is an object, log its sub-keys so we know which
-    // child field carries the message body.
-    if (first.content && typeof first.content === 'object') {
-      console.log(`[/v3/contacts/{id}/activities] first activity content sub-keys:`, Object.keys(first.content));
-    } else {
-      console.log(`[/v3/contacts/{id}/activities] first activity content typeof:`, typeof first.content);
-    }
-
-    loggedFirstActivityShape = true;
-  }
-
-  return activities;
+  return all;
 }
 
 Deno.serve(async (req) => {
@@ -320,36 +284,67 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        // v3: fetch ALL replied contacts in one paginated walk (was v1's
-        // page-by-page in-band loop). Pagination is items[]/hasMore via
-        // top+skip — matches sync-reply-campaigns / sync-reply-contacts.
-        let repliedContacts: V3Contact[];
+        // Fetch the inbox threads (the correct reply source — see
+        // fetchInboxThreads). Newest-first, capped at maxPages so each poll is
+        // fast and focused on recent replies.
+        let inboxThreads: InboxThread[];
         try {
-          repliedContacts = await fetchAllRepliedContactsV3(apiKey);
-          console.log(`[poll-reply-inbox] Fetched ${repliedContacts.length} replied contacts for integration ${integration.id}`);
+          inboxThreads = await fetchInboxThreads(apiKey);
+          console.log(`[poll-reply-inbox] Fetched ${inboxThreads.length} inbox threads for integration ${integration.id}`);
         } catch (fetchErr) {
-          console.error(`[poll-reply-inbox] Reply.io v3 fetch failed for integration ${integration.id}:`, fetchErr);
+          console.error(`[poll-reply-inbox] Reply.io inbox fetch failed for integration ${integration.id}:`, fetchErr);
           continue;
         }
 
-        const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+        const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
-        for (const contact of repliedContacts) {
+        const normalizeChannel = (c: unknown): string =>
+          String(c).toLowerCase() === 'linkedin' ? 'linkedin' : 'email';
+
+        for (const thread of inboxThreads) {
           try {
-            // Proxy for v1's `lastReplyDate` — v3 omits a reply-specific
-            // timestamp on the contact object. lastModifiedAt advances on
-            // any contact modification including replies; we accept some
-            // non-reply false positives as the cost of v3 compatibility.
-            const lastReplyDate = contact.lastModifiedAt || contact.createdAt || null;
+            const contact = thread.contact ?? null;
+            const externalId = String(thread.id);
+            const threadActivity = thread.lastActivityDate || null;
 
-            // ALL-TIME MIRRORING: we no longer skip old replies. Recency now
-            // only decides ACTIONABILITY (inbox_status), not whether the row
-            // is mirrored. Recent (≤7d) → 'pending' (shows in the agent
-            // inbox); older → 'mirrored' (data-only, non-actionable). A null
-            // date is treated as recent, preserving prior behavior.
-            const isRecentReply = !lastReplyDate || lastReplyDate >= sevenDaysAgo;
+            // PERFORMANCE: only inspect threads active within the last 24h —
+            // those are the only candidates for an actionable reply, and the
+            // per-thread messages fetch is expensive. Older threads are skipped
+            // here WITHOUT the messages call (the webhook is the primary capture
+            // path; this poll is a 24h backstop). null date → treat as recent.
+            if (threadActivity && threadActivity < oneDayAgo) {
+              continue;
+            }
 
-            const externalId = String(contact.id);
+            // Fetch the FULL message list for this thread (oldest → newest).
+            let messages: InboxMessage[];
+            try {
+              messages = await fetchThreadMessages(thread.id, apiKey);
+            } catch (msgErr) {
+              console.error(`[poll-reply-inbox] Failed to fetch messages for thread ${externalId}:`, msgErr);
+              continue;
+            }
+
+            // INBOUND = prospect reply (isOutbound === false). No inbound at all
+            // → this thread is outbound-only (we sent, nobody replied). SKIP it
+            // entirely — do not create/surface a lead. (Fixes outbound-counted-
+            // as-reply.)
+            const inbound = messages.filter((m) => m.isOutbound === false);
+            if (inbound.length === 0) {
+              continue;
+            }
+
+            const latestInbound = inbound[inbound.length - 1];
+            const latestMessage = messages[messages.length - 1];
+            // Actionable only when the most recent message in the thread IS the
+            // inbound reply (nothing outbound after it). If our send is latest,
+            // the thread's newest activity is our outbound — not a new reply.
+            const latestIsInbound = latestMessage ? latestMessage.isOutbound === false : true;
+
+            // last_reply_* derive from the latest INBOUND message (FULL body).
+            const lastReplyDate = latestInbound.date || threadActivity || null;
+            const isRecentReply = !lastReplyDate || lastReplyDate >= oneDayAgo;
+            const replyText = latestInbound.body || '';
 
             // Dedupe against existing agent_leads by timestamp similarity.
             // Also read inbox_status so we can preserve progressed leads
@@ -374,17 +369,32 @@ Deno.serve(async (req) => {
 
             // Target inbox_status. A human/agent-progressed lead
             // (draft_ready/approved/sent/dismissed) is preserved verbatim so a
-            // re-poll never drags it back to pending or mirrored. Otherwise
-            // recency decides: recent → 'pending', old → 'mirrored'.
+            // re-poll never drags it back. Otherwise: 'pending' (actionable)
+            // ONLY when the latest message is the inbound reply AND it's within
+            // 24h; everything else (we already replied, or older) → 'mirrored'.
             const targetInboxStatus =
               existingLead && PROTECTED_STATUSES.includes(existingLead.inbox_status)
                 ? existingLead.inbox_status
-                : (isRecentReply ? 'pending' : 'mirrored');
+                : (latestIsInbound && isRecentReply ? 'pending' : 'mirrored');
 
             totalProcessed++;
 
-            const fullName = [contact.firstName, contact.lastName].filter(Boolean).join(' ') || 'Unknown';
-            const channel = contact.linkedInUrl ? 'linkedin' : 'email';
+            const fullName = contact?.fullName || latestInbound.fromName || 'Unknown';
+            const company = contact?.companyName || '';
+            // Reply.io channel is "linkedIn" | "email"; normalize to the
+            // lowercase 'linkedin'/'email' convention the rest of the app uses.
+            const channel = normalizeChannel(thread.channel);
+
+            // Full conversation thread — same shape the HeyReach path writes so
+            // the Conversation panel renders the exchange: inbound → 'prospect'
+            // (left), outbound → 'sender' (right); the renderer reads `timestamp`.
+            const replyThread = messages.map((m) => ({
+              role: m.isOutbound ? 'sender' : 'prospect',
+              content: m.body || '',
+              timestamp: m.date || new Date().toISOString(),
+              channel: normalizeChannel(m.channel ?? thread.channel),
+              fromName: m.fromName ?? null,
+            }));
 
             const { data: upsertedLead, error: upsertError } = await supabase
               .from('agent_leads')
@@ -393,15 +403,16 @@ Deno.serve(async (req) => {
                 agent_config_id: agentConfig.id,
                 external_id: externalId,
                 full_name: fullName,
-                email: contact.email || '',
-                linkedin_url: contact.linkedInUrl || '',
-                company: contact.company || '',
+                email: contact?.email || '',
+                linkedin_url: contact?.linkedInProfileUrl || '',
+                company,
                 channel,
                 source: 'reply_io',
                 pipeline_stage: 'replied',
                 inbox_status: targetInboxStatus,
                 last_reply_at: lastReplyDate || new Date().toISOString(),
-                last_reply_text: '',
+                last_reply_text: replyText,
+                reply_thread: replyThread,
               }, {
                 onConflict: 'user_id,external_id',
                 ignoreDuplicates: false,
@@ -415,13 +426,10 @@ Deno.serve(async (req) => {
             }
 
             if (upsertedLead) {
-              // Old (mirrored) replies are data-only: skip the activity-feed
-              // entry and the per-contact reply-text backfill. The backfill is
-              // N API calls per contact, so doing it for all-time history
-              // would be a rate-limit storm — and a years-old "reply detected"
-              // activity entry dated now would be misleading. Only recent /
-              // actionable replies get the full treatment.
-              if (!isRecentReply) {
+              // Only newly-actionable ('pending') threads get an activity-feed
+              // entry; mirrored ones (we already replied, or PROTECTED) are
+              // data-only.
+              if (targetInboxStatus !== 'pending') {
                 totalMirrored++;
                 continue;
               }
@@ -434,121 +442,14 @@ Deno.serve(async (req) => {
                 agent_config_id: agentConfig.id,
                 lead_id: upsertedLead.id,
                 lead_name: fullName,
-                lead_company: contact.company || '',
+                lead_company: company,
                 activity_type: 'reply_received',
-                description: `${channel === 'linkedin' ? 'LinkedIn' : 'Email'} reply detected via polling from ${fullName}${contact.company ? ' at ' + contact.company : ''}`,
+                description: `${channel === 'linkedin' ? 'LinkedIn' : 'Email'} reply detected via polling from ${fullName}${company ? ' at ' + company : ''}`,
                 metadata: { channel, intent: 'pending', source: 'poll' },
               });
-
-              // Backfill reply text from /v3/contacts/{id}/activities.
-              // Endpoint shape UNVERIFIED — first-call log inside
-              // fetchContactActivitiesV3 surfaces the field names. The
-              // ?? chains below are intentionally generous so we don't
-              // silently drop the body field if v3 renamed it (e.g.,
-              // text/message/content). Tighten after one live read.
-              try {
-                const activities = await fetchContactActivitiesV3(externalId, apiKey);
-
-                // Defensive incoming-reply predicate. v3 uses
-                // `activityType` (PascalCase enum) as the discriminator;
-                // the exact reply-specific value is unknown from dev
-                // (which only had MoveToCampaign + Creation). Substring
-                // match on lowercased value catches likely candidates:
-                // "EmailReply", "LinkedInMessageReply", "ReceivedMessage",
-                // "ReplyReceived", etc.
-                const isIncoming = (a: V3Activity): boolean => {
-                  const at = String(a.activityType ?? '').toLowerCase();
-                  if (at.includes('reply')) return true;
-                  if (at.includes('incoming')) return true;
-                  if (at.includes('received')) return true;
-                  if (at.includes('inbound')) return true;
-                  return false;
-                };
-                // v3 content is an OBJECT (probe confirmed). Inner shape
-                // unknown — try common sub-keys before falling back. If
-                // none match, return empty string (drops the activity
-                // from the thread rather than writing `[object Object]`).
-                const getBody = (a: V3Activity): string => {
-                  const c = a.content;
-                  if (typeof c === 'string') return c;
-                  if (c && typeof c === 'object') {
-                    const obj = c as Record<string, unknown>;
-                    return String(
-                      obj.text ?? obj.body ?? obj.html ?? obj.message ?? obj.content ?? '',
-                    );
-                  }
-                  return '';
-                };
-                // v3 only exposes `date` (verified). createdAt /
-                // occurredAt are absent — kept as defensive fallbacks
-                // in case Reply.io adds them later.
-                const getTs = (a: V3Activity): string | null => {
-                  const x = a as unknown as Record<string, unknown>;
-                  return (
-                    (a.date ??
-                      (x.createdAt as string | undefined) ??
-                      (x.occurredAt as string | undefined) ??
-                      null) as string | null
-                  );
-                };
-
-                // Surface the activityType distribution when we couldn't
-                // find any incoming reply but activities exist — primary
-                // signal that the reply-specific enum value differs from
-                // our substring guesses. Once a real prod run hits this
-                // log, we update isIncoming() with the exact value.
-                if (activities.length > 0 && !activities.some(isIncoming)) {
-                  const types = [...new Set(activities.map(a => String(a.activityType ?? '(absent)')))];
-                  console.warn(`[poll-reply-inbox] No incoming-reply activityType match for contact ${externalId} (${activities.length} activities); activityTypes seen:`, types);
-                }
-
-                const replyActivities = activities
-                  .filter(isIncoming)
-                  .sort((a, b) => {
-                    const at = new Date(getTs(a) || 0).getTime();
-                    const bt = new Date(getTs(b) || 0).getTime();
-                    return at - bt;
-                  });
-
-                if (replyActivities.length > 0) {
-                  const latestReply = replyActivities[replyActivities.length - 1];
-                  const replyText = getBody(latestReply);
-
-                  // Build full thread (sent + received) ordered chronologically.
-                  // Same shape consumed by classify-reply: {role, content,
-                  // timestamp, channel}.
-                  const threadMessages = activities
-                    .filter((a) => getBody(a))
-                    .sort((a, b) => {
-                      const at = new Date(getTs(a) || 0).getTime();
-                      const bt = new Date(getTs(b) || 0).getTime();
-                      return at - bt;
-                    })
-                    .map((a) => ({
-                      role: isIncoming(a) ? 'prospect' : 'sender',
-                      content: getBody(a),
-                      timestamp: getTs(a) || new Date().toISOString(),
-                      channel,
-                    }));
-
-                  if (replyText) {
-                    await supabase
-                      .from('agent_leads')
-                      .update({
-                        last_reply_text: replyText,
-                        reply_thread: threadMessages.length > 0 ? threadMessages : undefined,
-                      })
-                      .eq('id', upsertedLead.id);
-
-                    console.log(`[poll-reply-inbox] Backfilled reply text for ${externalId} (${replyText.length} chars, ${threadMessages.length} messages)`);
-                  }
-                }
-              } catch (activityErr) {
-                console.error(`[poll-reply-inbox] Failed to fetch activities for ${externalId}:`, activityErr);
-              }
             }
-          } catch (contactErr) {
-            console.error(`[poll-reply-inbox] Error processing contact ${contact.id}:`, contactErr);
+          } catch (threadErr) {
+            console.error(`[poll-reply-inbox] Error processing thread ${thread.id}:`, threadErr);
           }
         }
       } catch (integrationErr) {
