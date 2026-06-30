@@ -1,0 +1,13 @@
+-- Per-client default CC address for email replies.
+--
+-- When an operator sends an email reply via the agent inbox (Send Reply →
+-- send-agent-reply direct-send → Reply.io POST /v3/inbox/threads/{id}/messages),
+-- the reply should CC a configured address (typically the client's real shared
+-- inbox). The value is pre-filled in the reply panel and editable per send.
+--
+-- Scope: email channel only. LinkedIn replies have no CC concept (the Reply.io
+-- thread-reply endpoint ignores/ rejects cc for the linkedIn channel), so the
+-- backend only attaches cc when the lead's channel is email.
+--
+-- Nullable TEXT holding a single email address. NULL / empty = no default CC.
+ALTER TABLE agent_configs ADD COLUMN IF NOT EXISTS default_cc text;

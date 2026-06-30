@@ -38,6 +38,9 @@ import {
   useAddToSmartleadCampaign,
   useSmartleadCampaigns,
 } from '@/hooks/useSmartlead';
+import { useAgentConfig } from '@/hooks/useAgent';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -106,11 +109,13 @@ function useSendAgentReply() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ leadId, draftResponse, intent, campaignId }: { leadId: string; draftResponse: string; intent: string; campaignId?: string }) => {
+    mutationFn: async ({ leadId, draftResponse, intent, campaignId, cc }: { leadId: string; draftResponse: string; intent: string; campaignId?: string; cc?: string }) => {
       const { data, error } = await supabase.functions.invoke('send-agent-reply', {
         // campaignId is forwarded only when set (operator picked a campaign);
         // absent → send-agent-reply keeps its intent-routing behavior.
-        body: { leadId, draftResponse, intent, ...(campaignId ? { campaignId } : {}) },
+        // cc is forwarded only when set (direct email Send Reply); the
+        // backend applies it to the email channel only and ignores it otherwise.
+        body: { leadId, draftResponse, intent, ...(campaignId ? { campaignId } : {}), ...(cc ? { cc } : {}) },
       });
       if (error) throw new Error(error.message || 'Failed to send reply');
       if (data?.error) throw new Error(data.error);
@@ -191,7 +196,9 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
   const sendReply = useSendAgentReply();
   const sendSmartleadEmail = useSendSmartleadEmail();
   const { toast } = useToast();
+  const { data: agentConfig } = useAgentConfig();
   const [draftText, setDraftText] = useState(lead.draft_response || '');
+  const [ccEmail, setCcEmail] = useState('');
   const [notes, setNotes] = useState(lead.notes || '');
   const { data: leadLearnings = [] } = useLearnings({ leadId: lead.id });
   const addLearning = useAddLearning();
@@ -241,6 +248,14 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
     setLastSyncedDraft(lead.draft_response);
   }
   const [showConfirm, setShowConfirm] = useState(false);
+
+  // Pre-fill the per-send CC from the client's configured default whenever the
+  // lead changes (or the config finishes loading). Only the email channel uses
+  // it (the field is hidden for LinkedIn); operator edits persist until the
+  // lead or the configured default changes.
+  useEffect(() => {
+    setCcEmail(agentConfig?.default_cc ?? '');
+  }, [lead.id, agentConfig?.default_cc]);
 
   // Channel/source discriminators (positive identifier — replaces the
   // earlier inference from smartlead_lead_id / heyreach_conversation_id
@@ -322,6 +337,9 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
           leadId: lead.id,
           draftResponse: draftText,
           intent: lead.intent,
+          // CC only applies to the email channel (Reply.io ignores cc for
+          // LinkedIn). Forwarded only when this is an email lead with a CC set.
+          ...(isReplyIoEmail && ccEmail.trim() ? { cc: ccEmail.trim() } : {}),
         },
         {
           onSuccess: () => {
@@ -881,6 +899,22 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
               rows={3}
               className="text-sm"
             />
+            {/* CC — email channel only (Reply.io ignores cc for LinkedIn).
+                Pre-filled from the client's configured Default CC and editable
+                per send. Applies to the direct Send Reply path only. */}
+            {isReplyIoEmail && (
+              <div className="space-y-1">
+                <Label htmlFor="reply_cc" className="text-xs text-muted-foreground">CC</Label>
+                <Input
+                  id="reply_cc"
+                  type="email"
+                  value={ccEmail}
+                  onChange={(e) => setCcEmail(e.target.value)}
+                  placeholder="cc@example.com (optional)"
+                  className="h-8 text-sm"
+                />
+              </div>
+            )}
             {/* Direct send — reuses the existing Approve & Send confirm flow
                 (setShowConfirm → handleApprove → sendReply with intent
                 routing, no campaignId). */}
