@@ -217,6 +217,72 @@ function pickLinkedInWinner(a: InboxThread, b: InboxThread): InboxThread {
   return a;                                            // stable
 }
 
+// Convert an email HTML body to readable plain text. Reply.io returns email
+// message bodies as HTML (Outlook MsoNormal markup, inline styles, signature
+// tables); LinkedIn bodies are already plain text. Stored verbatim, that HTML
+// renders as literal <div>/<p> noise in the conversation panel (which escapes
+// content as text — no XSS today, just unreadable). We normalize to text at
+// capture so the stored thread is clean for the panel AND for the text that
+// feeds classify-reply / draft generation.
+//
+// Deno's edge runtime has no DOMParser, so this is regex-based (same pragmatic
+// approach as stripBraceWrapper in send-agent-reply). Order matters: drop
+// script/style blocks (contents included) BEFORE stripping tags, turn block
+// boundaries into newlines, strip remaining tags, decode entities, then collapse
+// whitespace. &amp; is decoded LAST so double-encoded entities (&amp;lt;) don't
+// over-decode.
+function htmlToText(html: string): string {
+  if (!html) return '';
+  // Fast path: no tag/entity markers → already plain text (e.g. LinkedIn).
+  if (!/[<&]/.test(html)) return html;
+  let text = html;
+  // 1. Remove <script>/<style> blocks entirely (tag + contents).
+  text = text.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, '');
+  // 2. Block-level boundaries → newline (before tag-strip so structure survives).
+  text = text.replace(/<\s*br\s*\/?\s*>/gi, '\n');
+  text = text.replace(/<\/\s*(p|div|tr|li|h[1-6]|table|blockquote)\s*>/gi, '\n');
+  // 3. Strip all remaining tags.
+  text = text.replace(/<[^>]+>/g, '');
+  // 4. Decode common HTML entities (named + numeric); &amp; last.
+  text = text
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#0?39;|&apos;/gi, "'")
+    // Common named smart-punctuation/symbol entities that show up in email
+    // prose (numeric forms are handled below; these named ones would leak).
+    .replace(
+      /&(mdash|ndash|hellip|lsquo|rsquo|ldquo|rdquo|copy|reg|trade|deg|middot|bull|euro|pound|cent);/gi,
+      (_m, name) => {
+        const map: Record<string, string> = {
+          mdash: '—', ndash: '–', hellip: '…',
+          lsquo: '‘', rsquo: '’', ldquo: '“', rdquo: '”',
+          copy: '©', reg: '®', trade: '™', deg: '°',
+          middot: '·', bull: '•', euro: '€', pound: '£', cent: '¢',
+        };
+        return map[name.toLowerCase()] ?? _m;
+      },
+    )
+    .replace(/&#(\d+);/g, (_m, d) => {
+      const n = Number(d);
+      return n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : '';
+    })
+    .replace(/&#x([0-9a-f]+);/gi, (_m, h) => {
+      const n = parseInt(h, 16);
+      return n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : '';
+    })
+    .replace(/&amp;/gi, '&');
+  // 5. Collapse whitespace: normalize inline runs, trim each line, drop runs of
+  //    more than one blank line, trim the ends.
+  text = text
+    .replace(/[ \t ]+/g, ' ')
+    .replace(/ *\n */g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  return text;
+}
+
 // Existing reply_io lead row shape used by the against-DB LinkedIn dedup.
 interface ExistingReplyLead {
   id: string;
@@ -423,7 +489,12 @@ Deno.serve(async (req) => {
             // last_reply_* derive from the latest INBOUND message (FULL body).
             const lastReplyDate = latestInbound.date || threadActivity || null;
             const isRecentReply = !lastReplyDate || lastReplyDate >= oneDayAgo;
-            const replyText = latestInbound.body || '';
+            // Email bodies arrive as HTML; LinkedIn as plain text. Normalize
+            // email → readable text at capture (htmlToText is a no-op on text).
+            const latestInboundChannel = normalizeChannel(latestInbound.channel ?? thread.channel);
+            const replyText = latestInboundChannel === 'email'
+              ? htmlToText(latestInbound.body || '')
+              : (latestInbound.body || '');
 
             // Resolve the existing lead to dedupe against: prefer a normalized
             // LinkedIn-URL match (collapses real-email vs @genmail.com
@@ -474,13 +545,17 @@ Deno.serve(async (req) => {
             // Full conversation thread — same shape the HeyReach path writes so
             // the Conversation panel renders the exchange: inbound → 'prospect'
             // (left), outbound → 'sender' (right); the renderer reads `timestamp`.
-            const replyThread = messages.map((m) => ({
-              role: m.isOutbound ? 'sender' : 'prospect',
-              content: m.body || '',
-              timestamp: m.date || new Date().toISOString(),
-              channel: normalizeChannel(m.channel ?? thread.channel),
-              fromName: m.fromName ?? null,
-            }));
+            const replyThread = messages.map((m) => {
+              const msgChannel = normalizeChannel(m.channel ?? thread.channel);
+              return {
+                role: m.isOutbound ? 'sender' : 'prospect',
+                // Email → readable text; LinkedIn (plain text) passes through.
+                content: msgChannel === 'email' ? htmlToText(m.body || '') : (m.body || ''),
+                timestamp: m.date || new Date().toISOString(),
+                channel: msgChannel,
+                fromName: m.fromName ?? null,
+              };
+            });
 
             const nowIso = new Date().toISOString();
             let writtenLeadId: string | null = null;
