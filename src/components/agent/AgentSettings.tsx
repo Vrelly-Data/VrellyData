@@ -187,6 +187,7 @@ export function AgentSettings() {
     avoid_phrases: '',
     sample_message: '',
     reply_api_key: '',
+    default_cc: '',
     mode: 'copilot',
     is_active: false,
     campaign_rules: EMPTY_RULES as CampaignRules,
@@ -209,6 +210,7 @@ export function AgentSettings() {
         avoid_phrases: (config.avoid_phrases ?? []).join(', '),
         sample_message: config.sample_message ?? '',
         reply_api_key: config.reply_api_key ?? '',
+        default_cc: config.default_cc ?? '',
         mode: config.mode ?? 'copilot',
         is_active: config.is_active ?? false,
         campaign_rules: normalizeCampaignRules((config as any).campaign_rules),
@@ -255,6 +257,7 @@ export function AgentSettings() {
         : [],
       sample_message: formData.sample_message || undefined,
       reply_api_key: formData.reply_api_key || undefined,
+      default_cc: formData.default_cc.trim() || null,
       mode: formData.mode,
       is_active: formData.is_active,
       onboarding_complete: true,
@@ -528,6 +531,19 @@ export function AgentSettings() {
           <p className="text-xs text-muted-foreground">
             Each sequence's first step should use {'{{message}}'} as the body — Vrelly populates it with the agent's drafted reply. Pick a sequence per channel × intent; the agent routes each lead to the column that matches its source platform. Sequences with channel = multichannel (or unset) appear in both columns.
           </p>
+          <div className="space-y-1.5 border-b pb-4">
+            <Label htmlFor="s_default_cc">Default CC email</Label>
+            <Input
+              id="s_default_cc"
+              type="email"
+              value={formData.default_cc}
+              onChange={(e) => update('default_cc', e.target.value)}
+              placeholder="inbox@yourcompany.com"
+            />
+            <p className="text-xs text-muted-foreground">
+              CC'd on email replies sent from the inbox (e.g. your shared inbox). Pre-filled and editable per send. Email channel only — ignored for LinkedIn.
+            </p>
+          </div>
           <div className="border rounded-lg overflow-hidden">
             <table className="w-full text-sm">
               <thead>

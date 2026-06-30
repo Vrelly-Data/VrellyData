@@ -366,7 +366,7 @@ Deno.serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     );
 
-    const { leadId, draftResponse: rawDraft, intent, campaignId: bodyCampaignId } = await req.json();
+    const { leadId, draftResponse: rawDraft, intent, campaignId: bodyCampaignId, cc: bodyCc } = await req.json();
     const draftResponse = stripBraceWrapper(String(rawDraft ?? ''));
 
     if (!leadId || !draftResponse || !intent) {
@@ -483,10 +483,22 @@ Deno.serve(async (req) => {
       // lowercase "linkedin". Wrong casing → 400 channelMismatch.
       const replyChannel = lead.channel === 'linkedin' ? 'linkedIn' : 'email';
 
+      // CC applies to the email channel ONLY — Reply.io's thread-reply endpoint
+      // ignores cc for linkedIn. The caller may pass a comma-separated string;
+      // split/trim into the array shape the API expects. Empty → omit entirely.
+      const ccList =
+        replyChannel === 'email' && typeof bodyCc === 'string' && bodyCc.trim()
+          ? bodyCc.split(',').map((s) => s.trim()).filter(Boolean)
+          : [];
+
       const sendRes = await fetch(`${REPLY_API_V3}/inbox/threads/${threadId}/messages`, {
         method: 'POST',
         headers: authHeaders(apiKey),
-        body: JSON.stringify({ channel: replyChannel, message: draftResponse }),
+        body: JSON.stringify({
+          channel: replyChannel,
+          message: draftResponse,
+          ...(ccList.length ? { cc: ccList } : {}),
+        }),
       });
 
       if (!sendRes.ok) {

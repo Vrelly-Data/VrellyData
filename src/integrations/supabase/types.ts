@@ -76,6 +76,7 @@ export type Database = {
           company_name: string
           company_url: string | null
           created_at: string | null
+          default_cc: string | null
           desired_action: string | null
           id: string
           is_active: boolean | null
@@ -104,6 +105,7 @@ export type Database = {
           company_name: string
           company_url?: string | null
           created_at?: string | null
+          default_cc?: string | null
           desired_action?: string | null
           id?: string
           is_active?: boolean | null
@@ -132,6 +134,7 @@ export type Database = {
           company_name?: string
           company_url?: string | null
           created_at?: string | null
+          default_cc?: string | null
           desired_action?: string | null
           id?: string
           is_active?: boolean | null
