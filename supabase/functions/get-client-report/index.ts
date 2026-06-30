@@ -28,28 +28,21 @@
 //     campaigns: [...]   -- bar-chart data, scoped to this client's selections
 //   }
 //
-// Responder scoping (read carefully — diverges slightly from the spec):
+// Responder scoping (SHOW-ALL, owner-scoped):
 //
-//   The build spec proposed filtering HeyReach leads via
-//   `campaign_external_id IN (the client's heyreach campaign external ids)`.
-//   But client_analysis stores `heyreach_account_ids` (LinkedIn SENDER
-//   account IDs), NOT campaign IDs. Verified by reading the schema:
+//   Each user maps to exactly one client, so the report owner's replied leads
+//   ARE this client's responses. fetchResponders() returns every replied lead
+//   for the client's user_id (channel/source agnostic), mirroring the admin
+//   RespondersList exactly.
 //
-//     * client_analysis.heyreach_account_ids       INTEGER[]  (sender accounts)
-//     * agent_leads.heyreach_account_id            INTEGER    (sender account)
-//     * agent_leads.campaign_external_id           TEXT       (campaign id, new)
-//
-//   The semantic match is therefore:
-//     LinkedIn:  agent_leads.heyreach_account_id IN client.heyreach_account_ids
-//     Email:     agent_leads.smartlead_campaign_id IN client.smartlead_campaign_ids
-//
-//   This is what's implemented below. Bonus: account-level matching captures
-//   all historical leads (including pre-backfill ones where
-//   campaign_external_id is still NULL).
-//
-//   A lead whose smartlead_campaign_id and heyreach_account_id are BOTH
-//   null is excluded by the IN filters and never returned, satisfying the
-//   spec's "no matching attribution → not returned" requirement.
+//   History: an earlier version scoped by Smartlead campaign IDs + HeyReach
+//   account IDs (with an early return when the client had neither). That had no
+//   Reply.io branch, so Reply.io leads — which carry no SL campaign / HR
+//   account attribution — were never returned, and a Reply.io client's share
+//   link showed "Responses (0)" while the owner saw the full list. Replaced
+//   with SHOW-ALL parity. If users ever map to multiple clients, this must be
+//   revisited with a real per-client attribution key (none exists for Reply.io
+//   leads today).
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -89,33 +82,25 @@ async function fetchResponders(
   supabase: Supabase,
   client: ClientRow,
 ): Promise<unknown[]> {
-  const slIds = client.smartlead_campaign_ids ?? [];
-  const hrAccounts = client.heyreach_account_ids ?? [];
-  if (slIds.length === 0 && hrAccounts.length === 0) return [];
-
-  let query = supabase
+  // SHOW-ALL parity with the admin view. Each user maps to one client, so the
+  // report owner's replied leads ARE this client's responses — fetch every
+  // replied lead for client.user_id, regardless of channel/source. This is a
+  // byte-for-byte mirror of the self-fetch query in the admin RespondersList
+  // (src/components/playground/RespondersList.tsx): same columns, same filter.
+  //
+  // The previous implementation scoped by Smartlead campaign IDs + HeyReach
+  // account IDs only, with an early return when the client had neither. That
+  // excluded Reply.io leads entirely (source='reply_io' leads carry no SL
+  // campaign / HR account attribution), so a Reply.io client's share link
+  // showed "Responses (0)" while the owner saw the full list.
+  const { data, error } = await supabase
     .from("agent_leads")
     .select(
-      "id, full_name, company, job_title, channel, intent, intent_confidence, last_reply_at, last_reply_text, reply_thread, email, linkedin_url",
+      "id, full_name, company, job_title, email, linkedin_url, channel, intent, inbox_status, last_reply_text, last_reply_at, reply_thread",
     )
-    .eq("user_id", client.user_id);
+    .eq("user_id", client.user_id)
+    .or("inbox_status.eq.replied,last_reply_at.not.is.null");
 
-  // PostgREST `or` syntax: comma-separated `column.op.value` clauses inside
-  // a single `.or()`. For `in`, the value list is wrapped in parens; text
-  // values get quoted to avoid commas-in-id breaking the parser.
-  const clauses: string[] = [];
-  if (slIds.length > 0) {
-    const escaped = slIds
-      .map((id) => `"${String(id).replace(/"/g, '\\"')}"`)
-      .join(",");
-    clauses.push(`smartlead_campaign_id.in.(${escaped})`);
-  }
-  if (hrAccounts.length > 0) {
-    clauses.push(`heyreach_account_id.in.(${hrAccounts.join(",")})`);
-  }
-  query = query.or(clauses.join(","));
-
-  const { data, error } = await query;
   if (error) {
     logStep("Responders fetch failed", { error: error.message });
     return [];
