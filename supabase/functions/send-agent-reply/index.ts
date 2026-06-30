@@ -291,6 +291,44 @@ async function moveContactToSequence(
   }
 }
 
+// Reply.io v3 returns errors as an RFC9457 problem-details envelope:
+//   { title, status, detail, code }
+// `code` is the stable machine-readable discriminator (e.g.
+// 'inboxThread.channelMismatch'); `detail` is human prose. We map the
+// documented codes for POST /v3/inbox/threads/{id}/messages to specific
+// operator-readable messages, and fall back to surfacing the raw code/detail
+// for anything undocumented so we can diagnose it.
+interface ReplyErrorEnvelope {
+  title?: string;
+  status?: number;
+  detail?: string;
+  code?: string;
+}
+
+function mapThreadReplyError(httpStatus: number, env: ReplyErrorEnvelope): string {
+  switch (env.code) {
+    case 'inboxThread.channelMismatch':
+      return 'Channel mismatch — thread channel differs.';
+    case 'inboxThread.contactOptedOut':
+      return "Contact has opted out and can't be messaged.";
+    case 'inboxThread.forbidden':
+      return "Reply.io inbox sending isn't enabled for this account.";
+    case 'inboxThread.notFound':
+      return 'Thread not found in Reply.io.';
+    case 'inboxThread.threadSendFailed':
+      return 'LinkedIn rejected delivery (send limit, cookie, or message length) — thread needs attention in Reply.io.';
+  }
+  // No documented code matched. 429 has no per-code message in the docs, so
+  // key off the status. Otherwise surface whatever Reply.io told us.
+  if (httpStatus === 429) {
+    return 'Rate limited, try again shortly.';
+  }
+  const detail = [env.detail, env.code ? `(${env.code})` : ''].filter(Boolean).join(' ').trim();
+  return detail
+    ? `Reply.io thread reply failed: ${detail}`
+    : `Reply.io thread reply failed (HTTP ${httpStatus}).`;
+}
+
 Deno.serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
 
@@ -410,6 +448,107 @@ Deno.serve(async (req) => {
       typeof bodyCampaignId === 'string' && bodyCampaignId.trim()
         ? bodyCampaignId.trim()
         : null;
+
+    // =======================================================================
+    // DIRECT-SEND PATH ("Send Reply") — runs ONLY when no operator campaign
+    // was picked. Sends the operator's message straight into the existing
+    // Reply.io inbox thread, mirroring send-heyreach-message (one API call,
+    // sender-only thread append). Returns before reaching ANY of the campaign /
+    // move-to-sequence machinery below, which stays byte-for-byte unchanged and
+    // is reached only when operatorCampaignId is set ("Add to Campaign").
+    //
+    // lead.external_id IS the Reply.io inbox thread id — poll-reply-inbox
+    // stores exactly one agent_lead per thread (external_id = thread.id).
+    // Endpoint: POST /v3/inbox/threads/{id}/messages  body={channel, message}
+    // (https://docs.reply.io/api-reference/inbox/send-a-reply-within-a-thread.md)
+    // =======================================================================
+    if (!operatorCampaignId) {
+      const threadId = lead.external_id;
+      if (!threadId) {
+        return new Response(JSON.stringify({ error: 'Lead has no Reply.io thread to reply into.' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      // draftResponse was already validated non-empty above, but Reply.io
+      // rejects an empty message — guard at the send boundary so we never
+      // make a doomed API call.
+      if (!draftResponse) {
+        return new Response(JSON.stringify({ error: 'Cannot send an empty reply.' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      // Reply.io requires "linkedIn" (capital I) or "email"; our lead stores
+      // lowercase "linkedin". Wrong casing → 400 channelMismatch.
+      const replyChannel = lead.channel === 'linkedin' ? 'linkedIn' : 'email';
+
+      const sendRes = await fetch(`${REPLY_API_V3}/inbox/threads/${threadId}/messages`, {
+        method: 'POST',
+        headers: authHeaders(apiKey),
+        body: JSON.stringify({ channel: replyChannel, message: draftResponse }),
+      });
+
+      if (!sendRes.ok) {
+        let env: ReplyErrorEnvelope = {};
+        try {
+          env = (await sendRes.json()) as ReplyErrorEnvelope;
+        } catch {
+          // Non-JSON error body — leave env empty; mapper falls back to status.
+        }
+        const userMessage = mapThreadReplyError(sendRes.status, env);
+        console.error(
+          `[send-agent-reply] thread reply failed: status=${sendRes.status} code=${env.code ?? ''} detail=${(env.detail ?? '').slice(0, 200)}`,
+        );
+        // Relay 429 as 429 so the client can back off; everything else as a 502
+        // upstream failure, consistent with the campaign path's Reply.io errors.
+        const relayStatus = sendRes.status === 429 ? 429 : 502;
+        return new Response(JSON.stringify({ error: userMessage }), {
+          status: relayStatus,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      // Success — append the sent message to reply_thread (sender-only, same as
+      // the campaign path's CASE B) and mark the lead sent. Reply.io doesn't
+      // echo tracked outbound to our webhook, so this is the only place the
+      // outgoing message lands in the thread.
+      const pipelineStage = INTENT_STAGE_MAP[intent] || lead.pipeline_stage;
+      const existingThread = Array.isArray(lead.reply_thread) ? lead.reply_thread : [];
+      const sentMessage = {
+        role: 'sender',
+        content: draftResponse,
+        timestamp: new Date().toISOString(),
+        channel: lead.channel,
+      };
+
+      await supabase
+        .from('agent_leads')
+        .update({
+          inbox_status: 'sent',
+          pipeline_stage: pipelineStage,
+          draft_approved: true,
+          reply_thread: [...existingThread, sentMessage],
+        })
+        .eq('id', leadId);
+
+      await supabase.from('agent_activity').insert({
+        user_id: userId,
+        agent_config_id: agentConfig.id,
+        lead_id: leadId,
+        lead_name: lead.full_name,
+        lead_company: lead.company,
+        activity_type: 'message_sent',
+        description: `Reply sent to ${lead.full_name} via Reply.io`,
+        metadata: { intent, channel: lead.channel, direct: true },
+      });
+
+      return new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
     const campaignId = operatorCampaignId ?? resolveCampaignRule(campaignRules, leadChannel, intent);
 
     if (campaignId === 'dead') {
