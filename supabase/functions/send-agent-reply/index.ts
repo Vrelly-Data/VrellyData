@@ -219,16 +219,30 @@ async function findContactIdByEmail(email: string, apiKey: string): Promise<numb
 // v3 POST /v3/contacts is CREATE-ONLY (returns 400 on duplicate email).
 // customFields are intentionally NOT included in this POST — v3 silently
 // drops them on create (probe G3). PATCH happens separately below.
+//
+// linkedInProfile (optional) is written on create so contacts pushed into
+// follow-up campaigns carry the prospect's LinkedIn profile instead of
+// showing "Missing Data". The v3 create-body field name is `linkedInUrl`
+// (per https://docs.reply.io/api-reference/contacts/create-a-contact) — NOT
+// the `linkedInProfileUrl` that GET responses use; v3 silently drops the wrong
+// key (probe G3), so the create-body name must be exact. Spread-conditional so
+// an empty value is omitted entirely rather than clearing the field.
 async function createOrFindContact(
   email: string,
   firstName: string,
   lastName: string,
   apiKey: string,
+  linkedInProfile?: string,
 ): Promise<number> {
   const createRes = await fetch(`${REPLY_API_V3}/contacts`, {
     method: 'POST',
     headers: authHeaders(apiKey),
-    body: JSON.stringify({ email, firstName, lastName }),
+    body: JSON.stringify({
+      email,
+      firstName,
+      lastName,
+      ...(linkedInProfile ? { linkedInUrl: linkedInProfile } : {}),
+    }),
   });
 
   if (createRes.status === 201) {
@@ -666,7 +680,10 @@ Deno.serve(async (req) => {
 
     let contactId: number;
     try {
-      contactId = await createOrFindContact(lead.email, firstName, lastName, apiKey);
+      // Pass linkedin_url (agent_leads is SELECT *, so it's available) so the
+      // Reply.io contact carries the prospect's LinkedIn profile — otherwise
+      // campaign-pushed contacts show "Missing Data".
+      contactId = await createOrFindContact(lead.email, firstName, lastName, apiKey, lead.linkedin_url);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error('[send-agent-reply] createOrFindContact failed:', msg);
