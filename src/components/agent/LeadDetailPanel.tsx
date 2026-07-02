@@ -198,6 +198,12 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
   const { toast } = useToast();
   const { data: agentConfig } = useAgentConfig();
   const [draftText, setDraftText] = useState(lead.draft_response || '');
+  // Ref to the (single) mounted draft textarea. Read at send time so we always
+  // send exactly what's in the box — authoritative even if draftText state and
+  // the DOM ever diverge. Only one draft textarea renders at a time, so the
+  // shared ref points at whichever is active.
+  const draftRef = useRef<HTMLTextAreaElement>(null);
+  const getLiveDraft = () => (draftRef.current?.value ?? draftText);
   const [ccEmail, setCcEmail] = useState('');
   const [notes, setNotes] = useState(lead.notes || '');
   const { data: leadLearnings = [] } = useLearnings({ leadId: lead.id });
@@ -312,9 +318,21 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
   const handleApprove = () => {
     setShowConfirm(false);
 
+    // Read the live textarea value and block an empty send here with a clear
+    // message instead of letting the backend 400 on a blank draftResponse.
+    const draft = getLiveDraft().trim();
+    if (!draft) {
+      toast({
+        title: 'Draft is empty',
+        description: 'Write a reply before sending.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
     if (isSmartleadEmail) {
       sendSmartleadEmail.mutate(
-        { leadId: lead.id, message: draftText },
+        { leadId: lead.id, message: draft },
         {
           onSuccess: () => {
             toast({ title: 'Reply sent via Smartlead ✓' });
@@ -335,7 +353,7 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
       sendReply.mutate(
         {
           leadId: lead.id,
-          draftResponse: draftText,
+          draftResponse: draft,
           intent: lead.intent,
           // CC only applies to the email channel (Reply.io ignores cc for
           // LinkedIn). Forwarded only when this is an email lead with a CC set.
@@ -495,11 +513,20 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
   // send hooks (no cross-platform contamination for Reply.io leads).
   const handleAddToReplyCampaign = () => {
     const campaign = replyCampaigns.find((c) => c.id === selectedReplyCampaignId);
-    if (!draftText.trim() || !campaign?.external_campaign_id) return;
+    const draft = getLiveDraft().trim();
+    if (!draft) {
+      toast({
+        title: 'Draft is empty',
+        description: 'Write a reply before adding to a campaign.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    if (!campaign?.external_campaign_id) return;
     sendReply.mutate(
       {
         leadId: lead.id,
-        draftResponse: draftText,
+        draftResponse: draft,
         intent: lead.intent,
         campaignId: campaign.external_campaign_id, // operator-picked — overrides intent routing
       },
@@ -744,6 +771,7 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
               )}
             </div>
             <Textarea
+              ref={draftRef}
               value={draftText}
               onChange={(e) => setDraftText(e.target.value)}
               onBlur={() => {
@@ -795,6 +823,7 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
           <div className="space-y-4 border rounded-lg p-3">
             <h4 className="text-sm font-medium text-muted-foreground">LinkedIn Actions</h4>
             <Textarea
+              ref={draftRef}
               value={draftText}
               onChange={(e) => setDraftText(e.target.value)}
               onBlur={() => {
@@ -885,6 +914,7 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
           <div className="space-y-4 border rounded-lg p-3">
             <h4 className="text-sm font-medium text-muted-foreground">Reply.io Actions</h4>
             <Textarea
+              ref={draftRef}
               value={draftText}
               onChange={(e) => setDraftText(e.target.value)}
               onBlur={() => {

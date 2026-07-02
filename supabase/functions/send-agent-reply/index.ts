@@ -383,8 +383,14 @@ Deno.serve(async (req) => {
     const { leadId, draftResponse: rawDraft, intent, campaignId: bodyCampaignId, cc: bodyCc } = await req.json();
     const draftResponse = stripBraceWrapper(String(rawDraft ?? ''));
 
-    if (!leadId || !draftResponse || !intent) {
-      return new Response(JSON.stringify({ error: 'Missing required fields: leadId, draftResponse, intent' }), {
+    // intent is NOT hard-required: the direct-send "Send Reply" path only needs
+    // leadId + draftResponse (it replies into the existing thread). intent is
+    // used solely for optional pipeline-stage mapping (INTENT_STAGE_MAP falls
+    // back to the lead's current stage) and, on the campaign path, for
+    // rule-based routing — both tolerate a null intent. Requiring it here was
+    // the cause of a 400 on Send Reply when the lead had no classified intent.
+    if (!leadId || !draftResponse) {
+      return new Response(JSON.stringify({ error: 'Missing required fields: leadId, draftResponse' }), {
         status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
