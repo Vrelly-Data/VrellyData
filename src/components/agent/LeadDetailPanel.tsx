@@ -39,6 +39,7 @@ import {
   useSmartleadCampaigns,
 } from '@/hooks/useSmartlead';
 import { useAgentConfig } from '@/hooks/useAgent';
+import { useAgentDocuments } from '@/hooks/useAgentDocuments';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { supabase } from '@/integrations/supabase/client';
@@ -197,6 +198,7 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
   const sendSmartleadEmail = useSendSmartleadEmail();
   const { toast } = useToast();
   const { data: agentConfig } = useAgentConfig();
+  const { data: agentDocuments = [] } = useAgentDocuments();
   const [draftText, setDraftText] = useState(lead.draft_response || '');
   // Ref to the (single) mounted draft textarea. Read at send time so we always
   // send exactly what's in the box — authoritative even if draftText state and
@@ -943,6 +945,36 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
                   placeholder="cc@example.com (optional)"
                   className="h-8 text-sm"
                 />
+              </div>
+            )}
+            {/* Attach document — inserts a client document's hosted link into the
+                reply text (part of draftResponse). No send-path change: the link
+                is just text in the message. Only shown when the client has
+                documents. */}
+            {agentDocuments.length > 0 && (
+              <div className="space-y-1">
+                <Label className="text-xs text-muted-foreground">Attach document</Label>
+                <Select
+                  value=""
+                  onValueChange={(id) => {
+                    const doc = agentDocuments.find((d) => d.id === id);
+                    if (!doc?.public_url) return;
+                    setDraftText((prev) => {
+                      const base = prev.replace(/\s+$/, '');
+                      const link = `[${doc.title}](${doc.public_url})`;
+                      return base ? `${base}\n\n${link}` : link;
+                    });
+                  }}
+                >
+                  <SelectTrigger className="h-8 text-sm">
+                    <SelectValue placeholder="Insert a document link…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {agentDocuments.map((d) => (
+                      <SelectItem key={d.id} value={d.id}>{d.title}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             )}
             {/* Direct send — reuses the existing Approve & Send confirm flow

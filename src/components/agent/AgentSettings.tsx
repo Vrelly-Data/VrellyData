@@ -17,13 +17,20 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { useQuery } from '@tanstack/react-query';
-import { Loader2, Save, CheckCircle2, Eye, EyeOff, Wifi, WifiOff, ExternalLink, AlertTriangle, Plus, Trash2 } from 'lucide-react';
+import { Loader2, Save, CheckCircle2, Eye, EyeOff, Wifi, WifiOff, ExternalLink, AlertTriangle, Plus, Trash2, Upload } from 'lucide-react';
 import {
   useSenderProfiles,
   useUpsertSenderProfile,
   useDeleteSenderProfile,
   type SenderProfile,
 } from '@/hooks/useSenderProfiles';
+import {
+  useAgentDocuments,
+  useUploadAgentDocument,
+  useUpdateAgentDocument,
+  useDeleteAgentDocument,
+  type AgentDocument,
+} from '@/hooks/useAgentDocuments';
 
 const COMMUNICATION_STYLES = [
   { value: 'conversational', label: 'Conversational', description: 'Warm, natural, like a real person' },
@@ -213,6 +220,131 @@ function SenderProfileCard({
         </div>
       </div>
     </div>
+  );
+}
+
+// One document row — inline retitle / when-to-use edit + delete. Each row owns
+// its mutations so pending state doesn't bleed across rows.
+function AgentDocumentRow({ doc }: { doc: AgentDocument }) {
+  const update = useUpdateAgentDocument();
+  const del = useDeleteAgentDocument();
+  const { toast } = useToast();
+  const [title, setTitle] = useState(doc.title);
+  const [description, setDescription] = useState(doc.description ?? '');
+  const dirty = title !== doc.title || description !== (doc.description ?? '');
+
+  return (
+    <div className="border rounded-lg p-3 space-y-2">
+      <div className="grid grid-cols-2 gap-2">
+        <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Title" />
+        <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="When to use (optional)" />
+      </div>
+      <div className="flex items-center justify-between">
+        {doc.public_url ? (
+          <a href={doc.public_url} target="_blank" rel="noreferrer" className="text-xs text-primary inline-flex items-center gap-1">
+            <ExternalLink className="h-3 w-3" /> {doc.file_name ?? 'View'}
+          </a>
+        ) : (
+          <span className="text-xs text-muted-foreground">{doc.file_name}</span>
+        )}
+        <div className="flex gap-2">
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={del.isPending}
+            onClick={() =>
+              del.mutate(doc, {
+                onSuccess: () => toast({ title: 'Document deleted' }),
+                onError: (e: any) => toast({ title: 'Delete failed', description: e?.message || 'Try again.', variant: 'destructive' }),
+              })
+            }
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
+          <Button
+            size="sm"
+            disabled={!dirty || !title.trim() || update.isPending}
+            onClick={() =>
+              update.mutate(
+                { id: doc.id, title, description },
+                {
+                  onSuccess: () => toast({ title: 'Document updated' }),
+                  onError: (e: any) => toast({ title: 'Save failed', description: e?.message || 'Try again.', variant: 'destructive' }),
+                },
+              )
+            }
+          >
+            Save
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Documents card — upload a PDF (title + optional when-to-use), list existing.
+function AgentDocumentsCard() {
+  const { data: docs = [] } = useAgentDocuments();
+  const upload = useUploadAgentDocument();
+  const { toast } = useToast();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+
+  const doUpload = () => {
+    if (!file) { toast({ title: 'Choose a PDF first', variant: 'destructive' }); return; }
+    if (!title.trim()) { toast({ title: 'Title is required', variant: 'destructive' }); return; }
+    upload.mutate(
+      { file, title, description },
+      {
+        onSuccess: () => {
+          toast({ title: 'Document uploaded' });
+          setFile(null); setTitle(''); setDescription('');
+          if (fileRef.current) fileRef.current.value = '';
+        },
+        onError: (e: any) => toast({ title: 'Upload failed', description: e?.message || 'Try again.', variant: 'destructive' }),
+      },
+    );
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Documents</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <p className="text-xs text-muted-foreground">
+          Upload a PDF once (e.g. a one-pager or case study). From the inbox you can insert its link into a reply. Give each a clear title and an optional note on when to use it.
+        </p>
+        <div className="border rounded-lg p-3 space-y-3">
+          <div>
+            <Label>PDF file</Label>
+            <Input ref={fileRef} type="file" accept="application/pdf,.pdf" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label>Title *</Label>
+              <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Case study — Acme" />
+            </div>
+            <div>
+              <Label>When to use (optional)</Label>
+              <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="e.g. Share when a prospect asks for proof" />
+            </div>
+          </div>
+          <Button size="sm" onClick={doUpload} disabled={upload.isPending}>
+            {upload.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Upload className="h-4 w-4 mr-1" /> Upload</>}
+          </Button>
+        </div>
+        {docs.length === 0 ? (
+          <p className="text-sm text-muted-foreground italic">No documents yet.</p>
+        ) : (
+          <div className="space-y-2">
+            {docs.map((d) => <AgentDocumentRow key={d.id} doc={d} />)}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -573,6 +705,9 @@ export function AgentSettings() {
           </Button>
         </CardContent>
       </Card>
+
+      {/* Documents — per-client PDF library; links inserted from the inbox. */}
+      <AgentDocumentsCard />
 
       {/* Section 3 — Company Profile */}
       <Card>
