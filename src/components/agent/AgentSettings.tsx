@@ -379,7 +379,7 @@ export function AgentSettings() {
 
       const { data, error } = await (supabase as any)
         .from('synced_campaigns')
-        .select('name, status, integration_id')
+        .select('name, status, integration_id, is_linked')
         .in('integration_id', intRows.map((i: any) => i.id))
         .order('name', { ascending: true });
 
@@ -387,6 +387,7 @@ export function AgentSettings() {
       return (data ?? []).map((c: any) => ({
         name: c.name,
         status: c.status,
+        is_linked: c.is_linked,
         platform: platformById.get(c.integration_id) ?? 'unknown',
       }));
     },
@@ -809,6 +810,9 @@ export function AgentSettings() {
           <CardTitle>Monitored Campaigns</CardTitle>
         </CardHeader>
         <CardContent>
+          <p className="text-xs text-muted-foreground mb-3">
+            All synced campaigns are shown. <span className="font-medium">Linked</span> campaigns are included in this client’s Data Analysis / stats (the Data Playground shows only these). The agent captures and drafts replies on <span className="font-medium">every</span> synced campaign regardless of linking.
+          </p>
           {campaigns && campaigns.length > 0 ? (
             <div className="space-y-2">
               {campaigns.map((c: any, i: number) => (
@@ -823,11 +827,24 @@ export function AgentSettings() {
                     </Badge>
                     <span className="font-medium text-sm truncate">{c.name}</span>
                   </div>
-                  {c.status && (
-                    <Badge variant="outline" className="text-xs capitalize shrink-0">
-                      {c.status.replace(/_/g, ' ')}
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Badge
+                      variant={c.is_linked ? 'default' : 'outline'}
+                      className={cn('text-xs', !c.is_linked && 'text-muted-foreground')}
+                      title={
+                        c.is_linked
+                          ? 'Linked: included in this client’s Data Analysis / stats. (Reply capture & drafting run on all synced campaigns regardless.)'
+                          : 'Not linked: excluded from Data Analysis / stats. Replies are still captured and drafted.'
+                      }
+                    >
+                      {c.is_linked ? 'Linked' : 'Not linked'}
                     </Badge>
-                  )}
+                    {c.status && (
+                      <Badge variant="outline" className="text-xs capitalize">
+                        {c.status.replace(/_/g, ' ')}
+                      </Badge>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
