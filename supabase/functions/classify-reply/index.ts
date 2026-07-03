@@ -525,11 +525,14 @@ Use this campaign data to:
     let leadCompany: string | null = null;
     let leadLinkedinUrl: string | null = null;
     let leadLastCampaignName: string | null = null;
+    // Most recent role:'sender' fromName in the thread — identifies which sender
+    // owns this conversation, for multi-sender voice matching below.
+    let threadSenderName: string | null = null;
     if (lead_id) {
       try {
         const { data: leadRow } = await supabase
           .from('agent_leads')
-          .select('full_name, job_title, company, linkedin_url, last_campaign_name')
+          .select('full_name, job_title, company, linkedin_url, last_campaign_name, reply_thread')
           .eq('id', lead_id)
           .eq('user_id', user_id)
           .maybeSingle();
@@ -539,10 +542,55 @@ Use this campaign data to:
           leadCompany = leadRow.company ?? null;
           leadLinkedinUrl = leadRow.linkedin_url ?? null;
           leadLastCampaignName = leadRow.last_campaign_name ?? null;
+          const rt = Array.isArray(leadRow.reply_thread) ? leadRow.reply_thread : [];
+          for (let i = rt.length - 1; i >= 0; i--) {
+            const m = rt[i] as { role?: string; fromName?: string };
+            if (m?.role === 'sender' && typeof m.fromName === 'string' && m.fromName.trim()) {
+              threadSenderName = m.fromName.trim();
+              break;
+            }
+          }
         }
       } catch (e) {
         console.warn('[classify-reply] lead context fetch failed (continuing):', e);
       }
+    }
+
+    // Effective sender identity for the draft voice. Defaults to the client's
+    // single agent_configs sender_* fields (no regression for single-sender
+    // clients), then overridden when the client has sender_profiles: the row
+    // whose sender_name matches the thread's sender (case-insensitive/trimmed)
+    // → the is_default profile → the first profile. A chosen profile fully
+    // replaces the identity so we never mix one sender's name with another's
+    // title/bio.
+    let effSenderName = sender_name;
+    let effSenderTitle = sender_title;
+    let effSenderLinkedin = sender_linkedin;
+    let effSenderBio = sender_bio;
+    let effCommStyle = communication_style;
+    try {
+      const { data: profiles } = await supabase
+        .from('sender_profiles')
+        .select('sender_name, job_title, linkedin_url, bio, communication_style, is_default')
+        .eq('user_id', user_id);
+      const list = profiles ?? [];
+      if (list.length) {
+        const norm = (s: string | null | undefined) => (s ?? '').trim().toLowerCase();
+        const matched = threadSenderName
+          ? list.find((p: { sender_name: string }) => norm(p.sender_name) === norm(threadSenderName))
+          : null;
+        const chosen = matched ?? list.find((p: { is_default?: boolean }) => p.is_default) ?? list[0];
+        if (chosen) {
+          effSenderName = chosen.sender_name;
+          effSenderTitle = chosen.job_title ?? null;
+          effSenderLinkedin = chosen.linkedin_url ?? null;
+          effSenderBio = chosen.bio ?? null;
+          effCommStyle = chosen.communication_style ?? null;
+          console.log(`[classify-reply] sender voice: "${chosen.sender_name}" (${matched ? 'thread-match' : chosen.is_default ? 'default' : 'first'}; thread fromName=${threadSenderName ?? 'none'})`);
+        }
+      }
+    } catch (e) {
+      console.warn('[classify-reply] sender_profiles fetch failed (using config sender):', e);
     }
 
     // Render an optional sectioned line only when value is present, so empty
@@ -627,7 +675,7 @@ Use this campaign data to:
     const isFirstTouch = trimmedThread.length === 0;
 
     // ============================ CALL 1 — classify ========================
-    const call1SystemPrompt = `You are an expert B2B sales analyst working on behalf of ${sender_name} at ${company_name}. Your job is to read an inbound prospect reply and classify it precisely — you do NOT write the response, you analyze.
+    const call1SystemPrompt = `You are an expert B2B sales analyst working on behalf of ${effSenderName} at ${company_name}. Your job is to read an inbound prospect reply and classify it precisely — you do NOT write the response, you analyze.
 
 ## The Offer
 ${offer_description}
@@ -791,16 +839,16 @@ This is a genuine no, not an objection. Respect it.
     }
 
     const learningsSection = learnings.length > 0
-      ? `## What ${sender_name} Has Taught You
-${sender_name} has specifically taught you these lessons from past replies. Apply them — they reflect what actually works, and override generic advice where they conflict:
+      ? `## What ${effSenderName} Has Taught You
+${effSenderName} has specifically taught you these lessons from past replies. Apply them — they reflect what actually works, and override generic advice where they conflict:
 ${learnings.map((l) => `- ${l}`).join('\n')}`
       : '';
 
-    const call2SystemPrompt = `You are an expert B2B sales agent operating on behalf of ${sender_name}${sender_title ? `, ${sender_title}` : ''} at ${company_name}.
+    const call2SystemPrompt = `You are an expert B2B sales agent operating on behalf of ${effSenderName}${effSenderTitle ? `, ${effSenderTitle}` : ''} at ${company_name}.
 
-## About ${sender_name}
-${sender_bio || ''}
-${line('LinkedIn: ', sender_linkedin)}
+## About ${effSenderName}
+${effSenderBio || ''}
+${line('LinkedIn: ', effSenderLinkedin)}
 
 ## The Offer
 Company: ${company_name}${company_url ? ` (${company_url})` : ''}
@@ -808,7 +856,7 @@ What we sell: ${offer_description}
 ${line("Who it's for: ", target_icp)}
 ${line('Outcome we deliver: ', outcome_delivered)}
 ${line('Desired prospect action: ', desired_action)}
-${line('Communication style: ', communication_style)}
+${line('Communication style: ', effCommStyle)}
 ${avoid_phrases && avoid_phrases.length > 0 ? 'Never say or reference: ' + avoid_phrases.join(', ') : ''}
 ${sample_message ? 'Writing style example (match this tone exactly):\n' + sample_message : ''}
 
@@ -847,7 +895,7 @@ ${campaignIntelligence}
 
 ## Your Task
 The prospect's intent has been classified as: ${intent}${isObjection ? ' (objection-flavored)' : ''}. Generate the reply accordingly. Return ONLY this JSON object:
-- suggested_response: the ideal next message (2-4 sentences, matches ${sender_name}'s voice, grounded in the resources above. Reference the prospect by name where natural. Use the calendar link if booking a meeting. Reference case studies if it strengthens credibility.)
+- suggested_response: the ideal next message (2-4 sentences, matches ${effSenderName}'s voice, grounded in the resources above. Reference the prospect by name where natural. Use the calendar link if booking a meeting. Reference case studies if it strengthens credibility.)
 - reasoning: one sentence explaining your response
 - should_auto_send: boolean (true ONLY if channel is email AND intent is out_of_office or bounce)
 - next_pipeline_stage: one of 'contacted', 'replied', 'engaged', 'meeting_booked', 'closed', 'dead'

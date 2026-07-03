@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   useAgentConfig,
   useUpsertAgentConfig,
@@ -17,7 +17,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { useQuery } from '@tanstack/react-query';
-import { Loader2, Save, CheckCircle2, Eye, EyeOff, Wifi, WifiOff, ExternalLink, AlertTriangle } from 'lucide-react';
+import { Loader2, Save, CheckCircle2, Eye, EyeOff, Wifi, WifiOff, ExternalLink, AlertTriangle, Plus, Trash2 } from 'lucide-react';
+import {
+  useSenderProfiles,
+  useUpsertSenderProfile,
+  useDeleteSenderProfile,
+  type SenderProfile,
+} from '@/hooks/useSenderProfiles';
 
 const COMMUNICATION_STYLES = [
   { value: 'conversational', label: 'Conversational', description: 'Warm, natural, like a real person' },
@@ -91,8 +97,130 @@ function sequenceMatchesChannel(seqChannel: string | null | undefined, column: C
   return ch === column;
 }
 
+// One editable sender-profile card. Holds its own field state (seeded from the
+// server row, or blank for a new profile) so each card saves/deletes
+// independently. For a brand-new card `profile` is undefined and `onRemove`
+// clears its temporary slot in the parent (after save the persisted row arrives
+// via the query).
+function SenderProfileCard({
+  profile,
+  onRemove,
+}: {
+  profile?: SenderProfile;
+  onRemove?: () => void;
+}) {
+  const upsert = useUpsertSenderProfile();
+  const del = useDeleteSenderProfile();
+  const { toast } = useToast();
+  const [f, setF] = useState({
+    sender_name: profile?.sender_name ?? '',
+    job_title: profile?.job_title ?? '',
+    linkedin_url: profile?.linkedin_url ?? '',
+    bio: profile?.bio ?? '',
+    communication_style: profile?.communication_style ?? '',
+    is_default: profile?.is_default ?? false,
+  });
+  const set = (k: keyof typeof f, v: string | boolean) => setF((prev) => ({ ...prev, [k]: v }));
+
+  const save = () => {
+    if (!f.sender_name.trim()) {
+      toast({ title: 'Full name required', description: 'A profile needs a sender name that matches the thread.', variant: 'destructive' });
+      return;
+    }
+    upsert.mutate(
+      {
+        id: profile?.id,
+        sender_name: f.sender_name.trim(),
+        job_title: f.job_title.trim() || null,
+        linkedin_url: f.linkedin_url.trim() || null,
+        bio: f.bio.trim() || null,
+        communication_style: f.communication_style || null,
+        is_default: f.is_default,
+      },
+      {
+        onSuccess: () => {
+          toast({ title: 'Sender profile saved' });
+          onRemove?.(); // clear the temp "new" slot; persisted row comes from the query
+        },
+        onError: (e: any) => {
+          const msg = String(e?.message || '');
+          toast({
+            title: 'Could not save profile',
+            description: msg.includes('duplicate') || msg.includes('23505')
+              ? 'A profile with this name already exists.'
+              : msg || 'Try again.',
+            variant: 'destructive',
+          });
+        },
+      },
+    );
+  };
+
+  const remove = () => {
+    if (profile?.id) {
+      del.mutate(profile.id, {
+        onSuccess: () => toast({ title: 'Sender profile deleted' }),
+        onError: (e: any) => toast({ title: 'Could not delete', description: e?.message || 'Try again.', variant: 'destructive' }),
+      });
+    } else {
+      onRemove?.();
+    }
+  };
+
+  return (
+    <div className="border rounded-lg p-4 space-y-3">
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <Label>Full Name *</Label>
+          <Input value={f.sender_name} onChange={(e) => set('sender_name', e.target.value)} placeholder="e.g. Emma Grace" />
+        </div>
+        <div>
+          <Label>Job Title</Label>
+          <Input value={f.job_title} onChange={(e) => set('job_title', e.target.value)} />
+        </div>
+      </div>
+      <div>
+        <Label>LinkedIn URL</Label>
+        <Input value={f.linkedin_url} onChange={(e) => set('linkedin_url', e.target.value)} placeholder="https://www.linkedin.com/in/..." />
+      </div>
+      <div>
+        <Label>Bio</Label>
+        <Textarea value={f.bio} onChange={(e) => set('bio', e.target.value)} rows={3} />
+      </div>
+      <div>
+        <Label>Communication Style</Label>
+        <Select value={f.communication_style} onValueChange={(v) => set('communication_style', v)}>
+          <SelectTrigger><SelectValue placeholder="Select a style" /></SelectTrigger>
+          <SelectContent>
+            {COMMUNICATION_STYLES.map((style) => (
+              <SelectItem key={style.value} value={style.value}>{style.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="flex items-center justify-between pt-1">
+        <div className="flex items-center gap-2">
+          <Switch checked={f.is_default} onCheckedChange={(v) => set('is_default', v)} />
+          <Label className="text-sm text-muted-foreground">Default sender (used when no thread match)</Label>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="ghost" onClick={remove} disabled={del.isPending}>
+            <Trash2 className="h-4 w-4" />
+          </Button>
+          <Button size="sm" onClick={save} disabled={upsert.isPending}>
+            {upsert.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function AgentSettings() {
   const { data: config, isLoading } = useAgentConfig();
+  const { data: senderProfiles = [] } = useSenderProfiles();
+  const [newProfileKeys, setNewProfileKeys] = useState<number[]>([]);
+  const newProfileKeyRef = useRef(0);
   const upsertConfig = useUpsertAgentConfig();
   const { toast } = useToast();
   const { data: integrations = [] } = useConnectedIntegrations();
@@ -383,6 +511,43 @@ export function AgentSettings() {
             <Label htmlFor="s_sample">Sample Message</Label>
             <Textarea id="s_sample" value={formData.sample_message} onChange={(e) => update('sample_message', e.target.value)} rows={4} placeholder="Paste a message you've sent that got great replies." />
           </div>
+        </CardContent>
+      </Card>
+
+      {/* Sender Profiles — multi-sender voice. Drafts speak in the voice of the
+          sender who owns the thread (matched by name to the reply_thread
+          fromName). The single Sender Profile above stays as the fallback for
+          clients without profiles. */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Sender Profiles</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-xs text-muted-foreground">
+            For clients with multiple senders. Each reply is drafted in the voice of the sender who owns the thread — matched by <span className="font-medium">Full Name</span> to the sender name on the conversation. If no profile matches, the agent uses the default profile, then the first profile, then the single Sender Profile above. Add one profile per real sender (name must match exactly, e.g. "Emma Grace").
+          </p>
+          {senderProfiles.length === 0 && newProfileKeys.length === 0 && (
+            <p className="text-sm text-muted-foreground italic">No sender profiles yet — the single Sender Profile above is used for all drafts.</p>
+          )}
+          {senderProfiles.map((p) => (
+            <SenderProfileCard key={p.id} profile={p} />
+          ))}
+          {newProfileKeys.map((k) => (
+            <SenderProfileCard
+              key={`new-${k}`}
+              onRemove={() => setNewProfileKeys((keys) => keys.filter((x) => x !== k))}
+            />
+          ))}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              const k = newProfileKeyRef.current++;
+              setNewProfileKeys((keys) => [...keys, k]);
+            }}
+          >
+            <Plus className="h-4 w-4 mr-1" /> Add Profile
+          </Button>
         </CardContent>
       </Card>
 
