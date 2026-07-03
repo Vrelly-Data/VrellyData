@@ -376,6 +376,23 @@ Deno.serve(async (req) => {
       console.warn('[classify-reply] learnings fetch failed (continuing):', e);
     }
 
+    // Per-client Agent Knowledge doc — the whole markdown brief the operator
+    // maintains (niche, per-message goals, sender context). Fetched directly
+    // from agent_configs (not read from agent_context, which is built by 5
+    // different callers) so this is the single source. Best-effort + null-safe:
+    // a missing column or empty doc injects nothing → drafts exactly as today.
+    let agentKnowledge = '';
+    try {
+      const { data: cfgRow } = await supabase
+        .from('agent_configs')
+        .select('agent_knowledge')
+        .eq('user_id', user_id)
+        .maybeSingle();
+      agentKnowledge = (cfgRow?.agent_knowledge ?? '').trim();
+    } catch (e) {
+      console.warn('[classify-reply] agent_knowledge fetch failed (continuing):', e);
+    }
+
     console.log(`[classify-reply] sales_knowledge fetched +${Date.now() - t0}ms`);
 
     // --- Campaign Intelligence fetches ---
@@ -838,6 +855,14 @@ This is a genuine no, not an objection. Respect it.
 - Keep it short and classy. A clean, respectful close protects the brand and leaves room to re-engage later.`;
     }
 
+    // The client's whole Agent Knowledge brief, clearly delimited. Empty doc →
+    // empty string → no change to the prompt (no regression).
+    const knowledgeSection = agentKnowledge
+      ? `\n## Client Knowledge Brief
+The client's own brief — their niche, the goal of each message, and context on each sender. Treat it as authoritative context and let it shape both what you say and the voice you say it in:
+${agentKnowledge}\n`
+      : '';
+
     const learningsSection = learnings.length > 0
       ? `## What ${effSenderName} Has Taught You
 ${effSenderName} has specifically taught you these lessons from past replies. Apply them — they reflect what actually works, and override generic advice where they conflict:
@@ -849,7 +874,7 @@ ${learnings.map((l) => `- ${l}`).join('\n')}`
 ## About ${effSenderName}
 ${effSenderBio || ''}
 ${line('LinkedIn: ', effSenderLinkedin)}
-
+${knowledgeSection}
 ## The Offer
 Company: ${company_name}${company_url ? ` (${company_url})` : ''}
 What we sell: ${offer_description}

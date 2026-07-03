@@ -316,6 +316,7 @@ export function AgentSettings() {
     sample_message: '',
     reply_api_key: '',
     default_cc: '',
+    agent_knowledge: '',
     mode: 'copilot',
     is_active: false,
     campaign_rules: EMPTY_RULES as CampaignRules,
@@ -339,6 +340,7 @@ export function AgentSettings() {
         sample_message: config.sample_message ?? '',
         reply_api_key: config.reply_api_key ?? '',
         default_cc: config.default_cc ?? '',
+        agent_knowledge: config.agent_knowledge ?? '',
         mode: config.mode ?? 'copilot',
         is_active: config.is_active ?? false,
         campaign_rules: normalizeCampaignRules((config as any).campaign_rules),
@@ -386,6 +388,7 @@ export function AgentSettings() {
       sample_message: formData.sample_message || undefined,
       reply_api_key: formData.reply_api_key || undefined,
       default_cc: formData.default_cc.trim() || null,
+      agent_knowledge: formData.agent_knowledge.trim() || null,
       mode: formData.mode,
       is_active: formData.is_active,
       onboarding_complete: true,
@@ -461,6 +464,26 @@ export function AgentSettings() {
       </Card>
 
       {/* Section 2 — Sender Profile */}
+      {/* Agent Knowledge — the whole markdown brief the agent reads on every
+          draft. Additive to the structured config fields below. */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Agent Knowledge</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          <p className="text-xs text-muted-foreground">
+            The brief the agent reads on every draft: the client's niche, the goal of each message, and context on each sender. Write freely; everything you "Teach" the agent is also added automatically under the Learned section.
+          </p>
+          <Textarea
+            value={formData.agent_knowledge}
+            onChange={(e) => update('agent_knowledge', e.target.value)}
+            rows={16}
+            className="font-mono text-sm"
+            placeholder={'# About this client\n\n## Goal of each message\n\n## Senders\n- Emma Grace — ...\n\n## Learned from corrections\n- (auto-added when you Teach the agent)'}
+          />
+        </CardContent>
+      </Card>
+
       <Card>
         <CardHeader>
           <CardTitle>Sender Profile</CardTitle>

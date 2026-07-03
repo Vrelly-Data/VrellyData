@@ -40,6 +40,30 @@ export function useLearnings(scope: LearningScope) {
   });
 }
 
+// Append a taught lesson as a bullet under a "## Learned from corrections"
+// section in the agent_knowledge doc. Creates the section at the end if absent;
+// otherwise inserts the bullet at the end of that section (before the next
+// "## " heading, or at doc end). Accumulates — never overwrites existing text,
+// so operators can freely edit/delete these lines afterward.
+const LEARNED_HEADER = '## Learned from corrections';
+export function appendLearnedBullet(doc: string | null | undefined, lesson: string): string {
+  const bullet = `- ${lesson.trim()}`;
+  const base = (doc ?? '').replace(/\s+$/, '');
+  const m = /^## Learned from corrections[ \t]*$/m.exec(base);
+  if (!m) {
+    const prefix = base ? `${base}\n\n` : '';
+    return `${prefix}${LEARNED_HEADER}\n\n${bullet}\n`;
+  }
+  // Section exists — insert at the end of it (before the next "## " heading).
+  const sectionStart = m.index + m[0].length;
+  const nextRel = base.slice(sectionStart).search(/\n## /);
+  if (nextRel === -1) {
+    return `${base}\n${bullet}\n`;
+  }
+  const insertAt = sectionStart + nextRel;
+  return `${base.slice(0, insertAt)}\n${bullet}${base.slice(insertAt)}`;
+}
+
 // Add a learning. Writes the same text to description (NOT NULL, shown in the
 // Activity feed) and metadata.learning_text (what classify-reply reads).
 // user_id must equal auth.uid() to satisfy the agent_activity RLS policy.
@@ -69,10 +93,31 @@ export function useAddLearning() {
         metadata: { learning_text: text },
       });
       if (error) throw error;
+
+      // Additionally accumulate the lesson into the client's Agent Knowledge doc
+      // under "## Learned from corrections" (the agent_activity insert above
+      // still feeds classify-reply's recent-learnings section — this is purely
+      // additive). Best-effort: a failure here must not fail the Teach action.
+      try {
+        const { data: cfg } = await db
+          .from('agent_configs')
+          .select('agent_knowledge')
+          .eq('user_id', user.id)
+          .maybeSingle();
+        const next = appendLearnedBullet(cfg?.agent_knowledge ?? '', text);
+        await db
+          .from('agent_configs')
+          .update({ agent_knowledge: next })
+          .eq('user_id', user.id);
+      } catch (e) {
+        console.warn('[useAddLearning] agent_knowledge append failed (lesson still saved):', e);
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['learnings'] });
       queryClient.invalidateQueries({ queryKey: ['agent-activity'] });
+      // Refresh the Agent Settings doc so the appended bullet shows up.
+      queryClient.invalidateQueries({ queryKey: ['agent-config'] });
     },
   });
 }
