@@ -40,6 +40,7 @@ export interface AgentLead {
     content: string;
     timestamp: string;
     channel: string;
+    fromName?: string | null;
   }>;
   auto_handled: boolean;
   notes: string;
