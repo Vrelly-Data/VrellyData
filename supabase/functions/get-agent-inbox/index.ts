@@ -118,22 +118,26 @@ Deno.serve(async (req) => {
       const statusList =
         statusGroup === 'total_inbox' ? TOTAL_INBOX_STATUSES : PENDING_APPROVAL_STATUSES;
 
-      // Deterministic newest-first ordering across both tabs:
-      //   last_reply_at  — most authoritative "recent activity" signal
-      //   updated_at     — bumps on tag change, draft edit, inbox_status flip
-      //   created_at     — floor for freshly-imported leads
-      //   id             — final tie-breaker so two rows with identical
-      //                    timestamps don't flip order on each 30s refetch
-      // nullsFirst: false on the timestamp columns prevents null-timestamp
-      // rows from floating to the top of DESC order (Postgres' default for
-      // DESC is NULLS FIRST).
+      // Deterministic newest-first ordering. The PRIMARY key differs by tab:
+      //   total_inbox      → updated_at first. Our own sends (Send Reply) bump
+      //                      updated_at but NOT last_reply_at, so ordering by
+      //                      updated_at lifts BOTH prospect replies and our sends
+      //                      to the top — "most recent message" (Feature 3).
+      //   pending_approval → last_reply_at first. Actionability is driven by the
+      //                      prospect's latest reply, so keep it prospect-driven.
+      // Remaining keys: the other timestamp, then created_at (floor for freshly-
+      // imported leads), then id (final tie-breaker so identical-timestamp rows
+      // don't flip order on each 30s refetch). nullsFirst: false keeps
+      // null-timestamp rows off the top of DESC order.
+      const primarySort = statusGroup === 'total_inbox' ? 'updated_at' : 'last_reply_at';
+      const secondarySort = statusGroup === 'total_inbox' ? 'last_reply_at' : 'updated_at';
       const { data: inboxLeads, error } = await supabase
         .from('agent_leads')
         .select('*')
         .eq('user_id', authUserId)
         .in('inbox_status', statusList)
-        .order('last_reply_at', { ascending: false, nullsFirst: false })
-        .order('updated_at', { ascending: false, nullsFirst: false })
+        .order(primarySort, { ascending: false, nullsFirst: false })
+        .order(secondarySort, { ascending: false, nullsFirst: false })
         .order('created_at', { ascending: false, nullsFirst: false })
         .order('id', { ascending: false })
         .limit(50);
