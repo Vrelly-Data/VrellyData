@@ -1,4 +1,9 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import {
+  resolveExistingLead,
+  fetchReplyIoCandidates,
+  type LeadCandidate,
+} from '../_shared/lead-dedup.ts';
 
 const allowedOrigins = [
   'https://vrelly.com',
@@ -186,36 +191,9 @@ async function fetchThreadMessages(
   return all;
 }
 
-// Normalize a LinkedIn profile URL to a comparable key so the same person under
-// slightly different URLs dedupes. Returns null when there's no usable URL.
-//   https://www.linkedin.com/in/jasonmisztal/  →  linkedin.com/in/jasonmisztal
-function normalizeLinkedInUrl(url: string | null | undefined): string | null {
-  if (!url) return null;
-  let s = String(url).trim().toLowerCase();
-  if (!s) return null;
-  s = s.replace(/^https?:\/\//, '');   // strip protocol
-  s = s.replace(/^www\./, '');         // strip leading www.
-  s = s.split('#')[0].split('?')[0];   // strip fragment + query
-  s = s.replace(/\/+$/, '');           // strip trailing slash(es)
-  return s || null;
-}
-
-function isGenmailEmail(email: string | null | undefined): boolean {
-  return String(email ?? '').trim().toLowerCase().endsWith('@genmail.com');
-}
-
-// Reply.io can return the same person as a real-email thread + a @genmail.com
-// placeholder thread. When two threads share a normalized LinkedIn URL, keep the
-// one with the most recent activity; tie-break to the non-genmail email.
-function pickLinkedInWinner(a: InboxThread, b: InboxThread): InboxThread {
-  const aDate = a.lastActivityDate || '';
-  const bDate = b.lastActivityDate || '';
-  if (aDate !== bDate) return aDate > bDate ? a : b;   // most recent wins
-  const aGen = isGenmailEmail(a.contact?.email);
-  const bGen = isGenmailEmail(b.contact?.email);
-  if (aGen !== bGen) return aGen ? b : a;              // prefer non-genmail
-  return a;                                            // stable
-}
+// LinkedIn-URL / genmail / email dedup normalizers now live in
+// ../_shared/lead-dedup.ts and are shared with reply-webhook so both capture
+// paths resolve the same prospect to the same lead.
 
 // Convert an email HTML body to readable plain text. Reply.io returns email
 // message bodies as HTML (Outlook MsoNormal markup, inline styles, signature
@@ -281,15 +259,6 @@ function htmlToText(html: string): string {
     .replace(/\n{3,}/g, '\n\n')
     .trim();
   return text;
-}
-
-// Existing reply_io lead row shape used by the against-DB LinkedIn dedup.
-interface ExistingReplyLead {
-  id: string;
-  external_id: string | null;
-  linkedin_url: string | null;
-  inbox_status: string;
-  last_reply_at: string | null;
 }
 
 Deno.serve(async (req) => {
@@ -407,46 +376,15 @@ Deno.serve(async (req) => {
         const normalizeChannel = (c: unknown): string =>
           String(c).toLowerCase() === 'linkedin' ? 'linkedin' : 'email';
 
-        // --- Dedup pass 1 (within this run): collapse threads that resolve to
-        // the same person by normalized LinkedIn URL (real-email vs @genmail.com
-        // placeholder). Keep one winner per LinkedIn key; threads with NO
-        // LinkedIn URL pass through untouched and fall back to (user_id,
-        // external_id) dedup — we never collapse different no-LinkedIn people.
-        const linkedInWinners = new Map<string, InboxThread>();
-        const threadsToProcess: InboxThread[] = [];
+        // Dedup candidates: this user's existing reply_io leads, fetched once.
+        // MUTABLE — after each INSERT we push the new lead so a later thread in
+        // the same run resolves against it (intra-run dedup); after an UPDATE we
+        // refresh the matched candidate in place. Matching uses the shared
+        // resolveExistingLead (external_id → normalized linkedin_url →
+        // normalized email, genmail excluded) — identical to reply-webhook.
+        const candidates: LeadCandidate[] = await fetchReplyIoCandidates(supabase, userId);
+
         for (const thread of inboxThreads) {
-          const key = normalizeLinkedInUrl(thread.contact?.linkedInProfileUrl);
-          if (!key) {
-            threadsToProcess.push(thread);
-            continue;
-          }
-          const prev = linkedInWinners.get(key);
-          linkedInWinners.set(key, prev ? pickLinkedInWinner(prev, thread) : thread);
-        }
-        threadsToProcess.push(...linkedInWinners.values());
-
-        // --- Dedup pass 2 (against the DB): one query for this user's existing
-        // reply_io leads, indexed by normalized LinkedIn URL. A thread whose
-        // contact matches an existing lead's LinkedIn URL UPDATEs that lead
-        // (even under a different external_id) instead of inserting a new row.
-        const { data: existingReplyLeads } = await supabase
-          .from('agent_leads')
-          .select('id, external_id, linkedin_url, inbox_status, last_reply_at')
-          .eq('user_id', userId)
-          .eq('source', 'reply_io');
-
-        const leadsByLinkedIn = new Map<string, ExistingReplyLead>();
-        for (const l of (existingReplyLeads ?? []) as ExistingReplyLead[]) {
-          const key = normalizeLinkedInUrl(l.linkedin_url);
-          if (!key) continue;
-          const prev = leadsByLinkedIn.get(key);
-          // Pre-existing duplicates: keep the most recently active one.
-          if (!prev || (l.last_reply_at || '') > (prev.last_reply_at || '')) {
-            leadsByLinkedIn.set(key, l);
-          }
-        }
-
-        for (const thread of threadsToProcess) {
           try {
             const contact = thread.contact ?? null;
             const externalId = String(thread.id);
@@ -496,22 +434,15 @@ Deno.serve(async (req) => {
               ? htmlToText(latestInbound.body || '')
               : (latestInbound.body || '');
 
-            // Resolve the existing lead to dedupe against: prefer a normalized
-            // LinkedIn-URL match (collapses real-email vs @genmail.com
-            // duplicates, even under a different external_id), then fall back to
-            // the same-(user_id, external_id) lead for no-LinkedIn contacts.
-            const linkedInKey = normalizeLinkedInUrl(contact?.linkedInProfileUrl);
-            let existingLead: ExistingReplyLead | null =
-              linkedInKey ? (leadsByLinkedIn.get(linkedInKey) ?? null) : null;
-            if (!existingLead) {
-              const { data } = await supabase
-                .from('agent_leads')
-                .select('id, external_id, linkedin_url, inbox_status, last_reply_at')
-                .eq('user_id', userId)
-                .eq('external_id', externalId)
-                .maybeSingle();
-              existingLead = (data as ExistingReplyLead | null) ?? null;
-            }
+            // Resolve the existing lead to dedupe against, in shared order:
+            // external_id → normalized linkedin_url → normalized email (genmail
+            // excluded). The returned object is a reference into `candidates`,
+            // so mutating it below keeps the in-run list current.
+            const existingLead = resolveExistingLead(candidates, {
+              externalId,
+              linkedinUrl: contact?.linkedInProfileUrl,
+              email: contact?.email,
+            });
 
             if (existingLead) {
               const existingReplyAt = existingLead.last_reply_at;
@@ -530,8 +461,8 @@ Deno.serve(async (req) => {
             // ONLY when the latest message is the inbound reply AND it's within
             // 24h; everything else (we already replied, or older) → 'mirrored'.
             const targetInboxStatus =
-              existingLead && PROTECTED_STATUSES.includes(existingLead.inbox_status)
-                ? existingLead.inbox_status
+              existingLead && PROTECTED_STATUSES.includes(existingLead.inbox_status ?? '')
+                ? (existingLead.inbox_status as string)
                 : (latestIsInbound && isRecentReply ? 'pending' : 'mirrored');
 
             totalProcessed++;
@@ -583,11 +514,18 @@ Deno.serve(async (req) => {
                 continue;
               }
               writtenLeadId = updated?.id ?? existingLead.id;
+              // Refresh the matched candidate in place for later threads in this
+              // run (existingLead is a reference into `candidates`).
+              existingLead.last_reply_at = lastReplyDate || nowIso;
+              existingLead.inbox_status = targetInboxStatus;
             } else {
-              // INSERT a new lead (upsert keyed on user_id,external_id).
-              const { data: inserted, error: upsertError } = await supabase
+              // INSERT — nothing matched any dedup key. Plain insert (NOT upsert):
+              // the shared resolver already ruled out an existing row, and the
+              // (user_id, external_id) unique index is partial so onConflict
+              // inference is unreliable anyway.
+              const { data: inserted, error: insertError } = await supabase
                 .from('agent_leads')
-                .upsert({
+                .insert({
                   user_id: userId,
                   agent_config_id: agentConfig.id,
                   external_id: externalId,
@@ -602,29 +540,26 @@ Deno.serve(async (req) => {
                   last_reply_at: lastReplyDate || nowIso,
                   last_reply_text: replyText,
                   reply_thread: replyThread,
-                }, {
-                  onConflict: 'user_id,external_id',
-                  ignoreDuplicates: false,
                 })
                 .select('id')
                 .single();
 
-              if (upsertError) {
-                console.error(`[poll-reply-inbox] Upsert error for ${externalId}:`, upsertError.message);
+              if (insertError) {
+                console.error(`[poll-reply-inbox] Insert error for ${externalId}:`, insertError.message);
                 continue;
               }
               writtenLeadId = inserted?.id ?? null;
 
-              // Register the new lead under its LinkedIn key so a later thread
-              // in this same run with the same key UPDATEs it (defensive — the
-              // within-run pass already collapses same-key threads).
-              if (linkedInKey && writtenLeadId) {
-                leadsByLinkedIn.set(linkedInKey, {
+              // Register the new lead so a later thread in this same run resolves
+              // against it (intra-run dedup across all keys).
+              if (writtenLeadId) {
+                candidates.push({
                   id: writtenLeadId,
                   external_id: externalId,
                   linkedin_url: contact?.linkedInProfileUrl || null,
-                  inbox_status: targetInboxStatus,
+                  email: contact?.email || null,
                   last_reply_at: lastReplyDate || nowIso,
+                  inbox_status: targetInboxStatus,
                 });
               }
             }

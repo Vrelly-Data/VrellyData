@@ -1,4 +1,9 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import {
+  resolveExistingLead,
+  fetchReplyIoCandidates,
+  isGenmailEmail,
+} from '../_shared/lead-dedup.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -387,27 +392,52 @@ Deno.serve(async (req) => {
           })
           .eq('id', contact.id);
 
-        // Upsert into agent_leads when we have a reply with text (legacy path)
+        // Write agent_leads when we have a reply with text (legacy path).
+        // Now AWAITED + resolver-based (was fire-and-forget upsert): resolves via
+        // the shared keys so it converges with the inbox-routing write below on
+        // the same lead instead of racing it into a duplicate. Awaiting it also
+        // guarantees inbox-routing sees this row when it resolves.
         if (normalizedType === 'email_replied' && engagement.lastReplyText && integration.created_by) {
+          const legacyUserId = integration.created_by;
           const externalId = contact.external_contact_id ||
             event.contactId || event.contact?.id || event.data?.contactId || contactEmail;
-
-          supabase
-            .from('agent_leads')
-            .upsert({
-              user_id: integration.created_by,
-              external_id: String(externalId),
-              full_name: [contact.first_name, contact.last_name].filter(Boolean).join(' ') || null,
+          const legacyName = [contact.first_name, contact.last_name].filter(Boolean).join(' ') || null;
+          try {
+            const legacyCandidates = await fetchReplyIoCandidates(supabase, legacyUserId);
+            const legacyMatch = resolveExistingLead(legacyCandidates, {
+              externalId: String(externalId),
+              linkedinUrl: null,
               email: contactEmail,
-              last_reply_text: engagement.lastReplyText as string,
-              inbox_status: 'pending',
-              channel: 'email',
-              source: 'reply_io',
-            }, { onConflict: 'user_id,external_id' })
-            .then(({ error: leadsErr }) => {
-              if (leadsErr) console.error('agent_leads upsert error:', leadsErr);
-              else console.log(`Upserted agent_lead for ${contactEmail}`);
             });
+            if (legacyMatch) {
+              // Minimal refresh; don't clobber identity fields set elsewhere.
+              const { error: legacyUpdErr } = await supabase
+                .from('agent_leads')
+                .update({
+                  last_reply_text: engagement.lastReplyText as string,
+                  inbox_status: 'pending',
+                })
+                .eq('id', legacyMatch.id);
+              if (legacyUpdErr) console.error('agent_leads legacy update error:', legacyUpdErr.message);
+            } else {
+              const { error: legacyInsErr } = await supabase
+                .from('agent_leads')
+                .insert({
+                  user_id: legacyUserId,
+                  external_id: String(externalId),
+                  full_name: legacyName,
+                  email: contactEmail,
+                  last_reply_text: engagement.lastReplyText as string,
+                  inbox_status: 'pending',
+                  channel: 'email',
+                  source: 'reply_io',
+                });
+              if (legacyInsErr) console.error('agent_leads legacy insert error:', legacyInsErr.message);
+              else console.log(`Inserted agent_lead for ${contactEmail}`);
+            }
+          } catch (legacyErr) {
+            console.error('agent_leads legacy write error:', legacyErr);
+          }
 
           // Fire-and-forget: trigger full sync so agent_leads stays consistent
           if (campaign) {
@@ -451,52 +481,93 @@ Deno.serve(async (req) => {
         console.log(`[inbox-routing] externalId=${externalId} contactId=${contactId} contactEmail=${contactEmail}`);
 
         if (externalId) {
-          // Get existing lead to append thread
-          const { data: existingLead, error: existingLeadError } = await supabase
-            .from('agent_leads')
-            .select('id, reply_thread')
-            .eq('user_id', agentUserId)
-            .eq('external_id', externalId)
-            .maybeSingle();
+          // Resolve the existing lead across ALL reply_io dedup keys (external_id
+          // → normalized linkedin_url → normalized email, genmail excluded) —
+          // shared with poll-reply-inbox. Replaces the single external_id lookup
+          // + partial-index upsert so the same prospect never spawns a 2nd row.
+          const candidates = await fetchReplyIoCandidates(supabase, agentUserId);
+          const match = resolveExistingLead(candidates, {
+            externalId,
+            linkedinUrl,
+            email: contactEmail,
+          });
+          console.log(`[inbox-routing] dedup match=${match ? match.id : 'none'} (externalId=${externalId})`);
 
-          console.log(`[inbox-routing] existingLead=${existingLead ? 'found (id=' + existingLead.id + ')' : 'null'} error=${existingLeadError?.message || 'none'}`);
-
-          const existingThread = existingLead?.reply_thread || [];
-          const updatedThread = [...(existingThread as any[]), {
+          const newMsg = {
             role: 'prospect',
             content: replyText,
             timestamp: new Date().toISOString(),
             channel,
-          }];
+          };
 
-          // Upsert agent_leads
-          console.log(`[inbox-routing] upserting agent_leads for externalId=${externalId}`);
-          const { data: upsertedLead, error: upsertError } = await supabase
-            .from('agent_leads')
-            .upsert({
-              user_id: agentUserId,
-              agent_config_id: agentConfig.id,
-              external_id: externalId,
-              full_name: fullName || 'Unknown',
-              email: contactEmail,
-              linkedin_url: linkedinUrl,
-              company,
-              job_title: jobTitle,
-              channel,
-              source: 'reply_io',
-              pipeline_stage: 'replied',
-              inbox_status: 'pending',
-              last_reply_at: new Date().toISOString(),
-              last_reply_text: replyText,
-              reply_thread: updatedThread,
-            }, {
-              onConflict: 'user_id,external_id',
-              ignoreDuplicates: false,
-            })
-            .select()
-            .single();
+          let upsertedLead: { id: string } | null = null;
+          let updatedThread: any[];
 
-          console.log(`[inbox-routing] upsertedLead=${upsertedLead ? 'ok (id=' + upsertedLead.id + ')' : 'null'} error=${upsertError?.message || 'none'}`);
+          if (match) {
+            // Append to the matched lead's thread and UPDATE by id. Never touch
+            // external_id/source. Upgrade identity fields only when the incoming
+            // value is better (non-empty; email only when non-genmail) so a
+            // masked stub never downgrades a real-email lead — undefined fields
+            // are dropped from the PATCH by supabase-js.
+            const { data: existing } = await supabase
+              .from('agent_leads')
+              .select('reply_thread')
+              .eq('id', match.id)
+              .maybeSingle();
+            updatedThread = [...((existing?.reply_thread as any[]) || []), newMsg];
+
+            const { data: updated, error: updateError } = await supabase
+              .from('agent_leads')
+              .update({
+                agent_config_id: agentConfig.id,
+                full_name: (fullName && fullName !== 'Unknown') ? fullName : undefined,
+                email: (contactEmail && !isGenmailEmail(contactEmail)) ? contactEmail : undefined,
+                linkedin_url: linkedinUrl || undefined,
+                company: company || undefined,
+                job_title: jobTitle || undefined,
+                channel,
+                pipeline_stage: 'replied',
+                inbox_status: 'pending',
+                last_reply_at: new Date().toISOString(),
+                last_reply_text: replyText,
+                reply_thread: updatedThread,
+              })
+              .eq('id', match.id)
+              .select('id')
+              .single();
+            if (updateError) console.error('[inbox-routing] agent_leads update error:', updateError.message);
+            upsertedLead = updated ?? { id: match.id };
+          } else {
+            // INSERT — nothing matched any key. Plain insert (not upsert; the
+            // partial (user_id, external_id) index makes onConflict inference
+            // unreliable).
+            updatedThread = [newMsg];
+            const { data: inserted, error: insertError } = await supabase
+              .from('agent_leads')
+              .insert({
+                user_id: agentUserId,
+                agent_config_id: agentConfig.id,
+                external_id: externalId,
+                full_name: fullName || 'Unknown',
+                email: contactEmail,
+                linkedin_url: linkedinUrl,
+                company,
+                job_title: jobTitle,
+                channel,
+                source: 'reply_io',
+                pipeline_stage: 'replied',
+                inbox_status: 'pending',
+                last_reply_at: new Date().toISOString(),
+                last_reply_text: replyText,
+                reply_thread: updatedThread,
+              })
+              .select('id')
+              .single();
+            if (insertError) console.error('[inbox-routing] agent_leads insert error:', insertError.message);
+            upsertedLead = inserted ?? null;
+          }
+
+          console.log(`[inbox-routing] upsertedLead=${upsertedLead ? 'ok (id=' + upsertedLead.id + ')' : 'null'}`);
 
           // Log activity
           if (upsertedLead) {
