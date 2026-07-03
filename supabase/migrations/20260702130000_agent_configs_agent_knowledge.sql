@@ -1,0 +1,16 @@
+-- Per-client "Agent Knowledge" doc.
+--
+-- One editable markdown brief per client that the draft prompt reads whole
+-- (like Claude Project instructions): the client's niche, the goal of each
+-- message, and context on each sender. classify-reply injects it into the draft
+-- prompt alongside the existing agent_configs fields and the matched sender
+-- profile.
+--
+-- Additive + null-safe: existing agent_configs.* fields are unchanged and keep
+-- feeding the prompt; a client with no doc (NULL/empty) drafts exactly as today.
+--
+-- The "Teach the agent" flow keeps writing to agent_activity (learning_added)
+-- AND now also appends each lesson as a bullet under a "## Learned from
+-- corrections" section at the bottom of this doc (accumulates, never overwrites;
+-- operators can edit/delete those lines like any other text).
+ALTER TABLE agent_configs ADD COLUMN IF NOT EXISTS agent_knowledge text;

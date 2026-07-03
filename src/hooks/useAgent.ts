@@ -29,6 +29,7 @@ export interface AgentConfig {
   objection_handling_notes: string | null;
   reply_api_key: string | null;
   default_cc: string | null;
+  agent_knowledge: string | null;
   managed_campaigns: string[] | null;
   mode: string | null;
   is_active: boolean | null;
@@ -87,6 +88,7 @@ export interface AgentConfigInput {
   objection_handling_notes?: string;
   reply_api_key?: string;
   default_cc?: string | null;
+  agent_knowledge?: string | null;
   mode?: string;
   is_active?: boolean;
   onboarding_complete?: boolean;
