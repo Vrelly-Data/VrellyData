@@ -411,6 +411,22 @@ Deno.serve(async (req) => {
       });
     }
 
+    // Suppression: a lead tagged 'opted_out' must never be messaged. Refuse the
+    // send and return the same handled result the UI shows for a live Reply.io
+    // opt-out (friendly toast, not an error).
+    if (lead.pipeline_stage === 'opted_out') {
+      console.log(`[send-agent-reply] lead ${leadId} is opted_out — refusing to send`);
+      return new Response(JSON.stringify({
+        success: false,
+        handled: true,
+        code: 'contact_opted_out',
+        message: "This contact has opted out and can't be messaged — reply not sent",
+      }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
     // 2. Fetch agent config
     const { data: agentConfig, error: configError } = await supabase
       .from('agent_configs')
@@ -534,7 +550,15 @@ Deno.serve(async (req) => {
         // it in `data` rather than as a FunctionsHttpError ("non-2xx status
         // code"), letting the UI show a friendly toast.
         if (env.code === 'inboxThread.contactOptedOut') {
-          console.log('[send-agent-reply] contact opted out — surfacing as a handled result (not an error)');
+          console.log('[send-agent-reply] contact opted out — tagging lead opted_out + surfacing handled result');
+          // Auto-apply the opted_out tag so future drafts (classify-reply) and
+          // sends are suppressed, and move the lead out of the pending queue into
+          // Total Inbox (inbox_status='dismissed') — same effect as the operator
+          // applying the "Opted Out" tag by hand.
+          await supabase
+            .from('agent_leads')
+            .update({ pipeline_stage: 'opted_out', inbox_status: 'dismissed' })
+            .eq('id', leadId);
           return new Response(JSON.stringify({
             success: false,
             handled: true,

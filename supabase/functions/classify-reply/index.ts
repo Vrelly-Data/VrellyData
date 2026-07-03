@@ -326,6 +326,24 @@ Deno.serve(async (req) => {
     // Create Supabase client with service role key
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
+    // Suppression: a lead tagged 'opted_out' must never be drafted for again.
+    // Early-return BEFORE any LLM work so we don't engage an opted-out contact.
+    if (lead_id) {
+      const { data: optedRow } = await supabase
+        .from('agent_leads')
+        .select('pipeline_stage')
+        .eq('id', lead_id)
+        .eq('user_id', user_id)
+        .maybeSingle();
+      if (optedRow?.pipeline_stage === 'opted_out') {
+        console.log(`[classify-reply] lead ${lead_id} is opted_out — skipping draft`);
+        return new Response(JSON.stringify({ skipped: true, reason: 'opted_out' }), {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+    }
+
     // Fetch all sales_knowledge entries where category = 'sales_guideline'
     const { data: guidelines } = await supabase
       .from('sales_knowledge')

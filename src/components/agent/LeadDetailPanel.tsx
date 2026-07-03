@@ -58,6 +58,10 @@ export const PIPELINE_STAGES = [
   { value: 'in_progress', label: 'In Progress' },
   { value: 'meeting_booked', label: 'Meeting Booked' },
   { value: 'closed', label: 'Closed' },
+  { value: 'not_relevant', label: 'Not Relevant' },
+  // 'opted_out' doubles as the suppression flag: classify-reply skips drafting
+  // and send-agent-reply refuses to send when a lead is tagged opted_out.
+  { value: 'opted_out', label: 'Opted Out' },
 ] as const;
 
 export type PipelineStageValue = typeof PIPELINE_STAGES[number]['value'];
