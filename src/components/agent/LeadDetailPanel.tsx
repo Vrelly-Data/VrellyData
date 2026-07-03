@@ -362,7 +362,18 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
           ...(isReplyIoEmail && ccEmail.trim() ? { cc: ccEmail.trim() } : {}),
         },
         {
-          onSuccess: () => {
+          onSuccess: (result: any) => {
+            // Opted-out is a handled business state (backend returns 200 with
+            // code 'contact_opted_out', not an error) — show a friendly,
+            // non-destructive toast instead of a success/error one.
+            if (result?.code === 'contact_opted_out') {
+              toast({
+                title: 'Contact opted out',
+                description: result.message
+                  || "This contact has opted out and can't be messaged — reply not sent.",
+              });
+              return;
+            }
             toast({
               title: isReplyIoLinkedIn
                 ? 'Reply sent via Reply.io LinkedIn ✓'

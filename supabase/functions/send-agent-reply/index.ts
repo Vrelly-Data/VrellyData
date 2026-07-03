@@ -528,6 +528,24 @@ Deno.serve(async (req) => {
         } catch {
           // Non-JSON error body — leave env empty; mapper falls back to status.
         }
+        // Opted-out is a VALID business state, not a failure — the operator
+        // can't message this contact and there's nothing to fix or retry. Return
+        // it as a clean, handled 200 result (NOT a 502) so supabase-js delivers
+        // it in `data` rather than as a FunctionsHttpError ("non-2xx status
+        // code"), letting the UI show a friendly toast.
+        if (env.code === 'inboxThread.contactOptedOut') {
+          console.log('[send-agent-reply] contact opted out — surfacing as a handled result (not an error)');
+          return new Response(JSON.stringify({
+            success: false,
+            handled: true,
+            code: 'contact_opted_out',
+            message: "This contact has opted out and can't be messaged — reply not sent",
+          }), {
+            status: 200,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+
         const userMessage = mapThreadReplyError(sendRes.status, env);
         console.error(
           `[send-agent-reply] thread reply failed: status=${sendRes.status} code=${env.code ?? ''} detail=${(env.detail ?? '').slice(0, 200)}`,
