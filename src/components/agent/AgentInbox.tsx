@@ -17,6 +17,19 @@ import {
   getPipelineStageLabel,
 } from './LeadDetailPanel';
 
+// Most-recent role:'sender' fromName in the thread — the sender who owns this
+// conversation (matches a sender_profiles.sender_name).
+function latestSenderName(
+  thread?: Array<{ role: string; fromName?: string | null }> | null,
+): string | null {
+  if (!Array.isArray(thread)) return null;
+  for (let i = thread.length - 1; i >= 0; i--) {
+    const m = thread[i];
+    if (m?.role === 'sender' && m.fromName && m.fromName.trim()) return m.fromName.trim();
+  }
+  return null;
+}
+
 export function AgentInbox() {
   const [statusGroup, setStatusGroup] = useState<InboxStatusGroup>('pending_approval');
   const { leads, counts, isLoading } = useAgentInboxData('inbox', statusGroup);
@@ -137,6 +150,18 @@ export function AgentInbox() {
                     {lead.job_title && (
                       <p className="text-xs text-muted-foreground truncate">{lead.job_title}</p>
                     )}
+                    {(() => {
+                      const sender = latestSenderName(lead.reply_thread);
+                      const campaign = lead.last_campaign_name;
+                      if (!campaign && !sender) return null;
+                      return (
+                        <p className="text-xs text-muted-foreground truncate">
+                          {campaign && <span>{campaign}</span>}
+                          {campaign && sender && <span> · </span>}
+                          {sender && <span>Sender: {sender}</span>}
+                        </p>
+                      );
+                    })()}
                   </div>
                   {lead.last_reply_at && (
                     <span className="text-xs text-muted-foreground shrink-0">
