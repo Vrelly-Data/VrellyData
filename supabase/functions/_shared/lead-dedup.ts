@@ -44,6 +44,9 @@ export interface LeadCandidate {
   // Optional — poll-reply-inbox reads it (PROTECTED_STATUSES) on the matched
   // candidate; reply-webhook ignores it.
   inbox_status?: string | null;
+  // Optional — both ingestion paths read it to suppress resurfacing a lead the
+  // operator tagged opted_out / not_relevant.
+  disposition_tag?: string | null;
 }
 
 // Most recent by last_reply_at; on a tie prefer a real (non-genmail) email so a
@@ -94,7 +97,7 @@ export function resolveExistingLead(
 export async function fetchReplyIoCandidates(supabase: any, userId: string): Promise<LeadCandidate[]> {
   const { data } = await supabase
     .from('agent_leads')
-    .select('id, external_id, linkedin_url, email, last_reply_at, inbox_status')
+    .select('id, external_id, linkedin_url, email, last_reply_at, inbox_status, disposition_tag')
     .eq('user_id', userId)
     .eq('source', 'reply_io');
   return (data ?? []) as LeadCandidate[];

@@ -4,6 +4,7 @@ import {
   fetchReplyIoCandidates,
   isGenmailEmail,
 } from '../_shared/lead-dedup.ts';
+import { isSuppressed, fireClassifyReply } from '../_shared/inbox-reply.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -505,6 +506,9 @@ Deno.serve(async (req) => {
 
           let upsertedLead: { id: string } | null = null;
           let updatedThread: any[];
+          // Whether this reply should (re)surface the lead to 'pending' + draft.
+          // A brand-new lead (INSERT branch) always does; the match branch decides.
+          let resurface = true;
 
           if (match) {
             // Append to the matched lead's thread and UPDATE by id. Never touch
@@ -514,10 +518,17 @@ Deno.serve(async (req) => {
             // are dropped from the PATCH by supabase-js.
             const { data: existing } = await supabase
               .from('agent_leads')
-              .select('reply_thread')
+              .select('reply_thread, inbox_status, disposition_tag')
               .eq('id', match.id)
               .maybeSingle();
-            updatedThread = [...((existing?.reply_thread as any[]) || []), newMsg];
+            const existingThread = (existing?.reply_thread as any[]) || [];
+            // Re-delivery guard: if this exact prospect reply is already the
+            // newest entry, it's a webhook retry — don't re-append or resurface.
+            const newest = existingThread[existingThread.length - 1];
+            const alreadyRecorded = newest?.role === 'prospect' && newest?.content === replyText;
+            // (a) suppressed leads never resurface; (b) re-delivery never resurfaces.
+            resurface = !isSuppressed(existing?.disposition_tag) && !alreadyRecorded;
+            updatedThread = alreadyRecorded ? existingThread : [...existingThread, newMsg];
 
             const { data: updated, error: updateError } = await supabase
               .from('agent_leads')
@@ -529,11 +540,13 @@ Deno.serve(async (req) => {
                 company: company || undefined,
                 job_title: jobTitle || undefined,
                 channel,
-                pipeline_stage: 'replied',
-                inbox_status: 'pending',
                 last_reply_at: new Date().toISOString(),
                 last_reply_text: replyText,
                 reply_thread: updatedThread,
+                // Only (re)surface a genuinely-new, non-suppressed reply — leave
+                // pipeline_stage / inbox_status untouched otherwise (so an
+                // already-handled or opted_out lead isn't dragged back).
+                ...(resurface ? { pipeline_stage: 'replied', inbox_status: 'pending' } : {}),
               })
               .eq('id', match.id)
               .select('id')
@@ -576,8 +589,10 @@ Deno.serve(async (req) => {
 
           console.log(`[inbox-routing] upsertedLead=${upsertedLead ? 'ok (id=' + upsertedLead.id + ')' : 'null'}`);
 
-          // Log activity
-          if (upsertedLead) {
+          // Log activity + fire classify-reply ONLY when the reply resurfaces the
+          // lead (genuinely-new, non-suppressed). A re-delivery or an opted_out /
+          // not_relevant lead records the reply silently without a draft.
+          if (resurface && upsertedLead) {
             const { error: activityError } = await supabase.from('agent_activity').insert({
               user_id: agentUserId,
               agent_config_id: agentConfig.id,
@@ -589,47 +604,21 @@ Deno.serve(async (req) => {
               metadata: { channel, intent: 'pending' },
             });
             console.log(`[inbox-routing] activity insert error=${activityError?.message || 'none'}`);
-          }
 
-          // Fire-and-forget: classify-reply runs independently and updates agent_leads when done
-          console.log(`[inbox-routing] firing classify-reply for lead_id=${upsertedLead?.id}`);
-          fetch(
-            `${supabaseUrl}/functions/v1/classify-reply`,
-            {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'x-agent-key': Deno.env.get('AGENT_API_KEY') || '',
-              },
-              body: JSON.stringify({
-                reply_text: replyText,
-                thread_history: updatedThread,
-                lead_id: upsertedLead?.id,
-                agent_context: {
-                  offer_description: agentConfig.offer_description,
-                  desired_action: agentConfig.desired_action,
-                  outcome_delivered: agentConfig.outcome_delivered,
-                  target_icp: agentConfig.target_icp,
-                  sender_name: agentConfig.sender_name,
-                  sender_title: agentConfig.sender_title,
-                  sender_linkedin: agentConfig.sender_linkedin || '',
-                  sender_bio: agentConfig.sender_bio,
-                  company_name: agentConfig.company_name,
-                  company_url: agentConfig.company_url,
-                  communication_style: agentConfig.communication_style,
-                  avoid_phrases: agentConfig.avoid_phrases || [],
-                  sample_message: agentConfig.sample_message || '',
-                  calendar_link: agentConfig.calendar_link || '',
-                  pricing_summary: agentConfig.pricing_summary || '',
-                  case_studies: agentConfig.case_studies || '',
-                  disqualification_criteria: agentConfig.disqualification_criteria || '',
-                  objection_handling_notes: agentConfig.objection_handling_notes || '',
-                },
-                channel,
-                user_id: agentUserId,
-              }),
-            }
-          ).catch((err) => console.error('[inbox-routing] classify-reply fire-and-forget error:', err));
+            console.log(`[inbox-routing] firing classify-reply for lead_id=${upsertedLead.id}`);
+            fireClassifyReply({
+              supabaseUrl,
+              agentKey: Deno.env.get('AGENT_API_KEY') || '',
+              leadId: upsertedLead.id,
+              replyText,
+              threadHistory: updatedThread,
+              agentConfig,
+              channel,
+              userId: agentUserId,
+            });
+          } else {
+            console.log(`[inbox-routing] reply recorded without resurfacing (resurface=${resurface}) for lead_id=${upsertedLead?.id}`);
+          }
 
           console.log('[inbox-routing] done, returning success');
         }
