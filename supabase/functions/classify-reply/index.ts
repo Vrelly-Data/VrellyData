@@ -331,11 +331,11 @@ Deno.serve(async (req) => {
     if (lead_id) {
       const { data: optedRow } = await supabase
         .from('agent_leads')
-        .select('pipeline_stage')
+        .select('disposition_tag')
         .eq('id', lead_id)
         .eq('user_id', user_id)
         .maybeSingle();
-      if (optedRow?.pipeline_stage === 'opted_out') {
+      if (optedRow?.disposition_tag === 'opted_out') {
         console.log(`[classify-reply] lead ${lead_id} is opted_out — skipping draft`);
         return new Response(JSON.stringify({ skipped: true, reason: 'opted_out' }), {
           status: 200,

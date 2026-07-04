@@ -1,0 +1,16 @@
+-- Disposition tag (display label + suppression flag) separate from pipeline_stage.
+--
+-- pipeline_stage has a CHECK constraint (in_progress, bad_lead, ooo,
+-- not_interested, meeting_booked, closed, dead, contacted, replied, engaged).
+-- The inbox tag dropdown added two labels — Not Relevant, Opted Out — that are
+-- NOT valid pipeline_stage values, so writing them violated the CHECK.
+--
+-- Fix: store the operator's chosen tag here (raw label value: bad_lead, ooo,
+-- not_interested, in_progress, meeting_booked, closed, not_relevant, opted_out)
+-- as the display source + the opted_out suppression flag, and map it to a valid
+-- pipeline_stage (not_relevant -> bad_lead, opted_out -> dead) for the
+-- constrained column.
+--
+-- Nullable: existing leads keep disposition_tag NULL and the UI falls back to
+-- pipeline_stage (identical for the six original tags), so no backfill needed.
+ALTER TABLE agent_leads ADD COLUMN IF NOT EXISTS disposition_tag text;
