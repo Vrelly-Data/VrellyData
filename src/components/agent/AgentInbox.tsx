@@ -182,9 +182,9 @@ export function AgentInbox() {
                       Pending
                     </Badge>
                   )}
-                  {statusGroup === 'total_inbox' && getPipelineStageLabel(lead.pipeline_stage) && (
+                  {statusGroup === 'total_inbox' && getPipelineStageLabel(lead.disposition_tag ?? lead.pipeline_stage) && (
                     <Badge variant="secondary" className="text-xs">
-                      {getPipelineStageLabel(lead.pipeline_stage)}
+                      {getPipelineStageLabel(lead.disposition_tag ?? lead.pipeline_stage)}
                     </Badge>
                   )}
                 </div>

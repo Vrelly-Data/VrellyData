@@ -22,6 +22,10 @@ export interface AgentLead {
   // to "no send handler", never a wrong-channel send).
   source?: 'heyreach' | 'smartlead' | 'reply_io' | string | null;
   pipeline_stage: string;
+  // Operator's disposition tag (display label + opted_out flag). pipeline_stage
+  // holds the CHECK-valid mapped value; this holds the raw tag. Null → fall back
+  // to pipeline_stage (identical for the six original tags).
+  disposition_tag?: string | null;
   inbox_status: string;
   intent: string;
   intent_confidence: number;

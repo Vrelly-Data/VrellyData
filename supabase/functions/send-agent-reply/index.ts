@@ -413,8 +413,9 @@ Deno.serve(async (req) => {
 
     // Suppression: a lead tagged 'opted_out' must never be messaged. Refuse the
     // send and return the same handled result the UI shows for a live Reply.io
-    // opt-out (friendly toast, not an error).
-    if (lead.pipeline_stage === 'opted_out') {
+    // opt-out (friendly toast, not an error). Keyed on the disposition_tag flag,
+    // NOT pipeline_stage (which holds the mapped 'dead' value).
+    if (lead.disposition_tag === 'opted_out') {
       console.log(`[send-agent-reply] lead ${leadId} is opted_out — refusing to send`);
       return new Response(JSON.stringify({
         success: false,
@@ -554,10 +555,11 @@ Deno.serve(async (req) => {
           // Auto-apply the opted_out tag so future drafts (classify-reply) and
           // sends are suppressed, and move the lead out of the pending queue into
           // Total Inbox (inbox_status='dismissed') — same effect as the operator
-          // applying the "Opted Out" tag by hand.
+          // applying the "Opted Out" tag by hand. The tag/flag lives in
+          // disposition_tag; pipeline_stage gets the CHECK-valid mapped 'dead'.
           await supabase
             .from('agent_leads')
-            .update({ pipeline_stage: 'opted_out', inbox_status: 'dismissed' })
+            .update({ disposition_tag: 'opted_out', pipeline_stage: 'dead', inbox_status: 'dismissed' })
             .eq('id', leadId);
           return new Response(JSON.stringify({
             success: false,

@@ -66,6 +66,15 @@ export const PIPELINE_STAGES = [
 
 export type PipelineStageValue = typeof PIPELINE_STAGES[number]['value'];
 
+// pipeline_stage has a DB CHECK that does NOT allow the two inbox-only tags.
+// The operator's chosen tag is stored in agent_leads.disposition_tag (display
+// label + opted_out flag); pipeline_stage gets a CHECK-valid value via this map.
+const STAGE_FOR_TAG: Record<string, string> = {
+  not_relevant: 'bad_lead',
+  opted_out: 'dead',
+};
+export const pipelineStageForTag = (tag: string): string => STAGE_FOR_TAG[tag] ?? tag;
+
 export function getPipelineStageLabel(value: string | null | undefined): string | null {
   const match = PIPELINE_STAGES.find((s) => s.value === value);
   return match?.label ?? null;
@@ -295,16 +304,23 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
   // HeyReach only — Reply.io LinkedIn never falls into this block.
   const isColdInboundLinkedIn = isHeyReachLinkedIn && !(lead as any).heyreach_conversation_id;
 
-  const handleStageChange = (newStage: string) => {
-    if (newStage === lead.pipeline_stage) return;
+  const handleStageChange = (newTag: string) => {
+    const currentTag = lead.disposition_tag ?? lead.pipeline_stage;
+    if (newTag === currentTag) return;
     updateLead.mutate(
       {
         leadId: lead.id,
-        // Tag change always moves the lead to Total Inbox (inbox_status='dismissed').
-        updates: { pipeline_stage: newStage, inbox_status: 'dismissed' },
+        // The chosen tag (label source + opted_out flag) goes in disposition_tag;
+        // pipeline_stage gets the CHECK-valid mapped value (not_relevant->bad_lead,
+        // opted_out->dead). Any tag apply moves the lead to Total Inbox.
+        updates: {
+          disposition_tag: newTag,
+          pipeline_stage: pipelineStageForTag(newTag),
+          inbox_status: 'dismissed',
+        },
         logStageChange: {
-          oldStage: lead.pipeline_stage,
-          newStage,
+          oldStage: currentTag,
+          newStage: newTag,
           leadName: lead.full_name,
           leadCompany: lead.company,
         },
@@ -658,7 +674,7 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <Select value={lead.pipeline_stage || ''} onValueChange={handleStageChange}>
+          <Select value={(lead.disposition_tag ?? lead.pipeline_stage) || ''} onValueChange={handleStageChange}>
             <SelectTrigger className="w-[150px] h-8 text-xs">
               <SelectValue placeholder="Set tag" />
             </SelectTrigger>
