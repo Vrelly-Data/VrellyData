@@ -4,6 +4,7 @@ import {
   fetchReplyIoCandidates,
   type LeadCandidate,
 } from '../_shared/lead-dedup.ts';
+import { shouldResurface, fireClassifyReply } from '../_shared/inbox-reply.ts';
 
 const allowedOrigins = [
   'https://vrelly.com',
@@ -331,11 +332,6 @@ Deno.serve(async (req) => {
     let totalNew = 0;
     let totalMirrored = 0;
 
-    // Statuses that represent human/agent progress. We NEVER overwrite these
-    // back to pending/mirrored — i.e. a dismissed or sent lead is not
-    // resurrected into the actionable inbox by a re-poll.
-    const PROTECTED_STATUSES = ['draft_ready', 'approved', 'sent', 'dismissed'];
-
     for (const integration of integrations ?? []) {
       try {
         const apiKey = integration.api_key_encrypted;
@@ -444,26 +440,32 @@ Deno.serve(async (req) => {
               email: contact?.email,
             });
 
+            // Resurface decision (unified with reply-webhook via shouldResurface):
+            // a genuinely-new, unanswered, non-suppressed inbound reply flips the
+            // lead to 'pending' + triggers a draft. "Genuinely new" = the newest
+            // reply is STRICTLY newer than the lead's prior last_reply_at (the
+            // re-poll guard, replacing the old 60s window). Otherwise the lead's
+            // current status is preserved — a re-poll never drags a handled or
+            // opted_out/not_relevant lead back into the actionable queue.
+            const newerThanPrior = (() => {
+              const now = lastReplyDate ? new Date(lastReplyDate).getTime() : 0;
+              const prior = existingLead?.last_reply_at ? new Date(existingLead.last_reply_at).getTime() : 0;
+              return now > prior;
+            })();
+            let targetInboxStatus: string;
             if (existingLead) {
-              const existingReplyAt = existingLead.last_reply_at;
-              if (existingReplyAt && lastReplyDate) {
-                const existingDate = new Date(existingReplyAt).getTime();
-                const newDate = new Date(lastReplyDate).getTime();
-                if (Math.abs(existingDate - newDate) < 60000) {
-                  continue;
-                }
-              }
+              targetInboxStatus = shouldResurface({
+                dispositionTag: existingLead.disposition_tag,
+                newestRole: latestIsInbound ? 'prospect' : 'sender',
+                newerThanPrior,
+              })
+                ? 'pending'
+                : (existingLead.inbox_status ?? 'mirrored');
+            } else {
+              // New lead: actionable when the newest message is the inbound reply
+              // and it's recent (24h). classify-reply runs when 'pending'.
+              targetInboxStatus = (latestIsInbound && isRecentReply) ? 'pending' : 'mirrored';
             }
-
-            // Target inbox_status. A human/agent-progressed lead
-            // (draft_ready/approved/sent/dismissed) is preserved verbatim so a
-            // re-poll never drags it back. Otherwise: 'pending' (actionable)
-            // ONLY when the latest message is the inbound reply AND it's within
-            // 24h; everything else (we already replied, or older) → 'mirrored'.
-            const targetInboxStatus =
-              existingLead && PROTECTED_STATUSES.includes(existingLead.inbox_status ?? '')
-                ? (existingLead.inbox_status as string)
-                : (latestIsInbound && isRecentReply ? 'pending' : 'mirrored');
 
             totalProcessed++;
 
@@ -585,6 +587,21 @@ Deno.serve(async (req) => {
                 activity_type: 'reply_received',
                 description: `${channel === 'linkedin' ? 'LinkedIn' : 'Email'} reply detected via polling from ${fullName}${company ? ' at ' + company : ''}`,
                 metadata: { channel, intent: 'pending', source: 'poll' },
+              });
+
+              // Trigger a draft — poll previously NEVER did this (only the
+              // webhook did). Fires only for 'pending' (resurfaced or new
+              // actionable) leads; classify-reply itself early-returns for
+              // opted_out. replyText/replyThread are the just-written values.
+              fireClassifyReply({
+                supabaseUrl,
+                agentKey: expectedKey || '',
+                leadId: writtenLeadId,
+                replyText,
+                threadHistory: replyThread,
+                agentConfig,
+                channel,
+                userId,
               });
             }
           } catch (threadErr) {
