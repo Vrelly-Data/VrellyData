@@ -291,12 +291,14 @@ Deno.serve(async (req) => {
       event_data: event,
     });
 
-    // Update campaign stats
-    let campaign: { id: string; stats: Record<string, number> | null } | null = null;
+    // Update campaign stats. `name` is also selected so we can record the source
+    // campaign on the lead at capture (last_campaign_name), making the campaign
+    // show in the inbox for pending leads too — not just after Add to Campaign.
+    let campaign: { id: string; stats: Record<string, number> | null; name: string | null } | null = null;
     if (campaignId) {
       const { data } = await supabase
         .from('synced_campaigns')
-        .select('id, stats')
+        .select('id, stats, name')
         .eq('external_campaign_id', campaignId)
         .eq('team_id', integration.team_id)
         .single();
@@ -431,6 +433,7 @@ Deno.serve(async (req) => {
                   inbox_status: 'pending',
                   channel: 'email',
                   source: 'reply_io',
+                  last_campaign_name: campaign?.name ?? null,
                 });
               if (legacyInsErr) console.error('agent_leads legacy insert error:', legacyInsErr.message);
               else console.log(`Inserted agent_lead for ${contactEmail}`);
@@ -560,6 +563,10 @@ Deno.serve(async (req) => {
                 last_reply_at: new Date().toISOString(),
                 last_reply_text: replyText,
                 reply_thread: updatedThread,
+                // Record the source campaign at capture so the inbox shows it for
+                // pending leads (not just after Add to Campaign). Set on INSERT
+                // only — a later Add to Campaign overwrites with the follow-up.
+                last_campaign_name: campaign?.name ?? null,
               })
               .select('id')
               .single();
