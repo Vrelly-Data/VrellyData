@@ -21,13 +21,15 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Trash2, Search, Loader2, Shield, User } from 'lucide-react';
+import { Trash2, Search, Loader2, Shield, User, UserPlus } from 'lucide-react';
 import { format } from 'date-fns';
+import { GenerateOnboardingLinkDialog } from './GenerateOnboardingLinkDialog';
 
 export function UsersTab() {
   const { users, isLoading, isDeleting, fetchUsers, deleteUser } = useAdminUsers();
   const [searchQuery, setSearchQuery] = useState('');
   const [userToDelete, setUserToDelete] = useState<AdminUser | null>(null);
+  const [showGenerateLink, setShowGenerateLink] = useState(false);
 
   useEffect(() => {
     fetchUsers();
@@ -86,7 +88,17 @@ export function UsersTab() {
         <div className="text-sm text-muted-foreground">
           {filteredUsers.length} user{filteredUsers.length !== 1 ? 's' : ''}
         </div>
+        <Button className="ml-auto" onClick={() => setShowGenerateLink(true)}>
+          <UserPlus className="h-4 w-4 mr-2" />
+          Generate onboarding link
+        </Button>
       </div>
+
+      <GenerateOnboardingLinkDialog
+        open={showGenerateLink}
+        onOpenChange={setShowGenerateLink}
+        onCreated={fetchUsers}
+      />
 
       <div className="rounded-md border">
         <Table>

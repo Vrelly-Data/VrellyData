@@ -33,6 +33,7 @@ import ChoosePlan from "./pages/ChoosePlan";
 import CheckoutSuccess from "./pages/CheckoutSuccess";
 import AgentPage from "./pages/Agent";
 import PublicClientReport from "./pages/PublicClientReport";
+import Onboarding from "./pages/Onboarding";
 
 const queryClient = new QueryClient();
 
@@ -74,6 +75,9 @@ const App = () => (
                     SubscriptionGuard, no admin shell. Pulls everything from
                     the token via the public get-client-report function. */}
                 <Route path="/r/:token" element={<PublicClientReport />} />
+                {/* Public onboarding questionnaire — NO auth, NO subscription
+                    guard. All isolation is server-side via the token. */}
+                <Route path="/onboard/:token" element={<Onboarding />} />
                 {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
                 <Route path="*" element={<NotFound />} />
               </Routes>
