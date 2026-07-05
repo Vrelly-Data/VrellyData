@@ -42,6 +42,9 @@ export interface ClientAnalysisEditingState {
   // Reply.io is workspace-scoped (one workspace = one key = one
   // outbound_integrations row), so the picker stores one FK.
   replyIoIntegrationId: string | null;
+  // Per-client EXCLUDE list (external_campaign_id[]) of Reply.io campaigns
+  // hidden from the client's shared report. Absent/empty = all shown.
+  excludedReplyIoCampaignIds: string[];
 }
 
 interface NewClientAnalysisDialogProps {
@@ -69,6 +72,15 @@ interface SyncedCampaignRow {
   name: string;
   external_campaign_id: string;
   status: string | null;
+}
+
+interface ReplyIoCampaignRow {
+  id: string;
+  name: string;
+  external_campaign_id: string;
+  status: string | null;
+  // 'linkedin' | 'email' | null — drives the per-row channel icon.
+  channel: string | null;
 }
 
 // "Acme Corp" -> "acme-corp"; append 6 random base36 chars to avoid collisions.
@@ -106,6 +118,10 @@ export function NewClientAnalysisDialog({
   const [heyreachSelected, setHeyreachSelected] = useState<Set<number>>(new Set());
   const [smartleadSelected, setSmartleadSelected] = useState<Set<string>>(new Set());
   const [replyIoIntegrationId, setReplyIoIntegrationId] = useState<string | null>(null);
+  // EXCLUDE set: external_campaign_ids the admin has unchecked. A reply_io
+  // campaign is INCLUDED unless its id is in here, so campaigns synced later
+  // default to shown. Scoped to the selected workspace — reset on change.
+  const [replyIoExcluded, setReplyIoExcluded] = useState<Set<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
 
   // Pre-fill on (re)open when in edit mode. Reset to blank when transitioning
@@ -117,11 +133,13 @@ export function NewClientAnalysisDialog({
       setHeyreachSelected(new Set(editing.heyreachAccountIds));
       setSmartleadSelected(new Set(editing.smartleadCampaignIds));
       setReplyIoIntegrationId(editing.replyIoIntegrationId);
+      setReplyIoExcluded(new Set(editing.excludedReplyIoCampaignIds));
     } else {
       setDisplayName('');
       setHeyreachSelected(new Set());
       setSmartleadSelected(new Set());
       setReplyIoIntegrationId(null);
+      setReplyIoExcluded(new Set());
     }
   }, [open, editing]);
 
@@ -180,6 +198,35 @@ export function NewClientAnalysisDialog({
     staleTime: 60_000,
   });
 
+  // Per-campaign reply_io list for the selected workspace. Only these can be
+  // shown/hidden; the query is disabled until a workspace is picked. Mirrors
+  // generate-client-analysis's scope (source='reply_io', is_linked=true,
+  // integration_id = picker selection) so the checkboxes match what the
+  // report would include.
+  const replyIoCampaignsQuery = useQuery({
+    queryKey: ['client-analysis-options', 'reply-io-campaigns', replyIoIntegrationId],
+    queryFn: async (): Promise<ReplyIoCampaignRow[]> => {
+      const { data, error } = await supabase
+        .from('synced_campaigns')
+        .select('id, name, external_campaign_id, status, channel')
+        .eq('source', 'reply_io')
+        .eq('is_linked', true)
+        .eq('integration_id', replyIoIntegrationId!);
+      if (error) throw error;
+      return (data ?? []) as ReplyIoCampaignRow[];
+    },
+    enabled: open && !!replyIoIntegrationId,
+    staleTime: 60_000,
+  });
+
+  const replyIoCampaigns = useMemo(
+    () =>
+      (replyIoCampaignsQuery.data ?? [])
+        .slice()
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [replyIoCampaignsQuery.data],
+  );
+
   const smartleadCampaigns = useMemo(
     () =>
       (smartleadCampaignsQuery.data ?? [])
@@ -225,6 +272,24 @@ export function NewClientAnalysisDialog({
     });
   };
 
+  // Checkbox reflects INCLUDED state (checked = shown). Unchecking adds the
+  // id to the exclude set; re-checking removes it.
+  const toggleReplyIoCampaign = (externalId: string) => {
+    setReplyIoExcluded((prev) => {
+      const next = new Set(prev);
+      if (next.has(externalId)) next.delete(externalId);
+      else next.add(externalId);
+      return next;
+    });
+  };
+
+  // Switching or clearing the workspace invalidates the exclude set — those
+  // ids belong to the previous workspace's campaigns. Reset to "all shown".
+  const changeReplyIoIntegration = (next: string | null) => {
+    setReplyIoIntegrationId(next);
+    setReplyIoExcluded(new Set());
+  };
+
   const handleSubmit = async () => {
     if (!user) {
       toast.error('Not signed in');
@@ -256,6 +321,9 @@ export function NewClientAnalysisDialog({
             heyreach_account_ids: Array.from(heyreachSelected),
             smartlead_campaign_ids: Array.from(smartleadSelected),
             reply_io_integration_id: replyIoIntegrationId,
+            excluded_reply_io_campaign_ids: replyIoIntegrationId
+              ? Array.from(replyIoExcluded)
+              : [],
           })
           .eq('id', editing!.clientId);
         if (error) {
@@ -276,6 +344,9 @@ export function NewClientAnalysisDialog({
             heyreach_account_ids: Array.from(heyreachSelected),
             smartlead_campaign_ids: Array.from(smartleadSelected),
             reply_io_integration_id: replyIoIntegrationId,
+            excluded_reply_io_campaign_ids: replyIoIntegrationId
+              ? Array.from(replyIoExcluded)
+              : [],
             synced_campaign_ids: [],
           })
           .select('id')
@@ -428,7 +499,7 @@ export function NewClientAnalysisDialog({
               <Select
                 value={replyIoIntegrationId ?? REPLY_IO_NONE}
                 onValueChange={(v) =>
-                  setReplyIoIntegrationId(v === REPLY_IO_NONE ? null : v)
+                  changeReplyIoIntegration(v === REPLY_IO_NONE ? null : v)
                 }
                 disabled={submitting}
               >
@@ -444,6 +515,52 @@ export function NewClientAnalysisDialog({
                   ))}
                 </SelectContent>
               </Select>
+            )}
+
+            {/* Per-campaign show/hide for the selected workspace. Checked =
+                shown in the client's report. Unchecking adds the campaign to
+                the EXCLUDE list; campaigns synced later stay checked (shown)
+                by default. Only rendered once a workspace is picked. */}
+            {replyIoIntegrationId && (
+              <Section
+                icon={<MessageSquare className="h-4 w-4" />}
+                title="Campaigns shown to client"
+                selectedCount={
+                  replyIoCampaigns.filter(
+                    (c) => !replyIoExcluded.has(c.external_campaign_id),
+                  ).length
+                }
+                totalCount={replyIoCampaigns.length}
+                loading={replyIoCampaignsQuery.isLoading}
+                error={replyIoCampaignsQuery.error as Error | null}
+                emptyMessage={
+                  !replyIoCampaignsQuery.isLoading &&
+                  replyIoCampaigns.length === 0
+                    ? 'No linked Reply.io campaigns for this workspace yet. Newly synced campaigns appear here and are shown by default.'
+                    : null
+                }
+              >
+                {replyIoCampaigns.map((c) => (
+                  <CheckboxRow
+                    key={`rio-${c.id}`}
+                    id={`rio-${c.id}`}
+                    checked={!replyIoExcluded.has(c.external_campaign_id)}
+                    onCheckedChange={() =>
+                      toggleReplyIoCampaign(c.external_campaign_id)
+                    }
+                    disabled={submitting}
+                    icon={
+                      c.channel === 'linkedin' ? (
+                        <Linkedin className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                      ) : c.channel === 'email' ? (
+                        <Mail className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                      ) : undefined
+                    }
+                    title={c.name}
+                    subtitle={c.status ?? undefined}
+                  />
+                ))}
+              </Section>
             )}
           </div>
         </div>
@@ -544,6 +661,8 @@ interface CheckboxRowProps {
   disabled?: boolean;
   title: string;
   subtitle?: string;
+  // Optional leading icon (e.g. per-row channel indicator).
+  icon?: React.ReactNode;
 }
 
 function CheckboxRow({
@@ -553,6 +672,7 @@ function CheckboxRow({
   disabled,
   title,
   subtitle,
+  icon,
 }: CheckboxRowProps) {
   return (
     <div className="flex items-start gap-2 p-2 rounded hover:bg-accent/40 transition-colors">
@@ -564,7 +684,10 @@ function CheckboxRow({
         className="mt-0.5"
       />
       <label htmlFor={id} className="flex-1 min-w-0 cursor-pointer">
-        <div className="text-sm font-medium truncate">{title}</div>
+        <div className="flex items-center gap-1.5 text-sm font-medium truncate">
+          {icon}
+          <span className="truncate">{title}</span>
+        </div>
         {subtitle && (
           <div className="text-xs text-muted-foreground truncate">{subtitle}</div>
         )}

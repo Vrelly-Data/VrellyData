@@ -903,7 +903,7 @@ Deno.serve(async (req) => {
 
     const { data: clientRow, error: clientErr } = await supabase
       .from("client_analysis")
-      .select("id, user_id, display_name, heyreach_account_ids, smartlead_campaign_ids, reply_io_integration_id")
+      .select("id, user_id, display_name, heyreach_account_ids, smartlead_campaign_ids, reply_io_integration_id, excluded_reply_io_campaign_ids")
       .eq("id", clientId)
       .maybeSingle();
 
@@ -1013,17 +1013,24 @@ Deno.serve(async (req) => {
     }
 
     // Reply.io scope: every reply_io row whose integration_id matches the
-    // picker's selection. Channel passed through so fetchReplyIoStats can
+    // picker's selection, MINUS any campaign the admin unchecked in the
+    // "Edit campaigns" modal (excluded_reply_io_campaign_ids — a per-client
+    // EXCLUDE list keyed by external_campaign_id, so campaigns synced later
+    // default to shown). Channel passed through so fetchReplyIoStats can
     // route per-row to /reporting/linkedin or /reporting/emails (or both
     // for multichannel). Empty when the picker is unset, the integration
     // was deleted, or none of the workspace's linked sequences are picker-
     // scoped — Reply.io branch then no-ops cleanly.
+    const replyIoExcluded = new Set(
+      clientRow.excluded_reply_io_campaign_ids ?? [],
+    );
     const replyIoInScope = clientRow.reply_io_integration_id
       ? syncedRows
           .filter(
             (c) =>
               c.source === "reply_io" &&
-              c.integration_id === clientRow.reply_io_integration_id,
+              c.integration_id === clientRow.reply_io_integration_id &&
+              !replyIoExcluded.has(c.external_campaign_id),
           )
           .map((c) => ({
             external_campaign_id: c.external_campaign_id,

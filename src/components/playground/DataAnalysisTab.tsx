@@ -66,6 +66,10 @@ interface ClientFullRow {
   // Step 3b: single FK to a Reply.io outbound_integrations row. Null when
   // the client has no Reply.io workspace.
   reply_io_integration_id: string | null;
+  // Per-client EXCLUDE list (external_campaign_id[]) of Reply.io campaigns
+  // hidden from this client's report. Campaigns not listed are shown, so
+  // campaigns synced later default to visible.
+  excluded_reply_io_campaign_ids: string[] | null;
 }
 
 interface SnapshotRow {
@@ -282,7 +286,7 @@ function DataAnalysisDetail({
         supabase
           .from('client_analysis')
           .select(
-            'id, user_id, display_name, slug, heyreach_account_ids, smartlead_campaign_ids, reply_io_integration_id',
+            'id, user_id, display_name, slug, heyreach_account_ids, smartlead_campaign_ids, reply_io_integration_id, excluded_reply_io_campaign_ids',
           )
           .eq('id', clientId)
           .single(),
@@ -601,6 +605,8 @@ function DataAnalysisDetail({
                 heyreachAccountIds: row.heyreach_account_ids ?? [],
                 smartleadCampaignIds: row.smartlead_campaign_ids ?? [],
                 replyIoIntegrationId: row.reply_io_integration_id,
+                excludedReplyIoCampaignIds:
+                  row.excluded_reply_io_campaign_ids ?? [],
               })
             }
           >
