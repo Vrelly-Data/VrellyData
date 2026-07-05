@@ -26,12 +26,14 @@ const navItems = [
 
 export function AppSidebar() {
   const { state } = useSidebar();
-  const { signOut, profile, userRoles, profileLoading } = useAuthStore();
+  const { signOut, profile, isPlatformAdmin, profileLoading } = useAuthStore();
   const { data: credits } = useCredits();
   const { hasAccess: hasAgentAccess } = useAgentAccess();
   const navigate = useNavigate();
   const isCollapsed = state === 'collapsed';
-  const showAdminLink = userRoles.some(r => r.role === 'admin');
+  // Gate on platform-admin (same flag AdminRoute enforces) rather than team
+  // admin role — otherwise a team admin sees the link but gets redirected.
+  const showAdminLink = isPlatformAdmin;
 
   const remainingCredits = credits
     ? credits.plan === 'enterprise'
