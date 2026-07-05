@@ -32,6 +32,7 @@
 // grid layout stable across clients reads more cleanly on the public report.
 
 import { Card, CardContent } from '@/components/ui/card';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
   MessageSquare,
   Linkedin,
@@ -168,11 +169,14 @@ interface StatCardProps {
   value: string;
   icon: React.ReactNode;
   subtitle?: string;
+  // Optional hover/click breakdown (e.g. Replies → LinkedIn vs Email). When
+  // present the card becomes a Popover trigger, matching PlaygroundStatsGrid.
+  popoverContent?: React.ReactNode;
 }
 
-function StatCard({ title, value, icon, subtitle }: StatCardProps) {
-  return (
-    <Card>
+function StatCard({ title, value, icon, subtitle, popoverContent }: StatCardProps) {
+  const cardContent = (
+    <Card className={popoverContent ? 'cursor-pointer hover:bg-accent/50 transition-colors' : ''}>
       <CardContent className="pt-6">
         <div className="flex items-center justify-between">
           <div>
@@ -187,6 +191,16 @@ function StatCard({ title, value, icon, subtitle }: StatCardProps) {
       </CardContent>
     </Card>
   );
+
+  if (popoverContent) {
+    return (
+      <Popover>
+        <PopoverTrigger asChild>{cardContent}</PopoverTrigger>
+        <PopoverContent side="bottom" className="w-72">{popoverContent}</PopoverContent>
+      </Popover>
+    );
+  }
+  return cardContent;
 }
 
 export function fmtNum(n: number): string {
@@ -211,6 +225,37 @@ export function StatsGrid({
   showEmail?: boolean;
 }) {
   const t = stats.totals;
+
+  // Replies KPI breakdown — LinkedIn vs Email, from the nested per-channel
+  // reply counts (matches the Playground's Replies tooltip). Source-split:
+  //   LinkedIn = heyreach + reply_io.linkedin
+  //   Email    = smartlead + reply_io.email
+  const linkedinReplies =
+    (stats.heyreach?.replies ?? 0) + (stats.reply_io?.linkedin?.replies ?? 0);
+  const emailReplies =
+    (stats.smartlead?.totals?.replies ?? 0) + (stats.reply_io?.email?.totals?.replies ?? 0);
+  const repliesTooltipContent = (
+    <div className="space-y-2 text-sm">
+      <p className="font-medium text-foreground border-b pb-1">Replies Breakdown</p>
+      <div className="space-y-1">
+        <div className="flex items-center justify-between gap-4">
+          <span className="flex items-center gap-1.5 text-muted-foreground">
+            <Mail className="h-3.5 w-3.5" />
+            Email Replies:
+          </span>
+          <span className="font-medium">{emailReplies.toLocaleString()}</span>
+        </div>
+        <div className="flex items-center justify-between gap-4">
+          <span className="flex items-center gap-1.5 text-muted-foreground">
+            <Linkedin className="h-3.5 w-3.5" />
+            LinkedIn Replies:
+          </span>
+          <span className="font-medium">{linkedinReplies.toLocaleString()}</span>
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div className="space-y-2">
       <p className="text-xs text-muted-foreground">
@@ -250,12 +295,14 @@ export function StatsGrid({
           icon={<Mail className="h-5 w-5 text-primary" />}
         />
 
-        {/* 5. Replies (combined, with reply-rate subtitle) */}
+        {/* 5. Replies (combined, with reply-rate subtitle + LinkedIn/Email
+            breakdown on click — reuses the Playground's Replies tooltip). */}
         <StatCard
           title="Replies"
           value={fmtNum(t?.replies ?? 0)}
           icon={<MessageSquare className="h-5 w-5 text-primary" />}
           subtitle={`${fmtPct(t?.reply_rate_pct)} reply rate`}
+          popoverContent={repliesTooltipContent}
         />
 
         {/* 6. Bounces (email deliverability, with bounce-rate subtitle) */}
