@@ -234,9 +234,18 @@ Deno.serve(async (req) => {
       : null;
 
     // ---- Step 2: LOOP-SAFE billing writes (both tables) ------------------
+    // Also set profiles.name so the client never shows as "unnamed" in the
+    // admin users list. company_name is required (validated above), so the
+    // fallback chain is belt-and-suspenders: company → sender → email prefix.
+    const profileName =
+      config.company_name ||
+      config.sender_name ||
+      (email ? email.split("@")[0] : null) ||
+      "Client";
     const { error: profErr } = await supabase
       .from("profiles")
       .update({
+        name: profileName,
         subscription_tier: "agent",
         subscription_status: "active",
         stripe_customer_id: customerId,
