@@ -15,6 +15,7 @@ function getCorsHeaders(req: Request) {
 }
 
 const REPLY_API_BASE = "https://api.reply.io/v1";
+const REPLY_API_V3 = "https://api.reply.io/v3";
 
 interface ValidateRequest {
   platform: string;
@@ -40,7 +41,46 @@ Deno.serve(async (req) => {
     }
 
     if (platform === "reply.io") {
-      // Validate Reply.io API key by calling their API
+      // Reject Organization API keys (prefix "org_") BEFORE any API call.
+      // They span ALL workspaces, so one client's org key would see every
+      // client's data. Vrelly requires a workspace-scoped Team API key. The
+      // prefix is unambiguous, so no network round-trip is needed.
+      if (apiKey.trim().startsWith("org_")) {
+        return new Response(
+          JSON.stringify({
+            valid: false,
+            error:
+              "This is an Organization API key, which spans all workspaces. " +
+              "Vrelly needs a workspace-scoped Team API key — create one inside " +
+              "the client's workspace under Team API keys.",
+          }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      // v3 first: GET /v3/whoami with Bearer auth. 200 => valid (modern
+      // path). We fall back to the legacy v1 check on ANY non-2xx (incl.
+      // 401), so pre-v3 keys still validate. Valid if EITHER succeeds.
+      try {
+        const whoamiRes = await fetch(`${REPLY_API_V3}/whoami`, {
+          method: "GET",
+          headers: {
+            "Authorization": `Bearer ${apiKey}`,
+            "Accept": "application/json",
+          },
+        });
+        if (whoamiRes.ok) {
+          return new Response(
+            JSON.stringify({ valid: true }),
+            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+        // Non-2xx (incl. 401) → fall through to the legacy v1 validator.
+      } catch (whoamiErr) {
+        console.error("Reply.io v3 whoami error, falling back to v1:", whoamiErr);
+      }
+
+      // Legacy fallback: v1 /people + X-Api-Key (unchanged below).
       const response = await fetch(`${REPLY_API_BASE}/people?limit=1`, {
         method: "GET",
         headers: {
