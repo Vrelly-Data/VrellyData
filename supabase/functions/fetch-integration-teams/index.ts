@@ -15,6 +15,7 @@ function getCorsHeaders(req: Request) {
 }
 
 const REPLY_API_BASE = "https://api.reply.io/v1";
+const REPLY_API_V3 = "https://api.reply.io/v3";
 
 interface ReplyTeam {
   id: number;
@@ -88,8 +89,23 @@ Deno.serve(async (req) => {
     const teams: ReplyTeam[] = [];
     const seenTeamIds = new Set<number>();
 
-    // Try 1: Fetch email accounts (may contain team info)
-    console.log("Fetching email accounts from Reply.io...");
+    // Try 1a: v3 email accounts (Bearer) — modern endpoint + invalid-key
+    // gate. NOTE: v3 email-account objects do NOT carry teamId/teamName
+    // (confirmed against the v3 docs), so this call can't derive teams; it
+    // only tells us whether the Bearer key is accepted.
+    console.log("Fetching v3 email accounts (Bearer)...");
+    const v3EmailRes = await fetch(`${REPLY_API_V3}/email-accounts`, {
+      method: "GET",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Accept": "application/json",
+      },
+    });
+
+    // Try 1b (fallback): v1 /emailAccounts (X-Api-Key) to recover teamId,
+    // which v3 dropped. Additive — kept until Reply.io exposes team data in
+    // v3. Only when BOTH v3 and v1 reject with 401 is the key truly invalid.
+    console.log("Fetching v1 emailAccounts for teamId derivation...");
     const emailAccountsResponse = await fetch(`${REPLY_API_BASE}/emailAccounts`, {
       method: "GET",
       headers: {
@@ -98,7 +114,7 @@ Deno.serve(async (req) => {
       },
     });
 
-    if (emailAccountsResponse.status === 401) {
+    if (v3EmailRes.status === 401 && emailAccountsResponse.status === 401) {
       return new Response(
         JSON.stringify({ error: "Invalid API key stored for this integration", teams: [] }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -122,7 +138,8 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Try 2: Dedicated teams endpoint
+    // Try 2: Dedicated teams endpoint. No v3 equivalent exists (checked the
+    // v3 docs), so this stays on v1 + X-Api-Key.
     console.log("Trying /teams endpoint...");
     try {
       const teamsResponse = await fetch(`${REPLY_API_BASE}/teams`, {
@@ -153,7 +170,8 @@ Deno.serve(async (req) => {
       console.log("Teams endpoint not available:", teamsErr);
     }
 
-    // Try 3: Agency clients endpoint (for agency accounts)
+    // Try 3: Agency clients endpoint (for agency accounts). No v3 equivalent
+    // exists (checked the v3 docs), so this stays on v1 + X-Api-Key.
     console.log("Trying /agency/clients endpoint...");
     try {
       const agencyResponse = await fetch(`${REPLY_API_BASE}/agency/clients`, {
