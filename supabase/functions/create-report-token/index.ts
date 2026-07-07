@@ -92,11 +92,17 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Data-analysis (incl. share links) is open to every logged-in user. No
-    // admin gate — the create/revoke actions below are owner-scoped: create
-    // verifies the client_analysis row belongs to the caller, and revoke
-    // filters by created_by = caller. So a user can only mint/revoke tokens
-    // for their OWN reports.
+    // Data-analysis (incl. share links) is open to every logged-in user.
+    // Authorization is per-report: the report's owner OR a platform admin.
+    // Tokens are owned by the client (created_by = the client_analysis owner),
+    // so the client manages their own links AND an admin can mint/revoke on
+    // their behalf. callerIsAdmin is resolved here for the checks below.
+    const adminCheck = await userClient
+      .from("profiles")
+      .select("is_platform_admin")
+      .eq("id", user.id)
+      .maybeSingle();
+    const callerIsAdmin = adminCheck.data?.is_platform_admin === true;
 
     const body = await req.json().catch(() => ({}));
     const action = (body as { action?: string }).action;
@@ -127,14 +133,14 @@ Deno.serve(async (req) => {
         );
       }
 
-      // Verify the client_analysis row exists AND belongs to the caller.
-      // Stops one admin from minting tokens for another admin's clients.
+      // Verify the client_analysis row exists AND the caller may act on it:
+      // the row owner, or a platform admin minting on the client's behalf.
       const { data: clientRow } = await supabase
         .from("client_analysis")
         .select("id, user_id")
         .eq("id", clientId)
         .maybeSingle();
-      if (!clientRow || clientRow.user_id !== user.id) {
+      if (!clientRow || (clientRow.user_id !== user.id && !callerIsAdmin)) {
         return new Response(
           JSON.stringify({ error: "Client not found" }),
           {
@@ -150,7 +156,10 @@ Deno.serve(async (req) => {
         .insert({
           token: newToken,
           client_id: clientId,
-          created_by: user.id,
+          // Owned by the CLIENT (row owner), not the caller — so the client
+          // sees/manages their own links (owner RLS) and an admin minting on
+          // their behalf doesn't hide the token under the admin's identity.
+          created_by: clientRow.user_id,
           revoked: false,
         })
         .select("id")
@@ -189,27 +198,37 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Scope by created_by so an admin can't revoke another admin's token.
-    // If the WHERE matches zero rows, supabase returns no error — we return
-    // success either way so we don't leak whether the token existed.
-    const { error: updateErr } = await supabase
+    // Authorize revoke: the token must belong to a report the caller owns, or
+    // the caller is a platform admin. Look up the token → its client_analysis
+    // owner, then check owner-or-admin. We return success even when the token
+    // doesn't exist / isn't authorized, so we don't leak token existence.
+    const { data: tokRow } = await supabase
       .from("report_tokens")
-      .update({ revoked: true })
+      .select("id, client_id, client_analysis:client_id ( user_id )")
       .eq("token", targetToken)
-      .eq("created_by", user.id);
+      .maybeSingle();
 
-    if (updateErr) {
-      logStep("Revoke failed", { error: updateErr.message });
-      return new Response(
-        JSON.stringify({ error: "Failed to revoke token" }),
-        {
-          status: 500,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        },
-      );
+    const ownerId = (tokRow?.client_analysis as { user_id?: string } | null)?.user_id;
+    const mayRevoke = !!tokRow && (ownerId === user.id || callerIsAdmin);
+
+    if (mayRevoke) {
+      const { error: updateErr } = await supabase
+        .from("report_tokens")
+        .update({ revoked: true })
+        .eq("id", tokRow.id);
+      if (updateErr) {
+        logStep("Revoke failed", { error: updateErr.message });
+        return new Response(
+          JSON.stringify({ error: "Failed to revoke token" }),
+          {
+            status: 500,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          },
+        );
+      }
     }
 
-    logStep("Revoke processed");
+    logStep("Revoke processed", { revoked: mayRevoke });
     return new Response(JSON.stringify({ revoked: true }), {
       status: 200,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
