@@ -92,21 +92,11 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Defense-in-depth admin gate. RLS already enforces is_platform_admin
-    // via the policy, but we 403 explicitly here so the error message is
-    // clear instead of a generic "row not found".
-    const adminCheck = await userClient
-      .from("profiles")
-      .select("is_platform_admin")
-      .eq("id", user.id)
-      .maybeSingle();
-    if (!adminCheck.data?.is_platform_admin) {
-      logStep("Non-admin caller blocked", { userId: user.id });
-      return new Response(JSON.stringify({ error: "Forbidden" }), {
-        status: 403,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
+    // Data-analysis (incl. share links) is open to every logged-in user. No
+    // admin gate — the create/revoke actions below are owner-scoped: create
+    // verifies the client_analysis row belongs to the caller, and revoke
+    // filters by created_by = caller. So a user can only mint/revoke tokens
+    // for their OWN reports.
 
     const body = await req.json().catch(() => ({}));
     const action = (body as { action?: string }).action;

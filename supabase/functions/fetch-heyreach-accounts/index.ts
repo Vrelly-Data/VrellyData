@@ -86,21 +86,10 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Defense-in-depth admin gate. UI tab is also hidden if not admin, but
-    // the function is reachable via direct API call so we enforce here too.
-    // Mirrors generate-client-analysis exactly.
-    const adminCheck = await userClient
-      .from("profiles")
-      .select("is_platform_admin")
-      .eq("id", user.id)
-      .maybeSingle();
-    if (!adminCheck.data?.is_platform_admin) {
-      logStep("Non-admin caller blocked", { userId: user.id });
-      return new Response(JSON.stringify({ error: "Forbidden" }), {
-        status: 403,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
+    // Data-analysis is open to every logged-in user. This function is
+    // inherently owner-scoped — it only ever reads the CALLER's own HeyReach
+    // integration (userClient + created_by = user.id below), so no admin gate
+    // is needed.
 
     // First active HeyReach integration owned by the caller. Same selection
     // shape as generate-client-analysis; if the user has multiple, the

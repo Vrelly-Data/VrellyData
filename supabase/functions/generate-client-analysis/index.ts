@@ -861,20 +861,16 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Defense-in-depth admin gate. UI tab is also hidden if not admin, but
-    // the function is reachable via direct API call so we enforce here too.
+    // Data-analysis is open to every logged-in user for their OWN clients.
+    // We no longer gate on is_platform_admin; instead we authorize per-row
+    // below (owner OR platform admin). callerIsAdmin is resolved here but is
+    // NON-blocking — it only grants an admin the read-only cross-user path.
     const adminCheck = await userClient
       .from("profiles")
       .select("is_platform_admin")
       .eq("id", user.id)
       .maybeSingle();
-    if (!adminCheck.data?.is_platform_admin) {
-      logStep("Non-admin caller blocked", { userId: user.id });
-      return new Response(JSON.stringify({ error: "Forbidden" }), {
-        status: 403,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
+    const callerIsAdmin = adminCheck.data?.is_platform_admin === true;
 
     const body = await req.json().catch(() => ({}));
     const clientId = (body as { clientId?: string }).clientId;
@@ -885,6 +881,10 @@ Deno.serve(async (req) => {
     // detail-view mount so numbers stay current without spending an AI call.
     const statsOnly =
       (body as { statsOnly?: boolean }).statsOnly === true;
+    // Opt-in verification aid: when debug=true, success responses include a
+    // _debug object showing WHICH user's integration was resolved (always the
+    // row owner). The UI never sets this, so it's inert in normal use.
+    const debug = (body as { debug?: boolean }).debug === true;
     if (
       !clientId ||
       !range ||
@@ -913,7 +913,10 @@ Deno.serve(async (req) => {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-    if (clientRow.user_id !== user.id) {
+    // Authorize: the row owner always; a platform admin gets read-only
+    // cross-user access (the stats still come from the OWNER's own Reply
+    // integration below — never the admin's).
+    if (clientRow.user_id !== user.id && !callerIsAdmin) {
       return new Response(JSON.stringify({ error: "Forbidden" }), {
         status: 403,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -923,13 +926,17 @@ Deno.serve(async (req) => {
     const { startDate, endDate } = resolveRange(range);
     logStep("Resolved range", { range, start: toYMD(startDate), end: toYMD(endDate) });
 
-    // Resolve integration API keys. First active row per platform owned by
-    // the admin user. Missing integration = zero stats for that platform
-    // (still allows the run to complete with whatever does work).
+    // Resolve integration API keys owned by the ROW OWNER (clientRow.user_id)
+    // — NOT the caller. This is the isolation guarantee: a client's stats
+    // always come from the client's own Reply/HeyReach/Smartlead integration,
+    // even when a platform admin is viewing. An admin therefore never needs
+    // to (and never does) integrate a client's key under the admin account.
+    // Service-role read, so RLS doesn't block reading the owner's rows.
+    // Missing integration = zero stats for that platform (run still completes).
     const { data: integrations } = await supabase
       .from("outbound_integrations")
       .select("id, platform, api_key_encrypted, is_active, created_by")
-      .eq("created_by", user.id)
+      .eq("created_by", clientRow.user_id)
       .eq("is_active", true)
       .in("platform", ["heyreach", "smartlead", "reply.io"]);
 
@@ -949,6 +956,28 @@ Deno.serve(async (req) => {
             r.id === clientRow.reply_io_integration_id,
         )?.api_key_encrypted ?? null)
       : null;
+
+    // Verification aid: prove the resolved integrations belong to the ROW
+    // OWNER, not the caller. created_by on each matched row must equal
+    // clientRow.user_id (that's the .eq filter above). Included in the
+    // response only when debug=true.
+    const resolutionDebug = {
+      caller_user_id: user.id,
+      caller_is_admin: callerIsAdmin,
+      owner_user_id: clientRow.user_id,
+      resolved_from_owner: clientRow.user_id !== user.id
+        ? "admin viewing another user's client — key is the OWNER's"
+        : "caller is the owner",
+      matched_integration_created_by: {
+        heyreach: (integrations ?? []).find((r) => r.platform === "heyreach")?.created_by ?? null,
+        smartlead: (integrations ?? []).find((r) => r.platform === "smartlead")?.created_by ?? null,
+        reply_io: (integrations ?? []).find(
+          (r) => r.platform === "reply.io" && r.id === clientRow.reply_io_integration_id,
+        )?.created_by ?? null,
+      },
+      reply_io_key_present: replyIoKey !== null,
+    };
+    if (debug) logStep("resolution", resolutionDebug);
 
     // ---- Pre-fetch synced_campaigns (single query, both platforms) ----
     // Used for:
@@ -1181,7 +1210,7 @@ Deno.serve(async (req) => {
       }
       logStep("statsOnly persisted", { range });
       return new Response(
-        JSON.stringify({ stats, statsOnly: true }),
+        JSON.stringify({ stats, statsOnly: true, ...(debug ? { _debug: resolutionDebug } : {}) }),
         {
           status: 200,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -1210,7 +1239,10 @@ Deno.serve(async (req) => {
       .from("client_analysis_snapshots")
       .insert({
         client_id: clientId,
-        user_id: user.id,
+        // Snapshot belongs to the ROW OWNER, not the caller — so the client
+        // sees their own snapshot (owner RLS) and an admin generating on their
+        // behalf doesn't silently take ownership of it.
+        user_id: clientRow.user_id,
         analysis_text: analysis,
         stats_snapshot: stats,
         range,
@@ -1276,6 +1308,7 @@ Deno.serve(async (req) => {
         stats,
         checklist: finalChecklist ?? [],
         inserted_priorities: toInsert.length,
+        ...(debug ? { _debug: resolutionDebug } : {}),
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
