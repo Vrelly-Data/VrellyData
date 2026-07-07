@@ -8,11 +8,9 @@ import { PlaygroundDashboard } from '@/components/playground/PlaygroundDashboard
 import { CopyTab } from '@/components/playground/CopyTab';
 import { PeopleTab } from '@/components/playground/PeopleTab';
 import { DataAnalysisTab } from '@/components/playground/DataAnalysisTab';
-import { useAuthStore } from '@/stores/authStore';
 
 export default function DataPlayground() {
   const navigate = useNavigate();
-  const { isPlatformAdmin } = useAuthStore();
 
   return (
     <SidebarProvider>
@@ -39,9 +37,7 @@ export default function DataPlayground() {
                   <TabsTrigger value="playground">Playground</TabsTrigger>
                   <TabsTrigger value="copy">Copy</TabsTrigger>
                   <TabsTrigger value="people">People</TabsTrigger>
-                  {isPlatformAdmin && (
-                    <TabsTrigger value="analysis">Data Analysis</TabsTrigger>
-                  )}
+                  <TabsTrigger value="analysis">Data Analysis</TabsTrigger>
                 </TabsList>
               </div>
               <TabsContent value="playground" className="flex-1 m-0 p-6 overflow-auto">
@@ -53,11 +49,9 @@ export default function DataPlayground() {
               <TabsContent value="people" className="flex-1 m-0 p-6 overflow-auto">
                 <PeopleTab />
               </TabsContent>
-              {isPlatformAdmin && (
-                <TabsContent value="analysis" className="flex-1 m-0 p-6 overflow-auto">
-                  <DataAnalysisTab />
-                </TabsContent>
-              )}
+              <TabsContent value="analysis" className="flex-1 m-0 p-6 overflow-auto">
+                <DataAnalysisTab />
+              </TabsContent>
             </Tabs>
           </main>
         </div>
