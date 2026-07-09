@@ -447,9 +447,17 @@ Deno.serve(async (req) => {
             // re-poll guard, replacing the old 60s window). Otherwise the lead's
             // current status is preserved — a re-poll never drags a handled or
             // opted_out/not_relevant lead back into the actionable queue.
+            // "Genuinely new" is measured against the SURFACE watermark
+            // (last_surfaced_reply_at) — the last reply that actually flipped
+            // the lead to 'pending' — NOT last_reply_at, which the display
+            // write below bumps unconditionally. This is what lets a reply
+            // that was previously stored-without-surfacing (e.g. into a
+            // dismissed thread) still resurface, and keeps re-polls idempotent.
             const newerThanPrior = (() => {
               const now = lastReplyDate ? new Date(lastReplyDate).getTime() : 0;
-              const prior = existingLead?.last_reply_at ? new Date(existingLead.last_reply_at).getTime() : 0;
+              const prior = existingLead?.last_surfaced_reply_at
+                ? new Date(existingLead.last_surfaced_reply_at).getTime()
+                : 0;
               return now > prior;
             })();
             let targetInboxStatus: string;
@@ -506,6 +514,12 @@ Deno.serve(async (req) => {
                   last_reply_text: replyText,
                   reply_thread: replyThread,
                   updated_at: nowIso,
+                  // Advance the SURFACE watermark ONLY when we actually surface
+                  // (→ 'pending'). Otherwise leave it untouched so the display
+                  // write above can't consume the reply without surfacing it.
+                  ...(targetInboxStatus === 'pending'
+                    ? { last_surfaced_reply_at: lastReplyDate || nowIso }
+                    : {}),
                 })
                 .eq('id', existingLead.id)
                 .select('id')
@@ -520,6 +534,9 @@ Deno.serve(async (req) => {
               // run (existingLead is a reference into `candidates`).
               existingLead.last_reply_at = lastReplyDate || nowIso;
               existingLead.inbox_status = targetInboxStatus;
+              if (targetInboxStatus === 'pending') {
+                existingLead.last_surfaced_reply_at = lastReplyDate || nowIso;
+              }
             } else {
               // INSERT — nothing matched any dedup key. Plain insert (NOT upsert):
               // the shared resolver already ruled out an existing row, and the
@@ -542,6 +559,10 @@ Deno.serve(async (req) => {
                   last_reply_at: lastReplyDate || nowIso,
                   last_reply_text: replyText,
                   reply_thread: replyThread,
+                  // Seed the surface watermark when the new lead lands actionable.
+                  ...(targetInboxStatus === 'pending'
+                    ? { last_surfaced_reply_at: lastReplyDate || nowIso }
+                    : {}),
                 })
                 .select('id')
                 .single();
@@ -562,6 +583,8 @@ Deno.serve(async (req) => {
                   email: contact?.email || null,
                   last_reply_at: lastReplyDate || nowIso,
                   inbox_status: targetInboxStatus,
+                  last_surfaced_reply_at:
+                    targetInboxStatus === 'pending' ? (lastReplyDate || nowIso) : null,
                 });
               }
             }

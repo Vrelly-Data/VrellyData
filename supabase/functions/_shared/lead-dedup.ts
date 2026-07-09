@@ -45,8 +45,13 @@ export interface LeadCandidate {
   // candidate; reply-webhook ignores it.
   inbox_status?: string | null;
   // Optional — both ingestion paths read it to suppress resurfacing a lead the
-  // operator tagged opted_out / not_relevant.
+  // operator tagged opted_out.
   disposition_tag?: string | null;
+  // Optional — the SURFACE watermark: the timestamp of the last inbound reply
+  // that actually flipped the lead to 'pending'. "Genuinely new" is computed
+  // against THIS (not last_reply_at, which the display write bumps
+  // unconditionally), so a stored-but-not-surfaced reply can't poison it.
+  last_surfaced_reply_at?: string | null;
 }
 
 // Most recent by last_reply_at; on a tie prefer a real (non-genmail) email so a
@@ -97,7 +102,7 @@ export function resolveExistingLead(
 export async function fetchReplyIoCandidates(supabase: any, userId: string): Promise<LeadCandidate[]> {
   const { data } = await supabase
     .from('agent_leads')
-    .select('id, external_id, linkedin_url, email, last_reply_at, inbox_status, disposition_tag')
+    .select('id, external_id, linkedin_url, email, last_reply_at, inbox_status, disposition_tag, last_surfaced_reply_at')
     .eq('user_id', userId)
     .eq('source', 'reply_io');
   return (data ?? []) as LeadCandidate[];
