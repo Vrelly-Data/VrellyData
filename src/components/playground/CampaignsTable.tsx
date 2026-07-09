@@ -224,15 +224,16 @@ export function CampaignsTable() {
                 // (see 20260619130000 migration + Step 2.6). Reply.io rows
                 // not yet re-synced will be null and render no badge.
                 const channel = campaign.channel;
-                // Opens/Connections column is channel-specific (matches the
-                // header tooltip): LinkedIn campaigns report connection
-                // requests accepted, email campaigns report opens. The sync
-                // stores linkedinConnectionsAccepted for LinkedIn (no `opens`),
-                // so without this branch LinkedIn rows rendered "-".
+                // Opens/Connections column: prefer LinkedIn connections-accepted
+                // when the campaign has it, else fall back to email opens. Keyed
+                // off the STORED field rather than the nullable `channel` (which
+                // is null on LinkedIn rows not re-synced since the 20260619130000
+                // migration, so a `channel === 'linkedin'` branch silently fell
+                // through to opens → "-"). Email campaigns don't store the
+                // linkedin key, so they're unaffected and read opens.
                 const opensOrConnections =
-                  channel === 'linkedin'
-                    ? campaign.stats?.linkedinConnectionsAccepted
-                    : campaign.stats?.opens;
+                  campaign.stats?.linkedinConnectionsAccepted ??
+                  campaign.stats?.opens;
                 return (
                   <TableRow key={campaign.id}>
                     <TableCell className="font-medium max-w-[340px]">
