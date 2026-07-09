@@ -2,10 +2,12 @@
 // + poll-reply-inbox). Keeps "should a new reply resurface the lead + draft?"
 // and the classify-reply invocation identical across both.
 
-// Disposition tags the operator used to permanently sideline a lead. A new reply
-// must NOT drag these back into Pending Approval (and classify-reply also
-// early-returns for opted_out — this is the ingestion-side guard).
-export const SUPPRESSED_TAGS = ['opted_out', 'not_relevant'];
+// Disposition tags the operator used to PERMANENTLY sideline a lead. Only a
+// true opt-out blocks resurfacing — every other status (including a manual
+// 'dismissed' / 'in_progress' / 'not_relevant') MUST move back to Pending
+// Approval on a genuinely-new inbound reply. classify-reply also early-returns
+// for opted_out; this is the ingestion-side guard.
+export const SUPPRESSED_TAGS = ['opted_out'];
 export function isSuppressed(dispositionTag: string | null | undefined): boolean {
   return SUPPRESSED_TAGS.includes(String(dispositionTag ?? ''));
 }

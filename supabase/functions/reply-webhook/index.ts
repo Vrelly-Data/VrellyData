@@ -518,7 +518,7 @@ Deno.serve(async (req) => {
             // are dropped from the PATCH by supabase-js.
             const { data: existing } = await supabase
               .from('agent_leads')
-              .select('reply_thread, inbox_status, disposition_tag')
+              .select('reply_thread, inbox_status, disposition_tag, last_surfaced_reply_at')
               .eq('id', match.id)
               .maybeSingle();
             const existingThread = (existing?.reply_thread as any[]) || [];
@@ -526,8 +526,16 @@ Deno.serve(async (req) => {
             // newest entry, it's a webhook retry — don't re-append or resurface.
             const newest = existingThread[existingThread.length - 1];
             const alreadyRecorded = newest?.role === 'prospect' && newest?.content === replyText;
-            // (a) suppressed leads never resurface; (b) re-delivery never resurfaces.
-            resurface = !isSuppressed(existing?.disposition_tag) && !alreadyRecorded;
+            // Genuinely-new vs the SURFACE watermark (not last_reply_at): this
+            // reply is newer than the last one that flipped the lead to pending.
+            const newerThanSurfaced =
+              !existing?.last_surfaced_reply_at ||
+              newMsg.timestamp > existing.last_surfaced_reply_at;
+            // Resurface unless: (a) truly opted out, (b) exact re-delivery, or
+            // (c) not newer than what we already surfaced. Only opt-out blocks
+            // permanently — a 'dismissed'/'in_progress' lead resurfaces.
+            resurface =
+              !isSuppressed(existing?.disposition_tag) && !alreadyRecorded && newerThanSurfaced;
             updatedThread = alreadyRecorded ? existingThread : [...existingThread, newMsg];
 
             const { data: updated, error: updateError } = await supabase
@@ -543,10 +551,13 @@ Deno.serve(async (req) => {
                 last_reply_at: new Date().toISOString(),
                 last_reply_text: replyText,
                 reply_thread: updatedThread,
-                // Only (re)surface a genuinely-new, non-suppressed reply — leave
-                // pipeline_stage / inbox_status untouched otherwise (so an
-                // already-handled or opted_out lead isn't dragged back).
-                ...(resurface ? { pipeline_stage: 'replied', inbox_status: 'pending' } : {}),
+                // Only (re)surface a genuinely-new, non-opted-out reply — leave
+                // pipeline_stage / inbox_status untouched otherwise. Advance the
+                // surface watermark ONLY here (when we set pending), so the
+                // unconditional last_reply_at write above can't poison the guard.
+                ...(resurface
+                  ? { pipeline_stage: 'replied', inbox_status: 'pending', last_surfaced_reply_at: newMsg.timestamp }
+                  : {}),
               })
               .eq('id', match.id)
               .select('id')
@@ -574,6 +585,8 @@ Deno.serve(async (req) => {
                 pipeline_stage: 'replied',
                 inbox_status: 'pending',
                 last_reply_at: new Date().toISOString(),
+                // New lead lands actionable → seed the surface watermark.
+                last_surfaced_reply_at: newMsg.timestamp,
                 last_reply_text: replyText,
                 reply_thread: updatedThread,
                 // Record the source campaign at capture so the inbox shows it for
