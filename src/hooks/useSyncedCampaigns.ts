@@ -24,6 +24,10 @@ export interface SyncedCampaign {
     opens?: number;
     clicks?: number;
     peopleFinished?: number;
+    // LinkedIn (Reply.io) — stored by sync-reply-campaigns' formatLinkedinStats.
+    // The Opens/Connections column falls back to these for LinkedIn campaigns.
+    linkedinConnectionsSent?: number;
+    linkedinConnectionsAccepted?: number;
   } | null;
   updated_at: string;
   external_campaign_id: string;
