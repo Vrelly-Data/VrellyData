@@ -5,15 +5,18 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { DataSourceTemplatesTab } from '@/components/admin/DataSourceTemplatesTab';
 import { FreeDataTab } from '@/components/admin/FreeDataTab';
 import { UsersTab } from '@/components/admin/UsersTab';
+import { OrganizationsTab } from '@/components/admin/OrganizationsTab';
 import { Button } from '@/components/ui/button';
-import { Database, Upload, Plus, Users, BookOpen } from 'lucide-react';
+import { Database, Upload, Plus, Users, BookOpen, Building2 } from 'lucide-react';
 import { SalesKnowledgeTab } from '@/components/admin/SalesKnowledgeTab';
 import { useNavigate } from 'react-router-dom';
+import { useAuthStore } from '@/stores/authStore';
 import vrellyLogo from '@/assets/vrelly-logo.png';
 import { UserMenu } from '@/components/UserMenu';
 
 export default function Admin() {
   const navigate = useNavigate();
+  const { isSuperAdmin } = useAuthStore();
   const [showCreateTemplateDialog, setShowCreateTemplateDialog] = useState(false);
   const [showUploadDialog, setShowUploadDialog] = useState(false);
 
@@ -72,6 +75,13 @@ export default function Admin() {
                     <BookOpen className="h-4 w-4" />
                     Sales Knowledge
                   </TabsTrigger>
+                  {/* Financial/CRM layer — superadmin ONLY (not platform admin). */}
+                  {isSuperAdmin && (
+                    <TabsTrigger value="organizations" className="flex items-center gap-2">
+                      <Building2 className="h-4 w-4" />
+                      Organizations
+                    </TabsTrigger>
+                  )}
                 </TabsList>
 
                 <TabsContent value="templates">
@@ -95,6 +105,12 @@ export default function Admin() {
                 <TabsContent value="knowledge">
                   <SalesKnowledgeTab />
                 </TabsContent>
+
+                {isSuperAdmin && (
+                  <TabsContent value="organizations">
+                    <OrganizationsTab />
+                  </TabsContent>
+                )}
               </Tabs>
             </div>
           </main>
