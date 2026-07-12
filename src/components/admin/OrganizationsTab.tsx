@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { Card, CardContent } from '@/components/ui/card';
-import { Loader2, Pencil, RefreshCw, Building2 } from 'lucide-react';
+import { Loader2, Pencil, RefreshCw, Building2, Eye, EyeOff } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   Organization,
@@ -33,6 +33,25 @@ export function OrganizationsTab() {
   const updateOrg = useUpdateOrganization();
   const syncBilling = useSyncOrgBilling();
   const [editing, setEditing] = useState<Organization | null>(null);
+  // Privacy toggle: blur all monetary values (persisted so it survives reloads).
+  const [amountsHidden, setAmountsHidden] = useState(() => {
+    try {
+      return localStorage.getItem('vrelly_admin_amounts_hidden') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const toggleAmounts = () =>
+    setAmountsHidden((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('vrelly_admin_amounts_hidden', String(next));
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  const blurCls = amountsHidden ? 'blur-sm select-none' : '';
 
   const rollup = useMemo(() => {
     const list = orgs ?? [];
@@ -77,9 +96,9 @@ export function OrganizationsTab() {
 
   return (
     <div className="space-y-4">
-      {/* Roll-up */}
+      {/* Roll-up — only the MRR money figure blurs; counts never do. */}
       <div className="grid grid-cols-3 gap-3">
-        <Rollup label="Total MRR (active)" value={money(rollup.mrr)} strong />
+        <Rollup label="Total MRR (active)" value={money(rollup.mrr)} strong blurValue={blurCls} />
         <Rollup label="Active" value={String(rollup.active)} />
         <Rollup label="Inactive" value={String(rollup.inactive)} />
       </div>
@@ -88,14 +107,24 @@ export function OrganizationsTab() {
         <div className="text-sm text-muted-foreground">
           {list.length} organization{list.length !== 1 ? 's' : ''}
         </div>
-        <Button variant="outline" onClick={handleSync} disabled={syncBilling.isPending}>
-          {syncBilling.isPending ? (
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-          ) : (
-            <RefreshCw className="mr-2 h-4 w-4" />
-          )}
-          Sync billing
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={toggleAmounts}
+            title={amountsHidden ? 'Show amounts' : 'Hide amounts'}
+          >
+            {amountsHidden ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+          </Button>
+          <Button variant="outline" onClick={handleSync} disabled={syncBilling.isPending}>
+            {syncBilling.isPending ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="mr-2 h-4 w-4" />
+            )}
+            Sync billing
+          </Button>
+        </div>
       </div>
 
       <div className="rounded-md border">
@@ -148,7 +177,7 @@ export function OrganizationsTab() {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex items-center justify-end gap-2">
-                        <span>{money(effectiveMonthlyCents(o))}</span>
+                        <span className={blurCls}>{money(effectiveMonthlyCents(o))}</span>
                         {src !== 'none' && (
                           <Badge variant={src === 'manual' ? 'default' : 'secondary'} className="text-[10px]">
                             {src}
@@ -179,12 +208,24 @@ export function OrganizationsTab() {
   );
 }
 
-function Rollup({ label, value, strong }: { label: string; value: string; strong?: boolean }) {
+function Rollup({
+  label,
+  value,
+  strong,
+  blurValue,
+}: {
+  label: string;
+  value: string;
+  strong?: boolean;
+  blurValue?: string;
+}) {
   return (
     <Card>
       <CardContent className="py-4">
         <div className="text-xs text-muted-foreground">{label}</div>
-        <div className={strong ? 'text-2xl font-bold mt-1' : 'text-2xl font-semibold mt-1'}>
+        <div
+          className={`${strong ? 'text-2xl font-bold' : 'text-2xl font-semibold'} mt-1 ${blurValue ?? ''}`}
+        >
           {value}
         </div>
       </CardContent>
