@@ -93,15 +93,11 @@ export function AgentPipeline() {
   const [channelFilter, setChannelFilter] = useState<'all' | 'email' | 'linkedin'>('all');
   const [search, setSearch] = useState('');
 
-  const filteredLeads = useMemo(() => {
+  // Everything EXCEPT the stage filter — search + channel + tag. The stage
+  // count cards count off THIS, so their per-stage numbers reflect the search
+  // as you type (without the active stage chip filtering them circularly).
+  const baseFilteredLeads = useMemo(() => {
     return leads.filter((lead) => {
-      if (stageFilter.size > 0) {
-        // OR across selected stages: lead must match at least one.
-        const matchesAny = STAGES
-          .filter((s) => stageFilter.has(s.key))
-          .some((s) => s.matches(lead));
-        if (!matchesAny) return false;
-      }
       if (tagFilter.size > 0 && !tagFilter.has(lead.pipeline_stage)) return false;
       if (channelFilter !== 'all' && lead.channel !== channelFilter) return false;
       if (search) {
@@ -113,7 +109,15 @@ export function AgentPipeline() {
       }
       return true;
     });
-  }, [leads, stageFilter, tagFilter, channelFilter, search]);
+  }, [leads, tagFilter, channelFilter, search]);
+
+  // The table additionally applies the active stage chip(s).
+  const filteredLeads = useMemo(() => {
+    if (stageFilter.size === 0) return baseFilteredLeads;
+    return baseFilteredLeads.filter((lead) =>
+      STAGES.filter((s) => stageFilter.has(s.key)).some((s) => s.matches(lead)),
+    );
+  }, [baseFilteredLeads, stageFilter]);
 
   const toggleFilter = (set: Set<string>, value: string, setter: (s: Set<string>) => void) => {
     const next = new Set(set);
@@ -135,7 +139,14 @@ export function AgentPipeline() {
       {/* Stage count cards */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
         {STAGES.map((stage) => {
-          const count = counts.by_pipeline_category?.[stage.key] ?? 0;
+          // Count off the search/channel/tag-filtered set so each column's
+          // number updates live as you type. Falls back to the server total
+          // only when no filters are active (identical result, cheaper).
+          const anyFilter =
+            !!search || channelFilter !== 'all' || tagFilter.size > 0;
+          const count = anyFilter
+            ? baseFilteredLeads.filter((l) => stage.matches(l)).length
+            : counts.by_pipeline_category?.[stage.key] ?? 0;
           const active = stageFilter.has(stage.key);
           return (
             <button

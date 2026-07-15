@@ -15,6 +15,7 @@ import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import {
   Loader2,
   Linkedin,
@@ -22,6 +23,7 @@ import {
   ChevronDown,
   ChevronUp,
   MessageSquare,
+  Search,
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuthStore } from '@/stores/authStore';
@@ -135,6 +137,7 @@ export function RespondersList({ data }: RespondersListProps = {}) {
   // serves both admin tab and public report — each mount gets its own
   // collapsed default; not persisted across navigations.
   const [showAll, setShowAll] = useState(false);
+  const [search, setSearch] = useState('');
   const isDataMode = data !== undefined;
 
   const query = useQuery({
@@ -177,6 +180,21 @@ export function RespondersList({ data }: RespondersListProps = {}) {
     });
   }, [query.data, isDataMode, data]);
 
+  // Live search over the FULL response set (name, company, response text).
+  // Client-side; instant. Empty query → the full sorted list.
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return sorted;
+    return sorted.filter((r) => {
+      const text = latestProspectReply(r) ?? r.last_reply_text ?? '';
+      return (
+        (r.full_name ?? '').toLowerCase().includes(q) ||
+        (r.company ?? '').toLowerCase().includes(q) ||
+        text.toLowerCase().includes(q)
+      );
+    });
+  }, [sorted, search]);
+
   const toggle = (id: string) => {
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -189,16 +207,31 @@ export function RespondersList({ data }: RespondersListProps = {}) {
   return (
     <Card>
       <CardContent className="pt-6 space-y-3">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
           <h3 className="text-sm font-semibold flex items-center gap-2">
             <MessageSquare className="h-4 w-4" />
             Responses
             {(isDataMode || !query.isLoading) && (
               <span className="text-xs font-normal text-muted-foreground">
-                ({sorted.length})
+                ({filtered.length}
+                {search.trim() && filtered.length !== sorted.length
+                  ? ` of ${sorted.length}`
+                  : ''}
+                )
               </span>
             )}
           </h3>
+          {sorted.length > 0 && (
+            <div className="relative w-full sm:w-56">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Search responses..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="pl-9 h-8 text-sm"
+              />
+            </div>
+          )}
         </div>
 
         {/* Loading + error states only fire in fetch mode. Data mode skips
@@ -215,12 +248,16 @@ export function RespondersList({ data }: RespondersListProps = {}) {
           <p className="text-xs text-muted-foreground py-6 text-center">
             No responses yet.
           </p>
+        ) : filtered.length === 0 ? (
+          <p className="text-xs text-muted-foreground py-6 text-center">
+            No responses match “{search.trim()}”.
+          </p>
         ) : (
           <>
             <ul className="space-y-2">
               {(showAll
-                ? sorted
-                : sorted.slice(0, COLLAPSED_ROW_COUNT)
+                ? filtered
+                : filtered.slice(0, COLLAPSED_ROW_COUNT)
               ).map((r) => (
                 <ResponderRowView
                   key={r.id}
@@ -233,7 +270,7 @@ export function RespondersList({ data }: RespondersListProps = {}) {
             {/* Show-more/less only renders when there are enough rows to
                 hide. Same control for admin and public — the state is
                 local to each component instance. */}
-            {sorted.length > COLLAPSED_ROW_COUNT && (
+            {filtered.length > COLLAPSED_ROW_COUNT && (
               <div className="pt-2 flex justify-center">
                 <button
                   type="button"
@@ -242,7 +279,7 @@ export function RespondersList({ data }: RespondersListProps = {}) {
                 >
                   {showAll
                     ? 'Show less'
-                    : `Show all ${sorted.length} responses`}
+                    : `Show all ${filtered.length} responses`}
                 </button>
               </div>
             )}

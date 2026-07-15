@@ -28,6 +28,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Loader2, History } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import vrellyLogo from '@/assets/vrelly-logo.png';
@@ -375,19 +381,24 @@ const PIPELINE_CATEGORIES: {
   { key: 'dead', label: 'Dead', dot: 'bg-red-500', matches: (l) => ['bad_lead', 'ooo', 'not_interested'].includes(l.pipeline_stage ?? '') },
 ];
 
+function categoryFor(l: ResponderRow) {
+  return PIPELINE_CATEGORIES.find((c) => c.matches(l)) ?? null;
+}
+
 function PipelineReadonly({ leads }: { leads: ResponderRow[] }) {
+  const [selected, setSelected] = useState<ResponderRow | null>(null);
   const groups = useMemo(() => {
     // First matching category wins (pending_action takes precedence, like the
     // board), so each lead lands in exactly one column.
     return PIPELINE_CATEGORIES.map((cat) => ({
       cat,
-      leads: leads.filter(
-        (l) => PIPELINE_CATEGORIES.find((c) => c.matches(l))?.key === cat.key,
-      ),
+      leads: leads.filter((l) => categoryFor(l)?.key === cat.key),
     })).filter((g) => g.leads.length > 0);
   }, [leads]);
 
   if (groups.length === 0) return null;
+
+  const selectedCat = selected ? categoryFor(selected) : null;
 
   return (
     <Card>
@@ -395,7 +406,7 @@ function PipelineReadonly({ leads }: { leads: ResponderRow[] }) {
         <div>
           <h3 className="text-sm font-semibold">Pipeline</h3>
           <p className="text-xs text-muted-foreground">
-            Where each lead stands. Read-only.
+            Where each lead stands. Click a lead for details. Read-only.
           </p>
         </div>
         <div className="space-y-4">
@@ -410,15 +421,21 @@ function PipelineReadonly({ leads }: { leads: ResponderRow[] }) {
               </div>
               <ul className="space-y-1 pl-4">
                 {stageLeads.map((l) => (
-                  <li key={l.id} className="text-sm flex items-baseline gap-2">
-                    <span className="font-medium truncate">
-                      {l.full_name || 'Unknown'}
-                    </span>
-                    {l.company && (
-                      <span className="text-xs text-muted-foreground truncate">
-                        {l.company}
+                  <li key={l.id}>
+                    <button
+                      type="button"
+                      onClick={() => setSelected(l)}
+                      className="text-sm flex items-baseline gap-2 text-left hover:underline focus:outline-none focus-visible:underline"
+                    >
+                      <span className="font-medium truncate">
+                        {l.full_name || 'Unknown'}
                       </span>
-                    )}
+                      {l.company && (
+                        <span className="text-xs text-muted-foreground truncate">
+                          {l.company}
+                        </span>
+                      )}
+                    </button>
                   </li>
                 ))}
               </ul>
@@ -426,7 +443,59 @@ function PipelineReadonly({ leads }: { leads: ResponderRow[] }) {
           ))}
         </div>
       </CardContent>
+
+      {/* Status-only detail — no conversation thread, no internal fields. */}
+      <Dialog open={!!selected} onOpenChange={(o) => !o && setSelected(null)}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>{selected?.full_name || 'Unknown'}</DialogTitle>
+          </DialogHeader>
+          {selected && (
+            <dl className="text-sm space-y-2">
+              <DetailRow label="Company" value={selected.company} />
+              <DetailRow label="Title" value={selected.job_title} />
+              <DetailRow
+                label="Stage"
+                value={selectedCat?.label ?? '—'}
+                dot={selectedCat?.dot}
+              />
+              <DetailRow
+                label="Last activity"
+                value={
+                  selected.last_reply_at
+                    ? new Date(selected.last_reply_at).toLocaleDateString('en-US', {
+                        year: 'numeric',
+                        month: 'short',
+                        day: 'numeric',
+                      })
+                    : '—'
+                }
+              />
+            </dl>
+          )}
+        </DialogContent>
+      </Dialog>
     </Card>
+  );
+}
+
+function DetailRow({
+  label,
+  value,
+  dot,
+}: {
+  label: string;
+  value: string | null | undefined;
+  dot?: string;
+}) {
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className="flex items-center gap-1.5 font-medium text-right">
+        {dot && <span className={`h-2 w-2 rounded-full ${dot}`} />}
+        {value || '—'}
+      </dd>
+    </div>
   );
 }
 
