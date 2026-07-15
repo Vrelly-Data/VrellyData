@@ -1,18 +1,12 @@
 import { useState, useMemo } from 'react';
-import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
 import { Sheet, SheetContent } from '@/components/ui/sheet';
 import { Loader2, Search } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAgentInboxData, type AgentLead } from '@/hooks/useAgentInbox';
-import {
-  LeadDetailPanel,
-  ChannelBadge,
-  formatRelativeTime,
-  getPipelineStageLabel,
-  PIPELINE_STAGES,
-} from './LeadDetailPanel';
+import { LeadDetailPanel, PIPELINE_STAGES } from './LeadDetailPanel';
+import { PipelineBoard } from './PipelineBoard';
 
 type PipelineCategoryKey =
   | 'pending_action'
@@ -220,64 +214,18 @@ export function AgentPipeline() {
         </div>
       </div>
 
-      {/* Leads table */}
-      {filteredLeads.length === 0 ? (
-        <div className="text-center py-16">
-          <p className="text-muted-foreground">
-            {leads.length === 0
-              ? "No leads yet. Your agent will populate this as campaigns run and replies come in."
-              : "No leads match your filters."}
-          </p>
-        </div>
-      ) : (
-        <div className="border rounded-lg overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/50">
-              <tr>
-                <th className="text-left px-4 py-2 font-medium">Name & Company</th>
-                <th className="text-left px-4 py-2 font-medium hidden md:table-cell">Company</th>
-                <th className="text-left px-4 py-2 font-medium">Channel</th>
-                <th className="text-left px-4 py-2 font-medium">Tag</th>
-                <th className="text-left px-4 py-2 font-medium hidden lg:table-cell">Last Reply</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredLeads.map((lead) => (
-                <tr
-                  key={lead.id}
-                  onClick={() => setSelectedLead(lead)}
-                  className="border-t hover:bg-muted/30 cursor-pointer transition-colors"
-                >
-                  <td className="px-4 py-2.5">
-                    <div className="font-medium">{lead.full_name}</div>
-                    {lead.company && (
-                      <div className="text-xs text-muted-foreground">{lead.company}</div>
-                    )}
-                  </td>
-                  <td className="px-4 py-2.5 text-muted-foreground hidden md:table-cell">
-                    {lead.company || '—'}
-                  </td>
-                  <td className="px-4 py-2.5">
-                    <ChannelBadge channel={lead.channel} />
-                  </td>
-                  <td className="px-4 py-2.5">
-                    {getPipelineStageLabel(lead.pipeline_stage) ? (
-                      <Badge variant="secondary" className="text-xs">
-                        {getPipelineStageLabel(lead.pipeline_stage)}
-                      </Badge>
-                    ) : (
-                      '—'
-                    )}
-                  </td>
-                  <td className="px-4 py-2.5 text-muted-foreground hidden lg:table-cell">
-                    {lead.last_reply_at ? formatRelativeTime(lead.last_reply_at) : '—'}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      {/* Board — the SAME shared component the /r/:token client report renders,
+          so the two are visually identical. Read-only on the report; here each
+          card opens the editable LeadDetailPanel. */}
+      <PipelineBoard
+        leads={filteredLeads}
+        onCardClick={setSelectedLead}
+        emptyLabel={
+          leads.length === 0
+            ? 'No leads yet. Your agent will populate this as campaigns run and replies come in.'
+            : 'No leads match your filters.'
+        }
+      />
 
       {/* Slide-over panel */}
       <Sheet open={!!selectedLead} onOpenChange={() => setSelectedLead(null)}>

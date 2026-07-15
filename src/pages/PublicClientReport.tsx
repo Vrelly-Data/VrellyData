@@ -35,6 +35,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Loader2, History } from 'lucide-react';
+import { PipelineBoard } from '@/components/agent/PipelineBoard';
 import { supabase } from '@/integrations/supabase/client';
 import vrellyLogo from '@/assets/vrelly-logo.png';
 import { StatsGrid, type StatsSnapshot } from '@/components/playground/StatsGrid';
@@ -361,44 +362,29 @@ function ReportFooter() {
   );
 }
 
-// Read-only pipeline mirror of the agent-view board. Duplicate-but-tiny stage
-// categories (the page never reaches into agent code). Matches AgentPipeline's
-// columns/colors: pending_action is inbox-driven; the rest key off
-// pipeline_stage; 'dead' aggregates the negative tags. Empty stages are hidden.
-const PIPELINE_CATEGORIES: {
-  key: string;
-  label: string;
-  dot: string;
-  matches: (l: ResponderRow) => boolean;
-}[] = [
-  { key: 'pending_action', label: 'Pending Action', dot: 'bg-amber-500', matches: (l) => l.inbox_status === 'pending' || l.inbox_status === 'draft_ready' },
-  { key: 'in_progress', label: 'In Progress', dot: 'bg-blue-500', matches: (l) => l.pipeline_stage === 'in_progress' },
-  { key: 'sent_proposal', label: 'Sent Proposal', dot: 'bg-violet-500', matches: (l) => l.pipeline_stage === 'sent_proposal' },
-  { key: 'meeting_booked', label: 'Meeting Booked', dot: 'bg-green-500', matches: (l) => l.pipeline_stage === 'meeting_booked' },
-  { key: 'no_show', label: 'No Show', dot: 'bg-orange-500', matches: (l) => l.pipeline_stage === 'no_show' },
-  { key: 'closed_won', label: 'Closed Won', dot: 'bg-emerald-500', matches: (l) => l.pipeline_stage === 'closed_won' },
-  { key: 'closed_lost', label: 'Closed Lost', dot: 'bg-rose-500', matches: (l) => l.pipeline_stage === 'closed_lost' },
-  { key: 'dead', label: 'Dead', dot: 'bg-red-500', matches: (l) => ['bad_lead', 'ooo', 'not_interested'].includes(l.pipeline_stage ?? '') },
-];
+// Stage → label lookup for the detail dialog (mirrors the board's columns).
+const STAGE_LABELS: Record<string, string> = {
+  contacted: 'Contacted',
+  replied: 'Replied',
+  engaged: 'Engaged',
+  in_progress: 'In Progress',
+  sent_proposal: 'Sent Proposal',
+  meeting_booked: 'Meeting Booked',
+  no_show: 'No Show',
+  closed_won: 'Closed Won',
+  closed_lost: 'Closed Lost',
+  bad_lead: 'Dead',
+  ooo: 'Dead',
+  not_interested: 'Dead',
+  dead: 'Dead',
+};
 
-function categoryFor(l: ResponderRow) {
-  return PIPELINE_CATEGORIES.find((c) => c.matches(l)) ?? null;
-}
-
+// Read-only pipeline — renders the SAME PipelineBoard the agent view uses, so
+// the report and the internal board look identical. Cards open a status-only
+// detail dialog (no thread, no internal fields).
 function PipelineReadonly({ leads }: { leads: ResponderRow[] }) {
   const [selected, setSelected] = useState<ResponderRow | null>(null);
-  const groups = useMemo(() => {
-    // First matching category wins (pending_action takes precedence, like the
-    // board), so each lead lands in exactly one column.
-    return PIPELINE_CATEGORIES.map((cat) => ({
-      cat,
-      leads: leads.filter((l) => categoryFor(l)?.key === cat.key),
-    })).filter((g) => g.leads.length > 0);
-  }, [leads]);
-
-  if (groups.length === 0) return null;
-
-  const selectedCat = selected ? categoryFor(selected) : null;
+  if (leads.length === 0) return null;
 
   return (
     <Card>
@@ -409,39 +395,7 @@ function PipelineReadonly({ leads }: { leads: ResponderRow[] }) {
             Where each lead stands. Click a lead for details. Read-only.
           </p>
         </div>
-        <div className="space-y-4">
-          {groups.map(({ cat, leads: stageLeads }) => (
-            <div key={cat.key}>
-              <div className="flex items-center gap-2 mb-1.5">
-                <span className={`h-2.5 w-2.5 rounded-full ${cat.dot}`} />
-                <span className="text-sm font-medium">{cat.label}</span>
-                <span className="text-xs text-muted-foreground">
-                  ({stageLeads.length})
-                </span>
-              </div>
-              <ul className="space-y-1 pl-4">
-                {stageLeads.map((l) => (
-                  <li key={l.id}>
-                    <button
-                      type="button"
-                      onClick={() => setSelected(l)}
-                      className="text-sm flex items-baseline gap-2 text-left hover:underline focus:outline-none focus-visible:underline"
-                    >
-                      <span className="font-medium truncate">
-                        {l.full_name || 'Unknown'}
-                      </span>
-                      {l.company && (
-                        <span className="text-xs text-muted-foreground truncate">
-                          {l.company}
-                        </span>
-                      )}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
-        </div>
+        <PipelineBoard leads={leads} readOnly onCardClick={setSelected} />
       </CardContent>
 
       {/* Status-only detail — no conversation thread, no internal fields. */}
@@ -456,8 +410,7 @@ function PipelineReadonly({ leads }: { leads: ResponderRow[] }) {
               <DetailRow label="Title" value={selected.job_title} />
               <DetailRow
                 label="Stage"
-                value={selectedCat?.label ?? '—'}
-                dot={selectedCat?.dot}
+                value={STAGE_LABELS[selected.pipeline_stage ?? ''] ?? '—'}
               />
               <DetailRow
                 label="Last activity"
