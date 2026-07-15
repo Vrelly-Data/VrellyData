@@ -369,10 +369,10 @@ const STAGE_LABELS: Record<string, string> = {
   in_progress: 'In Progress',
   sent_proposal: 'Sent Proposal',
   call_scheduled: 'Call Scheduled',
-  meeting_booked: 'Meeting Booked',
   no_show: 'No Show',
   closed_won: 'Closed Won',
   closed_lost: 'Closed Lost',
+  meeting_booked: 'Call Scheduled',
   opted_out: 'Closed Lost',
 };
 

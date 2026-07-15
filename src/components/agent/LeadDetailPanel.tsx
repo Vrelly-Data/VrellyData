@@ -59,7 +59,6 @@ export const PIPELINE_STAGES = [
   { value: 'in_progress', label: 'In Progress' },
   { value: 'sent_proposal', label: 'Sent Proposal' },
   { value: 'call_scheduled', label: 'Call Scheduled' },
-  { value: 'meeting_booked', label: 'Meeting Booked' },
   { value: 'no_show', label: 'No Show' },
   { value: 'closed_won', label: 'Closed Won' },
   { value: 'closed_lost', label: 'Closed Lost' },
@@ -75,10 +74,12 @@ const ALL_STAGE_LABELS: Record<string, string> = {
   in_progress: 'In Progress',
   sent_proposal: 'Sent Proposal',
   call_scheduled: 'Call Scheduled',
-  meeting_booked: 'Meeting Booked',
   no_show: 'No Show',
   closed_won: 'Closed Won',
   closed_lost: 'Closed Lost',
+  // Legacy/compat: any lingering meeting_booked → Call Scheduled; opted_out is
+  // the compliance flag (deal stage closed_lost).
+  meeting_booked: 'Call Scheduled',
   opted_out: 'Closed Lost',
 };
 

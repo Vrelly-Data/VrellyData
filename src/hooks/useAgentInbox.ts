@@ -68,7 +68,6 @@ export interface AgentCounts {
     in_progress: number;
     sent_proposal: number;
     call_scheduled: number;
-    meeting_booked: number;
     no_show: number;
     closed_won: number;
     closed_lost: number;

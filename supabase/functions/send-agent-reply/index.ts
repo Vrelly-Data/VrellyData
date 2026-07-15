@@ -98,7 +98,7 @@ const INTENT_STAGE_MAP: Record<string, string> = {
   needs_more_info: 'in_progress',
   out_of_office: 'replied',
   not_interested: 'in_progress',
-  meeting_booked: 'meeting_booked',
+  meeting_booked: 'call_scheduled',
 };
 
 // Defensive strip — classify-reply already sanitizes `{...}` wrappers but
@@ -648,7 +648,7 @@ Deno.serve(async (req) => {
     if (campaignId === 'remove') {
       await supabase
         .from('agent_leads')
-        .update({ pipeline_stage: 'meeting_booked', inbox_status: 'sent', draft_approved: true })
+        .update({ pipeline_stage: 'call_scheduled', inbox_status: 'sent', draft_approved: true })
         .eq('id', leadId);
 
       return new Response(JSON.stringify({ success: true }), {

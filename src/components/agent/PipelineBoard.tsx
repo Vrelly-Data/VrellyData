@@ -30,7 +30,6 @@ export const DEAL_STAGES = [
   { key: 'in_progress', label: 'In Progress', dot: 'bg-blue-500' },
   { key: 'sent_proposal', label: 'Sent Proposal', dot: 'bg-violet-500' },
   { key: 'call_scheduled', label: 'Call Scheduled', dot: 'bg-teal-500' },
-  { key: 'meeting_booked', label: 'Meeting Booked', dot: 'bg-green-500' },
   { key: 'no_show', label: 'No Show', dot: 'bg-orange-500' },
   { key: 'closed_won', label: 'Closed Won', dot: 'bg-emerald-500' },
   { key: 'closed_lost', label: 'Closed Lost', dot: 'bg-rose-500' },
