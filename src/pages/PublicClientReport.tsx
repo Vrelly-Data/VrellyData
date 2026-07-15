@@ -362,21 +362,18 @@ function ReportFooter() {
   );
 }
 
-// Stage → label lookup for the detail dialog (mirrors the board's columns).
+// Stage → label lookup for the detail dialog (mirrors the board's 8 columns;
+// opted_out is a compliance flag whose deal stage is closed_lost).
 const STAGE_LABELS: Record<string, string> = {
-  contacted: 'Contacted',
   replied: 'Replied',
-  engaged: 'Engaged',
   in_progress: 'In Progress',
   sent_proposal: 'Sent Proposal',
+  call_scheduled: 'Call Scheduled',
   meeting_booked: 'Meeting Booked',
   no_show: 'No Show',
   closed_won: 'Closed Won',
   closed_lost: 'Closed Lost',
-  bad_lead: 'Dead',
-  ooo: 'Dead',
-  not_interested: 'Dead',
-  dead: 'Dead',
+  opted_out: 'Closed Lost',
 };
 
 // Read-only pipeline — renders the SAME PipelineBoard the agent view uses, so

@@ -27,14 +27,14 @@ import { cn } from '@/lib/utils';
 
 // Bar-chart column colors — mirror the semantic mapping used in AgentPipeline.
 const PIPELINE_CHART_CONFIG = [
-  { key: 'pending_action' as const,  label: 'Pending Action',  color: '#f59e0b' },
+  { key: 'replied' as const,         label: 'Replied',         color: '#0ea5e9' },
   { key: 'in_progress' as const,     label: 'In Progress',     color: '#3b82f6' },
   { key: 'sent_proposal' as const,   label: 'Sent Proposal',   color: '#8b5cf6' },
+  { key: 'call_scheduled' as const,  label: 'Call Scheduled',  color: '#14b8a6' },
   { key: 'meeting_booked' as const,  label: 'Meeting Booked',  color: '#22c55e' },
   { key: 'no_show' as const,         label: 'No Show',         color: '#f97316' },
   { key: 'closed_won' as const,      label: 'Closed Won',      color: '#10b981' },
   { key: 'closed_lost' as const,     label: 'Closed Lost',     color: '#f43f5e' },
-  { key: 'dead' as const,            label: 'Dead',            color: '#ef4444' },
 ];
 
 export function AgentOverview() {

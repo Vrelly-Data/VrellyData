@@ -64,14 +64,14 @@ export interface AgentCounts {
     total_inbox: number;
   };
   by_pipeline_category?: {
-    pending_action: number;
+    replied: number;
     in_progress: number;
     sent_proposal: number;
+    call_scheduled: number;
     meeting_booked: number;
     no_show: number;
     closed_won: number;
     closed_lost: number;
-    dead: number;
   };
 }
 

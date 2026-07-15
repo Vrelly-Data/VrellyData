@@ -6,78 +6,15 @@ import { Loader2, Search } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAgentInboxData, type AgentLead } from '@/hooks/useAgentInbox';
 import { LeadDetailPanel, PIPELINE_STAGES } from './LeadDetailPanel';
-import { PipelineBoard } from './PipelineBoard';
+import { PipelineBoard, DEAL_STAGES } from './PipelineBoard';
 
-type PipelineCategoryKey =
-  | 'pending_action'
-  | 'in_progress'
-  | 'sent_proposal'
-  | 'meeting_booked'
-  | 'no_show'
-  | 'closed_won'
-  | 'closed_lost'
-  | 'dead';
-
-type StageDef = {
-  key: PipelineCategoryKey;
-  label: string;
-  color: string;
-  matches: (lead: AgentLead) => boolean;
-};
-
-const STAGES: StageDef[] = [
-  {
-    key: 'pending_action',
-    label: 'Pending Action',
-    color: 'bg-amber-500',
-    matches: (l) => l.inbox_status === 'pending' || l.inbox_status === 'draft_ready',
-  },
-  {
-    key: 'in_progress',
-    label: 'In Progress',
-    color: 'bg-blue-500',
-    matches: (l) => l.pipeline_stage === 'in_progress',
-  },
-  {
-    key: 'sent_proposal',
-    label: 'Sent Proposal',
-    color: 'bg-violet-500',
-    matches: (l) => l.pipeline_stage === 'sent_proposal',
-  },
-  {
-    key: 'meeting_booked',
-    label: 'Meeting Booked',
-    color: 'bg-green-500',
-    matches: (l) => l.pipeline_stage === 'meeting_booked',
-  },
-  {
-    key: 'no_show',
-    label: 'No Show',
-    color: 'bg-orange-500',
-    matches: (l) => l.pipeline_stage === 'no_show',
-  },
-  {
-    key: 'closed_won',
-    label: 'Closed Won',
-    color: 'bg-emerald-500',
-    matches: (l) => l.pipeline_stage === 'closed_won',
-  },
-  {
-    key: 'closed_lost',
-    label: 'Closed Lost',
-    color: 'bg-rose-500',
-    matches: (l) => l.pipeline_stage === 'closed_lost',
-  },
-  {
-    key: 'dead',
-    label: 'Dead',
-    color: 'bg-red-500',
-    matches: (l) =>
-      l.pipeline_stage === 'bad_lead' ||
-      l.pipeline_stage === 'ooo' ||
-      l.pipeline_stage === 'not_interested',
-  },
-];
+// The stage filter cards mirror the board's 8 columns exactly (tags == stages).
+const STAGES = DEAL_STAGES.map((s) => ({
+  key: s.key,
+  label: s.label,
+  color: s.dot,
+  matches: (l: AgentLead) => l.pipeline_stage === s.key,
+}));
 
 export function AgentPipeline() {
   const { leads, counts, isLoading } = useAgentInboxData('pipeline');

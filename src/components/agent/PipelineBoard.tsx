@@ -20,28 +20,29 @@ export interface BoardLead {
   last_reply_at: string | null;
 }
 
-// Per-stage display columns. Order = funnel order. 'dead' aggregates the three
-// negative disposition stages (mirrors the agent view's existing rollup); every
-// other column keys off pipeline_stage 1:1. A lead lands in the FIRST column it
-// matches, so each appears exactly once.
-type Column = { key: string; label: string; dot: string; matches: (s: string) => boolean };
-const COLUMNS: Column[] = [
-  { key: 'contacted', label: 'Contacted', dot: 'bg-slate-400', matches: (s) => s === 'contacted' },
-  { key: 'replied', label: 'Replied', dot: 'bg-sky-500', matches: (s) => s === 'replied' },
-  { key: 'engaged', label: 'Engaged', dot: 'bg-cyan-500', matches: (s) => s === 'engaged' },
-  { key: 'in_progress', label: 'In Progress', dot: 'bg-blue-500', matches: (s) => s === 'in_progress' },
-  { key: 'sent_proposal', label: 'Sent Proposal', dot: 'bg-violet-500', matches: (s) => s === 'sent_proposal' },
-  { key: 'meeting_booked', label: 'Meeting Booked', dot: 'bg-green-500', matches: (s) => s === 'meeting_booked' },
-  { key: 'no_show', label: 'No Show', dot: 'bg-orange-500', matches: (s) => s === 'no_show' },
-  { key: 'closed_won', label: 'Closed Won', dot: 'bg-emerald-500', matches: (s) => s === 'closed_won' },
-  { key: 'closed_lost', label: 'Closed Lost', dot: 'bg-rose-500', matches: (s) => s === 'closed_lost' },
-  { key: 'dead', label: 'Dead', dot: 'bg-red-500', matches: (s) => ['bad_lead', 'ooo', 'not_interested', 'dead'].includes(s) },
-];
+// The ONE deal-stage taxonomy — 8 stages, funnel order. Tags == stages: the
+// operator dropdown and these columns are the same 8 in the same order. A lead
+// keys off pipeline_stage 1:1. Kept in sync with PIPELINE_STAGES in
+// LeadDetailPanel. (opted_out is NOT a stage — it's a compliance suppression
+// flag; such leads carry pipeline_stage='closed_lost'.)
+export const DEAL_STAGES = [
+  { key: 'replied', label: 'Replied', dot: 'bg-sky-500' },
+  { key: 'in_progress', label: 'In Progress', dot: 'bg-blue-500' },
+  { key: 'sent_proposal', label: 'Sent Proposal', dot: 'bg-violet-500' },
+  { key: 'call_scheduled', label: 'Call Scheduled', dot: 'bg-teal-500' },
+  { key: 'meeting_booked', label: 'Meeting Booked', dot: 'bg-green-500' },
+  { key: 'no_show', label: 'No Show', dot: 'bg-orange-500' },
+  { key: 'closed_won', label: 'Closed Won', dot: 'bg-emerald-500' },
+  { key: 'closed_lost', label: 'Closed Lost', dot: 'bg-rose-500' },
+] as const;
+
+type Column = { key: string; label: string; dot: string };
+const COLUMNS: Column[] = DEAL_STAGES.map((s) => ({ ...s }));
 
 const CARDS_PER_COLUMN = 8;
 
 function columnFor(stage: string): Column | null {
-  return COLUMNS.find((c) => c.matches(stage)) ?? null;
+  return COLUMNS.find((c) => c.key === stage) ?? null;
 }
 
 function relativeTime(iso: string | null): string {

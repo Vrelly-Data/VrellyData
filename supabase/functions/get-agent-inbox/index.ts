@@ -71,16 +71,16 @@ Deno.serve(async (req) => {
     const leads = allLeads || [];
     const counts = {
       total: leads.length,
+      // The 8 canonical deal stages.
       by_stage: {
-        contacted: leads.filter((l: any) => l.pipeline_stage === 'contacted').length,
         replied: leads.filter((l: any) => l.pipeline_stage === 'replied').length,
-        engaged: leads.filter((l: any) => l.pipeline_stage === 'engaged').length,
+        in_progress: leads.filter((l: any) => l.pipeline_stage === 'in_progress').length,
         sent_proposal: leads.filter((l: any) => l.pipeline_stage === 'sent_proposal').length,
+        call_scheduled: leads.filter((l: any) => l.pipeline_stage === 'call_scheduled').length,
         meeting_booked: leads.filter((l: any) => l.pipeline_stage === 'meeting_booked').length,
         no_show: leads.filter((l: any) => l.pipeline_stage === 'no_show').length,
         closed_won: leads.filter((l: any) => l.pipeline_stage === 'closed_won').length,
         closed_lost: leads.filter((l: any) => l.pipeline_stage === 'closed_lost').length,
-        dead: leads.filter((l: any) => l.pipeline_stage === 'dead').length,
       },
       needs_attention: leads.filter((l: any) =>
         l.inbox_status === 'pending' || l.inbox_status === 'draft_ready'
@@ -101,22 +101,17 @@ Deno.serve(async (req) => {
           TOTAL_INBOX_STATUSES.includes(l.inbox_status),
         ).length,
       },
-      // Pipeline columns — mirrors the 5-card layout in AgentPipeline.
-      // 'dead' aggregates the three negative-disposition tags set via the
-      // tag dropdown (bad_lead / ooo / not_interested).
+      // Pipeline columns — the 8 canonical stages, mirroring the board (tags
+      // == stages). Keyed 1:1 on pipeline_stage.
       by_pipeline_category: {
-        pending_action: leads.filter((l: any) =>
-          PENDING_APPROVAL_STATUSES.includes(l.inbox_status),
-        ).length,
+        replied: leads.filter((l: any) => l.pipeline_stage === 'replied').length,
         in_progress: leads.filter((l: any) => l.pipeline_stage === 'in_progress').length,
         sent_proposal: leads.filter((l: any) => l.pipeline_stage === 'sent_proposal').length,
+        call_scheduled: leads.filter((l: any) => l.pipeline_stage === 'call_scheduled').length,
         meeting_booked: leads.filter((l: any) => l.pipeline_stage === 'meeting_booked').length,
         no_show: leads.filter((l: any) => l.pipeline_stage === 'no_show').length,
         closed_won: leads.filter((l: any) => l.pipeline_stage === 'closed_won').length,
         closed_lost: leads.filter((l: any) => l.pipeline_stage === 'closed_lost').length,
-        dead: leads.filter((l: any) =>
-          ['bad_lead', 'ooo', 'not_interested'].includes(l.pipeline_stage),
-        ).length,
       },
     };
 
