@@ -941,8 +941,9 @@ The prospect's intent has been classified as: ${intent}${isObjection ? ' (object
 - suggested_response: the ideal next message (2-4 sentences, matches ${effSenderName}'s voice, grounded in the resources above. Reference the prospect by name where natural. Use the calendar link if booking a meeting. Reference case studies if it strengthens credibility.)
 - reasoning: one sentence explaining your response
 - should_auto_send: boolean (true ONLY if channel is email AND intent is out_of_office or bounce)
-- next_pipeline_stage: one of 'contacted', 'replied', 'engaged', 'meeting_booked', 'closed', 'dead'
-  Rules: not_interested → dead, bounce → dead, explicit meeting agreement → meeting_booked, interested/needs_more_info → engaged, everything else → replied
+- next_pipeline_stage: one of 'replied', 'in_progress', 'call_scheduled'
+  Rules: explicit agreement to a call/meeting → call_scheduled; interested/needs_more_info/not_interested → in_progress; out_of_office or bounce → replied.
+  NEVER auto-close a lead: closes (Closed Won / Closed Lost), No Show, and Sent Proposal are set by the operator, not you. Leave a not-interested reply active (in_progress) — the intent field already flags the sentiment.
 
 Return ONLY valid JSON. No markdown fences. No explanation.`;
 

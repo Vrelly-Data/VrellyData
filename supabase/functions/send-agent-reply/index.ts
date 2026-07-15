@@ -90,12 +90,15 @@ function getCorsHeaders(req: Request) {
 
 const REPLY_API_V3 = 'https://api.reply.io/v3';
 
+// Intent → deal stage (the 8-stage taxonomy). Progress stays ACTIVE — the
+// operator confirms closes. not_interested advances the lead to in_progress
+// (the intent badge still flags the sentiment); it is NOT auto-closed.
 const INTENT_STAGE_MAP: Record<string, string> = {
-  interested: 'engaged',
-  needs_more_info: 'engaged',
+  interested: 'in_progress',
+  needs_more_info: 'in_progress',
   out_of_office: 'replied',
-  not_interested: 'dead',
-  meeting_booked: 'meeting_booked',
+  not_interested: 'in_progress',
+  meeting_booked: 'call_scheduled',
 };
 
 // Defensive strip — classify-reply already sanitizes `{...}` wrappers but
@@ -552,14 +555,14 @@ Deno.serve(async (req) => {
         // code"), letting the UI show a friendly toast.
         if (env.code === 'inboxThread.contactOptedOut') {
           console.log('[send-agent-reply] contact opted out — tagging lead opted_out + surfacing handled result');
-          // Auto-apply the opted_out tag so future drafts (classify-reply) and
-          // sends are suppressed, and move the lead out of the pending queue into
-          // Total Inbox (inbox_status='dismissed') — same effect as the operator
-          // applying the "Opted Out" tag by hand. The tag/flag lives in
-          // disposition_tag; pipeline_stage gets the CHECK-valid mapped 'dead'.
+          // Auto-apply the opted_out suppression flag so future drafts
+          // (classify-reply) and sends are suppressed, and move the lead out of
+          // the pending queue into Total Inbox (inbox_status='dismissed').
+          // opted_out is a COMPLIANCE FLAG on disposition_tag (not a deal
+          // stage); the lead's deal stage becomes closed_lost.
           await supabase
             .from('agent_leads')
-            .update({ disposition_tag: 'opted_out', pipeline_stage: 'dead', inbox_status: 'dismissed' })
+            .update({ disposition_tag: 'opted_out', pipeline_stage: 'closed_lost', inbox_status: 'dismissed' })
             .eq('id', leadId);
           return new Response(JSON.stringify({
             success: false,
@@ -628,9 +631,12 @@ Deno.serve(async (req) => {
     const campaignId = operatorCampaignId ?? resolveCampaignRule(campaignRules, leadChannel, intent);
 
     if (campaignId === 'dead') {
+      // 'dead' is a campaign-routing sentinel (don't add to a sequence); the
+      // lead's deal stage becomes closed_lost (the 8-stage taxonomy has no
+      // 'dead').
       await supabase
         .from('agent_leads')
-        .update({ pipeline_stage: 'dead', inbox_status: 'sent', draft_approved: true })
+        .update({ pipeline_stage: 'closed_lost', inbox_status: 'sent', draft_approved: true })
         .eq('id', leadId);
 
       return new Response(JSON.stringify({ success: true }), {
@@ -642,7 +648,7 @@ Deno.serve(async (req) => {
     if (campaignId === 'remove') {
       await supabase
         .from('agent_leads')
-        .update({ pipeline_stage: 'meeting_booked', inbox_status: 'sent', draft_approved: true })
+        .update({ pipeline_stage: 'call_scheduled', inbox_status: 'sent', draft_approved: true })
         .eq('id', leadId);
 
       return new Response(JSON.stringify({ success: true }), {

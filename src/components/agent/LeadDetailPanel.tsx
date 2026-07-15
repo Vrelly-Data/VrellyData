@@ -51,33 +51,46 @@ export type { AgentLead };
 // Lead disposition tags. Selecting any of these also flips inbox_status to
 // 'dismissed', moving the lead from Pending Approval to Total Inbox.
 // Order mirrors the pipeline columns: negative dispositions → active → won.
+// The ONE deal-stage taxonomy — 8 stages, funnel order. Tags == stages: this
+// dropdown and the PipelineBoard columns are the same 8 in the same order.
+// Kept in sync with DEAL_STAGES in PipelineBoard.
 export const PIPELINE_STAGES = [
-  { value: 'bad_lead', label: 'Bad Lead' },
-  { value: 'ooo', label: 'OOO' },
-  { value: 'not_interested', label: 'Not Interested' },
+  { value: 'replied', label: 'Replied' },
   { value: 'in_progress', label: 'In Progress' },
-  { value: 'meeting_booked', label: 'Meeting Booked' },
-  { value: 'closed', label: 'Closed' },
-  { value: 'not_relevant', label: 'Not Relevant' },
-  // 'opted_out' doubles as the suppression flag: classify-reply skips drafting
-  // and send-agent-reply refuses to send when a lead is tagged opted_out.
-  { value: 'opted_out', label: 'Opted Out' },
+  { value: 'sent_proposal', label: 'Sent Proposal' },
+  { value: 'call_scheduled', label: 'Call Scheduled' },
+  { value: 'no_show', label: 'No Show' },
+  { value: 'closed_won', label: 'Closed Won' },
+  { value: 'closed_lost', label: 'Closed Lost' },
 ] as const;
 
 export type PipelineStageValue = typeof PIPELINE_STAGES[number]['value'];
 
-// pipeline_stage has a DB CHECK that does NOT allow the two inbox-only tags.
-// The operator's chosen tag is stored in agent_leads.disposition_tag (display
-// label + opted_out flag); pipeline_stage gets a CHECK-valid value via this map.
-const STAGE_FOR_TAG: Record<string, string> = {
-  not_relevant: 'bad_lead',
-  opted_out: 'dead',
+// Stage → display label. The 8 canonical stages, plus a graceful fallback for
+// the system compliance flag opted_out (displayed as Closed Lost — an
+// opted-out lead's pipeline_stage is closed_lost; opted_out is not a stage).
+const ALL_STAGE_LABELS: Record<string, string> = {
+  replied: 'Replied',
+  in_progress: 'In Progress',
+  sent_proposal: 'Sent Proposal',
+  call_scheduled: 'Call Scheduled',
+  no_show: 'No Show',
+  closed_won: 'Closed Won',
+  closed_lost: 'Closed Lost',
+  // Legacy/compat: any lingering meeting_booked → Call Scheduled; opted_out is
+  // the compliance flag (deal stage closed_lost).
+  meeting_booked: 'Call Scheduled',
+  opted_out: 'Closed Lost',
 };
-export const pipelineStageForTag = (tag: string): string => STAGE_FOR_TAG[tag] ?? tag;
+
+// Tags == stages now: the operator's chosen tag IS the pipeline_stage (all 8
+// are valid values), so this is the identity mapping. Kept as a function so
+// callers don't need to change.
+export const pipelineStageForTag = (tag: string): string => tag;
 
 export function getPipelineStageLabel(value: string | null | undefined): string | null {
-  const match = PIPELINE_STAGES.find((s) => s.value === value);
-  return match?.label ?? null;
+  if (!value) return null;
+  return ALL_STAGE_LABELS[value] ?? null;
 }
 
 const INTENT_COLORS: Record<string, string> = {

@@ -96,7 +96,7 @@ async function fetchResponders(
   const { data, error } = await supabase
     .from("agent_leads")
     .select(
-      "id, full_name, company, job_title, email, linkedin_url, channel, intent, inbox_status, last_reply_text, last_reply_at, reply_thread",
+      "id, full_name, company, job_title, email, linkedin_url, channel, intent, inbox_status, pipeline_stage, disposition_tag, last_reply_text, last_reply_at, reply_thread",
     )
     .eq("user_id", client.user_id)
     .or("inbox_status.eq.replied,last_reply_at.not.is.null");

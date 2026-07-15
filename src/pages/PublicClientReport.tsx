@@ -28,7 +28,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Loader2, History } from 'lucide-react';
+import { PipelineBoard } from '@/components/agent/PipelineBoard';
 import { supabase } from '@/integrations/supabase/client';
 import vrellyLogo from '@/assets/vrelly-logo.png';
 import { StatsGrid, type StatsSnapshot } from '@/components/playground/StatsGrid';
@@ -294,6 +301,10 @@ export default function PublicClientReport() {
       {/* Responders — data prop mode, no internal fetch. */}
       <RespondersList data={responders} />
 
+      {/* Pipeline — read-only mirror of the agent-view board. Groups this
+          client's leads by stage from the same token-scoped payload. */}
+      <PipelineReadonly leads={responders} />
+
       {/* Priorities — read-only inline list. No checkboxes that mutate. */}
       <PrioritiesReadonly items={priorities} />
 
@@ -348,6 +359,93 @@ function ReportFooter() {
     <footer className="text-center text-xs text-muted-foreground pt-4 border-t">
       Powered by Vrelly
     </footer>
+  );
+}
+
+// Stage → label lookup for the detail dialog (mirrors the board's 8 columns;
+// opted_out is a compliance flag whose deal stage is closed_lost).
+const STAGE_LABELS: Record<string, string> = {
+  replied: 'Replied',
+  in_progress: 'In Progress',
+  sent_proposal: 'Sent Proposal',
+  call_scheduled: 'Call Scheduled',
+  no_show: 'No Show',
+  closed_won: 'Closed Won',
+  closed_lost: 'Closed Lost',
+  meeting_booked: 'Call Scheduled',
+  opted_out: 'Closed Lost',
+};
+
+// Read-only pipeline — renders the SAME PipelineBoard the agent view uses, so
+// the report and the internal board look identical. Cards open a status-only
+// detail dialog (no thread, no internal fields).
+function PipelineReadonly({ leads }: { leads: ResponderRow[] }) {
+  const [selected, setSelected] = useState<ResponderRow | null>(null);
+  if (leads.length === 0) return null;
+
+  return (
+    <Card>
+      <CardContent className="pt-6 space-y-4">
+        <div>
+          <h3 className="text-sm font-semibold">Pipeline</h3>
+          <p className="text-xs text-muted-foreground">
+            Where each lead stands. Click a lead for details. Read-only.
+          </p>
+        </div>
+        <PipelineBoard leads={leads} readOnly onCardClick={setSelected} />
+      </CardContent>
+
+      {/* Status-only detail — no conversation thread, no internal fields. */}
+      <Dialog open={!!selected} onOpenChange={(o) => !o && setSelected(null)}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>{selected?.full_name || 'Unknown'}</DialogTitle>
+          </DialogHeader>
+          {selected && (
+            <dl className="text-sm space-y-2">
+              <DetailRow label="Company" value={selected.company} />
+              <DetailRow label="Title" value={selected.job_title} />
+              <DetailRow
+                label="Stage"
+                value={STAGE_LABELS[selected.pipeline_stage ?? ''] ?? '—'}
+              />
+              <DetailRow
+                label="Last activity"
+                value={
+                  selected.last_reply_at
+                    ? new Date(selected.last_reply_at).toLocaleDateString('en-US', {
+                        year: 'numeric',
+                        month: 'short',
+                        day: 'numeric',
+                      })
+                    : '—'
+                }
+              />
+            </dl>
+          )}
+        </DialogContent>
+      </Dialog>
+    </Card>
+  );
+}
+
+function DetailRow({
+  label,
+  value,
+  dot,
+}: {
+  label: string;
+  value: string | null | undefined;
+  dot?: string;
+}) {
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className="flex items-center gap-1.5 font-medium text-right">
+        {dot && <span className={`h-2 w-2 rounded-full ${dot}`} />}
+        {value || '—'}
+      </dd>
+    </div>
   );
 }
 
