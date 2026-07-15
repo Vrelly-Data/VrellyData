@@ -66,8 +66,11 @@ export interface AgentCounts {
   by_pipeline_category?: {
     pending_action: number;
     in_progress: number;
+    sent_proposal: number;
     meeting_booked: number;
-    closed: number;
+    no_show: number;
+    closed_won: number;
+    closed_lost: number;
     dead: number;
   };
 }

@@ -43,6 +43,11 @@ interface ResponderRow {
   channel: string | null;
   intent: string | null;
   inbox_status: string | null;
+  // Pipeline fields — populated on the public report via get-client-report so
+  // the report's Pipeline section can group by stage. Optional: the admin-side
+  // RespondersList query (this file) doesn't select them.
+  pipeline_stage?: string | null;
+  disposition_tag?: string | null;
   last_reply_text: string | null;
   last_reply_at: string | null;
   reply_thread: ReplyThreadItem[] | null;

@@ -52,12 +52,15 @@ export type { AgentLead };
 // 'dismissed', moving the lead from Pending Approval to Total Inbox.
 // Order mirrors the pipeline columns: negative dispositions → active → won.
 export const PIPELINE_STAGES = [
+  { value: 'in_progress', label: 'In Progress' },
+  { value: 'sent_proposal', label: 'Sent Proposal' },
+  { value: 'meeting_booked', label: 'Meeting Booked' },
+  { value: 'no_show', label: 'No Show' },
+  { value: 'closed_won', label: 'Closed Won' },
+  { value: 'closed_lost', label: 'Closed Lost' },
   { value: 'bad_lead', label: 'Bad Lead' },
   { value: 'ooo', label: 'OOO' },
   { value: 'not_interested', label: 'Not Interested' },
-  { value: 'in_progress', label: 'In Progress' },
-  { value: 'meeting_booked', label: 'Meeting Booked' },
-  { value: 'closed', label: 'Closed' },
   { value: 'not_relevant', label: 'Not Relevant' },
   // 'opted_out' doubles as the suppression flag: classify-reply skips drafting
   // and send-agent-reply refuses to send when a lead is tagged opted_out.
@@ -65,6 +68,29 @@ export const PIPELINE_STAGES = [
 ] as const;
 
 export type PipelineStageValue = typeof PIPELINE_STAGES[number]['value'];
+
+// Every stage/tag → display label, including the funnel stages that aren't in
+// the operator dropdown (contacted/replied/engaged/dead). Used by
+// getPipelineStageLabel so the pipeline board + client report can label any
+// value. closed_won/closed_lost/no_show/sent_proposal are real pipeline_stage
+// values (added 20260714), so pipelineStageForTag passes them through as-is.
+const ALL_STAGE_LABELS: Record<string, string> = {
+  contacted: 'Contacted',
+  replied: 'Replied',
+  engaged: 'Engaged',
+  in_progress: 'In Progress',
+  sent_proposal: 'Sent Proposal',
+  meeting_booked: 'Meeting Booked',
+  no_show: 'No Show',
+  closed_won: 'Closed Won',
+  closed_lost: 'Closed Lost',
+  bad_lead: 'Bad Lead',
+  ooo: 'OOO',
+  not_interested: 'Not Interested',
+  not_relevant: 'Not Relevant',
+  opted_out: 'Opted Out',
+  dead: 'Dead',
+};
 
 // pipeline_stage has a DB CHECK that does NOT allow the two inbox-only tags.
 // The operator's chosen tag is stored in agent_leads.disposition_tag (display
@@ -76,8 +102,8 @@ const STAGE_FOR_TAG: Record<string, string> = {
 export const pipelineStageForTag = (tag: string): string => STAGE_FOR_TAG[tag] ?? tag;
 
 export function getPipelineStageLabel(value: string | null | undefined): string | null {
-  const match = PIPELINE_STAGES.find((s) => s.value === value);
-  return match?.label ?? null;
+  if (!value) return null;
+  return ALL_STAGE_LABELS[value] ?? null;
 }
 
 const INTENT_COLORS: Record<string, string> = {

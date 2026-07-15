@@ -294,6 +294,10 @@ export default function PublicClientReport() {
       {/* Responders — data prop mode, no internal fetch. */}
       <RespondersList data={responders} />
 
+      {/* Pipeline — read-only mirror of the agent-view board. Groups this
+          client's leads by stage from the same token-scoped payload. */}
+      <PipelineReadonly leads={responders} />
+
       {/* Priorities — read-only inline list. No checkboxes that mutate. */}
       <PrioritiesReadonly items={priorities} />
 
@@ -348,6 +352,81 @@ function ReportFooter() {
     <footer className="text-center text-xs text-muted-foreground pt-4 border-t">
       Powered by Vrelly
     </footer>
+  );
+}
+
+// Read-only pipeline mirror of the agent-view board. Duplicate-but-tiny stage
+// categories (the page never reaches into agent code). Matches AgentPipeline's
+// columns/colors: pending_action is inbox-driven; the rest key off
+// pipeline_stage; 'dead' aggregates the negative tags. Empty stages are hidden.
+const PIPELINE_CATEGORIES: {
+  key: string;
+  label: string;
+  dot: string;
+  matches: (l: ResponderRow) => boolean;
+}[] = [
+  { key: 'pending_action', label: 'Pending Action', dot: 'bg-amber-500', matches: (l) => l.inbox_status === 'pending' || l.inbox_status === 'draft_ready' },
+  { key: 'in_progress', label: 'In Progress', dot: 'bg-blue-500', matches: (l) => l.pipeline_stage === 'in_progress' },
+  { key: 'sent_proposal', label: 'Sent Proposal', dot: 'bg-violet-500', matches: (l) => l.pipeline_stage === 'sent_proposal' },
+  { key: 'meeting_booked', label: 'Meeting Booked', dot: 'bg-green-500', matches: (l) => l.pipeline_stage === 'meeting_booked' },
+  { key: 'no_show', label: 'No Show', dot: 'bg-orange-500', matches: (l) => l.pipeline_stage === 'no_show' },
+  { key: 'closed_won', label: 'Closed Won', dot: 'bg-emerald-500', matches: (l) => l.pipeline_stage === 'closed_won' },
+  { key: 'closed_lost', label: 'Closed Lost', dot: 'bg-rose-500', matches: (l) => l.pipeline_stage === 'closed_lost' },
+  { key: 'dead', label: 'Dead', dot: 'bg-red-500', matches: (l) => ['bad_lead', 'ooo', 'not_interested'].includes(l.pipeline_stage ?? '') },
+];
+
+function PipelineReadonly({ leads }: { leads: ResponderRow[] }) {
+  const groups = useMemo(() => {
+    // First matching category wins (pending_action takes precedence, like the
+    // board), so each lead lands in exactly one column.
+    return PIPELINE_CATEGORIES.map((cat) => ({
+      cat,
+      leads: leads.filter(
+        (l) => PIPELINE_CATEGORIES.find((c) => c.matches(l))?.key === cat.key,
+      ),
+    })).filter((g) => g.leads.length > 0);
+  }, [leads]);
+
+  if (groups.length === 0) return null;
+
+  return (
+    <Card>
+      <CardContent className="pt-6 space-y-4">
+        <div>
+          <h3 className="text-sm font-semibold">Pipeline</h3>
+          <p className="text-xs text-muted-foreground">
+            Where each lead stands. Read-only.
+          </p>
+        </div>
+        <div className="space-y-4">
+          {groups.map(({ cat, leads: stageLeads }) => (
+            <div key={cat.key}>
+              <div className="flex items-center gap-2 mb-1.5">
+                <span className={`h-2.5 w-2.5 rounded-full ${cat.dot}`} />
+                <span className="text-sm font-medium">{cat.label}</span>
+                <span className="text-xs text-muted-foreground">
+                  ({stageLeads.length})
+                </span>
+              </div>
+              <ul className="space-y-1 pl-4">
+                {stageLeads.map((l) => (
+                  <li key={l.id} className="text-sm flex items-baseline gap-2">
+                    <span className="font-medium truncate">
+                      {l.full_name || 'Unknown'}
+                    </span>
+                    {l.company && (
+                      <span className="text-xs text-muted-foreground truncate">
+                        {l.company}
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 

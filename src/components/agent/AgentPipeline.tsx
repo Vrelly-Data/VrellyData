@@ -17,8 +17,11 @@ import {
 type PipelineCategoryKey =
   | 'pending_action'
   | 'in_progress'
+  | 'sent_proposal'
   | 'meeting_booked'
-  | 'closed'
+  | 'no_show'
+  | 'closed_won'
+  | 'closed_lost'
   | 'dead';
 
 type StageDef = {
@@ -42,16 +45,34 @@ const STAGES: StageDef[] = [
     matches: (l) => l.pipeline_stage === 'in_progress',
   },
   {
+    key: 'sent_proposal',
+    label: 'Sent Proposal',
+    color: 'bg-violet-500',
+    matches: (l) => l.pipeline_stage === 'sent_proposal',
+  },
+  {
     key: 'meeting_booked',
     label: 'Meeting Booked',
     color: 'bg-green-500',
     matches: (l) => l.pipeline_stage === 'meeting_booked',
   },
   {
-    key: 'closed',
-    label: 'Closed',
+    key: 'no_show',
+    label: 'No Show',
+    color: 'bg-orange-500',
+    matches: (l) => l.pipeline_stage === 'no_show',
+  },
+  {
+    key: 'closed_won',
+    label: 'Closed Won',
     color: 'bg-emerald-500',
-    matches: (l) => l.pipeline_stage === 'closed',
+    matches: (l) => l.pipeline_stage === 'closed_won',
+  },
+  {
+    key: 'closed_lost',
+    label: 'Closed Lost',
+    color: 'bg-rose-500',
+    matches: (l) => l.pipeline_stage === 'closed_lost',
   },
   {
     key: 'dead',
