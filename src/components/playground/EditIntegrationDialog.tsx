@@ -18,7 +18,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { supabase } from '@/integrations/supabase/client';
-import { Building2, Loader2, RefreshCw } from 'lucide-react';
+import { Building2, Loader2, RefreshCw, KeyRound } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { OutboundIntegration } from '@/hooks/useOutboundIntegrations';
@@ -36,6 +36,9 @@ interface EditIntegrationDialogProps {
 
 export function EditIntegrationDialog({ open, onOpenChange, integration }: EditIntegrationDialogProps) {
   const [teamId, setTeamId] = useState('');
+  // New API key to replace the stored one (e.g. after a Reply.io key rotation).
+  // Blank = leave the existing key untouched.
+  const [apiKey, setApiKey] = useState('');
   const [isUpdating, setIsUpdating] = useState(false);
   const [isLoadingTeams, setIsLoadingTeams] = useState(false);
   const [teams, setTeams] = useState<ReplyTeam[]>([]);
@@ -47,6 +50,7 @@ export function EditIntegrationDialog({ open, onOpenChange, integration }: EditI
   useEffect(() => {
     if (integration) {
       setTeamId(currentTeamId);
+      setApiKey('');
       setTeams([]);
       setTeamsLoaded(false);
     }
@@ -91,13 +95,36 @@ export function EditIntegrationDialog({ open, onOpenChange, integration }: EditI
     if (!integration) return;
 
     setIsUpdating(true);
-    
+
+    const updates: Record<string, unknown> = {
+      reply_team_id: teamId || null,
+      updated_at: new Date().toISOString(),
+    };
+
+    // If a new API key was entered, validate it (same path as the connect
+    // flow) BEFORE writing, then re-store it on THIS row — no delete, no new
+    // row, so reply_team_id / leads / campaigns are preserved.
+    const newKey = apiKey.trim();
+    if (newKey) {
+      const { data: v, error: vErr } = await supabase.functions.invoke('validate-api-key', {
+        body: { platform: integration.platform, apiKey: newKey },
+      });
+      if (vErr) {
+        setIsUpdating(false);
+        toast.error('Could not validate the API key. Please try again.');
+        return;
+      }
+      if (!(v as { valid?: boolean; error?: string })?.valid) {
+        setIsUpdating(false);
+        toast.error((v as { error?: string })?.error || 'Invalid API key.');
+        return;
+      }
+      updates.api_key_encrypted = newKey;
+    }
+
     const { error } = await supabase
       .from('outbound_integrations')
-      .update({ 
-        reply_team_id: teamId || null,
-        updated_at: new Date().toISOString()
-      })
+      .update(updates)
       .eq('id', integration.id);
 
     setIsUpdating(false);
@@ -108,7 +135,11 @@ export function EditIntegrationDialog({ open, onOpenChange, integration }: EditI
       return;
     }
 
-    toast.success('Integration updated! Re-sync to apply changes.');
+    toast.success(
+      newKey
+        ? 'API key updated — Send Reply should work again.'
+        : 'Integration updated! Re-sync to apply changes.',
+    );
     queryClient.invalidateQueries({ queryKey: ['outbound-integrations'] });
     onOpenChange(false);
   };
@@ -116,6 +147,7 @@ export function EditIntegrationDialog({ open, onOpenChange, integration }: EditI
   const handleOpenChange = (open: boolean) => {
     if (!open) {
       setTeamId('');
+      setApiKey('');
       setTeams([]);
       setTeamsLoaded(false);
     }
@@ -184,9 +216,29 @@ export function EditIntegrationDialog({ open, onOpenChange, integration }: EditI
               )}
               
               <p className="text-xs text-muted-foreground">
-                {showDropdown 
+                {showDropdown
                   ? "Select a team to sync, or choose 'All Teams' to sync everything."
                   : "For agency accounts: click 'Load Teams' to see available clients."}
+              </p>
+            </div>
+
+            <div className="grid gap-2">
+              <Label htmlFor="apiKey" className="flex items-center gap-2">
+                <KeyRound className="h-4 w-4" />
+                API Key
+              </Label>
+              <Input
+                id="apiKey"
+                type="password"
+                autoComplete="off"
+                placeholder="Leave blank to keep the current key"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Paste a new key to replace the stored one — e.g. after a Reply.io
+                key rotation. It's validated before saving and replaces the key on
+                this integration (leads, campaigns, and team stay intact).
               </p>
             </div>
           </div>
