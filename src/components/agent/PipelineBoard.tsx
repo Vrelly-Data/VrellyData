@@ -8,7 +8,32 @@
 // bundle doesn't pull in LeadDetailPanel's agent-only logic.
 
 import { useMemo, useState } from 'react';
-import { Linkedin, Mail } from 'lucide-react';
+import { Linkedin, Mail, Users } from 'lucide-react';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+
+const ALL_SENDERS = '__all__';
+
+// Derive a lead's LinkedIn sender from its reply_thread — the fromName on the
+// most recent role:'sender' (our outbound) message. Shared by the agent view
+// (reads AgentLead.reply_thread) and mirrored server-side in get-client-report.
+export function deriveSenderFromThread(
+  thread: ReadonlyArray<{ role?: string; fromName?: string | null }> | null | undefined,
+): string | null {
+  if (!Array.isArray(thread)) return null;
+  for (let i = thread.length - 1; i >= 0; i--) {
+    const m = thread[i];
+    if (m?.role === 'sender' && m.fromName && String(m.fromName).trim()) {
+      return String(m.fromName).trim();
+    }
+  }
+  return null;
+}
 
 // Minimal lead shape both AgentLead and the report's ResponderRow satisfy.
 export interface BoardLead {
@@ -68,23 +93,51 @@ export function PipelineBoard<T extends BoardLead>({
   readOnly = false,
   onCardClick,
   emptyLabel = 'No leads yet.',
+  getSender,
 }: {
   leads: T[];
   readOnly?: boolean;
   onCardClick?: (lead: T) => void;
   emptyLabel?: string;
+  // Optional per-lead LinkedIn sender accessor. When provided (and any
+  // LinkedIn-channel lead has a sender), a "sender" dropdown appears above the
+  // board and filters columns + counts to the selected sender.
+  getSender?: (lead: T) => string | null;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [sender, setSender] = useState<string>(ALL_SENDERS);
+
+  // Distinct LinkedIn senders present in the leads → dropdown options.
+  const senders = useMemo(() => {
+    if (!getSender) return [] as string[];
+    const set = new Set<string>();
+    for (const l of leads) {
+      if (l.channel !== 'linkedin') continue;
+      const s = getSender(l);
+      if (s) set.add(s);
+    }
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [leads, getSender]);
+
+  // If the chosen sender is no longer present (e.g. an upstream search narrowed
+  // the leads), fall back to All — combines cleanly with the search box.
+  const effectiveSender =
+    getSender && sender !== ALL_SENDERS && senders.includes(sender) ? sender : ALL_SENDERS;
+
+  const visibleLeads = useMemo(() => {
+    if (!getSender || effectiveSender === ALL_SENDERS) return leads;
+    return leads.filter((l) => getSender(l) === effectiveSender);
+  }, [leads, getSender, effectiveSender]);
 
   const byColumn = useMemo(() => {
     const map = new Map<string, T[]>();
     for (const c of COLUMNS) map.set(c.key, []);
-    for (const l of leads) {
+    for (const l of visibleLeads) {
       const col = columnFor(l.pipeline_stage ?? '');
       if (col) map.get(col.key)!.push(l);
     }
     return map;
-  }, [leads]);
+  }, [visibleLeads]);
 
   if (leads.length === 0) {
     return (
@@ -102,8 +155,28 @@ export function PipelineBoard<T extends BoardLead>({
     });
 
   return (
-    <div className="flex gap-3 overflow-x-auto pb-2">
-      {COLUMNS.map((col) => {
+    <div className="space-y-3">
+      {getSender && senders.length > 0 && (
+        <div className="flex items-center gap-2">
+          <Users className="h-4 w-4 text-muted-foreground" />
+          <Select value={effectiveSender} onValueChange={setSender}>
+            <SelectTrigger className="w-56 h-8 text-sm">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL_SENDERS}>All senders</SelectItem>
+              {senders.map((s) => (
+                <SelectItem key={s} value={s}>
+                  {s}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+
+      <div className="flex gap-3 overflow-x-auto pb-2">
+        {COLUMNS.map((col) => {
         const colLeads = byColumn.get(col.key) ?? [];
         const isOpen = expanded.has(col.key);
         const shown = isOpen ? colLeads : colLeads.slice(0, CARDS_PER_COLUMN);
@@ -157,7 +230,8 @@ export function PipelineBoard<T extends BoardLead>({
             </div>
           </div>
         );
-      })}
+        })}
+      </div>
     </div>
   );
 }

@@ -105,7 +105,22 @@ async function fetchResponders(
     logStep("Responders fetch failed", { error: error.message });
     return [];
   }
-  return data ?? [];
+  // Derive a client-safe sender_name from reply_thread (the fromName on the most
+  // recent role:'sender' outbound message) so the report board can offer a
+  // sender filter without shipping any new sensitive field.
+  return (data ?? []).map((r) => ({ ...r, sender_name: deriveSenderName(r.reply_thread) }));
+}
+
+// Mirror of the frontend's deriveSenderFromThread — latest sender's fromName.
+function deriveSenderName(thread: unknown): string | null {
+  if (!Array.isArray(thread)) return null;
+  for (let i = thread.length - 1; i >= 0; i--) {
+    const m = thread[i] as { role?: string; fromName?: string | null } | null;
+    if (m?.role === "sender" && m.fromName && String(m.fromName).trim()) {
+      return String(m.fromName).trim();
+    }
+  }
+  return null;
 }
 
 // fetchBarChartCampaigns + SyncedCampaignRow + pickNumber removed:

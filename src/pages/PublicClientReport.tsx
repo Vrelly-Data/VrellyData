@@ -392,7 +392,12 @@ function PipelineReadonly({ leads }: { leads: ResponderRow[] }) {
             Where each lead stands. Click a lead for details. Read-only.
           </p>
         </div>
-        <PipelineBoard leads={leads} readOnly onCardClick={setSelected} />
+        <PipelineBoard
+          leads={leads}
+          readOnly
+          onCardClick={setSelected}
+          getSender={(l) => l.sender_name ?? null}
+        />
       </CardContent>
 
       {/* Status-only detail — no conversation thread, no internal fields. */}

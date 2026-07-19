@@ -50,6 +50,9 @@ interface ResponderRow {
   // RespondersList query (this file) doesn't select them.
   pipeline_stage?: string | null;
   disposition_tag?: string | null;
+  // Derived by get-client-report (fromName of the latest outbound message) so
+  // the report Pipeline board can offer a LinkedIn-sender filter.
+  sender_name?: string | null;
   last_reply_text: string | null;
   last_reply_at: string | null;
   reply_thread: ReplyThreadItem[] | null;

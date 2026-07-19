@@ -6,7 +6,7 @@ import { Loader2, Search } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAgentInboxData, type AgentLead } from '@/hooks/useAgentInbox';
 import { LeadDetailPanel, PIPELINE_STAGES } from './LeadDetailPanel';
-import { PipelineBoard, DEAL_STAGES } from './PipelineBoard';
+import { PipelineBoard, DEAL_STAGES, deriveSenderFromThread } from './PipelineBoard';
 
 // The stage filter cards mirror the board's 8 columns exactly (tags == stages).
 const STAGES = DEAL_STAGES.map((s) => ({
@@ -157,6 +157,7 @@ export function AgentPipeline() {
       <PipelineBoard
         leads={filteredLeads}
         onCardClick={setSelectedLead}
+        getSender={(l) => deriveSenderFromThread(l.reply_thread)}
         emptyLabel={
           leads.length === 0
             ? 'No leads yet. Your agent will populate this as campaigns run and replies come in.'
