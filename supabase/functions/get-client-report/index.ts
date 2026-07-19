@@ -93,22 +93,31 @@ async function fetchResponders(
   // excluded Reply.io leads entirely (source='reply_io' leads carry no SL
   // campaign / HR account attribution), so a Reply.io client's share link
   // showed "Responses (0)" while the owner saw the full list.
-  const { data, error } = await supabase
-    .from("agent_leads")
-    .select(
-      "id, full_name, company, job_title, email, linkedin_url, channel, intent, inbox_status, pipeline_stage, disposition_tag, last_reply_text, last_reply_at, reply_thread",
-    )
-    .eq("user_id", client.user_id)
-    .or("inbox_status.eq.replied,last_reply_at.not.is.null");
-
-  if (error) {
-    logStep("Responders fetch failed", { error: error.message });
-    return [];
+  // Paginate past PostgREST's 1000-row default so the report's Responses list
+  // AND Pipeline board cover the client's full volume (not a capped subset) —
+  // so each board column's count reflects the true stage total.
+  const MAX_PAGES = 25; // 25 * 1000 = 25k leads
+  const rows: Record<string, unknown>[] = [];
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const { data, error } = await supabase
+      .from("agent_leads")
+      .select(
+        "id, full_name, company, job_title, email, linkedin_url, channel, intent, inbox_status, pipeline_stage, disposition_tag, last_reply_text, last_reply_at, reply_thread",
+      )
+      .eq("user_id", client.user_id)
+      .or("inbox_status.eq.replied,last_reply_at.not.is.null")
+      .range(page * 1000, page * 1000 + 999);
+    if (error) {
+      logStep("Responders fetch failed", { error: error.message });
+      return [];
+    }
+    rows.push(...(data ?? []));
+    if (!data || data.length < 1000) break;
   }
   // Derive a client-safe sender_name from reply_thread (the fromName on the most
   // recent role:'sender' outbound message) so the report board can offer a
   // sender filter without shipping any new sensitive field.
-  return (data ?? []).map((r) => ({ ...r, sender_name: deriveSenderName(r.reply_thread) }));
+  return rows.map((r) => ({ ...r, sender_name: deriveSenderName((r as { reply_thread?: unknown }).reply_thread) }));
 }
 
 // Mirror of the frontend's deriveSenderFromThread — latest sender's fromName.

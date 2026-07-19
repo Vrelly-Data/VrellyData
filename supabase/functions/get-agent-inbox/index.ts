@@ -14,6 +14,29 @@ function getCorsHeaders(req: Request) {
   };
 }
 
+// Fetch ALL of a user's agent_leads, paginating past PostgREST's 1000-row
+// default so the Pipeline board + counts cover the client's full volume (not a
+// capped subset). Bounded by MAX_PAGES as a runaway safeguard.
+const MAX_PAGES = 25; // 25 * 1000 = 25k leads
+// deno-lint-ignore no-explicit-any
+async function fetchAllLeads(
+  supabase: any,
+  userId: string,
+  select: string,
+  order?: { col: string; asc: boolean },
+): Promise<any[]> {
+  const out: any[] = [];
+  for (let page = 0; page < MAX_PAGES; page++) {
+    let q = supabase.from('agent_leads').select(select).eq('user_id', userId);
+    if (order) q = q.order(order.col, { ascending: order.asc });
+    const { data, error } = await q.range(page * 1000, page * 1000 + 999);
+    if (error) throw error;
+    out.push(...(data ?? []));
+    if (!data || data.length < 1000) break;
+  }
+  return out;
+}
+
 Deno.serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
 
@@ -62,13 +85,14 @@ Deno.serve(async (req) => {
     const TOTAL_INBOX_STATUSES = ['sent', 'replied', 'dismissed'];
     const statusGroup: string = body.statusGroup ?? 'pending_approval';
 
-    // Build aggregate counts (used in all views)
-    const { data: allLeads } = await supabase
-      .from('agent_leads')
-      .select('pipeline_stage, inbox_status, intent, auto_handled')
-      .eq('user_id', authUserId);
-
-    const leads = allLeads || [];
+    // Build aggregate counts (used in all views). Paginated so per-stage
+    // totals are EXACT for clients over 1000 leads — these drive both the stat
+    // tiles and (via by_pipeline_category) the board column totals.
+    const leads = await fetchAllLeads(
+      supabase,
+      authUserId,
+      'pipeline_stage, inbox_status, intent, auto_handled',
+    );
     const counts = {
       total: leads.length,
       // The 8 canonical deal stages.
@@ -150,14 +174,13 @@ Deno.serve(async (req) => {
     }
 
     if (view === 'pipeline') {
-      const { data: pipelineLeads, error } = await supabase
-        .from('agent_leads')
-        .select('*')
-        .eq('user_id', authUserId)
-        .order('updated_at', { ascending: false })
-        .limit(200);
-
-      if (error) throw error;
+      // ALL leads (paginated, was capped at 200) so every column populates and
+      // its count reflects the true stage total. Cards render lazily via the
+      // board's per-column "Show more".
+      const pipelineLeads = await fetchAllLeads(supabase, authUserId, '*', {
+        col: 'updated_at',
+        asc: false,
+      });
 
       return new Response(JSON.stringify({ leads: pipelineLeads, counts }), {
         status: 200,
