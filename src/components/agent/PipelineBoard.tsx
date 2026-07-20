@@ -88,6 +88,53 @@ function ChannelIcon({ channel }: { channel: string | null }) {
   return null;
 }
 
+// True when `a` is a first-name-style prefix of `b` (or they're equal),
+// case-insensitive: "Carey" ⊑ "Carey Rome", but "Car" is NOT ⊑ "Carey" (the
+// match must land on a word boundary). Used to fold inconsistently-signed
+// variants of one rep into a single sender option.
+function isNamePrefix(a: string, b: string): boolean {
+  const x = a.trim().toLowerCase();
+  const y = b.trim().toLowerCase();
+  return y === x || y.startsWith(x + ' ');
+}
+
+// Group raw sender strings so variants of one person collapse to one option.
+// Any two values where one is a name-prefix of the other are unioned
+// (transitively), and each group's canonical label is its longest (fullest)
+// member — ties broken alphabetically for determinism. Returns the sorted
+// canonical options + a raw→canonical map for filtering.
+function groupSenders(raw: string[]): { options: string[]; canonicalOf: Map<string, string> } {
+  const values = [...new Set(raw)];
+  const parent = new Map<string, string>(values.map((v) => [v, v]));
+  const find = (v: string): string => {
+    let r = v;
+    while (parent.get(r) !== r) r = parent.get(r)!;
+    let c = v;
+    while (parent.get(c) !== c) { const n = parent.get(c)!; parent.set(c, r); c = n; }
+    return r;
+  };
+  const union = (a: string, b: string) => { parent.set(find(a), find(b)); };
+  for (let i = 0; i < values.length; i++) {
+    for (let j = i + 1; j < values.length; j++) {
+      if (isNamePrefix(values[i], values[j]) || isNamePrefix(values[j], values[i])) {
+        union(values[i], values[j]);
+      }
+    }
+  }
+  // Canonical (fullest form) per group root.
+  const better = (a: string, b: string) =>
+    b.length > a.length || (b.length === a.length && b.localeCompare(a) < 0) ? b : a;
+  const canonByRoot = new Map<string, string>();
+  for (const v of values) {
+    const r = find(v);
+    canonByRoot.set(r, canonByRoot.has(r) ? better(canonByRoot.get(r)!, v) : v);
+  }
+  const canonicalOf = new Map<string, string>();
+  for (const v of values) canonicalOf.set(v, canonByRoot.get(find(v))!);
+  const options = [...new Set(canonicalOf.values())].sort((a, b) => a.localeCompare(b));
+  return { options, canonicalOf };
+}
+
 export function PipelineBoard<T extends BoardLead>({
   leads,
   readOnly = false,
@@ -107,16 +154,18 @@ export function PipelineBoard<T extends BoardLead>({
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [sender, setSender] = useState<string>(ALL_SENDERS);
 
-  // Distinct LinkedIn senders present in the leads → dropdown options.
-  const senders = useMemo(() => {
-    if (!getSender) return [] as string[];
-    const set = new Set<string>();
+  // LinkedIn senders present in the leads, with inconsistently-signed variants
+  // of one rep ("Carey" / "Carey Rome") folded into a single canonical option.
+  const { senders, canonicalOf } = useMemo(() => {
+    if (!getSender) return { senders: [] as string[], canonicalOf: new Map<string, string>() };
+    const raw: string[] = [];
     for (const l of leads) {
       if (l.channel !== 'linkedin') continue;
       const s = getSender(l);
-      if (s) set.add(s);
+      if (s) raw.push(s);
     }
-    return [...set].sort((a, b) => a.localeCompare(b));
+    const { options, canonicalOf } = groupSenders(raw);
+    return { senders: options, canonicalOf };
   }, [leads, getSender]);
 
   // If the chosen sender is no longer present (e.g. an upstream search narrowed
@@ -126,8 +175,12 @@ export function PipelineBoard<T extends BoardLead>({
 
   const visibleLeads = useMemo(() => {
     if (!getSender || effectiveSender === ALL_SENDERS) return leads;
-    return leads.filter((l) => getSender(l) === effectiveSender);
-  }, [leads, getSender, effectiveSender]);
+    // Match any lead whose sender maps to the selected canonical group.
+    return leads.filter((l) => {
+      const s = getSender(l);
+      return s != null && canonicalOf.get(s) === effectiveSender;
+    });
+  }, [leads, getSender, effectiveSender, canonicalOf]);
 
   const byColumn = useMemo(() => {
     const map = new Map<string, T[]>();
