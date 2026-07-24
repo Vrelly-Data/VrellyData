@@ -726,6 +726,156 @@ async function fetchReplyIoStats(
   };
 }
 
+// ---- Responder breakdowns -------------------------------------------------
+// Aggregate the PERIOD'S responders by (1) reply intent, (2) top job titles,
+// (3) top industries — the concrete substance the analysis is grounded in.
+// intent + job_title live on agent_leads; industry is joined from
+// synced_contacts (by lower(email) or linkedin_url). Coverage is computed per
+// dimension so the prompt can degrade gracefully when title/industry is sparse.
+
+interface Breakdown {
+  total: number; // responders in the period
+  intent: Record<string, number>; // counts per intent (incl. 'unknown')
+  intent_classified: number; // responders with a real (non-unknown) intent
+  titles: { name: string; count: number }[]; // top titles, desc
+  title_coverage: number; // 0..1 share of responders with a title
+  industries: { name: string; count: number }[]; // top industries, desc
+  industry_coverage: number; // 0..1 share with an industry (via join)
+}
+
+// Coverage gates: only surface title/industry when meaningfully populated, so
+// the model never invents a pattern from a handful of rows.
+const COVERAGE_MIN = 0.4; // ≥40% of responders have the field
+const COVERAGE_MIN_COUNT = 5; // and at least this many non-null
+const TOP_N = 5;
+
+function topCounts(values: (string | null | undefined)[]): {
+  top: { name: string; count: number }[];
+  nonNull: number;
+} {
+  const counts = new Map<string, { name: string; count: number }>();
+  let nonNull = 0;
+  for (const raw of values) {
+    const v = (raw ?? "").trim();
+    if (!v) continue;
+    nonNull++;
+    const key = v.toLowerCase();
+    const cur = counts.get(key);
+    if (cur) cur.count++;
+    else counts.set(key, { name: v, count: 1 }); // display first-seen casing
+  }
+  const top = [...counts.values()].sort((a, b) => b.count - a.count).slice(0, TOP_N);
+  return { top, nonNull };
+}
+
+// deno-lint-ignore no-explicit-any
+async function buildResponderBreakdowns(
+  supabase: any,
+  userId: string,
+  startDate: Date,
+  endDate: Date,
+): Promise<Breakdown> {
+  // 1. Period responders (paginated). A responder = a lead whose reply landed
+  //    in the window.
+  const rows: {
+    intent: string | null;
+    job_title: string | null;
+    email: string | null;
+    linkedin_url: string | null;
+  }[] = [];
+  const startIso = startDate.toISOString();
+  const endIso = endDate.toISOString();
+  for (let page = 0; page < 25; page++) {
+    const { data, error } = await supabase
+      .from("agent_leads")
+      .select("intent, job_title, email, linkedin_url")
+      .eq("user_id", userId)
+      .gte("last_reply_at", startIso)
+      .lte("last_reply_at", endIso)
+      .range(page * 1000, page * 1000 + 999);
+    if (error) {
+      logStep("Responder breakdown fetch failed", { error: error.message });
+      break;
+    }
+    rows.push(...(data ?? []));
+    if (!data || data.length < 1000) break;
+  }
+
+  const total = rows.length;
+
+  // Intent breakdown.
+  const intent: Record<string, number> = {};
+  let intentClassified = 0;
+  for (const r of rows) {
+    const key = (r.intent ?? "unknown") || "unknown";
+    intent[key] = (intent[key] ?? 0) + 1;
+    if (key !== "unknown") intentClassified++;
+  }
+
+  // Titles (on the lead).
+  const t = topCounts(rows.map((r) => r.job_title));
+
+  // Industries — join synced_contacts by email (chunked IN) and by linkedin_url.
+  // CRITICAL: synced_contacts is keyed by team_id, and an email/linkedin can
+  // exist under multiple clients' teams. Scope the join to THIS client's own
+  // team(s), or a same-email contact from another client would leak the wrong
+  // industry into a client-facing report. No teams → no industry join (safe).
+  const { data: memberships } = await supabase
+    .from("team_memberships")
+    .select("team_id")
+    .eq("user_id", userId);
+  const teamIds = [...new Set((memberships ?? []).map((m: { team_id: string }) => m.team_id).filter(Boolean))];
+
+  const industryByEmail = new Map<string, string>();
+  const industryByLinkedin = new Map<string, string>();
+  if (teamIds.length > 0) {
+    const emails = [...new Set(rows.map((r) => (r.email ?? "").toLowerCase()).filter(Boolean))];
+    const linkedins = [...new Set(rows.map((r) => r.linkedin_url).filter(Boolean) as string[])];
+    const chunk = <T,>(a: T[], n: number) =>
+      Array.from({ length: Math.ceil(a.length / n) }, (_, i) => a.slice(i * n, i * n + n));
+    for (const part of chunk(emails, 200)) {
+      if (!part.length) continue;
+      const { data } = await supabase
+        .from("synced_contacts")
+        .select("email, industry")
+        .in("team_id", teamIds)
+        .in("email", part);
+      for (const c of data ?? []) {
+        const ind = (c.industry ?? "").trim();
+        if (ind && c.email) industryByEmail.set(String(c.email).toLowerCase(), ind);
+      }
+    }
+    for (const part of chunk(linkedins, 200)) {
+      if (!part.length) continue;
+      const { data } = await supabase
+        .from("synced_contacts")
+        .select("linkedin_url, industry")
+        .in("team_id", teamIds)
+        .in("linkedin_url", part);
+      for (const c of data ?? []) {
+        const ind = (c.industry ?? "").trim();
+        if (ind && c.linkedin_url) industryByLinkedin.set(String(c.linkedin_url), ind);
+      }
+    }
+  }
+  const industryValues = rows.map((r) => {
+    const byEmail = r.email ? industryByEmail.get(r.email.toLowerCase()) : undefined;
+    if (byEmail) return byEmail;
+    return r.linkedin_url ? industryByLinkedin.get(r.linkedin_url) : undefined;
+  });
+  const ind = topCounts(industryValues);
+
+  return {
+    total,
+    intent,
+    intent_classified: intentClassified,
+    titles: t.top,
+    title_coverage: total ? t.nonNull / total : 0,
+    industries: ind.top,
+    industry_coverage: total ? ind.nonNull / total : 0,
+  };
+}
+
 // ---- Claude ---------------------------------------------------------------
 
 interface ClaudeResult {
@@ -740,19 +890,53 @@ async function callClaude(
   startDate: Date,
   endDate: Date,
   stats: Record<string, unknown>,
+  breakdowns: Breakdown,
 ): Promise<ClaudeResult> {
-  const systemPrompt = `You are an expert B2B outbound sales analyst writing a brief, data-grounded performance report for the team running outbound on behalf of a client.
+  // Build the responder-breakdown block, gating title/industry on coverage so
+  // the model never fabricates a pattern from sparse data.
+  const titleOk =
+    breakdowns.titles.length > 0 &&
+    breakdowns.title_coverage >= COVERAGE_MIN &&
+    breakdowns.titles.reduce((s, t) => s + t.count, 0) >= COVERAGE_MIN_COUNT;
+  const industryOk =
+    breakdowns.industries.length > 0 &&
+    breakdowns.industry_coverage >= COVERAGE_MIN &&
+    breakdowns.industries.reduce((s, t) => s + t.count, 0) >= COVERAGE_MIN_COUNT;
+  const pct = (n: number) => `${Math.round(n * 100)}%`;
+  const breakdownBlock = `Responder breakdowns for the period (${breakdowns.total} responders):
+- Reply intent (always available): ${JSON.stringify(breakdowns.intent)} — ${breakdowns.intent_classified} classified.
+- Top job titles: ${
+    titleOk
+      ? JSON.stringify(breakdowns.titles) + ` (coverage ${pct(breakdowns.title_coverage)})`
+      : `unavailable (coverage ${pct(breakdowns.title_coverage)} — too sparse; DO NOT discuss job titles)`
+  }
+- Top industries: ${
+    industryOk
+      ? JSON.stringify(breakdowns.industries) + ` (coverage ${pct(breakdowns.industry_coverage)})`
+      : `unavailable (coverage ${pct(breakdowns.industry_coverage)} — too sparse; DO NOT discuss industries)`
+  }`;
+
+  const systemPrompt = `You are a B2B outbound sales analyst. Write a brief, FACTUAL analysis of who replied this period, grounded strictly in the responder breakdowns below. Do not spin or force positivity — report what the data shows.
 
 Produce two outputs:
 
-1. "analysis": a 2–4 paragraph performance write-up in markdown (headers, bullets, **bold** for emphasis are fine). Tone: professional, direct, data-grounded. Cite specific numbers from the stats. If something is concerning (e.g. high bounce rate, low reply rate, low connection-accept rate), call it out plainly. If activity is low or zero for the period, say so and explain what the stats DO show. Do NOT speculate beyond what the numbers support.
+1. "analysis": ONE short paragraph (3–5 sentences), plain text (no markdown headers/bullets). Analyze the PEOPLE WHO REPLIED across up to three dimensions, in this priority order:
+   (a) reply-type / intent breakdown — always discuss this; cite real counts (e.g. "of 18 replies, 7 were interested and 4 needs-more-info").
+   (b) top job titles of responders — discuss ONLY if provided below (not marked unavailable), citing counts (e.g. "11 of 18 interested replies came from Operations titles").
+   (c) top industries of responders — discuss ONLY if provided below.
+   Rules: Use ONLY the numbers in the breakdowns. NEVER invent titles, industries, or counts. If a dimension is marked "unavailable", do not mention it at all — lean on the reply-type breakdown instead. If total responders is very low, say so plainly and keep it to what the intent mix shows.
 
-2. "priorities": an array of 3–6 short to-do strings. Each priority is one imperative-voice sentence stating a concrete next action the team should take. Be specific and tied to the data (e.g. "Investigate high bounce rate on campaign 11111 — currently 12.3% (>5% threshold)"). Avoid generic advice ("improve copy" is not actionable).
+2. "priorities": an array of AT MOST TWO short imperative-voice to-do strings. Never more than two.
+   - Priority 1 is derived from the overall campaign stats.
+   - Priority 2 is derived from the responder patterns in the analysis (intent mix, or a title/industry pattern if available).
+   Each one concrete, specific sentence tied to a number. If only one meaningful priority exists, return just one. Never more than two.
 
 Client: ${displayName}
 Range: ${range} (${toYMD(startDate)} to ${toYMD(endDate)})
 
-Stats:
+${breakdownBlock}
+
+Aggregate stats (for priority 1 context):
 ${JSON.stringify(stats, null, 2)}
 
 Return STRICTLY valid JSON in this exact shape, with no preamble, no trailing prose, and no markdown fences around the JSON itself:
@@ -802,10 +986,13 @@ Return STRICTLY valid JSON in this exact shape, with no preamble, no trailing pr
     throw new Error("Claude JSON missing expected shape {analysis, priorities[]}");
   }
 
-  // Coerce + trim each priority; drop empties.
+  // Coerce + trim each priority; drop empties; HARD-CAP at 2 (Feature 3 —
+  // priority 1 from stats, priority 2 from the analysis paragraph). Enforced
+  // here regardless of what the model returns.
   parsed.priorities = parsed.priorities
     .map((p) => String(p).trim())
-    .filter((p) => p.length > 0);
+    .filter((p) => p.length > 0)
+    .slice(0, 2);
 
   return parsed;
 }
@@ -1218,6 +1405,20 @@ Deno.serve(async (req) => {
       );
     }
 
+    // ---- Responder breakdowns (grounds the analysis in real replies) ----
+    const breakdowns = await buildResponderBreakdowns(
+      supabase,
+      clientRow.user_id,
+      startDate,
+      endDate,
+    );
+    logStep("Responder breakdowns", {
+      total: breakdowns.total,
+      intent: breakdowns.intent,
+      title_coverage: breakdowns.title_coverage,
+      industry_coverage: breakdowns.industry_coverage,
+    });
+
     // ---- Claude ----
     const { analysis, priorities } = await callClaude(
       anthropicKey,
@@ -1226,6 +1427,7 @@ Deno.serve(async (req) => {
       startDate,
       endDate,
       stats,
+      breakdowns,
     );
 
     // ---- Persist snapshot ----
