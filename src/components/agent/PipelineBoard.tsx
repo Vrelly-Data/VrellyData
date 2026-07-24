@@ -148,6 +148,9 @@ export function PipelineBoard<T extends BoardLead>({
   onCardClick,
   emptyLabel = 'No leads yet.',
   getSender,
+  tags,
+  getLeadTagIds,
+  onCreateTag,
 }: {
   leads: T[];
   readOnly?: boolean;
