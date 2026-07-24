@@ -238,12 +238,49 @@ Deno.serve(async (req) => {
       logStep("Priorities fetch error", { error: prioritiesRes.error.message });
     }
 
+    // Pipeline tags (Feature 1). Runs under the SERVICE ROLE (RLS bypassed), so
+    // we MUST scope to the token's client in-query, or another client's tags
+    // would surface on this report:
+    //   * pipeline_tags: WHERE user_id = <the token's client user_id>
+    //   * agent_lead_tags: WHERE tag_id IN (that client's tag ids) — the join
+    //     table has no user_id, so we constrain it to THIS client's tags (which
+    //     are user_id-scoped), which also implies the lead is the client's.
+    const { data: tagRows } = await supabase
+      .from("pipeline_tags")
+      .select("id, name, color")
+      .eq("user_id", client.user_id)
+      .order("name", { ascending: true });
+    const tags = tagRows ?? [];
+    const tagIds = tags.map((t: { id: string }) => t.id);
+    const tagById = new Map(tags.map((t: { id: string }) => [t.id, t]));
+
+    // Attach tags[] to each responder (empty when the client has no tags).
+    const tagsByLead = new Map<string, unknown[]>();
+    if (tagIds.length > 0) {
+      const { data: appRows } = await supabase
+        .from("agent_lead_tags")
+        .select("lead_id, tag_id")
+        .in("tag_id", tagIds);
+      for (const a of appRows ?? []) {
+        const t = tagById.get(a.tag_id as string);
+        if (!t) continue;
+        const arr = tagsByLead.get(a.lead_id as string) ?? [];
+        arr.push(t);
+        tagsByLead.set(a.lead_id as string, arr);
+      }
+    }
+    const respondersWithTags = (responders as { id: string }[]).map((r) => ({
+      ...r,
+      tags: tagsByLead.get(r.id) ?? [],
+    }));
+
     return new Response(
       JSON.stringify({
         client: { display_name: client.display_name },
         snapshots: snapsRes.data ?? [],
         priorities: prioritiesRes.data ?? [],
-        responders,
+        responders: respondersWithTags,
+        tags, // the client's full tag list, for the report filter dropdown
       }),
       {
         status: 200,

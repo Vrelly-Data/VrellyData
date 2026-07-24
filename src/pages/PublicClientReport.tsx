@@ -78,6 +78,8 @@ interface PublicReport {
   snapshots: PublicReportSnapshot[];
   priorities: PublicReportPriority[];
   responders: ResponderRow[];
+  // The client's full pipeline-tag list, for the report's read-only tag filter.
+  tags?: { id: string; name: string; color: string }[];
   // campaigns[] field removed from the payload — the chart now derives
   // its data from the SELECTED snapshot's stats_snapshot.heyreach.per_campaign
   // + smartlead.per_campaign, same as the admin tab does. Range-scoped.
@@ -303,7 +305,7 @@ export default function PublicClientReport() {
 
       {/* Pipeline — read-only mirror of the agent-view board. Groups this
           client's leads by stage from the same token-scoped payload. */}
-      <PipelineReadonly leads={responders} />
+      <PipelineReadonly leads={responders} tags={reportQuery.data.tags ?? []} />
 
       {/* Priorities — read-only inline list. No checkboxes that mutate. */}
       <PrioritiesReadonly items={priorities} />
@@ -379,7 +381,13 @@ const STAGE_LABELS: Record<string, string> = {
 // Read-only pipeline — renders the SAME PipelineBoard the agent view uses, so
 // the report and the internal board look identical. Cards open a status-only
 // detail dialog (no thread, no internal fields).
-function PipelineReadonly({ leads }: { leads: ResponderRow[] }) {
+function PipelineReadonly({
+  leads,
+  tags,
+}: {
+  leads: ResponderRow[];
+  tags: { id: string; name: string; color: string }[];
+}) {
   const [selected, setSelected] = useState<ResponderRow | null>(null);
   if (leads.length === 0) return null;
 
@@ -397,6 +405,8 @@ function PipelineReadonly({ leads }: { leads: ResponderRow[] }) {
           readOnly
           onCardClick={setSelected}
           getSender={(l) => l.sender_name ?? null}
+          tags={tags}
+          getLeadTagIds={(l) => (l.tags ?? []).map((t) => t.id)}
         />
       </CardContent>
 

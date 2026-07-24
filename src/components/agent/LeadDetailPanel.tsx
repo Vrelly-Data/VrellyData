@@ -45,6 +45,7 @@ import { Label } from '@/components/ui/label';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { LeadTagsSection } from './LeadTagsSection';
 
 export type { AgentLead };
 
@@ -1133,6 +1134,9 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
             </div>
           </div>
         )}
+
+        {/* Tags (Feature 1) — colored chips + add/create-inline. */}
+        <LeadTagsSection leadId={lead.id} />
 
         {/* Notes */}
         <div className="space-y-2">
