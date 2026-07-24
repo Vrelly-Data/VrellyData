@@ -53,6 +53,9 @@ interface ResponderRow {
   // Derived by get-client-report (fromName of the latest outbound message) so
   // the report Pipeline board can offer a LinkedIn-sender filter.
   sender_name?: string | null;
+  // Pipeline tags applied to this lead (Feature 1) — returned by
+  // get-client-report for the report's read-only tag filter.
+  tags?: { id: string; name: string; color: string }[];
   last_reply_text: string | null;
   last_reply_at: string | null;
   reply_thread: ReplyThreadItem[] | null;

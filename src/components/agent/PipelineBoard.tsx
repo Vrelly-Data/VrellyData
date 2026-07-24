@@ -8,7 +8,7 @@
 // bundle doesn't pull in LeadDetailPanel's agent-only logic.
 
 import { useMemo, useState } from 'react';
-import { Linkedin, Mail, Users } from 'lucide-react';
+import { Linkedin, Mail, Users, Tag as TagIcon, Plus, Check } from 'lucide-react';
 import {
   Select,
   SelectContent,
@@ -16,8 +16,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 
 const ALL_SENDERS = '__all__';
+
+export interface BoardTag {
+  id: string;
+  name: string;
+  color: string;
+}
 
 // Derive a lead's LinkedIn sender from its reply_thread — the fromName on the
 // most recent role:'sender' (our outbound) message. Shared by the agent view
@@ -141,6 +148,9 @@ export function PipelineBoard<T extends BoardLead>({
   onCardClick,
   emptyLabel = 'No leads yet.',
   getSender,
+  tags,
+  getLeadTagIds,
+  onCreateTag,
 }: {
   leads: T[];
   readOnly?: boolean;
@@ -150,9 +160,18 @@ export function PipelineBoard<T extends BoardLead>({
   // LinkedIn-channel lead has a sender), a "sender" dropdown appears above the
   // board and filters columns + counts to the selected sender.
   getSender?: (lead: T) => string | null;
+  // Tags (Feature 1). When `tags` is provided, a Tags multi-select filter
+  // appears; selecting tags filters to leads carrying ANY selected tag (OR).
+  // `getLeadTagIds` returns a lead's applied tag ids. `onCreateTag` (agent-only,
+  // omit on the read-only report) shows a "+ New tag" affordance.
+  tags?: BoardTag[];
+  getLeadTagIds?: (lead: T) => string[];
+  onCreateTag?: (name: string) => void | Promise<void>;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [sender, setSender] = useState<string>(ALL_SENDERS);
+  const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
+  const [newTag, setNewTag] = useState('');
 
   // LinkedIn senders present in the leads, with inconsistently-signed variants
   // of one rep ("Carey" / "Carey Rome") folded into a single canonical option.
@@ -174,13 +193,21 @@ export function PipelineBoard<T extends BoardLead>({
     getSender && sender !== ALL_SENDERS && senders.includes(sender) ? sender : ALL_SENDERS;
 
   const visibleLeads = useMemo(() => {
-    if (!getSender || effectiveSender === ALL_SENDERS) return leads;
-    // Match any lead whose sender maps to the selected canonical group.
-    return leads.filter((l) => {
-      const s = getSender(l);
-      return s != null && canonicalOf.get(s) === effectiveSender;
-    });
-  }, [leads, getSender, effectiveSender, canonicalOf]);
+    let out = leads;
+    // Sender filter (canonical group).
+    if (getSender && effectiveSender !== ALL_SENDERS) {
+      out = out.filter((l) => {
+        const s = getSender(l);
+        return s != null && canonicalOf.get(s) === effectiveSender;
+      });
+    }
+    // Tag filter — keep leads carrying ANY selected tag (OR). Combines with the
+    // sender filter and the upstream search.
+    if (getLeadTagIds && selectedTags.size > 0) {
+      out = out.filter((l) => getLeadTagIds(l).some((id) => selectedTags.has(id)));
+    }
+    return out;
+  }, [leads, getSender, effectiveSender, canonicalOf, getLeadTagIds, selectedTags]);
 
   const byColumn = useMemo(() => {
     const map = new Map<string, T[]>();
@@ -207,24 +234,109 @@ export function PipelineBoard<T extends BoardLead>({
       return next;
     });
 
+  const toggleTag = (id: string) =>
+    setSelectedTags((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+
+  const showFilters = (getSender && senders.length > 0) || (tags && tags.length > 0) || !!onCreateTag;
+
   return (
     <div className="space-y-3">
-      {getSender && senders.length > 0 && (
-        <div className="flex items-center gap-2">
-          <Users className="h-4 w-4 text-muted-foreground" />
-          <Select value={effectiveSender} onValueChange={setSender}>
-            <SelectTrigger className="w-56 h-8 text-sm">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={ALL_SENDERS}>All senders</SelectItem>
-              {senders.map((s) => (
-                <SelectItem key={s} value={s}>
-                  {s}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+      {showFilters && (
+        <div className="flex items-center gap-2 flex-wrap">
+          {getSender && senders.length > 0 && (
+            <div className="flex items-center gap-2">
+              <Users className="h-4 w-4 text-muted-foreground" />
+              <Select value={effectiveSender} onValueChange={setSender}>
+                <SelectTrigger className="w-56 h-8 text-sm">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL_SENDERS}>All senders</SelectItem>
+                  {senders.map((s) => (
+                    <SelectItem key={s} value={s}>
+                      {s}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          {tags && tags.length > 0 && (
+            <Popover>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1.5 h-8 rounded-md border px-2.5 text-sm hover:bg-accent/40"
+                >
+                  <TagIcon className="h-4 w-4 text-muted-foreground" />
+                  {selectedTags.size > 0 ? `${selectedTags.size} tag${selectedTags.size > 1 ? 's' : ''}` : 'Filter tags'}
+                </button>
+              </PopoverTrigger>
+              <PopoverContent align="start" className="w-56 p-2">
+                <div className="max-h-56 overflow-y-auto space-y-0.5">
+                  {tags.map((t) => {
+                    const on = selectedTags.has(t.id);
+                    return (
+                      <button
+                        key={t.id}
+                        type="button"
+                        onClick={() => toggleTag(t.id)}
+                        className="flex w-full items-center gap-2 rounded px-1.5 py-1 text-left text-sm hover:bg-accent/50"
+                      >
+                        <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: t.color }} />
+                        <span className="truncate flex-1">{t.name}</span>
+                        {on && <Check className="h-3.5 w-3.5 text-primary" />}
+                      </button>
+                    );
+                  })}
+                </div>
+                {selectedTags.size > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedTags(new Set())}
+                    className="mt-1 w-full text-xs text-muted-foreground hover:underline py-1"
+                  >
+                    Clear
+                  </button>
+                )}
+              </PopoverContent>
+            </Popover>
+          )}
+
+          {/* Agent-only tag creation ("+ New tag"); omitted on the read-only report. */}
+          {onCreateTag && (
+            <Popover>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 h-8 rounded-md border border-dashed px-2.5 text-sm text-muted-foreground hover:bg-accent/40"
+                >
+                  <Plus className="h-3.5 w-3.5" /> New tag
+                </button>
+              </PopoverTrigger>
+              <PopoverContent align="start" className="w-56 p-2">
+                <input
+                  autoFocus
+                  value={newTag}
+                  onChange={(e) => setNewTag(e.target.value)}
+                  placeholder="Tag name…"
+                  className="w-full h-8 rounded-md border px-2 text-sm bg-background"
+                  onKeyDown={async (e) => {
+                    if (e.key === 'Enter' && newTag.trim()) {
+                      await onCreateTag(newTag.trim());
+                      setNewTag('');
+                    }
+                  }}
+                />
+                <p className="mt-1 text-xs text-muted-foreground">Press Enter to create.</p>
+              </PopoverContent>
+            </Popover>
+          )}
         </div>
       )}
 

@@ -1,10 +1,13 @@
 import { useState, useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
 import { Sheet, SheetContent } from '@/components/ui/sheet';
 import { Loader2, Search } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { supabase } from '@/integrations/supabase/client';
 import { useAgentInboxData, type AgentLead } from '@/hooks/useAgentInbox';
+import { usePipelineTags, useCreateTag } from '@/hooks/usePipelineTags';
 import { LeadDetailPanel, PIPELINE_STAGES } from './LeadDetailPanel';
 import { PipelineBoard, DEAL_STAGES, deriveSenderFromThread } from './PipelineBoard';
 
@@ -19,6 +22,25 @@ const STAGES = DEAL_STAGES.map((s) => ({
 export function AgentPipeline() {
   const { leads, counts, isLoading } = useAgentInboxData('pipeline');
   const [selectedLead, setSelectedLead] = useState<AgentLead | null>(null);
+
+  // Pipeline tags (Feature 1): the client's tag list + which tags each lead
+  // carries, for the board's Tags multi-select filter. RLS scopes both to the
+  // signed-in agent.
+  const { data: pipelineTags = [] } = usePipelineTags();
+  const createTag = useCreateTag();
+  const { data: leadTagMap = {} } = useQuery({
+    queryKey: ['agent-lead-tag-map'],
+    queryFn: async (): Promise<Record<string, string[]>> => {
+      const { data, error } = await supabase.from('agent_lead_tags').select('lead_id, tag_id');
+      if (error) throw error;
+      const m: Record<string, string[]> = {};
+      for (const r of data ?? []) {
+        const row = r as { lead_id: string; tag_id: string };
+        (m[row.lead_id] ??= []).push(row.tag_id);
+      }
+      return m;
+    },
+  });
   const [stageFilter, setStageFilter] = useState<Set<string>>(new Set());
   const [tagFilter, setTagFilter] = useState<Set<string>>(new Set());
   const [channelFilter, setChannelFilter] = useState<'all' | 'email' | 'linkedin'>('all');
@@ -158,6 +180,9 @@ export function AgentPipeline() {
         leads={filteredLeads}
         onCardClick={setSelectedLead}
         getSender={(l) => deriveSenderFromThread(l.reply_thread)}
+        tags={pipelineTags}
+        getLeadTagIds={(l) => leadTagMap[l.id] ?? []}
+        onCreateTag={(name) => createTag.mutateAsync(name).then(() => undefined)}
         emptyLabel={
           leads.length === 0
             ? 'No leads yet. Your agent will populate this as campaigns run and replies come in.'
