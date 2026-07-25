@@ -12,6 +12,24 @@ export interface EmailSenderMailbox {
   updated_at: string;
 }
 
+// Whether the client has an active Smartlead integration — gates whether the
+// mailbox-mapping section shows at all (independent of mailbox count, so the
+// first Sync is reachable).
+export function useHasSmartleadIntegration() {
+  return useQuery<boolean>({
+    queryKey: ['has-smartlead-integration'],
+    queryFn: async () => {
+      const { count, error } = await db
+        .from('outbound_integrations')
+        .select('id', { count: 'exact', head: true })
+        .eq('platform', 'smartlead')
+        .eq('is_active', true);
+      if (error) throw error;
+      return (count ?? 0) > 0;
+    },
+  });
+}
+
 export function useEmailSenderMailboxes() {
   return useQuery<EmailSenderMailbox[]>({
     queryKey: ['email-sender-mailboxes'],

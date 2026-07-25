@@ -15,6 +15,7 @@ import {
   useEmailSenderMailboxes,
   useUpdateMailboxSender,
   useSyncMailboxes,
+  useHasSmartleadIntegration,
 } from '@/hooks/useEmailSenderMailboxes';
 
 const UNMAPPED = '__unmapped__';
@@ -23,6 +24,7 @@ const UNMAPPED = '__unmapped__';
 // by from_name == sender name on sync. Unmapped mailboxes surface here for the
 // operator to assign. Only relevant for email-heavy (Smartlead) clients.
 export function EmailMailboxMapping() {
+  const { data: hasSmartlead, isLoading: intLoading } = useHasSmartleadIntegration();
   const { data: mailboxes = [], isLoading } = useEmailSenderMailboxes();
   const { data: senders = [] } = useSenderProfiles();
   const updateSender = useUpdateMailboxSender();
@@ -34,8 +36,11 @@ export function EmailMailboxMapping() {
   );
   const unmappedCount = mailboxes.filter((m) => !m.sender_name).length;
 
-  // Don't render for clients with no mailboxes synced (LinkedIn-only, etc.).
-  if (!isLoading && mailboxes.length === 0) return null;
+  // Show whenever the client has a Smartlead integration — regardless of
+  // mailbox count — so the FIRST Sync is always reachable. Hide only for
+  // clients with no Smartlead integration (LinkedIn-only, etc.).
+  if (intLoading) return null;
+  if (!hasSmartlead) return null;
 
   const assign = async (id: string, value: string) => {
     try {
@@ -86,6 +91,11 @@ export function EmailMailboxMapping() {
         <div className="flex justify-center py-6">
           <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
         </div>
+      ) : mailboxes.length === 0 ? (
+        <p className="text-sm text-muted-foreground border border-dashed rounded-md p-4 text-center">
+          No mailboxes synced yet. Click <span className="font-medium">Sync mailboxes</span> to
+          pull this client&apos;s Smartlead sending accounts and auto-map them to senders.
+        </p>
       ) : (
         <div className="rounded-md border divide-y max-h-96 overflow-y-auto">
           {mailboxes.map((m) => (
