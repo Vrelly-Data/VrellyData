@@ -24,6 +24,7 @@ import {
   useDeleteSenderProfile,
   type SenderProfile,
 } from '@/hooks/useSenderProfiles';
+import { EmailMailboxMapping } from './EmailMailboxMapping';
 import {
   useAgentDocuments,
   useUploadAgentDocument,
@@ -704,6 +705,14 @@ export function AgentSettings() {
           >
             <Plus className="h-4 w-4 mr-1" /> Add Profile
           </Button>
+        </CardContent>
+      </Card>
+
+      {/* Email sender ↔ mailbox mapping — many mailboxes → one sender (email-
+          heavy Smartlead clients). Self-hides when no mailboxes are synced. */}
+      <Card>
+        <CardContent className="pt-6">
+          <EmailMailboxMapping />
         </CardContent>
       </Card>
 

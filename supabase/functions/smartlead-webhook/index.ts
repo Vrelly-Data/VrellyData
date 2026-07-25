@@ -212,6 +212,13 @@ Deno.serve(async (req) => {
 
     const fullName = (payload.to_name as string | undefined) ?? null;
 
+    // The SENDER mailbox (inversion gotcha: from_email is OURS, not the
+    // prospect's). Used to attribute the reply to the mailbox's mapped sender
+    // (email_sender_mailboxes), so one sender's many mailboxes collapse to one
+    // sender in the pipeline filter + the correct draft voice.
+    const fromEmailRaw = (payload.from_email as string | undefined) ?? null;
+    const fromEmail = fromEmailRaw ? fromEmailRaw.trim().toLowerCase() : null;
+
     const smartleadLeadId =
       payload.sl_email_lead_id !== undefined && payload.sl_email_lead_id !== null
         ? String(payload.sl_email_lead_id)
@@ -288,6 +295,21 @@ Deno.serve(async (req) => {
         JSON.stringify({ success: true, skipped: "no_active_integration", eventType }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
+    }
+
+    // Resolve the sender for THIS reply's mailbox (from_email → mapped
+    // sender_name). NULL when the mailbox is unmapped or unknown — then the
+    // sender entry carries no fromName and lands in the "Unmapped" filter
+    // rather than spawning a per-mailbox sender.
+    let mailboxSenderName: string | null = null;
+    if (fromEmail) {
+      const { data: mb } = await supabase
+        .from("email_sender_mailboxes")
+        .select("sender_name")
+        .eq("user_id", integration.created_by)
+        .ilike("mailbox_email", fromEmail)
+        .maybeSingle();
+      mailboxSenderName = (mb?.sender_name as string | null) ?? null;
     }
 
     // === Build reply_thread (single-message seed) ===========================
@@ -493,11 +515,15 @@ Deno.serve(async (req) => {
               const stripped = stripZendeskMarker(
                 rawBody.replace(/<[^>]+>/g, " ").replace(/\s+/g, " "),
               );
+              const isSender = msg.type === "SENT";
               return {
-                role: msg.type === "SENT" ? "sender" : "prospect",
+                role: isSender ? "sender" : "prospect",
                 content: stripped,
                 timestamp: msg.timestamp || new Date().toISOString(),
                 channel: "email",
+                // Attribute our outbound to the mailbox's mapped sender so the
+                // pipeline sender filter groups by SENDER, not per-mailbox.
+                ...(isSender && mailboxSenderName ? { fromName: mailboxSenderName } : {}),
               };
             },
           );
