@@ -126,7 +126,10 @@ Deno.serve(async (req) => {
     const rows = accounts
       .filter((a) => a.from_email && String(a.from_email).trim())
       .map((a) => {
-        const mailbox = String(a.from_email).trim();
+        // Store lowercased — the plain unique index (user_id, mailbox_email)
+        // relies on this for case-insensitive dedup, and smartlead-webhook
+        // looks up the lowercased from_email, so write and read must match.
+        const mailbox = String(a.from_email).trim().toLowerCase();
         const fromName = a.from_name ? String(a.from_name).trim() : null;
         const existing = existingSenderByMailbox.get(norm(mailbox));
         const auto = fromName ? senderByNorm.get(norm(fromName)) ?? null : null;
