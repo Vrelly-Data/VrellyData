@@ -303,11 +303,15 @@ Deno.serve(async (req) => {
     // rather than spawning a per-mailbox sender.
     let mailboxSenderName: string | null = null;
     if (fromEmail) {
+      // fromEmail is already lowercased above; mailbox_email is stored
+      // lowercased by the sync — so an exact eq matches (and hits the unique
+      // index). Read and write must use the same normalization or attribution
+      // silently misses.
       const { data: mb } = await supabase
         .from("email_sender_mailboxes")
         .select("sender_name")
         .eq("user_id", integration.created_by)
-        .ilike("mailbox_email", fromEmail)
+        .eq("mailbox_email", fromEmail)
         .maybeSingle();
       mailboxSenderName = (mb?.sender_name as string | null) ?? null;
     }
