@@ -741,6 +741,10 @@ interface Breakdown {
   title_coverage: number; // 0..1 share of responders with a title
   industries: { name: string; count: number }[]; // top industries, desc
   industry_coverage: number; // 0..1 share with an industry (via join)
+  company_sizes: { name: string; count: number }[]; // top company sizes, desc
+  company_size_coverage: number; // 0..1 share with a company size (via join)
+  locations: { name: string; count: number }[]; // top locations, desc
+  location_coverage: number; // 0..1 share with a location (via join)
 }
 
 // Coverage gates: only surface title/industry when meaningfully populated, so
@@ -815,55 +819,58 @@ async function buildResponderBreakdowns(
   // Titles (on the lead).
   const t = topCounts(rows.map((r) => r.job_title));
 
-  // Industries — join synced_contacts by email (chunked IN) and by linkedin_url.
-  // CRITICAL: synced_contacts is keyed by team_id, and an email/linkedin can
-  // exist under multiple clients' teams. Scope the join to THIS client's own
-  // team(s), or a same-email contact from another client would leak the wrong
-  // industry into a client-facing report. No teams → no industry join (safe).
+  // Enrich responders from synced_contacts (industry, company size, location).
+  // Match by email OR linkedin_url — LinkedIn/masked-email responders often
+  // have no email match but do carry a linkedin_url, so a single pass fetches
+  // all fields and merges per lead (email match preferred, linkedin fallback).
+  // CRITICAL: synced_contacts is keyed by team_id and an email/linkedin can
+  // exist under multiple clients' teams — scope to THIS client's team(s) or a
+  // same-key contact from another client leaks into a client-facing report.
   const { data: memberships } = await supabase
     .from("team_memberships")
     .select("team_id")
     .eq("user_id", userId);
   const teamIds = [...new Set((memberships ?? []).map((m: { team_id: string }) => m.team_id).filter(Boolean))];
 
-  const industryByEmail = new Map<string, string>();
-  const industryByLinkedin = new Map<string, string>();
+  type Contact = { industry: string; company_size: string; location: string };
+  const clean = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+  const toLocation = (c: { city?: unknown; state?: unknown; country?: unknown }) => {
+    const parts = [clean(c.city), clean(c.state)].filter(Boolean);
+    return parts.length ? parts.join(", ") : clean(c.country); // "City, State" else country
+  };
+  const byEmail = new Map<string, Contact>();
+  const byLinkedin = new Map<string, Contact>();
   if (teamIds.length > 0) {
     const emails = [...new Set(rows.map((r) => (r.email ?? "").toLowerCase()).filter(Boolean))];
     const linkedins = [...new Set(rows.map((r) => r.linkedin_url).filter(Boolean) as string[])];
     const chunk = <T,>(a: T[], n: number) =>
       Array.from({ length: Math.ceil(a.length / n) }, (_, i) => a.slice(i * n, i * n + n));
+    const SEL = "email, linkedin_url, industry, company_size, city, state, country";
+    const toContact = (c: Record<string, unknown>): Contact => ({
+      industry: clean(c.industry),
+      company_size: clean(c.company_size),
+      location: toLocation(c),
+    });
     for (const part of chunk(emails, 200)) {
       if (!part.length) continue;
-      const { data } = await supabase
-        .from("synced_contacts")
-        .select("email, industry")
-        .in("team_id", teamIds)
-        .in("email", part);
-      for (const c of data ?? []) {
-        const ind = (c.industry ?? "").trim();
-        if (ind && c.email) industryByEmail.set(String(c.email).toLowerCase(), ind);
-      }
+      const { data } = await supabase.from("synced_contacts").select(SEL).in("team_id", teamIds).in("email", part);
+      for (const c of data ?? []) if (c.email) byEmail.set(String(c.email).toLowerCase(), toContact(c));
     }
     for (const part of chunk(linkedins, 200)) {
       if (!part.length) continue;
-      const { data } = await supabase
-        .from("synced_contacts")
-        .select("linkedin_url, industry")
-        .in("team_id", teamIds)
-        .in("linkedin_url", part);
-      for (const c of data ?? []) {
-        const ind = (c.industry ?? "").trim();
-        if (ind && c.linkedin_url) industryByLinkedin.set(String(c.linkedin_url), ind);
-      }
+      const { data } = await supabase.from("synced_contacts").select(SEL).in("team_id", teamIds).in("linkedin_url", part);
+      for (const c of data ?? []) if (c.linkedin_url) byLinkedin.set(String(c.linkedin_url), toContact(c));
     }
   }
-  const industryValues = rows.map((r) => {
-    const byEmail = r.email ? industryByEmail.get(r.email.toLowerCase()) : undefined;
-    if (byEmail) return byEmail;
-    return r.linkedin_url ? industryByLinkedin.get(r.linkedin_url) : undefined;
+  // One merged contact per lead (email preferred, linkedin fallback).
+  const contacts = rows.map((r) => {
+    const e = r.email ? byEmail.get(r.email.toLowerCase()) : undefined;
+    return e ?? (r.linkedin_url ? byLinkedin.get(r.linkedin_url) : undefined) ?? null;
   });
-  const ind = topCounts(industryValues);
+
+  const ind = topCounts(contacts.map((c) => c?.industry));
+  const size = topCounts(contacts.map((c) => c?.company_size));
+  const loc = topCounts(contacts.map((c) => c?.location));
 
   return {
     total,
@@ -873,6 +880,10 @@ async function buildResponderBreakdowns(
     title_coverage: total ? t.nonNull / total : 0,
     industries: ind.top,
     industry_coverage: total ? ind.nonNull / total : 0,
+    company_sizes: size.top,
+    company_size_coverage: total ? size.nonNull / total : 0,
+    locations: loc.top,
+    location_coverage: total ? loc.nonNull / total : 0,
   };
 }
 
@@ -892,39 +903,40 @@ async function callClaude(
   stats: Record<string, unknown>,
   breakdowns: Breakdown,
 ): Promise<ClaudeResult> {
-  // Build the responder-breakdown block, gating title/industry on coverage so
-  // the model never fabricates a pattern from sparse data.
-  const titleOk =
-    breakdowns.titles.length > 0 &&
-    breakdowns.title_coverage >= COVERAGE_MIN &&
-    breakdowns.titles.reduce((s, t) => s + t.count, 0) >= COVERAGE_MIN_COUNT;
-  const industryOk =
-    breakdowns.industries.length > 0 &&
-    breakdowns.industry_coverage >= COVERAGE_MIN &&
-    breakdowns.industries.reduce((s, t) => s + t.count, 0) >= COVERAGE_MIN_COUNT;
+  // Build the responder-breakdown block, gating each enriched dimension on
+  // coverage so the model never fabricates a pattern from sparse data.
   const pct = (n: number) => `${Math.round(n * 100)}%`;
+  const gated = (
+    label: string,
+    items: { name: string; count: number }[],
+    coverage: number,
+  ) => {
+    const ok =
+      items.length > 0 &&
+      coverage >= COVERAGE_MIN &&
+      items.reduce((s, x) => s + x.count, 0) >= COVERAGE_MIN_COUNT;
+    return ok
+      ? `${JSON.stringify(items)} (coverage ${pct(coverage)})`
+      : `unavailable (coverage ${pct(coverage)} — too sparse; DO NOT discuss ${label})`;
+  };
   const breakdownBlock = `Responder breakdowns for the period (${breakdowns.total} responders):
 - Reply intent (always available): ${JSON.stringify(breakdowns.intent)} — ${breakdowns.intent_classified} classified.
-- Top job titles: ${
-    titleOk
-      ? JSON.stringify(breakdowns.titles) + ` (coverage ${pct(breakdowns.title_coverage)})`
-      : `unavailable (coverage ${pct(breakdowns.title_coverage)} — too sparse; DO NOT discuss job titles)`
-  }
-- Top industries: ${
-    industryOk
-      ? JSON.stringify(breakdowns.industries) + ` (coverage ${pct(breakdowns.industry_coverage)})`
-      : `unavailable (coverage ${pct(breakdowns.industry_coverage)} — too sparse; DO NOT discuss industries)`
-  }`;
+- Top job titles: ${gated("job titles", breakdowns.titles, breakdowns.title_coverage)}
+- Top industries: ${gated("industries", breakdowns.industries, breakdowns.industry_coverage)}
+- Top company sizes: ${gated("company sizes", breakdowns.company_sizes, breakdowns.company_size_coverage)}
+- Top locations: ${gated("locations", breakdowns.locations, breakdowns.location_coverage)}`;
 
   const systemPrompt = `You are a B2B outbound sales analyst. Write a brief, FACTUAL analysis of who replied this period, grounded strictly in the responder breakdowns below. Do not spin or force positivity — report what the data shows.
 
 Produce two outputs:
 
-1. "analysis": ONE short paragraph (3–5 sentences), plain text (no markdown headers/bullets). Analyze the PEOPLE WHO REPLIED across up to three dimensions, in this priority order:
+1. "analysis": ONE short paragraph (3–5 sentences), plain text (no markdown headers/bullets). Characterize WHO IS BEING REACHED and WHO REPLIED, across up to five dimensions, in this priority order:
    (a) reply-type / intent breakdown — always discuss this; cite real counts (e.g. "of 18 replies, 7 were interested and 4 needs-more-info").
    (b) top job titles of responders — discuss ONLY if provided below (not marked unavailable), citing counts (e.g. "11 of 18 interested replies came from Operations titles").
    (c) top industries of responders — discuss ONLY if provided below.
-   Rules: Use ONLY the numbers in the breakdowns. NEVER invent titles, industries, or counts. If a dimension is marked "unavailable", do not mention it at all — lean on the reply-type breakdown instead. If total responders is very low, say so plainly and keep it to what the intent mix shows.
+   (d) top company sizes of responders — discuss ONLY if provided below.
+   (e) top locations of responders — discuss ONLY if provided below.
+   Rules: Use ONLY the numbers in the breakdowns. NEVER invent titles, industries, company sizes, locations, or counts. If a dimension is marked "unavailable", do not mention it at all. Always lead with the reply-type breakdown; weave in whichever enriched dimensions (title/industry/company size/location) are available. If total responders is very low, say so plainly and keep it to what the intent mix shows.
 
 2. "priorities": an array of AT MOST TWO short imperative-voice to-do strings. Never more than two.
    - Priority 1 is derived from the overall campaign stats.
@@ -1417,6 +1429,15 @@ Deno.serve(async (req) => {
       intent: breakdowns.intent,
       title_coverage: breakdowns.title_coverage,
       industry_coverage: breakdowns.industry_coverage,
+      company_size_coverage: breakdowns.company_size_coverage,
+      location_coverage: breakdowns.location_coverage,
+      // Populated counts (out of total) so coverage reads as "X of N".
+      populated: {
+        title: Math.round(breakdowns.title_coverage * breakdowns.total),
+        industry: Math.round(breakdowns.industry_coverage * breakdowns.total),
+        company_size: Math.round(breakdowns.company_size_coverage * breakdowns.total),
+        location: Math.round(breakdowns.location_coverage * breakdowns.total),
+      },
     });
 
     // ---- Claude ----
