@@ -150,6 +150,7 @@ interface UnifiedContact {
   addedAt?: string;          // remapped FROM v3 addingDate
   industry?: string;
   companySize?: string;
+  domain?: string;
   city?: string;
   state?: string;
   country?: string;
@@ -282,6 +283,86 @@ async function fetchSequenceContactsV3(
 //   - Top-level v3 booleans (e.g. contact.replied)        — speculative
 //   - Nested status object (legacy shape)                 — defensive
 //   - Defaults to false                                   — safe under uncertainty
+// ── Firmographic extraction from Reply.io customFields ─────────────────────
+// Reply.io delivers industry / company size / location as user-defined
+// customFields ({key,value}[]), NOT top-level contact fields — and key names
+// vary per account. Match keys case-insensitively against alias sets. Company
+// location is PREFERRED over personal location. Any unmapped key is collected
+// (logged once per sync) so we can extend the aliases.
+const unmappedCustomFieldKeys = new Set<string>();
+
+const normKey = (k: string) => k.trim().toLowerCase().replace(/\s+/g, " ").replace(/[_-]+/g, " ").trim();
+
+const INDUSTRY_ALIASES = new Set(["industry", "company industry", "vertical", "sector"].map(normKey));
+const COMPANY_SIZE_ALIASES = new Set(
+  ["company size", "employees", "employee count", "number of employees", "no of employees",
+   "size", "headcount", "company headcount", "employee range", "company size range", "employees count"].map(normKey),
+);
+const COMPANY_CITY_ALIASES = new Set(["company city", "hq city", "headquarters city"].map(normKey));
+const COMPANY_STATE_ALIASES = new Set(["company state", "hq state", "headquarters state", "company region"].map(normKey));
+const COMPANY_COUNTRY_ALIASES = new Set(["company country", "hq country", "headquarters country"].map(normKey));
+const COMPANY_LOCATION_ALIASES = new Set(
+  ["company location", "hq", "headquarters", "hq location", "company hq", "company address", "company headquarters"].map(normKey),
+);
+const PERSONAL_CITY_ALIASES = new Set(["city"].map(normKey));
+const PERSONAL_STATE_ALIASES = new Set(["state", "region", "province"].map(normKey));
+const PERSONAL_COUNTRY_ALIASES = new Set(["country"].map(normKey));
+
+const ALL_ALIAS_SETS = [
+  INDUSTRY_ALIASES, COMPANY_SIZE_ALIASES, COMPANY_CITY_ALIASES, COMPANY_STATE_ALIASES,
+  COMPANY_COUNTRY_ALIASES, COMPANY_LOCATION_ALIASES, PERSONAL_CITY_ALIASES,
+  PERSONAL_STATE_ALIASES, PERSONAL_COUNTRY_ALIASES,
+];
+
+interface Firmographics {
+  industry?: string;
+  companySize?: string;
+  city?: string;
+  state?: string;
+  country?: string;
+}
+
+function extractFirmographics(customFields: Array<{ key?: string; value?: string }> | undefined): Firmographics {
+  if (!Array.isArray(customFields) || customFields.length === 0) return {};
+  // Normalized key → value (first non-empty wins).
+  const map = new Map<string, string>();
+  for (const f of customFields) {
+    const k = typeof f?.key === "string" ? normKey(f.key) : "";
+    const v = typeof f?.value === "string" ? f.value.trim() : "";
+    if (!k) continue;
+    if (v && !map.has(k)) map.set(k, v);
+    // Track keys that match NO alias set — for extending the alias list.
+    if (!ALL_ALIAS_SETS.some((s) => s.has(k))) unmappedCustomFieldKeys.add(k);
+  }
+  const pick = (aliases: Set<string>): string | undefined => {
+    for (const [k, v] of map) if (aliases.has(k) && v) return v;
+    return undefined;
+  };
+
+  const industry = pick(INDUSTRY_ALIASES);
+  const companySize = pick(COMPANY_SIZE_ALIASES);
+
+  // Location: prefer COMPANY over personal. If company city/state/country exist
+  // use them; else a combined company-location string → city; else personal.
+  const cCity = pick(COMPANY_CITY_ALIASES);
+  const cState = pick(COMPANY_STATE_ALIASES);
+  const cCountry = pick(COMPANY_COUNTRY_ALIASES);
+  let city: string | undefined, state: string | undefined, country: string | undefined;
+  if (cCity || cState || cCountry) {
+    city = cCity; state = cState; country = cCountry;
+  } else {
+    const combined = pick(COMPANY_LOCATION_ALIASES);
+    if (combined) {
+      city = combined; // store the whole company-location string; analysis buckets on it
+    } else {
+      city = pick(PERSONAL_CITY_ALIASES);
+      state = pick(PERSONAL_STATE_ALIASES);
+      country = pick(PERSONAL_COUNTRY_ALIASES);
+    }
+  }
+  return { industry, companySize, city, state, country };
+}
+
 function v3ToUnified(contact: V3Contact): UnifiedContact {
   const toBool = (val: unknown): boolean => {
     if (typeof val === "boolean") return val;
@@ -305,6 +386,10 @@ function v3ToUnified(contact: V3Contact): UnifiedContact {
   const hasEmailActivity = opened || replied || clicked;
   const delivered = deliveredExplicit || hasEmailActivity;
 
+  // Firmographics come from customFields (varying key names), not top-level —
+  // extract them and prefer over the (usually-empty) top-level fields.
+  const fg = extractFirmographics(contact.customFields);
+
   return {
     id: contact.id,
     email: contact.email,
@@ -313,11 +398,11 @@ function v3ToUnified(contact: V3Contact): UnifiedContact {
     title: contact.title,
     company: contact.company,
     addedAt: contact.addingDate,         // ← REMAP: v3 'addingDate' → UnifiedContact 'addedAt'
-    industry: contact.industry,
-    companySize: contact.companySize,
-    city: contact.city,
-    state: contact.state,
-    country: contact.country,
+    industry: fg.industry ?? contact.industry,
+    companySize: fg.companySize ?? contact.companySize,
+    city: fg.city ?? contact.city,
+    state: fg.state ?? contact.state,
+    country: fg.country ?? contact.country,
     phone: contact.phone,
     linkedInProfile: contact.linkedInUrl, // ← REMAP: v3 'linkedInUrl' → UnifiedContact 'linkedInProfile'
     delivered,
@@ -360,12 +445,63 @@ function computeEngagementStats(contacts: UnifiedContact[]): EngagementStats {
   return { deliveredCount, repliesCount, opensCount, clicksCount, bouncesCount, optedOutCount };
 }
 
+// ── Firmographic enrichment from the bulk /v3/contacts list ────────────────
+// The sequence roster (/v3/sequences/{id}/contacts) is lean — no firmographics.
+// The workspace list GET /v3/contacts DOES carry industry/companySize/domain/
+// location per item (top/skip, max top=1000). Fetch it once, build lookup maps
+// by contact id + email, and enrich the roster. Page-capped so a huge workspace
+// degrades gracefully (logs if capped) rather than looping forever.
+interface Firmo { industry?: string; companySize?: string; domain?: string; city?: string; state?: string; country?: string }
+const cleanStr = (v: unknown) => (typeof v === "string" && v.trim() && v.trim() !== "Empty" ? v.trim() : undefined);
+
+async function fetchWorkspaceFirmographics(
+  apiKey: string,
+): Promise<{ byId: Map<string, Firmo>; byEmail: Map<string, Firmo>; total: number; capped: boolean }> {
+  const byId = new Map<string, Firmo>();
+  const byEmail = new Map<string, Firmo>();
+  const PAGE = 1000;
+  const MAX_PAGES = 50; // 50k contacts cap
+  let total = 0;
+  let capped = false;
+  let page = 0;
+  for (; page < MAX_PAGES; page++) {
+    let items: any[] = [];
+    try {
+      const resp = await fetchV3WithRetry<any>(`/contacts?top=${PAGE}&skip=${page * PAGE}`, apiKey);
+      items = Array.isArray(resp?.items) ? resp.items : Array.isArray(resp) ? resp : [];
+    } catch (e) {
+      console.warn(`[sync-reply-contacts] workspace /contacts page ${page} failed: ${e instanceof Error ? e.message : String(e)} — using what we have`);
+      break;
+    }
+    for (const c of items) {
+      const firmo: Firmo = {
+        industry: cleanStr(c.industry),
+        companySize: cleanStr(c.companySize),
+        domain: cleanStr(c.domain),
+        city: cleanStr(c.city),
+        state: cleanStr(c.state),
+        country: cleanStr(c.country),
+      };
+      if (c.id !== undefined && c.id !== null) byId.set(String(c.id), firmo);
+      if (typeof c.email === "string" && c.email.trim()) byEmail.set(c.email.trim().toLowerCase(), firmo);
+    }
+    total += items.length;
+    if (items.length < PAGE) break;
+  }
+  if (page >= MAX_PAGES) capped = true;
+  console.log(`[sync-reply-contacts] workspace firmographics: ${total} contacts across ${page + 1} page(s)${capped ? " (CAPPED — some contacts not enriched)" : ""}`);
+  return { byId, byEmail, total, capped };
+}
+
 Deno.serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
 
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
+
+  // Reset the per-run unmapped-customField-key collector.
+  unmappedCustomFieldKeys.clear();
 
   try {
     const authHeader = req.headers.get("Authorization");
@@ -471,6 +607,31 @@ Deno.serve(async (req) => {
       }
     }
     const contacts = Array.from(contactsMap.values());
+
+    // Enrich firmographics from the bulk workspace list (the roster endpoint
+    // omits them). One paginated pull, matched by contact id then email; the
+    // bulk value wins, else keep whatever v3ToUnified already had (customFields
+    // fallback). Bulk fetch errors degrade to no-enrichment, never fail the sync.
+    try {
+      const { byId, byEmail } = await fetchWorkspaceFirmographics(apiKey);
+      let enriched = 0;
+      for (const c of contacts) {
+        const f =
+          (c.id !== undefined && c.id !== null ? byId.get(String(c.id)) : undefined) ??
+          (c.email ? byEmail.get(c.email.toLowerCase()) : undefined);
+        if (!f) continue;
+        if (f.industry) c.industry = f.industry;
+        if (f.companySize) c.companySize = f.companySize;
+        if (f.domain) c.domain = f.domain;
+        if (f.city) c.city = f.city;
+        if (f.state) c.state = f.state;
+        if (f.country) c.country = f.country;
+        if (f.industry || f.companySize || f.city || f.state || f.country || f.domain) enriched++;
+      }
+      console.log(`[sync-reply-contacts] firmographics enriched ${enriched}/${contacts.length} roster contacts for sequence ${externalCampaignId}`);
+    } catch (e) {
+      console.warn(`[sync-reply-contacts] firmographic enrichment skipped: ${e instanceof Error ? e.message : String(e)}`);
+    }
     console.log(`Total contacts to sync: ${contacts.length} (source: v3 /contacts + client-side sequence filter)`);
 
     // Compute engagement stats from contacts
@@ -516,6 +677,7 @@ Deno.serve(async (req) => {
           updated_at: new Date().toISOString(),
           industry: contact.industry || null,
           company_size: contact.companySize && contact.companySize !== "Empty" ? contact.companySize : null,
+          domain: contact.domain || null,
           city: contact.city || null,
           state: contact.state || null,
           country: contact.country || null,
@@ -620,6 +782,13 @@ Deno.serve(async (req) => {
       .eq("id", campaignId);
 
     console.log(`Contacts sync complete: ${contactsSynced} synced, ${contactsFailed} failed`);
+    // Surface customFields keys we did NOT map to a firmographic — so the alias
+    // sets can be extended to whatever this client actually uses.
+    if (unmappedCustomFieldKeys.size > 0) {
+      console.log(
+        `[sync-reply-contacts] Unmapped customField keys (extend aliases if any are firmographic): ${JSON.stringify([...unmappedCustomFieldKeys].sort())}`,
+      );
+    }
     console.log(`Campaign stats updated: peopleCount=${peopleCount} (engagement counts preserved from prior values)`);
 
     // --- Agent Leads Population Block ---
