@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Loader2, CheckCircle, Linkedin, Mail } from 'lucide-react';
+import { LinkedInProfileLink } from '@/components/LinkedInProfileLink';
 import { cn } from '@/lib/utils';
 import {
   useAgentInboxData,
@@ -131,21 +132,39 @@ export function AgentInbox() {
             </div>
           ) : (
             leads.map((lead) => (
-              <button
+              // role="button" rather than <button>: this row now contains the
+              // LinkedIn <a>, and an anchor nested in a button is invalid HTML.
+              <div
                 key={lead.id}
+                role="button"
+                tabIndex={0}
                 onClick={() => handleSelectLead(lead)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    handleSelectLead(lead);
+                  }
+                }}
                 className={cn(
-                  'w-full text-left px-4 py-3 border-b transition-colors hover:bg-muted/50',
+                  'w-full text-left px-4 py-3 border-b transition-colors hover:bg-muted/50 cursor-pointer',
+                  'focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary',
                   selectedLead?.id === lead.id && 'bg-muted'
                 )}
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <div className="font-medium text-sm truncate">
-                      {lead.full_name}
-                      {lead.company && (
-                        <span className="text-muted-foreground font-normal"> · {lead.company}</span>
-                      )}
+                    <div className="font-medium text-sm truncate flex items-center gap-1.5">
+                      <span className="truncate">
+                        {lead.full_name}
+                        {lead.company && (
+                          <span className="text-muted-foreground font-normal"> · {lead.company}</span>
+                        )}
+                      </span>
+                      {/* Next to the name rather than folded into ChannelBadge:
+                          that badge labels the CHANNEL (and can read
+                          "multichannel"), so making it the profile link would
+                          conflate two different meanings. */}
+                      <LinkedInProfileLink url={lead.linkedin_url} />
                     </div>
                     {lead.job_title && (
                       <p className="text-xs text-muted-foreground truncate">{lead.job_title}</p>
@@ -193,7 +212,7 @@ export function AgentInbox() {
                     {lead.last_reply_text}
                   </p>
                 )}
-              </button>
+              </div>
             ))
           )}
         </div>

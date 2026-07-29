@@ -25,6 +25,7 @@ import {
   MessageSquare,
   Search,
 } from 'lucide-react';
+import { LinkedInProfileLink } from '@/components/LinkedInProfileLink';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuthStore } from '@/stores/authStore';
 
@@ -326,6 +327,8 @@ function ResponderRowView({
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-semibold text-sm truncate">{name}</span>
+            {/* Client-facing: exposing the prospect's profile here is intended. */}
+            <LinkedInProfileLink url={lead.linkedin_url} />
             <ChannelPill channel={lead.channel} />
             <IntentBadge intent={lead.intent} />
           </div>
