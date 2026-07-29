@@ -727,49 +727,138 @@ async function fetchReplyIoStats(
 }
 
 // ---- Responder breakdowns -------------------------------------------------
-// Aggregate the PERIOD'S responders by (1) reply intent, (2) top job titles,
-// (3) top industries — the concrete substance the analysis is grounded in.
-// intent + job_title live on agent_leads; industry is joined from
-// synced_contacts (by lower(email) or linkedin_url). Coverage is computed per
-// dimension so the prompt can degrade gracefully when title/industry is sparse.
+// Aggregate the PERIOD'S responders by (1) reply intent, (2) job titles,
+// (3) industry / company size / location — the concrete substance the analysis
+// is grounded in. intent lives on agent_leads; job title comes from the lead
+// and falls back to synced_contacts; industry/size/location are joined from
+// synced_contacts (by lower(email) or linkedin_url).
+//
+// At weekly scale a period has a handful of replies, so every dimension is
+// reported IN FULL (every distinct value, with count + % of the replies that
+// have that field). Nothing is truncated to a top-N and nothing is suppressed
+// by a coverage gate — instead each dimension carries a `missing` count so the
+// prompt can state "no industry on 3 of the 4 replies" rather than go silent.
 
-interface Breakdown {
-  total: number; // responders in the period
-  intent: Record<string, number>; // counts per intent (incl. 'unknown')
-  intent_classified: number; // responders with a real (non-unknown) intent
-  titles: { name: string; count: number }[]; // top titles, desc
-  title_coverage: number; // 0..1 share of responders with a title
-  industries: { name: string; count: number }[]; // top industries, desc
-  industry_coverage: number; // 0..1 share with an industry (via join)
-  company_sizes: { name: string; count: number }[]; // top company sizes, desc
-  company_size_coverage: number; // 0..1 share with a company size (via join)
-  locations: { name: string; count: number }[]; // top locations, desc
-  location_coverage: number; // 0..1 share with a location (via join)
+interface Dimension {
+  items: { name: string; count: number; pct: number }[]; // ALL distinct, desc
+  known: number; // replies where this field is populated
+  missing: number; // replies where it is not
 }
 
-// Coverage gates: only surface title/industry when meaningfully populated, so
-// the model never invents a pattern from a handful of rows.
-const COVERAGE_MIN = 0.4; // ≥40% of responders have the field
-const COVERAGE_MIN_COUNT = 5; // and at least this many non-null
-const TOP_N = 5;
+interface Breakdown {
+  total: number; // replies in the period
+  intent: Record<string, number>; // counts per intent (incl. 'unknown')
+  intent_classified: number; // replies with a real (non-unknown) intent
+  titles: Dimension;
+  industries: Dimension;
+  company_sizes: Dimension;
+  locations: Dimension;
+}
 
-function topCounts(values: (string | null | undefined)[]): {
-  top: { name: string; count: number }[];
-  nonNull: number;
-} {
-  const counts = new Map<string, { name: string; count: number }>();
-  let nonNull = 0;
+// Title normalization ------------------------------------------------------
+// "Director of Talent Acquisition", "Director Talent Acquisition" and
+// "Director, Talent Acquisition" are one title. Collapse by: strip accents and
+// punctuation, expand common abbreviations, drop connective filler, then SORT
+// the remaining words — so word order ("Director of Engineering" vs
+// "Engineering Director") does not split a bucket either. The bucket displays
+// its most frequently written variant, not the normalized key.
+const TITLE_FILLER = new Set([
+  "of", "the", "for", "and", "at", "to", "a", "an", "in", "on",
+]);
+const TITLE_ABBREV: Record<string, string> = {
+  vp: "vice president",
+  svp: "senior vice president",
+  evp: "executive vice president",
+  avp: "assistant vice president",
+  ceo: "chief executive officer",
+  coo: "chief operating officer",
+  cfo: "chief financial officer",
+  cto: "chief technology officer",
+  cio: "chief information officer",
+  cmo: "chief marketing officer",
+  cro: "chief revenue officer",
+  chro: "chief human resources officer",
+  hr: "human resources",
+  sr: "senior",
+  snr: "senior",
+  jr: "junior",
+  dir: "director",
+  mgr: "manager",
+  mgmt: "management",
+  exec: "executive",
+  asst: "assistant",
+  ops: "operations",
+};
+
+function titleKey(raw: string): string {
+  const words = raw
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "") // strip accents
+    .replace(/[^a-z0-9]+/g, " ") // commas, slashes, hyphens, & → space
+    .trim()
+    .split(/\s+/)
+    .flatMap((w) => (TITLE_ABBREV[w] ?? w).split(" "))
+    .filter((w) => w && !TITLE_FILLER.has(w));
+  return [...words].sort().join(" ");
+}
+
+// Per-dimension cap in the prompt. Above this, the long tail collapses into a
+// "+N more" note so a 23-distinct-title week does not become a 20-item run-on
+// sentence. The breakdown OBJECT still carries every value (the edge log gets
+// the full list); only what is handed to the model is trimmed.
+const DIM_MAX_ITEMS = 8;
+
+// Industry / company size / location need only whitespace+case folding —
+// splitting on punctuation would mangle size buckets like "11-50".
+function plainKey(raw: string): string {
+  return raw.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+// How many words start with a capital — used only to pick the nicest-looking
+// spelling when two variants are equally common.
+function capScore(s: string): number {
+  return s.split(/\s+/).filter((w) => /^[A-Z]/.test(w)).length;
+}
+
+// Count every distinct value. `pct` is the share of the replies that HAVE this
+// field (not of all replies) — so a dimension's percentages sum to 100 and the
+// `missing` count carries the rest of the story.
+function tally(
+  values: (string | null | undefined)[],
+  keyOf: (s: string) => string,
+): Dimension {
+  const buckets = new Map<string, { count: number; variants: Map<string, number> }>();
+  let known = 0;
   for (const raw of values) {
-    const v = (raw ?? "").trim();
+    const v = (raw ?? "").replace(/\s+/g, " ").trim();
     if (!v) continue;
-    nonNull++;
-    const key = v.toLowerCase();
-    const cur = counts.get(key);
-    if (cur) cur.count++;
-    else counts.set(key, { name: v, count: 1 }); // display first-seen casing
+    known++;
+    const k = keyOf(v) || v.toLowerCase();
+    let b = buckets.get(k);
+    if (!b) {
+      b = { count: 0, variants: new Map() };
+      buckets.set(k, b);
+    }
+    b.count++;
+    b.variants.set(v, (b.variants.get(v) ?? 0) + 1);
   }
-  const top = [...counts.values()].sort((a, b) => b.count - a.count).slice(0, TOP_N);
-  return { top, nonNull };
+  const items = [...buckets.values()]
+    .map((b) => ({
+      // Display the most-written spelling. Ties go to the better-capitalized
+      // variant ("Real Estate" over "real estate") and then alphabetically, so
+      // the label is both client-presentable and stable across runs.
+      name: [...b.variants.entries()]
+        .sort((a, z) =>
+          z[1] - a[1] ||
+          capScore(z[0]) - capScore(a[0]) ||
+          a[0].localeCompare(z[0])
+        )[0][0],
+      count: b.count,
+      pct: known ? Math.round((b.count / known) * 100) : 0,
+    }))
+    .sort((a, z) => z.count - a.count || a.name.localeCompare(z.name));
+  return { items, known, missing: values.length - known };
 }
 
 // deno-lint-ignore no-explicit-any
@@ -781,27 +870,46 @@ async function buildResponderBreakdowns(
 ): Promise<Breakdown> {
   // 1. Period responders (paginated). A responder = a lead whose reply landed
   //    in the window.
+  //
+  //    CRITICAL: last_reply_at alone is NOT proof of a reply. Pipeline-mirror
+  //    rows backfilled from Reply.io (external_id 'backfill:*',
+  //    inbox_status 'mirrored') are stamped with the BACKFILL RUN TIME, so a
+  //    single import drops hundreds of never-replied leads into whichever
+  //    window contains that timestamp — they carry no reply text and no
+  //    intent, and they were the source of the "531 unknown intent" line.
+  //    Require actual reply evidence: reply text, or an intent that
+  //    classify-reply could only have set by reading a real inbound message.
+  //    (Filtering on external_id/inbox_status instead would wrongly drop
+  //    genuinely-backfilled replies, which DO carry text + intent.)
   const rows: {
     intent: string | null;
     job_title: string | null;
     email: string | null;
     linkedin_url: string | null;
+    last_reply_text: string | null;
   }[] = [];
   const startIso = startDate.toISOString();
   const endIso = endDate.toISOString();
   for (let page = 0; page < 25; page++) {
     const { data, error } = await supabase
       .from("agent_leads")
-      .select("intent, job_title, email, linkedin_url")
+      .select("intent, job_title, email, linkedin_url, last_reply_text")
       .eq("user_id", userId)
       .gte("last_reply_at", startIso)
       .lte("last_reply_at", endIso)
+      .or("last_reply_text.not.is.null,intent.not.is.null")
       .range(page * 1000, page * 1000 + 999);
     if (error) {
       logStep("Responder breakdown fetch failed", { error: error.message });
       break;
     }
-    rows.push(...(data ?? []));
+    // Re-check in JS: PostgREST's not.is.null passes empty strings through.
+    rows.push(
+      ...(data ?? []).filter(
+        (r: { last_reply_text: string | null; intent: string | null }) =>
+          (r.last_reply_text ?? "").trim() !== "" || (r.intent ?? "").trim() !== "",
+      ),
+    );
     if (!data || data.length < 1000) break;
   }
 
@@ -816,10 +924,8 @@ async function buildResponderBreakdowns(
     if (key !== "unknown") intentClassified++;
   }
 
-  // Titles (on the lead).
-  const t = topCounts(rows.map((r) => r.job_title));
-
-  // Enrich responders from synced_contacts (industry, company size, location).
+  // Enrich responders from synced_contacts (title, industry, company size,
+  // location).
   // Match by email OR linkedin_url — LinkedIn/masked-email responders often
   // have no email match but do carry a linkedin_url, so a single pass fetches
   // all fields and merges per lead (email match preferred, linkedin fallback).
@@ -832,7 +938,7 @@ async function buildResponderBreakdowns(
     .eq("user_id", userId);
   const teamIds = [...new Set((memberships ?? []).map((m: { team_id: string }) => m.team_id).filter(Boolean))];
 
-  type Contact = { industry: string; company_size: string; location: string };
+  type Contact = { job_title: string; industry: string; company_size: string; location: string };
   const clean = (v: unknown) => (typeof v === "string" ? v.trim() : "");
   const toLocation = (c: { city?: unknown; state?: unknown; country?: unknown }) => {
     const parts = [clean(c.city), clean(c.state)].filter(Boolean);
@@ -845,8 +951,9 @@ async function buildResponderBreakdowns(
     const linkedins = [...new Set(rows.map((r) => r.linkedin_url).filter(Boolean) as string[])];
     const chunk = <T,>(a: T[], n: number) =>
       Array.from({ length: Math.ceil(a.length / n) }, (_, i) => a.slice(i * n, i * n + n));
-    const SEL = "email, linkedin_url, industry, company_size, city, state, country";
+    const SEL = "email, linkedin_url, job_title, industry, company_size, city, state, country";
     const toContact = (c: Record<string, unknown>): Contact => ({
+      job_title: clean(c.job_title),
       industry: clean(c.industry),
       company_size: clean(c.company_size),
       location: toLocation(c),
@@ -868,22 +975,23 @@ async function buildResponderBreakdowns(
     return e ?? (r.linkedin_url ? byLinkedin.get(r.linkedin_url) : undefined) ?? null;
   });
 
-  const ind = topCounts(contacts.map((c) => c?.industry));
-  const size = topCounts(contacts.map((c) => c?.company_size));
-  const loc = topCounts(contacts.map((c) => c?.location));
+  // Title: prefer the lead's own job_title, fall back to the synced contact's.
+  // On Reply.io-sourced leads agent_leads.job_title is usually null while the
+  // synced contact carries the title, so without this fallback the weekly title
+  // breakdown reads as empty for most clients.
+  const titleValues = rows.map((r, i) => {
+    const own = (r.job_title ?? "").trim();
+    return own || contacts[i]?.job_title || "";
+  });
 
   return {
     total,
     intent,
     intent_classified: intentClassified,
-    titles: t.top,
-    title_coverage: total ? t.nonNull / total : 0,
-    industries: ind.top,
-    industry_coverage: total ? ind.nonNull / total : 0,
-    company_sizes: size.top,
-    company_size_coverage: total ? size.nonNull / total : 0,
-    locations: loc.top,
-    location_coverage: total ? loc.nonNull / total : 0,
+    titles: tally(titleValues, titleKey),
+    industries: tally(contacts.map((c) => c?.industry), plainKey),
+    company_sizes: tally(contacts.map((c) => c?.company_size), plainKey),
+    locations: tally(contacts.map((c) => c?.location), plainKey),
   };
 }
 
@@ -903,45 +1011,69 @@ async function callClaude(
   stats: Record<string, unknown>,
   breakdowns: Breakdown,
 ): Promise<ClaudeResult> {
-  // Build the responder-breakdown block, gating each enriched dimension on
-  // coverage so the model never fabricates a pattern from sparse data.
-  const pct = (n: number) => `${Math.round(n * 100)}%`;
-  const gated = (
-    label: string,
-    items: { name: string; count: number }[],
-    coverage: number,
-  ) => {
-    const ok =
-      items.length > 0 &&
-      coverage >= COVERAGE_MIN &&
-      items.reduce((s, x) => s + x.count, 0) >= COVERAGE_MIN_COUNT;
-    return ok
-      ? `${JSON.stringify(items)} (coverage ${pct(coverage)})`
-      : `unavailable (coverage ${pct(coverage)} — too sparse; DO NOT discuss ${label})`;
+  // Build the responder-breakdown block.
+  //
+  // Two shaping rules, both about not wasting the client's attention:
+  //   * A dimension with ZERO populated values is omitted entirely — a line
+  //     saying "no locations on record for any of the 27 replies" tells the
+  //     client nothing. A dimension that is only PARTLY populated still gets
+  //     its line plus a missing-count note, because there the gap is real
+  //     information about the enrichment.
+  //   * A dimension is capped at the top DIM_MAX_ITEMS by count with a
+  //     "+N more" tail. Most weeks list everything; only the long tail of
+  //     near-unique values (27 replies / 23 distinct titles) gets trimmed.
+  const linesFor = (label: string, d: Dimension): string[] => {
+    if (d.known === 0) return []; // omit the dimension entirely
+    const shown = d.items.slice(0, DIM_MAX_ITEMS);
+    const rest = d.items.length - shown.length;
+    const list = shown.map((i) => `${i.name} — ${i.count} (${i.pct}%)`).join("; ");
+    // Count the replies behind the tail, so "+N more" is not mistaken for
+    // "N more replies".
+    const restReplies = d.items.slice(DIM_MAX_ITEMS).reduce((s, i) => s + i.count, 0);
+    const tail = rest > 0
+      ? `; +${rest} more (${restReplies} ${restReplies === 1 ? "reply" : "replies"}, each with a distinct value)`
+      : "";
+    // Phrased "no X on record for N of M" so it reads correctly at N = 1 too.
+    const gap = d.missing > 0
+      ? ` [no ${label.toLowerCase().replace(/s$/, "")} on record for ${d.missing} of ${breakdowns.total} replies]`
+      : "";
+    return [`- ${label} (${d.known} of ${breakdowns.total} replies have this): ${list}${tail}${gap}`];
   };
-  const breakdownBlock = `Responder breakdowns for the period (${breakdowns.total} responders):
-- Reply intent (always available): ${JSON.stringify(breakdowns.intent)} — ${breakdowns.intent_classified} classified.
-- Top job titles: ${gated("job titles", breakdowns.titles, breakdowns.title_coverage)}
-- Top industries: ${gated("industries", breakdowns.industries, breakdowns.industry_coverage)}
-- Top company sizes: ${gated("company sizes", breakdowns.company_sizes, breakdowns.company_size_coverage)}
-- Top locations: ${gated("locations", breakdowns.locations, breakdowns.location_coverage)}`;
+  const dimLines = [
+    ...linesFor("Titles", breakdowns.titles),
+    ...linesFor("Industries", breakdowns.industries),
+    ...linesFor("Company sizes", breakdowns.company_sizes),
+    ...linesFor("Locations", breakdowns.locations),
+  ];
+  const breakdownBlock = `Reply breakdowns for THIS PERIOD ONLY (${breakdowns.total} replies in the window):
+- Reply intent: ${JSON.stringify(breakdowns.intent)} — ${breakdowns.intent_classified} of ${breakdowns.total} classified.
+${dimLines.length ? dimLines.join("\n") : "(No title, industry, company size or location is on record for any reply this period.)"}
 
-  const systemPrompt = `You are a B2B outbound sales analyst. Write a brief, FACTUAL analysis of who replied this period, grounded strictly in the responder breakdowns below. Do not spin or force positivity — report what the data shows.
+Percentages are the share of the replies that HAVE that field, so each dimension's percentages sum to ~100. Near-duplicate job titles have already been merged upstream — treat each listed title as one distinct title and do NOT merge or re-group them further. A dimension that does not appear above has NO data at all this period.`;
+
+  const systemPrompt = `You are a B2B outbound sales analyst. Write a brief, FACTUAL summary of who replied this period, grounded strictly in the breakdowns below. Report what the data shows — no spin, no forced positivity, no strategic narrative the numbers do not support.
 
 Produce two outputs:
 
-1. "analysis": ONE short paragraph (3–5 sentences), plain text (no markdown headers/bullets). Characterize WHO IS BEING REACHED and WHO REPLIED, across up to five dimensions, in this priority order:
-   (a) reply-type / intent breakdown — always discuss this; cite real counts (e.g. "of 18 replies, 7 were interested and 4 needs-more-info").
-   (b) top job titles of responders — discuss ONLY if provided below (not marked unavailable), citing counts (e.g. "11 of 18 interested replies came from Operations titles").
-   (c) top industries of responders — discuss ONLY if provided below.
-   (d) top company sizes of responders — discuss ONLY if provided below.
-   (e) top locations of responders — discuss ONLY if provided below.
-   Rules: Use ONLY the numbers in the breakdowns. NEVER invent titles, industries, company sizes, locations, or counts. If a dimension is marked "unavailable", do not mention it at all. Always lead with the reply-type breakdown; weave in whichever enriched dimensions (title/industry/company size/location) are available. If total responders is very low, say so plainly and keep it to what the intent mix shows.
+1. "analysis": TWO short paragraphs, separated by one blank line, in plain prose (no markdown headers, no bullet lists).
 
-2. "priorities": an array of AT MOST TWO short imperative-voice to-do strings. Never more than two.
-   - Priority 1 is derived from the overall campaign stats.
-   - Priority 2 is derived from the responder patterns in the analysis (intent mix, or a title/industry pattern if available).
-   Each one concrete, specific sentence tied to a number. If only one meaningful priority exists, return just one. Never more than two.
+   Paragraph 1 — ACTIVITY SUMMARY. The reply volume for the period and the intent mix, citing real counts (e.g. "18 replies this week: 7 interested, 4 needs-more-info, 5 not-interested, 2 unclassified"). Always include this paragraph.
+
+   Paragraph 2 — WHO REPLIED. Enumerate the week's replies across the dimensions below, listing EVERY distinct value with its count and %, in the format of these examples:
+     "Titles: Director of Talent Acquisition 50% (2), VP Engineering 25% (1), Head of TA 25% (1). Industries: real estate 2, staffing 1, fintech 1. Company sizes: 1-10 (2), 11-50 (2)."
+   Rules for paragraph 2:
+   - Cover ONLY the dimensions that appear in the breakdowns below. A dimension that is absent has no data at all this period — say NOTHING about it, not even that it is missing.
+   - For each dimension that IS present, list every value given for it. Do NOT summarize as "mostly X" or pick a top few — this is a small weekly sample and the client wants the actual list.
+   - If a dimension's list ends in "+N more", reproduce that as a trailing "+N more" (or "and N more, each a distinct value"). NEVER invent, name or guess the values behind it.
+   - If a dimension has replies MISSING the field, say so plainly ("industry is not on record for 3 of the 4"). Never drop a present dimension silently.
+   - Use ONLY the values and numbers given below. NEVER invent, infer, or extrapolate a title, industry, company size, location or count. Do not guess an industry from a company name or a title.
+   - Reproduce each value VERBATIM as written below. Do not re-word, re-case, expand or annotate it — a company size listed as "11-50" is written "11-50", not "11-50 employees".
+   - Do not editorialize about what a pattern "signals" — with a handful of replies there is no pattern to read. State the counts.
+
+2. "priorities": an array of ONE or TWO short imperative-voice to-do strings, each a single concrete sentence tied to a number. NEVER more than two.
+   - A stats priority, derived from the aggregate campaign stats. Include it ONLY if those stats are non-zero for this period — if every stat is zero or absent, omit it rather than inventing one.
+   - A reply priority, derived from this period's reply data (the intent mix, or a title / industry / company-size observation). REQUIRED whenever the period has at least one reply — e.g. "Follow up with the 3 interested replies from Director of Talent Acquisition contacts." Never omit this one just because the aggregate stats are empty.
+   Return an empty array ONLY when the period has zero replies AND all stats are zero.
 
 Client: ${displayName}
 Range: ${range} (${toYMD(startDate)} to ${toYMD(endDate)})
@@ -1427,17 +1559,12 @@ Deno.serve(async (req) => {
     logStep("Responder breakdowns", {
       total: breakdowns.total,
       intent: breakdowns.intent,
-      title_coverage: breakdowns.title_coverage,
-      industry_coverage: breakdowns.industry_coverage,
-      company_size_coverage: breakdowns.company_size_coverage,
-      location_coverage: breakdowns.location_coverage,
-      // Populated counts (out of total) so coverage reads as "X of N".
-      populated: {
-        title: Math.round(breakdowns.title_coverage * breakdowns.total),
-        industry: Math.round(breakdowns.industry_coverage * breakdowns.total),
-        company_size: Math.round(breakdowns.company_size_coverage * breakdowns.total),
-        location: Math.round(breakdowns.location_coverage * breakdowns.total),
-      },
+      // "known of total" per dimension, plus the distinct values actually sent
+      // to the model — the whole list, since nothing is truncated any more.
+      titles: { known: breakdowns.titles.known, items: breakdowns.titles.items },
+      industries: { known: breakdowns.industries.known, items: breakdowns.industries.items },
+      company_sizes: { known: breakdowns.company_sizes.known, items: breakdowns.company_sizes.items },
+      locations: { known: breakdowns.locations.known, items: breakdowns.locations.items },
     });
 
     // ---- Claude ----
