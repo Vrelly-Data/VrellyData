@@ -18,10 +18,20 @@ export const Navbar = () => {
     <nav className="fixed top-0 left-0 right-0 z-50 backdrop-blur-xl bg-[#0f1729]/90 border-b border-white/10">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16">
+          {/* Logo. The asset is square (1000x1000), so height drives width too.
+              At the desktop h-[6.75rem] (108px) it is WIDER than the space left
+              beside the Log In / See Demo buttons on a ~390px phone: the nav row
+              measured 421px inside a 358px content box, which pushed the layout
+              viewport out to 453px. iOS then renders the whole page zoomed out,
+              clipping the logo's left edge and the See Demo button — and because
+              108px does not fit the h-16 (64px) bar either, the image box hung
+              21px BELOW the nav's bottom border, reading as a stray outline over
+              the hero. h-16 exactly fills the bar on mobile; desktop keeps h-[6.75rem]
+              exactly as it was. */}
           <img
             src={vrellyLogo}
             alt="Vrelly"
-            className="h-[6.75rem] cursor-pointer"
+            className="h-16 md:h-[6.75rem] w-auto shrink-0 cursor-pointer"
             onClick={() => navigate('/')}
           />
 

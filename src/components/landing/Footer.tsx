@@ -22,7 +22,13 @@ export const Footer = () => {
             <p className="text-sm text-slate-500">AI-powered B2B sales intelligence</p>
           </div>
 
-          <div className="flex items-center gap-8 text-sm text-slate-400">
+          {/* This row of 6 links measured 436px unwrapped — wider than a 390px
+              phone. Because nothing clipped it, it pushed the LAYOUT VIEWPORT
+              to 453px, so iOS rendered the whole page zoomed out: that is what
+              cropped the header logo and the See Demo button up in the hero.
+              flex-wrap + a tighter mobile gap keeps it inside the viewport; on
+              md+ there is ample room, so gap-8 on one line is unchanged. */}
+          <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-3 md:gap-8 text-sm text-slate-400">
             <button onClick={() => scrollToSection('features')} className="hover:text-white transition-colors">
               Features
             </button>
