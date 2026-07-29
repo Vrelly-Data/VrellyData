@@ -47,7 +47,13 @@ export const HeroSection = () => {
 
       {/* Main hero content — grows to fill, keeping the text block centered */}
       <div className="relative z-10 flex-1 flex items-center justify-center w-full">
-        <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 text-center pt-24">
+        {/* pb-32 is MOBILE ONLY. On md+ the trusted-by marquee below supplies
+            the hero's bottom breathing room via its own pb-16, but that whole
+            block is `hidden md:flex`, so on a phone the CTAs ended up just 33px
+            above where the dark hero meets the white section. Padding the
+            centered content block adds clear space below the buttons without
+            touching the md+ layout, which keeps its existing 252px. */}
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 text-center pt-24 pb-32 md:pb-0">
           {/* Badge */}
           <div className="inline-flex items-center gap-2 px-5 py-2 rounded-full bg-[#2563eb]/15 border border-[#2563eb]/30 text-[#60a5fa] text-sm font-medium mb-10 opacity-0 animate-fade-up" style={{ animationDelay: '0.1s' }}>
             <div className="w-2 h-2 rounded-full bg-[#60a5fa] animate-pulse" />
