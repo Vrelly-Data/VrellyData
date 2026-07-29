@@ -454,25 +454,121 @@ function computeEngagementStats(contacts: UnifiedContact[]): EngagementStats {
 interface Firmo { industry?: string; companySize?: string; domain?: string; city?: string; state?: string; country?: string }
 const cleanStr = (v: unknown) => (typeof v === "string" && v.trim() && v.trim() !== "Empty" ? v.trim() : undefined);
 
-async function fetchWorkspaceFirmographics(
+// Pull result. `incomplete` is TRUE whenever the walk stopped for any reason
+// other than the API telling us it was done — a page cap, an exhausted retry
+// budget, or a run out of time. It is observability only: an incomplete pull is
+// SAFE, because the write path never nulls a firmographic (see
+// applyFirmographics). Fewer contacts get enriched; none get erased.
+interface FirmoPull {
+  byId: Map<string, Firmo>;
+  byEmail: Map<string, Firmo>;
+  total: number;
+  pages: number;
+  incomplete: boolean;
+  stopReason: string;
+}
+
+const FIRMO_PAGE = 1000;
+const FIRMO_MAX_PAGES = 50; // 50k contacts
+const FIRMO_PAGE_DELAY_MS = 250; // gentle pacing; Reply.io throttles bursts
+const FIRMO_REQUEST_TIMEOUT_MS = 30_000;
+const FIRMO_MAX_ATTEMPTS = 4;
+
+// Reply.io throttles by STALLING as well as by 429 — a single page was measured
+// at 57s against a live workspace. Without a timeout one slow page can eat the
+// whole function budget, so each attempt is bounded and then retried.
+async function fetchContactsPage(
   apiKey: string,
-): Promise<{ byId: Map<string, Firmo>; byEmail: Map<string, Firmo>; total: number; capped: boolean }> {
+  skip: number,
+): Promise<{ items: any[]; hasMore: boolean | null }> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), FIRMO_REQUEST_TIMEOUT_MS);
+  try {
+    const response = await fetch(
+      `${REPLY_API_V3}/contacts?top=${FIRMO_PAGE}&skip=${skip}`,
+      {
+        headers: {
+          "Authorization": `Bearer ${apiKey}`,
+          "Accept": "application/json",
+          "Content-Type": "application/json",
+        },
+        signal: ctrl.signal,
+      },
+    );
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      const err = new Error(`Reply.io v3 API error (${response.status}): ${body.slice(0, 200)}`);
+      // Tag what the caller needs to decide retry-vs-abort, plus the server's
+      // own Retry-After when it bothers to send one.
+      (err as any).status = response.status;
+      (err as any).retryAfterMs = Number(response.headers.get("retry-after") ?? 0) * 1000;
+      throw err;
+    }
+    const body = await response.json();
+    const items = Array.isArray(body?.items) ? body.items : Array.isArray(body) ? body : [];
+    // hasMore is authoritative when present; null means "fall back to a
+    // short-page check".
+    const hasMore = body && typeof body === "object" && "hasMore" in body
+      ? Boolean(body.hasMore)
+      : null;
+    return { items, hasMore };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Retry 429 AND 5xx AND timeouts with exponential backoff. The previous
+// implementation retried only 429 and treated everything else — including a
+// transient 502 — as "the pull is finished", silently truncating the map.
+async function fetchContactsPageWithRetry(
+  apiKey: string,
+  skip: number,
+  page: number,
+): Promise<{ items: any[]; hasMore: boolean | null }> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= FIRMO_MAX_ATTEMPTS; attempt++) {
+    try {
+      return await fetchContactsPage(apiKey, skip);
+    } catch (e) {
+      lastErr = e;
+      const status = Number((e as any)?.status ?? 0);
+      const aborted = (e as any)?.name === "AbortError";
+      const retryable = aborted || status === 429 || status === 408 || status >= 500;
+      if (!retryable || attempt === FIRMO_MAX_ATTEMPTS) throw e;
+      const serverAsked = Number((e as any)?.retryAfterMs ?? 0);
+      const backoff = Math.max(serverAsked, 2000 * Math.pow(2, attempt - 1)); // 2s, 4s, 8s
+      console.warn(
+        `[sync-reply-contacts] page ${page} attempt ${attempt}/${FIRMO_MAX_ATTEMPTS} failed ` +
+        `(${aborted ? "timeout" : `HTTP ${status || "?"}`}) — retrying in ${Math.round(backoff / 1000)}s`,
+      );
+      await new Promise((r) => setTimeout(r, backoff));
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
+
+async function fetchWorkspaceFirmographics(apiKey: string): Promise<FirmoPull> {
   const byId = new Map<string, Firmo>();
   const byEmail = new Map<string, Firmo>();
-  const PAGE = 1000;
-  const MAX_PAGES = 50; // 50k contacts cap
   let total = 0;
-  let capped = false;
   let page = 0;
-  for (; page < MAX_PAGES; page++) {
-    let items: any[] = [];
+  let incomplete = false;
+  let stopReason = "exhausted";
+
+  for (; page < FIRMO_MAX_PAGES; page++) {
+    let items: any[];
+    let hasMore: boolean | null;
     try {
-      const resp = await fetchV3WithRetry<any>(`/contacts?top=${PAGE}&skip=${page * PAGE}`, apiKey);
-      items = Array.isArray(resp?.items) ? resp.items : Array.isArray(resp) ? resp : [];
+      ({ items, hasMore } = await fetchContactsPageWithRetry(apiKey, page * FIRMO_PAGE, page));
     } catch (e) {
-      console.warn(`[sync-reply-contacts] workspace /contacts page ${page} failed: ${e instanceof Error ? e.message : String(e)} — using what we have`);
+      // Retries are spent. Stop, but KEEP everything already collected and mark
+      // the pull incomplete — partial enrichment is safe by construction.
+      incomplete = true;
+      stopReason = `page ${page} failed after ${FIRMO_MAX_ATTEMPTS} attempts: ${e instanceof Error ? e.message : String(e)}`;
+      console.error(`[sync-reply-contacts] ${stopReason} — continuing with ${total} contacts already fetched`);
       break;
     }
+
     for (const c of items) {
       const firmo: Firmo = {
         industry: cleanStr(c.industry),
@@ -486,11 +582,98 @@ async function fetchWorkspaceFirmographics(
       if (typeof c.email === "string" && c.email.trim()) byEmail.set(c.email.trim().toLowerCase(), firmo);
     }
     total += items.length;
-    if (items.length < PAGE) break;
+    console.log(
+      `[sync-reply-contacts] workspace /contacts page ${page} -> ${items.length} contacts, running total ${total}` +
+      (hasMore === null ? "" : ` (hasMore=${hasMore})`),
+    );
+
+    // hasMore is the API's own signal and wins. Only when it is absent do we
+    // fall back to inferring exhaustion from a short page.
+    if (hasMore === false) break;
+    if (hasMore === null && items.length < FIRMO_PAGE) break;
+    if (items.length === 0) break; // defensive: never spin on an empty page
+
+    await new Promise((r) => setTimeout(r, FIRMO_PAGE_DELAY_MS));
   }
-  if (page >= MAX_PAGES) capped = true;
-  console.log(`[sync-reply-contacts] workspace firmographics: ${total} contacts across ${page + 1} page(s)${capped ? " (CAPPED — some contacts not enriched)" : ""}`);
-  return { byId, byEmail, total, capped };
+
+  if (page >= FIRMO_MAX_PAGES) {
+    incomplete = true;
+    stopReason = `hit the ${FIRMO_MAX_PAGES}-page cap`;
+    console.error(
+      `[sync-reply-contacts] WORKSPACE PULL CAPPED at ${FIRMO_MAX_PAGES} pages ` +
+      `(${total} contacts). Contacts beyond this point were NOT enriched this run. ` +
+      `Raise FIRMO_MAX_PAGES if this workspace is legitimately larger.`,
+    );
+  }
+
+  console.log(
+    `[sync-reply-contacts] workspace firmographics: ${total} contacts across ${Math.min(page + 1, FIRMO_MAX_PAGES)} page(s), ` +
+    `${byEmail.size} unique emails${incomplete ? ` — INCOMPLETE (${stopReason})` : ""}`,
+  );
+  return { byId, byEmail, total, pages: Math.min(page + 1, FIRMO_MAX_PAGES), incomplete, stopReason };
+}
+
+// ── Non-destructive firmographic write ────────────────────────────────────
+// Firmographics are WRITE-ONLY. This runs AFTER the roster upsert (which no
+// longer carries these columns) and issues one targeted UPDATE per contact
+// that the workspace pull actually enriched, containing ONLY the fields that
+// came back non-empty.
+//
+// Two properties this guarantees, and the reasons they are load-bearing:
+//   1. A contact missing from the bulk map is never touched — its stored
+//      firmographics survive untouched. That is what makes a partial pull safe.
+//   2. A contact present with only SOME fields updates only those fields — a
+//      contact carrying an industry but no companySize cannot null the stored
+//      companySize, because company_size is never put in the patch.
+//
+// Scoped by campaign_id + email (the roster upsert's conflict identity) AND
+// team_id, so a shared email under another client's team can never be written.
+// deno-lint-ignore no-explicit-any
+async function applyFirmographics(
+  serviceClient: any,
+  campaignId: string,
+  teamId: string,
+  contacts: UnifiedContact[],
+): Promise<{ updated: number; failed: number; skipped: number }> {
+  let updated = 0;
+  let failed = 0;
+  let skipped = 0;
+
+  for (const contact of contacts) {
+    if (!contact.email) { skipped++; continue; }
+
+    // Build the patch from non-empty values ONLY. An absent or blank field is
+    // left out of the object entirely — never set to null.
+    const patch: Record<string, string> = {};
+    const put = (col: string, val: unknown) => {
+      const v = cleanStr(val);
+      if (v) patch[col] = v;
+    };
+    put("industry", contact.industry);
+    put("company_size", contact.companySize);
+    put("domain", contact.domain);
+    put("city", contact.city);
+    put("state", contact.state);
+    put("country", contact.country);
+
+    if (Object.keys(patch).length === 0) { skipped++; continue; } // nothing learned
+
+    const { error } = await serviceClient
+      .from("synced_contacts")
+      .update(patch)
+      .eq("campaign_id", campaignId)
+      .eq("team_id", teamId)
+      .eq("email", contact.email.toLowerCase());
+
+    if (error) {
+      failed++;
+      if (failed <= 3) console.warn(`[sync-reply-contacts] firmographic update failed for ${contact.email}: ${error.message}`);
+    } else {
+      updated++;
+    }
+  }
+
+  return { updated, failed, skipped };
 }
 
 Deno.serve(async (req) => {
@@ -612,8 +795,15 @@ Deno.serve(async (req) => {
     // omits them). One paginated pull, matched by contact id then email; the
     // bulk value wins, else keep whatever v3ToUnified already had (customFields
     // fallback). Bulk fetch errors degrade to no-enrichment, never fail the sync.
+    let firmoIncomplete = false;
+    let firmoStopReason = "";
+    let firmoWorkspaceTotal = 0;
     try {
-      const { byId, byEmail } = await fetchWorkspaceFirmographics(apiKey);
+      const pull = await fetchWorkspaceFirmographics(apiKey);
+      firmoIncomplete = pull.incomplete;
+      firmoStopReason = pull.stopReason;
+      firmoWorkspaceTotal = pull.total;
+      const { byId, byEmail } = pull;
       let enriched = 0;
       for (const c of contacts) {
         const f =
@@ -630,7 +820,12 @@ Deno.serve(async (req) => {
       }
       console.log(`[sync-reply-contacts] firmographics enriched ${enriched}/${contacts.length} roster contacts for sequence ${externalCampaignId}`);
     } catch (e) {
-      console.warn(`[sync-reply-contacts] firmographic enrichment skipped: ${e instanceof Error ? e.message : String(e)}`);
+      // Enrichment is best-effort and must never fail the roster sync. With
+      // firmographics omitted from the upsert, skipping it simply leaves the
+      // stored values alone.
+      firmoIncomplete = true;
+      firmoStopReason = e instanceof Error ? e.message : String(e);
+      console.warn(`[sync-reply-contacts] firmographic enrichment skipped: ${firmoStopReason}`);
     }
     console.log(`Total contacts to sync: ${contacts.length} (source: v3 /contacts + client-side sequence filter)`);
 
@@ -661,6 +856,19 @@ Deno.serve(async (req) => {
         // events) survives. mapContactStatus / engagementData helpers
         // are retained for the future per-contact /v3/contacts/{id}/statuses
         // enrichment path but currently unused here.
+        //
+        // The SIX FIRMOGRAPHIC COLUMNS (industry, company_size, domain, city,
+        // state, country) are omitted for the same reason, and it matters far
+        // more here. They used to be written as `contact.industry || null`,
+        // which meant every contact the bulk workspace pull did not cover had
+        // its stored firmographics UPDATEd to NULL on conflict — one partial
+        // pull erased good data for the whole roster. Measured on prod: 100%
+        // of Avania's matched contacts held NULL locally while Reply.io still
+        // had an industry for every one of them.
+        //
+        // Firmographics are now WRITE-ONLY, applied afterwards by
+        // applyFirmographics() for the contacts this run actually enriched.
+        // Omitting them here is what makes an incomplete pull harmless.
         return {
           campaign_id: campaignId,
           team_id: teamId,
@@ -672,15 +880,11 @@ Deno.serve(async (req) => {
           job_title: contact.title || null,
           // status: omitted — see comment above
           // engagement_data: omitted — see comment above
+          // industry / company_size / domain / city / state / country:
+          //   omitted — see comment above; written by applyFirmographics()
           custom_fields: {},
           raw_data: contact.rawData,
           updated_at: new Date().toISOString(),
-          industry: contact.industry || null,
-          company_size: contact.companySize && contact.companySize !== "Empty" ? contact.companySize : null,
-          domain: contact.domain || null,
-          city: contact.city || null,
-          state: contact.state || null,
-          country: contact.country || null,
           phone: contact.phone || null,
           linkedin_url: contact.linkedInProfile || null,
           added_at: contact.addedAt || null,
@@ -705,6 +909,17 @@ Deno.serve(async (req) => {
         contactsFailed += batch.length;
       }
     }
+
+    // Firmographics, applied AFTER the roster upsert so the rows exist. Only
+    // contacts this run actually enriched are touched, and only with the
+    // fields that came back non-empty — nothing is ever nulled, so a partial
+    // workspace pull enriches fewer contacts rather than erasing any.
+    const firmoResult = await applyFirmographics(serviceClient, campaignId, teamId, contacts);
+    console.log(
+      `[sync-reply-contacts] firmographics written: ${firmoResult.updated} updated, ` +
+      `${firmoResult.skipped} skipped (nothing to write), ${firmoResult.failed} failed` +
+      (firmoIncomplete ? ` — workspace pull was INCOMPLETE (${firmoStopReason}); unenriched contacts kept their existing values` : ""),
+    );
 
     // Upsert replied contacts with reply text into agent_leads
     const { data: repliedContacts } = await serviceClient
@@ -969,6 +1184,19 @@ Deno.serve(async (req) => {
         // (webhook-populated) or synced_campaigns.stats (Step 3a reporting).
         mode: "roster_only",
         agentLeadsCreated,
+        // Firmographic observability. `incomplete` means the workspace pull
+        // stopped early (retries spent, page cap, or enrichment threw) and
+        // some contacts were not enriched THIS run. It never means data was
+        // lost — firmographics are write-only. Re-running the sync picks up
+        // whatever was missed.
+        firmographics: {
+          updated: firmoResult.updated,
+          skipped: firmoResult.skipped,
+          failed: firmoResult.failed,
+          workspaceContactsFetched: firmoWorkspaceTotal,
+          incomplete: firmoIncomplete,
+          ...(firmoIncomplete ? { stopReason: firmoStopReason } : {}),
+        },
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
