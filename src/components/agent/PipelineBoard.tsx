@@ -9,6 +9,8 @@
 
 import { useMemo, useState } from 'react';
 import { Linkedin, Mail, Users, Tag as TagIcon, Plus, Check } from 'lucide-react';
+import { LinkedInProfileLink } from '@/components/LinkedInProfileLink';
+import { normalizeLinkedInUrl } from '@/lib/linkedin';
 import {
   Select,
   SelectContent,
@@ -48,6 +50,9 @@ export interface BoardLead {
   full_name: string | null;
   company: string | null;
   channel: string | null;
+  // Contact's LinkedIn profile. Optional so callers that never had it still
+  // satisfy the constraint; the card renders no icon when it is absent.
+  linkedin_url?: string | null;
   pipeline_stage?: string | null;
   last_reply_at: string | null;
 }
@@ -358,12 +363,23 @@ export function PipelineBoard<T extends BoardLead>({
               ) : (
                 <>
                   {shown.map((l) => (
-                    <button
+                    // role="button" rather than a real <button>: the card holds
+                    // a LinkedIn <a>, and an anchor nested inside a button is
+                    // invalid HTML (interactive content inside interactive
+                    // content). Keyboard behaviour is preserved below.
+                    <div
                       key={l.id}
-                      type="button"
+                      role="button"
+                      tabIndex={0}
                       onClick={() => onCardClick?.(l)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          onCardClick?.(l);
+                        }
+                      }}
                       title={readOnly ? 'View details' : undefined}
-                      className="w-full text-left rounded-md border bg-card p-2 hover:bg-accent/40 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                      className="w-full text-left rounded-md border bg-card p-2 hover:bg-accent/40 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                     >
                       <div className="text-sm font-medium truncate">
                         {l.full_name || 'Unknown'}
@@ -374,12 +390,27 @@ export function PipelineBoard<T extends BoardLead>({
                         </div>
                       )}
                       <div className="flex items-center justify-between mt-1.5">
-                        <ChannelIcon channel={l.channel} />
+                        <div className="flex items-center gap-1.5">
+                          {/* When the lead came in over LinkedIn AND we have a
+                              profile URL, the existing channel glyph BECOMES the
+                              link — no second "in" icon. Otherwise the channel
+                              glyph stays inert and the profile link is added
+                              alongside it (e.g. an email lead we still have a
+                              LinkedIn URL for). */}
+                          {l.channel === 'linkedin' && normalizeLinkedInUrl(l.linkedin_url) ? (
+                            <LinkedInProfileLink url={l.linkedin_url} />
+                          ) : (
+                            <>
+                              <ChannelIcon channel={l.channel} />
+                              <LinkedInProfileLink url={l.linkedin_url} />
+                            </>
+                          )}
+                        </div>
                         <span className="text-[10px] text-muted-foreground">
                           {relativeTime(l.last_reply_at)}
                         </span>
                       </div>
-                    </button>
+                    </div>
                   ))}
                   {colLeads.length > CARDS_PER_COLUMN && (
                     <button

@@ -38,6 +38,7 @@ import { Loader2, History } from 'lucide-react';
 import { PipelineBoard } from '@/components/agent/PipelineBoard';
 import { supabase } from '@/integrations/supabase/client';
 import vrellyLogo from '@/assets/vrelly-logo.png';
+import { LinkedInProfileLink } from '@/components/LinkedInProfileLink';
 import { StatsGrid, type StatsSnapshot } from '@/components/playground/StatsGrid';
 import {
   CampaignBarChart,
@@ -414,7 +415,12 @@ function PipelineReadonly({
       <Dialog open={!!selected} onOpenChange={(o) => !o && setSelected(null)}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle>{selected?.full_name || 'Unknown'}</DialogTitle>
+            <DialogTitle className="flex items-center gap-2">
+              <span className="truncate">{selected?.full_name || 'Unknown'}</span>
+              {/* Client-facing by design — the prospect's profile is what the
+                  client wants to look up from their report. */}
+              <LinkedInProfileLink url={selected?.linkedin_url} size="md" />
+            </DialogTitle>
           </DialogHeader>
           {selected && (
             <dl className="text-sm space-y-2">

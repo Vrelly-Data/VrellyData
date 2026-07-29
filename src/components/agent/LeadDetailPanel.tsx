@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Send, UserPlus, Loader2, X, Linkedin, Mail, Check, Sparkles, Plus, Trash2 } from 'lucide-react';
+import { LinkedInProfileLink } from '@/components/LinkedInProfileLink';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -660,7 +661,12 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
           the dropdown trigger looks missing). */}
       <div className="pl-4 pr-12 py-4 border-b flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h3 className="font-semibold text-lg truncate">{lead.full_name}</h3>
+          <div className="flex items-center gap-2 min-w-0">
+            <h3 className="font-semibold text-lg truncate">{lead.full_name}</h3>
+            {/* Profile link sits with the name so it is present regardless of
+                which channel the reply arrived on. Absent when we have no URL. */}
+            <LinkedInProfileLink url={lead.linkedin_url} size="md" />
+          </div>
           {lead.company && (
             <p className="text-sm text-muted-foreground">{lead.company}</p>
           )}
