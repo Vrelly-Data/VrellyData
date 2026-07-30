@@ -221,6 +221,18 @@ export function PipelineBoard<T extends BoardLead>({
       const col = columnFor(l.pipeline_stage ?? '');
       if (col) map.get(col.key)!.push(l);
     }
+    // Newest reply first. Only CARDS_PER_COLUMN cards render before the "show
+    // more" cut, so without an explicit sort a reply that landed today can sit
+    // hundreds of cards deep in a large column and look uncaptured — Avania's
+    // Replied column holds 525 leads against a visible 8. Sorting by recency
+    // puts the leads an operator is most likely to act on inside the cut.
+    // Leads with no last_reply_at sort last (they have no recency to rank on)
+    // and keep a stable relative order.
+    const recency = (l: T) => {
+      const t = l.last_reply_at ? new Date(l.last_reply_at).getTime() : NaN;
+      return Number.isNaN(t) ? -Infinity : t;
+    };
+    for (const list of map.values()) list.sort((a, b) => recency(b) - recency(a));
     return map;
   }, [visibleLeads]);
 
@@ -355,7 +367,22 @@ export function PipelineBoard<T extends BoardLead>({
             <div className="flex items-center gap-2 px-1 pb-2">
               <span className={`h-2.5 w-2.5 rounded-full ${col.dot}`} />
               <span className="text-sm font-medium">{col.label}</span>
-              <span className="text-xs text-muted-foreground">{colLeads.length}</span>
+              {/* Total for the column, and — when the 8-card cap is hiding the
+                  rest — how many of that total are actually on screen. A bare
+                  "525" next to 8 visible cards reads as if 525 are rendered,
+                  which is what made recently-captured replies look missing. */}
+              <span
+                className="text-xs text-muted-foreground"
+                title={
+                  shown.length < colLeads.length
+                    ? `Showing ${shown.length} of ${colLeads.length} — newest reply first`
+                    : `${colLeads.length} in this stage`
+                }
+              >
+                {shown.length < colLeads.length
+                  ? `${shown.length} of ${colLeads.length}`
+                  : colLeads.length}
+              </span>
             </div>
             <div className="flex-1 space-y-2 rounded-lg bg-muted/30 p-2 min-h-[4rem] max-h-[60vh] overflow-y-auto">
               {colLeads.length === 0 ? (
