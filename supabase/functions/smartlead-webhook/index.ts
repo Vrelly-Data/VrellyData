@@ -274,28 +274,66 @@ Deno.serve(async (req) => {
     }
 
     // === Route to an integration ============================================
-    // Smartlead payload doesn't expose which integration in our DB it maps
-    // to. Pick the first active Smartlead integration for now; multi-
-    // integration disambiguation can be added later via API-key hashing or
-    // a per-integration webhook secret.
+    // The Smartlead payload carries nothing that identifies which of OUR
+    // integrations it belongs to, so routing is driven by a per-integration
+    // token we put in the callback URL at registration time:
+    //
+    //   .../smartlead-webhook?secret=<SMARTLEAD_WEBHOOK_SECRET>&t=<webhook_secret>
+    //
+    // `t` maps 1:1 to outbound_integrations.webhook_secret, so an event can
+    // only ever land on the client whose campaign it was registered against.
+    //
+    // This REPLACES a "pick the most recently created active smartlead
+    // integration" guess. That guess was a live cross-tenant defect: Vrelly's
+    // own Smartlead account has a webhook registered from 2026-04-27, and once
+    // SourceCo's integration was created (2026-07-26) it became the sole active
+    // row — so replies to Vrelly's OWN outbound would have been written into
+    // SourceCo's inbox.
+    //
+    // There is deliberately NO fallback. An untokenized or unknown-token event
+    // is logged and 200-acknowledged WITHOUT writing anything: dropping a reply
+    // is recoverable (the backfill and poller both re-find it), whereas filing
+    // one prospect's reply under another client's account is not. The legacy
+    // untokenized webhook on Vrelly's own account therefore stops resolving,
+    // which is the intended trade.
+    const routingToken = url.searchParams.get("t");
+
+    if (!routingToken) {
+      console.warn(
+        "[smartlead-webhook v2] No routing token (?t=) on the callback URL — " +
+        "refusing to guess an integration. Re-register this webhook via " +
+        "setup-smartlead-webhook to attach a token. Event dropped (not written).",
+      );
+      return new Response(
+        JSON.stringify({ success: true, skipped: "no_routing_token", eventType }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
     const { data: integration } = await supabase
       .from("outbound_integrations")
-      .select("id, team_id, created_by, api_key_encrypted")
+      .select("id, name, team_id, created_by, api_key_encrypted")
       .eq("platform", "smartlead")
       .eq("is_active", true)
-      .order("created_at", { ascending: false })
-      .limit(1)
+      .eq("webhook_secret", routingToken)
       .maybeSingle();
 
     if (!integration?.created_by || !integration?.team_id) {
       console.warn(
-        "[smartlead-webhook v2] No active Smartlead integration — cannot route lead",
+        `[smartlead-webhook v2] Routing token did not match any active Smartlead ` +
+        `integration (token suffix …${routingToken.slice(-6)}). Event dropped ` +
+        `(not written) rather than routed to a guessed tenant.`,
       );
       return new Response(
-        JSON.stringify({ success: true, skipped: "no_active_integration", eventType }),
+        JSON.stringify({ success: true, skipped: "unknown_routing_token", eventType }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
+
+    console.log(
+      `[smartlead-webhook v2] Routed to integration "${integration.name}" ` +
+      `(${integration.id}) via token`,
+    );
 
     // Resolve the sender for THIS reply's mailbox (from_email → mapped
     // sender_name). NULL when the mailbox is unmapped or unknown — then the
