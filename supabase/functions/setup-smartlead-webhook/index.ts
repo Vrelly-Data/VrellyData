@@ -114,6 +114,16 @@ Deno.serve(async (req) => {
     // Optional: cap the number of campaigns touched in one invocation so a very
     // large account can be swept across several calls (edge wall-clock limit).
     const limit = Number((body as { limit?: number }).limit ?? 0) || null;
+    // Optional scope narrowing. A client's Smartlead account often holds
+    // campaigns for several of THEIR end-clients, and we may only be engaged on
+    // some of them — registering on all of it would pull unrelated prospects
+    // into the agent inbox. Two ways to narrow:
+    //   nameContains — case-insensitive substring on the campaign name
+    //   campaignIds  — explicit allow-list of external_campaign_id (wins)
+    const nameContains = String((body as { nameContains?: string }).nameContains ?? "").trim();
+    const campaignIds: string[] = Array.isArray((body as { campaignIds?: string[] }).campaignIds)
+      ? (body as { campaignIds: string[] }).campaignIds.map(String)
+      : [];
     // dryRun reports exactly what WOULD change without calling Smartlead's
     // write endpoints.
     const dryRun = (body as { dryRun?: boolean }).dryRun === true;
@@ -171,17 +181,29 @@ Deno.serve(async (req) => {
       .eq("team_id", integration.team_id)
       .in("status", statuses)
       .order("created_at", { ascending: false });
+    if (campaignIds.length > 0) campaignQuery = campaignQuery.in("external_campaign_id", campaignIds);
+    else if (nameContains) campaignQuery = campaignQuery.ilike("name", `%${nameContains}%`);
     if (limit) campaignQuery = campaignQuery.limit(limit);
     const { data: campaigns, error: campErr } = await campaignQuery;
 
     if (campErr) return json({ success: false, error: `Campaign lookup failed: ${campErr.message}` });
     if (!campaigns || campaigns.length === 0) {
-      return json({ success: false, error: `No campaigns with status in [${statuses.join(", ")}] for this team` });
+      const scope = campaignIds.length
+        ? `campaignIds [${campaignIds.slice(0, 5).join(", ")}…]`
+        : nameContains
+        ? `name containing "${nameContains}"`
+        : "any name";
+      return json({
+        success: false,
+        error: `No campaigns matched: status in [${statuses.join(", ")}] AND ${scope}`,
+      });
     }
 
     console.log(
       `[setup-smartlead-webhook] ${integration.name}: ${campaigns.length} campaign(s), ` +
-      `statuses=[${statuses.join(",")}], dryRun=${dryRun}`,
+      `statuses=[${statuses.join(",")}], ` +
+      `scope=${campaignIds.length ? `${campaignIds.length} explicit ids` : nameContains ? `name~"${nameContains}"` : "all names"}, ` +
+      `dryRun=${dryRun}`,
     );
 
     const key = integration.api_key_encrypted;
@@ -303,6 +325,11 @@ Deno.serve(async (req) => {
       integration: { id: integration.id, name: integration.name },
       campaignsConsidered: campaigns.length,
       statuses,
+      scope: campaignIds.length
+        ? { campaignIds: campaignIds.length }
+        : nameContains
+        ? { nameContains }
+        : { nameContains: null },
       created,
       replacedStale: replaced,
       alreadyCorrect: skipped,
@@ -311,6 +338,17 @@ Deno.serve(async (req) => {
       webhook_status: dryRun ? "(unchanged)" : status,
       routingTokenFingerprint: fingerprint(routingToken),
       eventTypes: EVENT_TYPES,
+      // On a dry run the whole point is to eyeball WHICH campaigns matched
+      // before touching anything, so return the full list rather than a count.
+      ...(dryRun
+        ? {
+            matchedCampaigns: campaigns.map((c) => ({
+              external_campaign_id: c.external_campaign_id,
+              name: c.name,
+              status: c.status,
+            })),
+          }
+        : {}),
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
