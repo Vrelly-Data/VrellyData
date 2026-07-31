@@ -93,6 +93,14 @@ Deno.serve(async (req) => {
     const body = await req.json();
     const leadId: string | undefined = body.leadId ?? body.lead_id;
     const message: string = stripBraceWrapper(String(body.message ?? ""));
+    // Optional CC, mirroring send-agent-reply's Reply.io behaviour. Smartlead's
+    // reply-email-thread accepts `cc` as a comma-separated STRING — verified
+    // against the live API: an array returns `"cc" must be a string`, and
+    // `cc_email`/`bcc_email` are rejected as `not allowed`.
+    const ccRaw = typeof body.cc === "string" ? body.cc.trim() : "";
+    const cc = ccRaw
+      ? ccRaw.split(",").map((s: string) => s.trim()).filter(Boolean).join(",")
+      : "";
 
     if (!leadId || !message) {
       throw new Error("Missing required fields: leadId, message");
@@ -185,6 +193,8 @@ Deno.serve(async (req) => {
         // EMAIL_REPLY webhook payload (`stats_id`) and persisted on
         // agent_leads.smartlead_email_stats_id.
         email_stats_id: lead.smartlead_email_stats_id,
+        // Omitted entirely when unset — never send an empty cc.
+        ...(cc ? { cc } : {}),
       }),
     });
 
