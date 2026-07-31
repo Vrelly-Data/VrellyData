@@ -4,6 +4,7 @@ import {
   fetchReplyIoCandidates,
   isGenmailEmail,
 } from '../_shared/lead-dedup.ts';
+import { htmlToText } from '../_shared/html-to-text.ts';
 import { isSuppressed, fireClassifyReply } from '../_shared/inbox-reply.ts';
 
 const corsHeaders = {
@@ -153,6 +154,24 @@ Deno.serve(async (req) => {
     // event.teamId / event.team_id / event.event.teamId
     const teamId = String(
       pick(
+        // v3 (VERIFIED against a genuine payload, event id
+        // 4ab0eacb-4a1f-4d66-b353-56d66a5a61b0 on 2026-07-31): identifiers nest
+        // under `event` in snake_case, and the one that maps to our
+        // outbound_integrations.reply_team_id is user_id — NOT team_id:
+        //
+        //   "event": { "type": "email_replied",
+        //              "team_id": 383893,   <- Incrementums (INACTIVE)
+        //              "user_id": 368216,   <- Vrelly Reply  (correct owner)
+        //              "subscription_id": 21570 }  <- Vrelly Reply's hook id
+        //
+        // event.team_id is DELIBERATELY NOT in this chain. It resolves to a
+        // DIFFERENT tenant, so falling back to it would file one client's
+        // replies under another client's account — the same cross-tenant
+        // misroute class already fixed in smartlead-webhook. A dropped event is
+        // recoverable (it is now persisted unmatched, and the poll re-finds it);
+        // a misrouted one is not.
+        event.event?.user_id,
+        // v2 legacy paths, kept as fallback. All null-safe under v3.
         event.event?.TeamId,
         event.teamId,
         event.team_id,
@@ -237,8 +256,21 @@ Deno.serve(async (req) => {
     // Reply text — v2 uses event.reply_text / event.reply_message_url
     // (top-level). v3 candidates added defensively; if none present,
     // fall back to the channel descriptor (preserved v2 behavior).
+    // v3 carries the body as HTML in `email_text` — none of the v2 fields below
+    // exist, so without this the pick() chain fell through to the
+    // `${channel} reply received` PLACEHOLDER. Because both capture paths dedup
+    // onto the SAME agent_leads row, that placeholder would have OVERWRITTEN the
+    // real text the poll had already stored, across all 7 clients, and been fed
+    // to classify-reply as if it were the prospect's words. Caught by the dev
+    // replay: "I just grabbed time." became "email reply received".
+    //
+    // Cleaned with the SHARED htmlToText (moved out of poll-reply-inbox) so both
+    // paths produce byte-identical text and an UPDATE is idempotent rather than
+    // flip-flopping the stored value.
+    const v3Body = pick(event.email_text, event.emailText);
     const replyText = String(
       pick(
+        typeof v3Body === 'string' && v3Body.trim() ? htmlToText(v3Body) : undefined,
         event.reply_text,
         event.replyText,
         event.reply_message_url,
@@ -550,10 +582,29 @@ Deno.serve(async (req) => {
           });
           console.log(`[inbox-routing] dedup match=${match ? match.id : 'none'} (externalId=${externalId})`);
 
+          // TRUE reply time from the payload (v3: reply_date, e.g.
+          // "2026-07-31T13:59:02" — no zone marker, so treat as UTC). Never
+          // now(): stamping capture time makes an old event look like the
+          // newest reply and corrupts every period-scoped report. It also makes
+          // the re-delivery guard work — a retry of the SAME event carries the
+          // SAME reply_date, so `newerThanSurfaced` is false and we don't
+          // resurface twice.
+          const rawReplyDate = pick(event.reply_date, event.replyDate) as string | undefined;
+          const replyAt = (() => {
+            if (!rawReplyDate) return new Date().toISOString();
+            const iso = /[Zz]|[+-]\d{2}:?\d{2}$/.test(rawReplyDate) ? rawReplyDate : `${rawReplyDate}Z`;
+            const t = new Date(iso);
+            return Number.isNaN(t.getTime()) ? new Date().toISOString() : t.toISOString();
+          })();
+
+          // NOTE: newMsg is no longer PERSISTED — reply_thread is owned solely by
+          // poll-reply-inbox (see the update/insert blocks below). It is retained
+          // purely to carry the surface-watermark timestamp and the re-delivery
+          // comparison.
           const newMsg = {
             role: 'prospect',
             content: replyText,
-            timestamp: new Date().toISOString(),
+            timestamp: replyAt,
             channel,
           };
 
@@ -601,9 +652,17 @@ Deno.serve(async (req) => {
                 company: company || undefined,
                 job_title: jobTitle || undefined,
                 channel,
-                last_reply_at: new Date().toISOString(),
+                last_reply_at: replyAt,
                 last_reply_text: replyText,
-                reply_thread: updatedThread,
+                // reply_thread DELIBERATELY NOT WRITTEN. poll-reply-inbox is the
+                // sole owner: it builds the thread from Reply.io's PER-MESSAGE
+                // bodies (GET /v3/inbox/threads/{id}/messages), which arrive
+                // already separated. The webhook only ever sees the raw email
+                // body (`email_text`), quoted chain included, so appending here
+                // produced a near-duplicate entry the poll's clean one collided
+                // with. Split ownership removes the collision structurally
+                // rather than by heuristic. last_reply_text stays best-effort
+                // for real-time freshness; the next poll re-cleans it (<=15 min).
                 // Only (re)surface a genuinely-new, non-opted-out reply — leave
                 // pipeline_stage / inbox_status untouched otherwise. Advance the
                 // surface watermark ONLY here (when we set pending), so the
@@ -637,11 +696,15 @@ Deno.serve(async (req) => {
                 source: 'reply_io',
                 pipeline_stage: 'replied',
                 inbox_status: 'pending',
-                last_reply_at: new Date().toISOString(),
+                last_reply_at: replyAt,
                 // New lead lands actionable → seed the surface watermark.
                 last_surfaced_reply_at: newMsg.timestamp,
                 last_reply_text: replyText,
-                reply_thread: updatedThread,
+                // reply_thread NOT written here either — same ownership split.
+                // A webhook-created lead therefore has an empty thread until the
+                // next poll (<=15 min) populates it. Verified safe: the inbox
+                // and pipeline previews read last_reply_text, and LeadDetailPanel
+                // renders the thread only when non-empty.
                 // Record the source campaign at capture so the inbox shows it for
                 // pending leads (not just after Add to Campaign). Set on INSERT
                 // only — a later Add to Campaign overwrites with the follow-up.
