@@ -164,9 +164,11 @@ function useSendSmartleadEmail() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ leadId, message }: { leadId: string; message: string }) => {
+    mutationFn: async ({ leadId, message, cc }: { leadId: string; message: string; cc?: string }) => {
       const { data, error } = await supabase.functions.invoke('send-smartlead-email', {
-        body: { leadId, message },
+        // cc forwarded only when set; the backend omits it from the Smartlead
+        // payload when absent.
+        body: { leadId, message, ...(cc ? { cc } : {}) },
       });
       if (error) throw new Error(error.message || 'Failed to send Smartlead email');
       if (data?.error) throw new Error(data.error);
@@ -369,7 +371,15 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
 
     if (isSmartleadEmail) {
       sendSmartleadEmail.mutate(
-        { leadId: lead.id, message: draft },
+        {
+          leadId: lead.id,
+          message: draft,
+          // Same shape as the Reply.io branch below: forwarded only when this
+          // is an email lead with a CC set. Smartlead's reply-email-thread
+          // takes `cc` as a comma-separated STRING (verified: passing an array
+          // returns `"cc" must be a string`).
+          ...(ccEmail.trim() ? { cc: ccEmail.trim() } : {}),
+        },
         {
           onSuccess: () => {
             toast({ title: 'Reply sent via Smartlead ✓' });
@@ -985,7 +995,7 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
             {/* CC — email channel only (Reply.io ignores cc for LinkedIn).
                 Pre-filled from the client's configured Default CC and editable
                 per send. Applies to the direct Send Reply path only. */}
-            {isReplyIoEmail && (
+            {(isReplyIoEmail || isSmartleadEmail) && (
               <div className="space-y-1">
                 <Label htmlFor="reply_cc" className="text-xs text-muted-foreground">CC</Label>
                 <Input
