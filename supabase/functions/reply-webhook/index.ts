@@ -78,7 +78,32 @@ Deno.serve(async (req) => {
     //                    sequence_fields: { id }, reply_text, ... }
     //   * v3 (unverified): unknown shape — first-call logger dumps the
     //                      structure so we can confirm.
-    const event = await req.json();
+    // Read the body as TEXT first so we can log exactly what arrived on the
+    // wire before any parsing can throw or reshape it.
+    //
+    // This is UNCONDITIONAL, unlike the loggedFirstPayloadShape dump below,
+    // which is guarded by a module-scope flag and therefore fires at most once
+    // per worker process — an edge worker that has already served one request
+    // logs nothing for the next, which is how a v3 payload could arrive
+    // repeatedly and still never be seen. Reply.io v3's body shape is still
+    // unconfirmed (their delivery log records httpStatus: null, i.e. no
+    // response recorded at their end), so we need the raw bytes of the next
+    // genuine delivery.
+    const rawText = await req.text();
+    console.log('[reply-webhook] RAW', rawText.slice(0, 3000));
+
+    let event: Record<string, any>;
+    try {
+      event = JSON.parse(rawText);
+    } catch (parseErr) {
+      // Never 4xx a malformed body — Reply.io would retry it forever. Log and
+      // acknowledge; the RAW line above is what we actually need.
+      console.error('[reply-webhook] body is not valid JSON:', String(parseErr));
+      return new Response(JSON.stringify({ success: true, warning: 'invalid json' }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
 
     // First-call shape log: dumps the full top-level structure + the
     // keys of every nested object so we can identify the v3 layout the
@@ -248,11 +273,39 @@ Deno.serve(async (req) => {
       .single();
 
     if (integrationError || !integration) {
-      console.warn(`No integration found for TeamId=${teamId}, UserId=${userId}. Accepting payload to prevent retries.`);
-      return new Response(JSON.stringify({ success: true, warning: 'no matching integration' }), {
-        status: 200,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      // SILENT-DROP FIX. This branch used to return 200 and write NOTHING —
+      // before the webhook_events insert further down — so an unmatched event
+      // vanished with no trace on either side: Reply.io saw a 200 and had no
+      // reason to retry, and our log stayed empty. That is precisely how
+      // Reply.io capture sat broken for ~110 days without anyone noticing.
+      //
+      // Persist the raw payload with integration_id NULL so an unroutable
+      // event is VISIBLE and replayable once the cause is fixed. Still 200 —
+      // acknowledging is correct, dropping silently is not.
+      console.error(
+        `[reply-webhook] UNMATCHED EVENT — no integration for TeamId="${teamId}" ` +
+        `UserId="${userId}" event="${eventType}" contact="${contactEmail ?? '-'}". ` +
+        `Persisting to webhook_events with integration_id=null for triage.`,
+      );
+      const { error: unmatchedErr } = await supabase.from('webhook_events').insert({
+        integration_id: null,
+        team_id: null,
+        event_type: eventType,
+        contact_email: contactEmail,
+        campaign_external_id: campaignId,
+        event_data: event,
       });
+      if (unmatchedErr) {
+        // Don't fail the request over the audit write — but make the reason
+        // loud, since this is the only remaining path to invisibility.
+        console.error(
+          `[reply-webhook] could not persist unmatched event: ${unmatchedErr.message}`,
+        );
+      }
+      return new Response(
+        JSON.stringify({ success: true, warning: 'no matching integration', teamId, logged: !unmatchedErr }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      );
     }
 
     console.log(`Matched integration ${integration.id} for TeamId=${teamId}`);
