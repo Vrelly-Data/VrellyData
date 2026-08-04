@@ -66,6 +66,93 @@ const EVENT_TYPE_MAP: Record<string, string> = {
   ContactFinished: 'contact_finished',
 };
 
+// ---------------------------------------------------------------------------
+// Resolve the Reply.io INBOX THREAD id for a reply event.
+//
+// WHY THIS EXISTS. send-agent-reply posts to POST /v3/inbox/threads/{id}/messages
+// using agent_leads.external_id directly. This webhook previously wrote
+// `contactId || contactEmail` there — a CONTACT id, not a thread id — so every
+// webhook-captured lead 404'd with inboxThread.notFound on send. The v3 payload
+// contains NO thread id in any event type (verified across 705 real events:
+// email_replied, linkedin_message_replied, contact_finished, contact_opted_out
+// carry only contact_fields.id, sent_email_id, linkedin_message_id), so the
+// thread must be resolved via lookup.
+//
+// SAFETY. GET /v3/inbox/threads SILENTLY IGNORES every filter parameter --
+// contactId, contactIds, contactEmail, email, search, searchString, q all
+// return the same unfiltered page (verified: a bogus contactId returns real
+// rows). Filtering therefore happens CLIENT-SIDE, and we require BOTH
+// contact.id AND contact.email to agree before trusting a match. Posting into a
+// wrongly-resolved thread would deliver one prospect's reply to another, so
+// this function returns null rather than guess.
+async function resolveThreadId(
+  apiKey: string,
+  opts: {
+    contactId: string;
+    contactEmail: string;
+    sequenceId?: string | number | null;   // payload sequence_fields.id
+    channel: string;                       // 'linkedin' | 'email'
+  },
+): Promise<{ threadId: string | null; reason: string }> {
+  if (!apiKey || !opts.contactId) return { threadId: null, reason: 'missing api key or contact id' };
+  const norm = (e: unknown) => String(e ?? '').trim().toLowerCase();
+  const wantEmail = norm(opts.contactEmail);
+
+  // BOUNDED paging. Avania's inbox is ~600 threads; the cap keeps a large
+  // account from turning one webhook into an unbounded crawl, and we early-exit
+  // the moment the contact is found. Threads are returned most-recently-active
+  // first, and a replying contact is by definition recently active, so a match
+  // almost always lands on page 1.
+  const PAGE = 100, MAX_PAGES = 12;   // <= 1200 threads
+  const matches: any[] = [];
+  for (let page = 0; page < MAX_PAGES; page++) {
+    let res: Response;
+    try {
+      res = await fetch(
+        `${REPLY_API_V3}/inbox/threads?top=${PAGE}&skip=${page * PAGE}`,
+        { headers: { 'x-api-key': apiKey, Accept: 'application/json' } },
+      );
+    } catch (e) {
+      return { threadId: null, reason: `network error: ${e instanceof Error ? e.message : String(e)}` };
+    }
+    if (res.status === 429) return { threadId: null, reason: 'rate limited (429)' };
+    if (!res.ok) return { threadId: null, reason: `HTTP ${res.status}` };
+    const body = await res.json().catch(() => null);
+    const items: any[] = body?.items ?? [];
+    for (const t of items) {
+      // DUAL KEY — id and email must BOTH agree (email compared only when both
+      // sides carry one; masked/absent addresses fall back to id alone).
+      if (String(t?.contact?.id) !== String(opts.contactId)) continue;
+      const tEmail = norm(t?.contact?.email);
+      if (wantEmail && tEmail && tEmail !== wantEmail) continue;
+      matches.push(t);
+    }
+    if (matches.length) break;              // early exit — contact found
+    if (items.length < PAGE) break;         // inbox exhausted
+  }
+
+  if (matches.length === 0) return { threadId: null, reason: 'no thread matched contact id + email' };
+  if (matches.length === 1) return { threadId: String(matches[0].id), reason: 'unique match' };
+
+  // MULTI-THREAD (~7% of contacts — same contact across several sequences, same
+  // channel, often with identical lastActivityDate, so "most recent" does NOT
+  // disambiguate). Use the payload's own context.
+  if (opts.sequenceId != null) {
+    const bySeq = matches.filter((t) => String(t?.sequence?.id) === String(opts.sequenceId));
+    if (bySeq.length === 1) return { threadId: String(bySeq[0].id), reason: 'disambiguated by sequence id' };
+  }
+  const byChannel = matches.filter(
+    (t) => String(t?.channel ?? '').toLowerCase() === (opts.channel === 'linkedin' ? 'linkedin' : 'email'),
+  );
+  if (byChannel.length === 1) return { threadId: String(byChannel[0].id), reason: 'disambiguated by channel' };
+
+  // FAIL-SAFE: still ambiguous. Do NOT guess.
+  return {
+    threadId: null,
+    reason: `ambiguous: ${matches.length} threads match (ids ${matches.map((t) => t.id).join(',')})`,
+  };
+}
+
 Deno.serve(async (req) => {
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
@@ -566,10 +653,34 @@ Deno.serve(async (req) => {
       console.log(`[inbox-routing] agentConfig=${agentConfig ? 'found (id=' + agentConfig.id + ')' : 'null'} error=${agentConfigError?.message || 'none'}`);
 
       if (agentConfig) {
-        const externalId = contactId || contactEmail;
-        console.log(`[inbox-routing] externalId=${externalId} contactId=${contactId} contactEmail=${contactEmail}`);
+        // Resolve the REAL thread id. Never fall back to contactId/contactEmail
+        // for external_id: send-agent-reply treats external_id as a thread id,
+        // so a contact id there produces a guaranteed 404 inboxThread.notFound.
+        const sequenceId = pick(event.sequence_fields?.id, event.sequenceId) ?? null;
+        const resolved = await resolveThreadId(integration.api_key_encrypted, {
+          contactId,
+          contactEmail,
+          sequenceId,
+          channel,
+        });
+        // null when unresolved/ambiguous — the lead is still captured in
+        // real-time (dedup falls through to linkedin_url / email), it is simply
+        // flagged unsendable until repaired. An unsendable-but-visible lead is
+        // recoverable; a reply delivered to the wrong prospect is not.
+        const externalId = resolved.threadId;
+        if (!externalId) {
+          console.error(
+            `[inbox-routing] THREAD UNRESOLVED (${resolved.reason}) contactId=${contactId} ` +
+            `email=${contactEmail} seq=${sequenceId} channel=${channel} — capturing lead with ` +
+            `external_id=null; run the thread-id backfill to repair.`,
+          );
+        }
+        console.log(`[inbox-routing] externalId=${externalId ?? 'NULL(unresolved)'} reason=${resolved.reason} contactId=${contactId} contactEmail=${contactEmail}`);
 
-        if (externalId) {
+        // Capture proceeds on ANY usable dedup key — external_id may legitimately
+        // be null now (unresolved thread), and the shared resolver still matches
+        // on linkedin_url / email.
+        if (externalId || contactEmail || linkedinUrl) {
           // Resolve the existing lead across ALL reply_io dedup keys (external_id
           // → normalized linkedin_url → normalized email, genmail excluded) —
           // shared with poll-reply-inbox. Replaces the single external_id lookup

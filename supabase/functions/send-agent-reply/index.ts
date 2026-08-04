@@ -505,10 +505,69 @@ Deno.serve(async (req) => {
     if (!operatorCampaignId) {
       const threadId = lead.external_id;
       if (!threadId) {
-        return new Response(JSON.stringify({ error: 'Lead has no Reply.io thread to reply into.' }), {
+        return new Response(JSON.stringify({
+          error: 'This reply has no Reply.io thread linked yet, so it cannot be sent. '
+               + 'It will become sendable once the thread is resolved (usually within 15 minutes).',
+          code: 'thread_unresolved',
+        }), {
           status: 400,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
+      }
+      // GUARD: external_id must LOOK like a Reply.io inbox-thread id before we
+      // post to /v3/inbox/threads/{id}/messages. Historically this column also
+      // held CONTACT ids (reply-webhook, pre-fix) and email addresses /
+      // 'backfill:*' keys (sync-reply-contacts), each of which produced an
+      // opaque 502 relayed from Reply.io's 404 inboxThread.notFound. Observed
+      // ranges on live data: thread ids 3.5e8-4.1e8, contact ids >7e8.
+      // Fail with a clear message instead of a doomed call.
+      const threadIdStr = String(threadId);
+      const looksLikeThreadId = /^\d+$/.test(threadIdStr) && Number(threadIdStr) < 5e8;
+      if (!looksLikeThreadId) {
+        console.error(
+          `[send-agent-reply] refusing to send: external_id="${threadIdStr}" is not a thread id `
+          + `(lead ${leadId}). Contact ids / emails / backfill keys are not valid thread references.`,
+        );
+        return new Response(JSON.stringify({
+          error: "This lead isn't linked to a Reply.io conversation thread, so the reply can't be "
+               + 'delivered. It needs its thread reference repaired before sending.',
+          code: 'invalid_thread_reference',
+        }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      // GUARD: the thread we are about to post into must belong to THIS lead's
+      // contact. GET /v3/inbox/threads silently ignores every filter parameter,
+      // so a resolver bug could hand us someone else's thread; delivering one
+      // prospect's reply to another is unrecoverable. Verify, then send.
+      try {
+        const tRes = await fetch(`${REPLY_API_V3}/inbox/threads/${threadIdStr}`, {
+          headers: authHeaders(apiKey),
+        });
+        if (tRes.ok) {
+          const t = await tRes.json();
+          const tEmail = String(t?.contact?.email ?? '').trim().toLowerCase();
+          const lEmail = String(lead.email ?? '').trim().toLowerCase();
+          if (tEmail && lEmail && tEmail !== lEmail) {
+            console.error(
+              `[send-agent-reply] ABORT — thread ${threadIdStr} belongs to ${tEmail}, `
+              + `lead ${leadId} is ${lEmail}. Refusing to deliver to the wrong prospect.`,
+            );
+            return new Response(JSON.stringify({
+              error: 'Safety check failed: the linked conversation belongs to a different contact. '
+                   + 'Reply not sent.',
+              code: 'thread_contact_mismatch',
+            }), {
+              status: 409,
+              headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            });
+          }
+        }
+        // Non-OK verification is NOT fatal — the send below surfaces the real
+        // upstream error rather than blocking on a transient lookup failure.
+      } catch (verifyErr) {
+        console.warn(`[send-agent-reply] thread ownership check skipped: ${String(verifyErr)}`);
       }
       // draftResponse was already validated non-empty above, but Reply.io
       // rejects an empty message — guard at the send boundary so we never
