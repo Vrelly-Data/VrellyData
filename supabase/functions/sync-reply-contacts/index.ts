@@ -1006,11 +1006,45 @@ Deno.serve(async (req) => {
     }
     console.log(`Campaign stats updated: peopleCount=${peopleCount} (engagement counts preserved from prior values)`);
 
-    // --- Agent Leads Population Block ---
-    // Populate agent_leads for replied contacts so the Agent inbox
-    // gets data from both webhooks AND manual syncs.
+    // --- Agent Leads Population Block (OPT-IN, DEFAULT OFF) ---
+    // DISABLED BY DEFAULT as of the 2026-08-04 incident. This block wrote
+    // agent_leads directly from synced_contacts and caused two live failures:
+    //
+    //   1. DUPLICATES. external_id was `sc.external_contact_id || sc.email`
+    //      (line ~1056) and the upsert relied on onConflict "user_id,external_id"
+    //      instead of the shared resolveExistingLead. Real Reply.io leads key on
+    //      the numeric THREAD id, so the conflict target never matched and the
+    //      sync inserted second rows for contacts the operator had already
+    //      handled — 14 phantom `pending` leads for Avania Clinical on 2026-08-04,
+    //      every one duplicating an intact dismissed/sent lead.
+    //
+    //   2. UNSENDABLE LEADS. Those same external_ids are contact ids or email
+    //      addresses, but send-agent-reply posts to
+    //      /v3/inbox/threads/{external_id}/messages — so any such lead 404s with
+    //      inboxThread.notFound the moment a rep clicks Send.
+    //
+    // The contacts/campaign sync above is unaffected and still runs: this gate
+    // only stops the sync from MINTING INBOX LEADS. Capture is owned by
+    // reply-webhook (real-time) and poll-reply-inbox (15-min backstop), both of
+    // which write a real thread id and share resolveExistingLead for dedup.
+    //
+    // Set `populateAgentLeads: true` in the request body to re-enable for a
+    // one-off run once this block writes thread ids and uses the shared dedup.
+    const populateAgentLeads = body?.populateAgentLeads === true;
     let agentLeadsCreated = 0;
+    if (!populateAgentLeads) {
+      console.log(
+        "[sync-reply-contacts] agent_leads population SKIPPED (opt-in flag off). " +
+        "Contacts/campaign sync completed normally; inbox capture is owned by " +
+        "reply-webhook + poll-reply-inbox.",
+      );
+    }
     try {
+      // Single gate: everything below writes agent_leads / agent_activity and is
+      // skipped entirely unless explicitly opted in.
+      if (!populateAgentLeads) {
+        // no-op — see the block comment above
+      } else {
       // 1. Find the user_id for this integration
       const { data: integrationOwner } = await serviceClient
         .from("outbound_integrations")
@@ -1163,6 +1197,7 @@ Deno.serve(async (req) => {
         } else {
           console.log("No active agent config found, skipping agent_leads population");
         }
+      }
       }
     } catch (agentLeadsErr) {
       // 7. Don't affect the existing sync response if anything fails
