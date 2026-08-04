@@ -317,6 +317,13 @@ Deno.serve(async (req) => {
         // resolveExistingLead (external_id → normalized linkedin_url →
         // normalized email, genmail excluded) — identical to reply-webhook.
         const candidates: LeadCandidate[] = await fetchReplyIoCandidates(supabase, userId);
+        // Visibility for the null-repair's one known imprecision: a contact with
+        // MULTIPLE threads gets whichever thread this run processes first, and
+        // later threads for the same lead then see a non-null id and skip. That
+        // is safe (send-agent-reply's ownership check still confirms the thread
+        // belongs to this contact) but it IS a first-seen-wins choice, so record
+        // repairs per run and log when a second thread turns up for one.
+        const repairedThisRun = new Map<string, string>();
 
         for (const thread of inboxThreads) {
           try {
@@ -458,6 +465,25 @@ Deno.serve(async (req) => {
                   ...(targetInboxStatus === 'pending'
                     ? { last_surfaced_reply_at: lastReplyDate || nowIso }
                     : {}),
+                  // SELF-HEALING NULL-REPAIR (strict upgrade, null -> thread id).
+                  //
+                  // reply-webhook captures in real time but cannot always resolve
+                  // the inbox thread (Reply.io's v3 payload carries no thread id,
+                  // and GET /v3/inbox/threads ignores every filter param, so it
+                  // resolves client-side and returns NULL rather than guess on a
+                  // 429 or a genuinely ambiguous multi-thread contact). Such a
+                  // lead is visible but unsendable — send-agent-reply rejects a
+                  // null external_id with 400 thread_unresolved. The poll already
+                  // holds the authoritative thread id, so it fills the gap here.
+                  //
+                  // ONLY when the stored value is NULL. This deliberately does
+                  // NOT relax the "DO NOT touch external_id" rule above: that rule
+                  // exists so a later capture can't OVERWRITE an established
+                  // identity (the masked-stub <-> real-email downgrade). Writing
+                  // into a null is not an overwrite — there is no identity to
+                  // downgrade — so the guarantee is preserved. A non-null
+                  // external_id, right or wrong, is still never touched here.
+                  ...(existingLead.external_id == null ? { external_id: externalId } : {}),
                 })
                 .eq('id', existingLead.id)
                 .select('id')
@@ -472,6 +498,27 @@ Deno.serve(async (req) => {
               // run (existingLead is a reference into `candidates`).
               existingLead.last_reply_at = lastReplyDate || nowIso;
               existingLead.inbox_status = targetInboxStatus;
+              // Mirror the repair into the in-run candidate so a LATER thread for
+              // the same contact in this same run sees a non-null value and does
+              // not overwrite the id we just set.
+              if (existingLead.external_id == null) {
+                existingLead.external_id = externalId;
+                repairedThisRun.set(String(existingLead.id), String(externalId));
+                console.log(
+                  `[poll-reply-inbox] null-repair: lead ${existingLead.id} external_id -> ${externalId}`,
+                );
+              } else if (
+                repairedThisRun.has(String(existingLead.id)) &&
+                repairedThisRun.get(String(existingLead.id)) !== String(externalId)
+              ) {
+                // MULTI-THREAD CONTACT — we repaired this lead earlier in this
+                // same run with a different thread. Keeping first-seen.
+                console.log(
+                  `[poll-reply-inbox] null-repair MULTI-THREAD: lead ${existingLead.id} kept ` +
+                  `first-seen thread ${repairedThisRun.get(String(existingLead.id))}, also saw ` +
+                  `${externalId}. Safe (same contact), but first-seen-wins — revisit if frequent.`,
+                );
+              }
               if (targetInboxStatus === 'pending') {
                 existingLead.last_surfaced_reply_at = lastReplyDate || nowIso;
               }
