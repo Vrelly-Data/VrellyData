@@ -46,10 +46,14 @@ async function validateApiKey(platform: string, apiKey: string): Promise<{ valid
     // Route to the platform-specific validator. validate-api-key no longer
     // silently accepts unknown platforms — each new platform must add its
     // own validator function.
-    const functionName =
-      platform === 'smartlead' ? 'validate-smartlead-key' : 'validate-api-key';
-    const body =
-      platform === 'smartlead' ? { apiKey } : { platform, apiKey };
+    const PLATFORM_VALIDATORS: Record<string, string> = {
+      smartlead: 'validate-smartlead-key',
+      heyreach: 'validate-heyreach-key',
+    };
+    const functionName = PLATFORM_VALIDATORS[platform] ?? 'validate-api-key';
+    // Platform-specific validators take just the key; the generic one needs to
+    // be told which platform to check.
+    const body = PLATFORM_VALIDATORS[platform] ? { apiKey } : { platform, apiKey };
 
     const { data, error } = await supabase.functions.invoke(functionName, { body });
 

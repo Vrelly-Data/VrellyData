@@ -158,14 +158,26 @@ export function useOutboundIntegrations() {
               toast.success('HeyReach campaigns synced');
             }
 
-            // Step 2: Poll HeyReach inbox for replies
-            try {
-              await supabase.functions.invoke('poll-heyreach-inbox', {
-                body: { integrationId: data.id },
-              });
-            } catch (err) {
-              console.warn('HeyReach inbox poll error (non-fatal):', err);
-            }
+            // Step 2: DISABLED — do not poll the HeyReach inbox on connect.
+            //
+            // poll-heyreach-inbox requests
+            //   filters: { linkedInAccountIds: [], campaignIds: [], searchString: '' }
+            // i.e. EVERY conversation in the account, and nothing scopes it:
+            // heyreach_account_ids lives on client_analysis and is read only by
+            // get-client-report / generate-client-analysis for REPORTING — no
+            // capture path consults it. There is also no account-selection step
+            // in the connect dialog. So polling here would ingest a client's
+            // entire HeyReach inbox as 'pending' agent_leads within seconds of
+            // connecting, for every end-client in that account.
+            //
+            // Campaign sync above is unaffected, so the integration still
+            // appears configured. Capture is enabled deliberately once account
+            // scoping exists (or on-demand), rather than implicitly at connect.
+            // Reply.io and Smartlead connect behaviour is untouched.
+            console.log(
+              '[heyreach] connect-time inbox poll intentionally skipped — capture is ' +
+              'enabled separately once account scoping is in place.',
+            );
           } catch (err) {
             console.error('HeyReach auto-sync error:', err);
           }
