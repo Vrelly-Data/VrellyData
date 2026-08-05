@@ -85,9 +85,21 @@ Deno.serve(async (req) => {
       return json({ valid: true });
     }
     if (res.status === 401 || res.status === 403) {
-      // Log status only — never the key or a body that might echo it.
-      console.warn(`[validate-heyreach-key] key rejected (HTTP ${res.status})`);
-      return json({ valid: false, error: "Invalid HeyReach API key." });
+      // SURFACE HEYREACH'S OWN MESSAGE. A flat "Invalid API key" hid the single
+      // most actionable fact during the first real connect: HeyReach replies
+      //   "The provided API key is not a workspace-level key."
+      // for a key that is valid but of the wrong SCOPE. The user had a real key
+      // and no way to learn they needed a workspace-level one. HeyReach's 401
+      // body is a short plain-string reason and never echoes the key, so it is
+      // safe to pass through; length-capped, with the generic wording as a
+      // fallback when the body is empty or unexpectedly large.
+      const raw = (await res.text().catch(() => "")).trim().replace(/^"|"$/g, "");
+      const detail = raw && raw.length <= 200 ? raw : "";
+      console.warn(`[validate-heyreach-key] key rejected (HTTP ${res.status}): ${detail || "(no body)"}`);
+      return json({
+        valid: false,
+        error: detail ? `HeyReach rejected this key: ${detail}` : "Invalid HeyReach API key.",
+      });
     }
     if (res.status === 429) {
       return json({ valid: false, error: "HeyReach rate limit hit. Please try again in a minute." });
