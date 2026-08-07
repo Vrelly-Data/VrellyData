@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils';
 import {
   useAgentInboxData,
   useClassifyLead,
+  INBOX_PAGE_SIZE,
   type AgentLead,
   type InboxStatusGroup,
 } from '@/hooks/useAgentInbox';
@@ -31,9 +32,32 @@ function latestSenderName(
   return null;
 }
 
+// Server-side ceiling in get-agent-inbox. Mirrored here so the UI can say
+// "showing the first N of M" instead of just hiding the button and implying
+// the list is complete.
+const MAX_INBOX_PAGE = 500;
+
 export function AgentInbox() {
-  const [statusGroup, setStatusGroup] = useState<InboxStatusGroup>('pending_approval');
-  const { leads, counts, isLoading } = useAgentInboxData('inbox', statusGroup);
+  const [statusGroup, setStatusGroupRaw] = useState<InboxStatusGroup>('pending_approval');
+  const [limit, setLimit] = useState(INBOX_PAGE_SIZE);
+
+  // Switching tabs starts a new list — carrying a grown page size across would
+  // fetch hundreds of rows for a tab the operator has not scrolled yet.
+  const setStatusGroup = useCallback((group: InboxStatusGroup) => {
+    setStatusGroupRaw(group);
+    setLimit(INBOX_PAGE_SIZE);
+  }, []);
+
+  const { leads, counts, hasMore, total, isLoading, isFetching } =
+    useAgentInboxData('inbox', statusGroup, limit);
+
+  // Distinguishes "fetching a BIGGER page" from the routine 30s background
+  // poll, which also sets isFetching. Keying the button's pending state off
+  // isFetching alone would grey it out and flip it to "Loading…" twice a
+  // minute. While a larger page is in flight the placeholder still holds the
+  // previous, smaller row set — so fewer rows than the requested limit means
+  // the expansion has not landed yet.
+  const isExpanding = isFetching && leads.length < limit;
   const { data: agentConfig } = useAgentConfig();
   const classifyLead = useClassifyLead();
   const [selectedLead, setSelectedLead] = useState<AgentLead | null>(null);
@@ -182,9 +206,14 @@ export function AgentInbox() {
                       );
                     })()}
                   </div>
-                  {lead.last_reply_at && (
+                  {/* Show the timestamp the list is SORTED by. This row used to
+                      render last_reply_at while Total Inbox ordered by
+                      updated_at, so the visible times read as shuffled even
+                      where the order was defensible. Falls back to
+                      last_reply_at for any row the backfill hasn't reached. */}
+                  {(lead.last_message_at ?? lead.last_reply_at) && (
                     <span className="text-xs text-muted-foreground shrink-0">
-                      {formatRelativeTime(lead.last_reply_at)}
+                      {formatRelativeTime(lead.last_message_at ?? lead.last_reply_at)}
                     </span>
                   )}
                 </div>
@@ -214,6 +243,37 @@ export function AgentInbox() {
                 )}
               </div>
             ))
+          )}
+
+          {/* Paging footer. Three states, and none of them silently imply the
+              list is complete when it isn't:
+                more available        → clickable "Load more"
+                more, but at the cap  → static count, no false affordance
+                nothing more          → nothing rendered */}
+          {hasMore && limit < MAX_INBOX_PAGE && (
+            <button
+              onClick={() => setLimit((n) => Math.min(n + INBOX_PAGE_SIZE, MAX_INBOX_PAGE))}
+              disabled={isExpanding}
+              className={cn(
+                'w-full px-4 py-3 text-sm text-muted-foreground border-b transition-colors',
+                'hover:text-foreground hover:bg-muted/50 disabled:opacity-60',
+                'focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary',
+              )}
+            >
+              {isExpanding ? (
+                <span className="inline-flex items-center gap-2">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Loading…
+                </span>
+              ) : (
+                <>Load more · showing {leads.length} of {total}</>
+              )}
+            </button>
+          )}
+          {hasMore && limit >= MAX_INBOX_PAGE && (
+            <p className="px-4 py-3 text-xs text-muted-foreground border-b">
+              Showing the first {leads.length} of {total}.
+            </p>
           )}
         </div>
       </div>

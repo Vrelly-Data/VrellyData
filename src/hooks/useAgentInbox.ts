@@ -38,6 +38,13 @@ export interface AgentLead {
   draft_response: string;
   draft_approved: boolean;
   last_reply_at: string;
+  // Newest message in EITHER direction — MAX over reply_thread[] (excluding
+  // role:'system'), floored by last_reply_at/created_at, maintained DB-side by
+  // the zz_agent_leads_set_last_message_at trigger. Drives Total Inbox ordering
+  // and the row timestamp. Optional in the type because the migration and this
+  // deploy are two steps; a row that escapes the backfill falls back to
+  // last_reply_at, which is the pre-existing behaviour.
+  last_message_at?: string | null;
   last_reply_text: string;
   reply_thread: Array<{
     role: string;
@@ -77,14 +84,27 @@ export interface AgentCounts {
 interface AgentInboxResponse {
   leads: AgentLead[];
   counts: AgentCounts;
+  // Present on the 'inbox' view only: whether the group holds more rows than
+  // this page returned, and the group's full size. Reported independently of
+  // the server's page ceiling, so a caller at the cap can still tell there is
+  // more behind it rather than silently believing it has everything.
+  hasMore?: boolean;
+  total?: number;
 }
+
+// Page size for the inbox list. The caller grows `limit` rather than walking
+// offsets: the list refetches every 30s, and under a live-updating result set
+// an accumulating offset walk duplicates or skips rows as new leads land at the
+// top. Refetching a growing window is idempotent and always self-consistent.
+export const INBOX_PAGE_SIZE = 50;
 
 async function fetchAgentInbox(
   view: 'inbox' | 'pipeline',
   statusGroup?: InboxStatusGroup,
+  limit?: number,
 ): Promise<AgentInboxResponse> {
   const { data, error } = await supabase.functions.invoke('get-agent-inbox', {
-    body: { view, ...(statusGroup && { statusGroup }) },
+    body: { view, ...(statusGroup && { statusGroup }), ...(limit && { limit }) },
   });
 
   if (error) throw new Error(`Failed to fetch agent inbox: ${error.message}`);
@@ -94,13 +114,18 @@ async function fetchAgentInbox(
 export function useAgentInbox(
   view: 'inbox' | 'pipeline' = 'inbox',
   statusGroup?: InboxStatusGroup,
+  limit: number = INBOX_PAGE_SIZE,
 ) {
   return useQuery<AgentInboxResponse>({
-    queryKey: ['agent-inbox', view, statusGroup ?? 'pending_approval'],
-    queryFn: () => fetchAgentInbox(view, statusGroup),
+    queryKey: ['agent-inbox', view, statusGroup ?? 'pending_approval', limit],
+    queryFn: () => fetchAgentInbox(view, statusGroup, limit),
     refetchInterval: 30000, // Poll every 30 seconds
     staleTime: 0,
     refetchOnWindowFocus: true,
+    // Growing `limit` changes the queryKey, which would otherwise drop the
+    // cached page and flash the whole list back to its loading spinner on every
+    // "Load more". Keep showing the current rows while the larger page loads.
+    placeholderData: (previous) => previous,
   });
 }
 
@@ -108,8 +133,9 @@ export function useAgentInbox(
 export function useAgentInboxData(
   view: 'inbox' | 'pipeline' = 'inbox',
   statusGroup?: InboxStatusGroup,
+  limit: number = INBOX_PAGE_SIZE,
 ) {
-  const query = useAgentInbox(view, statusGroup);
+  const query = useAgentInbox(view, statusGroup, limit);
   return {
     leads: query.data?.leads ?? [],
     counts: query.data?.counts ?? {
@@ -119,6 +145,11 @@ export function useAgentInboxData(
       auto_handled: 0,
       by_intent: {},
     },
+    hasMore: query.data?.hasMore ?? false,
+    total: query.data?.total ?? 0,
+    // isFetching (not isLoading) stays true across a placeholder-backed refetch,
+    // which is what the "Load more" button needs to show its pending state.
+    isFetching: query.isFetching,
     isLoading: query.isLoading,
     error: query.error,
     refetch: query.refetch,
