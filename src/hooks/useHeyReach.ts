@@ -55,7 +55,9 @@ export function useSendHeyReachMessage() {
         body: { lead_id, message },
       });
 
-      if (error) throw new Error(error.message || 'Failed to send message');
+      // See edgeFunctionError.ts: error.message is always the generic non-2xx
+      // placeholder; the real reason is in the unread response body.
+      if (error) throw await edgeFunctionError(error, 'Failed to send message');
       if (!data?.success) throw new Error(data?.error || 'Failed to send message');
       return data;
     },
