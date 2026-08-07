@@ -11,6 +11,7 @@ import {
   type InboxStatusGroup,
 } from '@/hooks/useAgentInbox';
 import { useAgentConfig } from '@/hooks/useAgent';
+import { useHeyReachAccountNames } from '@/hooks/useHeyReachAccounts';
 import {
   LeadDetailPanel,
   IntentBadge,
@@ -58,6 +59,12 @@ export function AgentInbox() {
   // previous, smaller row set — so fewer rows than the requested limit means
   // the expansion has not landed yet.
   const isExpanding = isFetching && leads.length < limit;
+
+  // HeyReach sender names. Only fetched when the visible list actually contains
+  // a HeyReach lead — Reply.io/Smartlead-only tenants make no request at all.
+  const heyReachAccountNames = useHeyReachAccountNames(
+    leads.some((l) => l.heyreach_account_id != null),
+  );
   const { data: agentConfig } = useAgentConfig();
   const classifyLead = useClassifyLead();
   const [selectedLead, setSelectedLead] = useState<AgentLead | null>(null);
@@ -194,7 +201,15 @@ export function AgentInbox() {
                       <p className="text-xs text-muted-foreground truncate">{lead.job_title}</p>
                     )}
                     {(() => {
-                      const sender = latestSenderName(lead.reply_thread);
+                      // reply_thread fromName first (Reply.io); fall back to the
+                      // HeyReach account that owns the conversation, whose name
+                      // isn't in the thread or anywhere in the DB. Same line,
+                      // same "Campaign · Sender: X" layout for both platforms.
+                      const sender =
+                        latestSenderName(lead.reply_thread)
+                        ?? (lead.heyreach_account_id != null
+                          ? heyReachAccountNames.get(lead.heyreach_account_id) ?? null
+                          : null);
                       const campaign = lead.last_campaign_name;
                       if (!campaign && !sender) return null;
                       return (
