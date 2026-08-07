@@ -38,6 +38,13 @@ export interface AgentLead {
   draft_response: string;
   draft_approved: boolean;
   last_reply_at: string;
+  // Newest message in EITHER direction — MAX over reply_thread[] (excluding
+  // role:'system'), floored by last_reply_at/created_at, maintained DB-side by
+  // the zz_agent_leads_set_last_message_at trigger. Drives Total Inbox ordering
+  // and the row timestamp. Optional in the type because the migration and this
+  // deploy are two steps; a row that escapes the backfill falls back to
+  // last_reply_at, which is the pre-existing behaviour.
+  last_message_at?: string | null;
   last_reply_text: string;
   reply_thread: Array<{
     role: string;

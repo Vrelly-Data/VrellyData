@@ -182,9 +182,14 @@ export function AgentInbox() {
                       );
                     })()}
                   </div>
-                  {lead.last_reply_at && (
+                  {/* Show the timestamp the list is SORTED by. This row used to
+                      render last_reply_at while Total Inbox ordered by
+                      updated_at, so the visible times read as shuffled even
+                      where the order was defensible. Falls back to
+                      last_reply_at for any row the backfill hasn't reached. */}
+                  {(lead.last_message_at ?? lead.last_reply_at) && (
                     <span className="text-xs text-muted-foreground shrink-0">
-                      {formatRelativeTime(lead.last_reply_at)}
+                      {formatRelativeTime(lead.last_message_at ?? lead.last_reply_at)}
                     </span>
                   )}
                 </div>

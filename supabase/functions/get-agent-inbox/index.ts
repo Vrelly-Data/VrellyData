@@ -142,18 +142,32 @@ Deno.serve(async (req) => {
         statusGroup === 'total_inbox' ? TOTAL_INBOX_STATUSES : PENDING_APPROVAL_STATUSES;
 
       // Deterministic newest-first ordering. The PRIMARY key differs by tab:
-      //   total_inbox      → updated_at first. Our own sends (Send Reply) bump
-      //                      updated_at but NOT last_reply_at, so ordering by
-      //                      updated_at lifts BOTH prospect replies and our sends
-      //                      to the top — "most recent message" (Feature 3).
+      //   total_inbox      → last_message_at: MAX over reply_thread[] excluding
+      //                      role:'system', floored by last_reply_at/created_at,
+      //                      maintained by the zz_agent_leads_set_last_message_at
+      //                      trigger. This is the newest message in EITHER
+      //                      direction — every send path appends to reply_thread,
+      //                      so our own sends and prospect replies both count.
+      //
+      //                      Was updated_at (0313fef), on the assumption that a
+      //                      Send Reply bumps it while last_reply_at stays put.
+      //                      True, but updated_at is a ROW-TOUCH stamp: the
+      //                      */15 poll-reply-inbox cron writes it explicitly
+      //                      (index.ts:461), re-stamping every thread it walks
+      //                      whether or not anything changed — and nothing
+      //                      suppresses that, since agent_leads_skip_noop is
+      //                      NOT attached on dev or prod despite the repo's
+      //                      migrations. Ordering tracked poll batches, not
+      //                      conversations — 18/50 rows correctly placed on
+      //                      Avania, median 23.9h skew.
       //   pending_approval → last_reply_at first. Actionability is driven by the
       //                      prospect's latest reply, so keep it prospect-driven.
       // Remaining keys: the other timestamp, then created_at (floor for freshly-
       // imported leads), then id (final tie-breaker so identical-timestamp rows
       // don't flip order on each 30s refetch). nullsFirst: false keeps
       // null-timestamp rows off the top of DESC order.
-      const primarySort = statusGroup === 'total_inbox' ? 'updated_at' : 'last_reply_at';
-      const secondarySort = statusGroup === 'total_inbox' ? 'last_reply_at' : 'updated_at';
+      const primarySort = statusGroup === 'total_inbox' ? 'last_message_at' : 'last_reply_at';
+      const secondarySort = statusGroup === 'total_inbox' ? 'last_reply_at' : 'last_message_at';
       const { data: inboxLeads, error } = await supabase
         .from('agent_leads')
         .select('*')
