@@ -56,6 +56,12 @@ export interface AgentLead {
   auto_handled: boolean;
   notes: string;
   last_campaign_name?: string | null;
+  // HeyReach LinkedIn sender account that owns this conversation. Written by
+  // poll-heyreach-inbox; null for every other source. get-agent-inbox already
+  // select('*')s it — this only declares it to TS. Resolved to a display name
+  // via useHeyReachAccountNames, because HeyReach's ingest writes no
+  // reply_thread fromName for the inbox's usual sender derivation to read.
+  heyreach_account_id?: number | null;
 }
 
 export type InboxStatusGroup = 'pending_approval' | 'total_inbox';

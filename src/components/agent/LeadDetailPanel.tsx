@@ -44,6 +44,7 @@ import { useAgentDocuments } from '@/hooks/useAgentDocuments';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { supabase } from '@/integrations/supabase/client';
+import { edgeFunctionError } from '@/lib/edgeFunctionError';
 import { useToast } from '@/hooks/use-toast';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { LeadTagsSection } from './LeadTagsSection';
@@ -146,7 +147,10 @@ function useSendAgentReply() {
         // backend applies it to the email channel only and ignores it otherwise.
         body: { leadId, draftResponse, intent, ...(campaignId ? { campaignId } : {}), ...(cc ? { cc } : {}) },
       });
-      if (error) throw new Error(error.message || 'Failed to send reply');
+      // error.message alone is always 'Edge Function returned a non-2xx status
+      // code' — the real reason is in the unread response body. See
+      // edgeFunctionError.ts.
+      if (error) throw await edgeFunctionError(error, 'Failed to send reply');
       if (data?.error) throw new Error(data.error);
       return data;
     },
@@ -170,7 +174,7 @@ function useSendSmartleadEmail() {
         // payload when absent.
         body: { leadId, message, ...(cc ? { cc } : {}) },
       });
-      if (error) throw new Error(error.message || 'Failed to send Smartlead email');
+      if (error) throw await edgeFunctionError(error, 'Failed to send Smartlead email');
       if (data?.error) throw new Error(data.error);
       return data;
     },
@@ -427,11 +431,21 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
           },
           onError: (err: any) => {
             const msg = err?.message || 'Failed to send reply';
+            // Branch on the body's `code` where we have one — it survives
+            // rewording of the message. These two mean the lead has no live
+            // Reply.io thread to post into, which retrying cannot fix, so the
+            // toast says so rather than implying a transient failure.
+            if (err?.code === 'invalid_thread_reference' || err?.code === 'thread_unresolved') {
+              toast({
+                title: "Can't send — no live thread",
+                description: msg,
+                variant: 'destructive',
+              });
             // Channel-mismatch is the new safety-check error from
             // send-agent-reply (commit ee07c2a). Surface it with a
             // distinct toast so the operator knows to fix Settings,
             // not retry.
-            if (msg.includes('Channel mismatch')) {
+            } else if (msg.includes('Channel mismatch')) {
               toast({
                 title: 'Channel mismatch',
                 description: msg,
@@ -848,6 +862,34 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
               rows={4}
               className="text-sm"
             />
+            {/* CC — Smartlead email only. The identical field also exists in the
+                Reply.io Actions block below; both are bound to the SAME
+                component-level ccEmail state and the same default_cc pre-fill,
+                so behaviour is identical across platforms.
+                WHY IT LIVES IN BOTH PLACES: 6948e8a added CC for Smartlead by
+                widening the render gate on the Reply.io copy to
+                (isReplyIoEmail || isSmartleadEmail) — but that copy sits inside
+                the "Reply.io Actions" block, whose own gate is
+                (isReplyIoEmail || isReplyIoLinkedIn). A Smartlead lead can never
+                satisfy the parent, so the widened inner gate was unreachable and
+                the field never rendered for the only Smartlead client. The two
+                composers are mutually exclusive branches (a lead is either
+                Smartlead email or Reply.io), so duplicating the markup is what
+                keeps each composer self-contained; the id is safe for the same
+                reason — both can never mount at once. */}
+            {isSmartleadEmail && (
+              <div className="space-y-1">
+                <Label htmlFor="reply_cc" className="text-xs text-muted-foreground">CC</Label>
+                <Input
+                  id="reply_cc"
+                  type="email"
+                  value={ccEmail}
+                  onChange={(e) => setCcEmail(e.target.value)}
+                  placeholder="cc@example.com (optional)"
+                  className="h-8 text-sm"
+                />
+              </div>
+            )}
             <div className="flex items-center gap-2">
               <Button
                 size="sm"
