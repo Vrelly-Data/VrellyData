@@ -862,6 +862,34 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
               rows={4}
               className="text-sm"
             />
+            {/* CC — Smartlead email only. The identical field also exists in the
+                Reply.io Actions block below; both are bound to the SAME
+                component-level ccEmail state and the same default_cc pre-fill,
+                so behaviour is identical across platforms.
+                WHY IT LIVES IN BOTH PLACES: 6948e8a added CC for Smartlead by
+                widening the render gate on the Reply.io copy to
+                (isReplyIoEmail || isSmartleadEmail) — but that copy sits inside
+                the "Reply.io Actions" block, whose own gate is
+                (isReplyIoEmail || isReplyIoLinkedIn). A Smartlead lead can never
+                satisfy the parent, so the widened inner gate was unreachable and
+                the field never rendered for the only Smartlead client. The two
+                composers are mutually exclusive branches (a lead is either
+                Smartlead email or Reply.io), so duplicating the markup is what
+                keeps each composer self-contained; the id is safe for the same
+                reason — both can never mount at once. */}
+            {isSmartleadEmail && (
+              <div className="space-y-1">
+                <Label htmlFor="reply_cc" className="text-xs text-muted-foreground">CC</Label>
+                <Input
+                  id="reply_cc"
+                  type="email"
+                  value={ccEmail}
+                  onChange={(e) => setCcEmail(e.target.value)}
+                  placeholder="cc@example.com (optional)"
+                  className="h-8 text-sm"
+                />
+              </div>
+            )}
             <div className="flex items-center gap-2">
               <Button
                 size="sm"
