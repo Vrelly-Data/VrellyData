@@ -1,0 +1,52 @@
+-- Drop the duplicate updated_at trigger on agent_leads.
+--
+-- agent_leads carries TWO equivalent BEFORE UPDATE triggers (verified on dev AND
+-- prod, 2026-08-06):
+--     agent_leads_updated_at        → public.update_updated_at()
+--     update_agent_leads_updated_at → public.update_updated_at_column()
+-- Both are FOR EACH ROW, and both function bodies reduce to
+-- `NEW.updated_at = now(); RETURN NEW;` — identical but for whitespace.
+--
+-- PROVENANCE: accidental, not intentional. 20260402120000_create_agent_tables.sql
+-- created agent_leads and agent_leads_updated_at. Ten days later
+-- 20260412000001_create_agent_leads.sql was written as though the table did not
+-- exist — CREATE TABLE IF NOT EXISTS with a strictly smaller column list — so
+-- the table creation no-op'd, but its trigger was created unconditionally under
+-- a new name. That migration's `DROP TRIGGER IF EXISTS` guarded only its OWN
+-- name, never the incumbent, so both survived and both have fired on every
+-- update since.
+--
+-- WHY DROP IT: the duplication is harmless in effect (the second stamp
+-- overwrites the first with the same now()) but it is an active footgun —
+-- anyone suppressing "the updated_at trigger" by name suppresses only half of
+-- it. That is exactly the bug the first draft of 20260806120000 shipped with,
+-- caught only because the two environments were inspected directly.
+--
+-- WHY THIS IS BEHAVIOUR-NEUTRAL: update_agent_leads_updated_at remains attached
+-- and keeps stamping updated_at on every update. No row will observe a
+-- different value than it does today.
+--
+-- SCOPE — TRIGGER ONLY, NEVER THE FUNCTION.
+-- public.update_updated_at() is SHARED by three triggers:
+--     agent_leads.agent_leads_updated_at      <- the one dropped here
+--     agent_configs.agent_configs_updated_at  <- must keep working
+--     user_credits.user_credits_updated_at    <- must keep working
+-- Dropping the function (or using CASCADE) would silently strip updated_at
+-- maintenance from agent_configs and user_credits. Do not.
+--
+-- DEPENDENCY CHECK: no edge function, hook, component, or script references
+-- either trigger by name — the only hits in the repo are the creating migration
+-- and the prod_schema.sql / dev_apply.sql schema dumps. Triggers are not
+-- addressable through PostgREST, so application code cannot depend on the name
+-- even in principle.
+--
+-- Deliberately a SEPARATE migration from 20260806120000: a schema cleanup has a
+-- different risk and rollback profile than the sort fix, and bundling them would
+-- mean the sort fix could not be reverted without also reverting this. The
+-- backfill in 20260806120000 discovers updated_at triggers dynamically, so it
+-- stays correct both before and after this runs.
+--
+-- REVERT: CREATE TRIGGER agent_leads_updated_at BEFORE UPDATE ON public.agent_leads
+--           FOR EACH ROW EXECUTE FUNCTION public.update_updated_at();
+
+DROP TRIGGER IF EXISTS agent_leads_updated_at ON public.agent_leads;
