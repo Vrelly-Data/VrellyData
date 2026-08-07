@@ -168,6 +168,27 @@ Deno.serve(async (req) => {
       // null-timestamp rows off the top of DESC order.
       const primarySort = statusGroup === 'total_inbox' ? 'last_message_at' : 'last_reply_at';
       const secondarySort = statusGroup === 'total_inbox' ? 'last_reply_at' : 'last_message_at';
+
+      // Paging. Was a hard .limit(50) since the original Phase 2 commit
+      // (676b48c): the tab badge reported the FULL group total while the list
+      // rendered 50, so the remainder was unreachable — 241 of Avania's 291
+      // Total Inbox leads at the time of writing. The badge was right; the list
+      // was the lie.
+      //
+      // MAX_PAGE is a real ceiling, not a silent one: hasMore is reported
+      // independently of it, so a caller that has hit the cap can still tell
+      // there is more behind it and say so. Sized against live data — the
+      // largest total_inbox group across all prod tenants is 291 (Avania), so
+      // 500 clears every client today with headroom. A group that ever exceeds
+      // it needs real offset paging in the UI, which `offset` below already
+      // supports server-side.
+      const MAX_PAGE = 500;
+      const limit = Math.min(
+        Math.max(parseInt(String(body.limit ?? 50), 10) || 50, 1),
+        MAX_PAGE,
+      );
+      const offset = Math.max(parseInt(String(body.offset ?? 0), 10) || 0, 0);
+
       const { data: inboxLeads, error } = await supabase
         .from('agent_leads')
         .select('*')
@@ -177,14 +198,25 @@ Deno.serve(async (req) => {
         .order(secondarySort, { ascending: false, nullsFirst: false })
         .order('created_at', { ascending: false, nullsFirst: false })
         .order('id', { ascending: false })
-        .limit(50);
+        .range(offset, offset + limit - 1);
 
       if (error) throw error;
 
-      return new Response(JSON.stringify({ leads: inboxLeads, counts }), {
-        status: 200,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+      // Reuses the exact totals the tab badges already render, so "Load more"
+      // and the badge can never disagree — they are the same number.
+      const groupTotal =
+        statusGroup === 'total_inbox'
+          ? counts.by_status_group.total_inbox
+          : counts.by_status_group.pending_approval;
+      const hasMore = offset + (inboxLeads?.length ?? 0) < groupTotal;
+
+      return new Response(
+        JSON.stringify({ leads: inboxLeads, counts, hasMore, total: groupTotal }),
+        {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      );
     }
 
     if (view === 'pipeline') {
