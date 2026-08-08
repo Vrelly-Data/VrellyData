@@ -42,6 +42,31 @@ const money = (cents: number | null) =>
     ? '—'
     : `$${(cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
 
+const DATE_FMT: Intl.DateTimeFormatOptions = {
+  month: 'short',
+  day: 'numeric',
+  year: 'numeric',
+};
+
+// billing_date is a Postgres DATE, so PostgREST returns a bare 'YYYY-MM-DD'.
+// `new Date('2026-08-03')` parses that as UTC midnight, which then renders as
+// Aug 2 in any negative-offset timezone — an off-by-one-day bug on a field whose
+// whole point is the day. Build the Date from the parts instead so it is local
+// from the start. Falls back to plain parsing if the shape is ever unexpected.
+const formatDateOnly = (ymd: string): string => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
+  const d = m
+    ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+    : new Date(ymd);
+  return Number.isNaN(d.getTime()) ? ymd : d.toLocaleDateString('en-US', DATE_FMT);
+};
+
+// A timestamptz is an instant, so the default parse is already correct here.
+const formatInstant = (iso: string): string => {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString('en-US', DATE_FMT);
+};
+
 export function OrganizationsTab() {
   const { data: orgs, isLoading, error } = useOrganizations();
   const updateOrg = useUpdateOrganization();
@@ -195,7 +220,7 @@ export function OrganizationsTab() {
               <TableHead>Contact</TableHead>
               <TableHead>Status</TableHead>
               <TableHead className="text-right">Monthly</TableHead>
-              <TableHead>Last Stripe sync</TableHead>
+              <TableHead>Billing date</TableHead>
               <TableHead className="w-[80px]">Actions</TableHead>
             </TableRow>
           </TableHeader>
@@ -249,10 +274,22 @@ export function OrganizationsTab() {
                         )}
                       </div>
                     </TableCell>
+                    {/* Billing date, falling back to the Stripe sync date. The
+                        two are different kinds of fact — one is when they get
+                        billed, the other is when we last talked to Stripe — so
+                        the fallback is labelled rather than shown bare. Without
+                        that, a sync timestamp under a "Billing date" header
+                        would read as a billing date. */}
                     <TableCell className="text-muted-foreground text-sm">
-                      {o.stripe_synced_at
-                        ? new Date(o.stripe_synced_at).toLocaleDateString()
-                        : '—'}
+                      {o.billing_date ? (
+                        <span className="text-foreground">{formatDateOnly(o.billing_date)}</span>
+                      ) : o.stripe_synced_at ? (
+                        <span title="No billing date set — showing when Stripe was last synced">
+                          Synced {formatInstant(o.stripe_synced_at)}
+                        </span>
+                      ) : (
+                        '—'
+                      )}
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1">
