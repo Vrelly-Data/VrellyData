@@ -57,6 +57,7 @@ export function EditOrgDialog({ org, open, onOpenChange }: EditOrgDialogProps) {
   const [domain, setDomain] = useState('');
   const [notes, setNotes] = useState('');
   const [isActive, setIsActive] = useState(true);
+  const [billingDate, setBillingDate] = useState('');
   const [manualDollars, setManualDollars] = useState('');
 
   // Reset on every open so a create form never inherits the last edited org's
@@ -73,6 +74,7 @@ export function EditOrgDialog({ org, open, onOpenChange }: EditOrgDialogProps) {
     setDomain(org?.domain ?? '');
     setNotes(org?.notes ?? '');
     setIsActive(org?.is_active ?? true);
+    setBillingDate(org?.billing_date ?? '');
     setManualDollars(centsToInput(org?.manual_monthly_cents));
   }, [org, open]);
 
@@ -103,6 +105,9 @@ export function EditOrgDialog({ org, open, onOpenChange }: EditOrgDialogProps) {
       domain: domain.trim() || null,
       notes: notes.trim() || null,
       is_active: isActive,
+      // Empty input -> null, never ''. Postgres rejects '' for a DATE, and an
+      // unset billing date means unknown.
+      billing_date: billingDate.trim() || null,
       manual_monthly_cents: manualCents,
     };
 
@@ -183,6 +188,16 @@ export function EditOrgDialog({ org, open, onOpenChange }: EditOrgDialogProps) {
             </div>
             <Switch checked={isActive} onCheckedChange={setIsActive} />
           </div>
+
+          {/* Grouped with the monthly amount — both answer "what do they pay
+              and when", and the operator sets them together. */}
+          <Field label="Billing date">
+            <Input
+              type="date"
+              value={billingDate}
+              onChange={(e) => setBillingDate(e.target.value)}
+            />
+          </Field>
 
           <Field label="Manual monthly amount ($)">
             <Input
