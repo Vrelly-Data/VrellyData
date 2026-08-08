@@ -21,6 +21,9 @@ export interface Organization {
   linkedin_url: string | null;
   domain: string | null;
   notes: string | null;
+  // Calendar date the client is billed on. DATE in Postgres, so PostgREST
+  // hands it back as a plain 'YYYY-MM-DD' string — no timezone involved.
+  billing_date: string | null;
   is_active: boolean;
   manual_monthly_cents: number | null;
   stripe_customer_id: string | null;
@@ -83,6 +86,7 @@ export type NewOrganization = Pick<
   | 'linkedin_url'
   | 'domain'
   | 'notes'
+  | 'billing_date'
   | 'is_active'
   | 'manual_monthly_cents'
 >;

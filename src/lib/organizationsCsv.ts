@@ -35,6 +35,7 @@ const COLUMNS: ReadonlyArray<readonly [header: string, get: (o: Organization) =>
   ['domain', (o) => o.domain],
   ['notes', (o) => o.notes],
   ['is_active', (o) => (o.is_active ? 'true' : 'false')],
+  ['billing_date', (o) => o.billing_date],
   ['manual_monthly', (o) => dollars(o.manual_monthly_cents)],
   ['stripe_monthly', (o) => dollars(o.stripe_monthly_cents)],
   ['effective_monthly', (o) => dollars(o.manual_monthly_cents ?? o.stripe_monthly_cents)],
