@@ -11,7 +11,19 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { Card, CardContent } from '@/components/ui/card';
-import { Loader2, Pencil, RefreshCw, Building2, Eye, EyeOff } from 'lucide-react';
+import {
+  Loader2, Pencil, RefreshCw, Building2, Eye, EyeOff, Plus, Trash2, Download,
+} from 'lucide-react';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { toast } from 'sonner';
 import {
   Organization,
@@ -19,9 +31,11 @@ import {
   effectiveSource,
   useOrganizations,
   useUpdateOrganization,
+  useDeleteOrganization,
   useSyncOrgBilling,
 } from '@/hooks/useOrganizations';
 import { EditOrgDialog } from './EditOrgDialog';
+import { organizationsToCsv, downloadCsv } from '@/lib/organizationsCsv';
 
 const money = (cents: number | null) =>
   cents == null
@@ -31,8 +45,13 @@ const money = (cents: number | null) =>
 export function OrganizationsTab() {
   const { data: orgs, isLoading, error } = useOrganizations();
   const updateOrg = useUpdateOrganization();
+  const deleteOrg = useDeleteOrganization();
   const syncBilling = useSyncOrgBilling();
   const [editing, setEditing] = useState<Organization | null>(null);
+  // Separate from `editing` because the dialog uses org===null to mean CREATE —
+  // so `editing` alone cannot distinguish "closed" from "creating".
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [deleting, setDeleting] = useState<Organization | null>(null);
   // Privacy toggle: blur all monetary values (persisted so it survives reloads).
   const [amountsHidden, setAmountsHidden] = useState(() => {
     try {
@@ -66,6 +85,39 @@ export function OrganizationsTab() {
     } catch (e) {
       toast.error(`Update failed: ${(e as Error).message}`);
     }
+  };
+
+  const openCreate = () => {
+    setEditing(null);
+    setDialogOpen(true);
+  };
+  const openEdit = (o: Organization) => {
+    setEditing(o);
+    setDialogOpen(true);
+  };
+
+  const handleDelete = async () => {
+    if (!deleting) return;
+    try {
+      await deleteOrg.mutateAsync(deleting.id);
+      toast.success(`Deleted ${deleting.name}`);
+      setDeleting(null);
+    } catch (e) {
+      toast.error(`Delete failed: ${(e as Error).message}`);
+    }
+  };
+
+  // Exports REAL amounts even while the blur toggle is on: the toggle is
+  // shoulder-surfing protection for the screen, not a permissions boundary, and
+  // a CSV of blurred numbers would be useless. Superadmin-only either way.
+  const handleExport = () => {
+    const rows = orgs ?? [];
+    if (rows.length === 0) {
+      toast.error('Nothing to export');
+      return;
+    }
+    downloadCsv(organizationsToCsv(rows));
+    toast.success(`Exported ${rows.length} organization${rows.length !== 1 ? 's' : ''}`);
   };
 
   const handleSync = async () => {
@@ -116,6 +168,10 @@ export function OrganizationsTab() {
           >
             {amountsHidden ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
           </Button>
+          <Button variant="outline" onClick={handleExport} disabled={list.length === 0}>
+            <Download className="mr-2 h-4 w-4" />
+            Export CSV
+          </Button>
           <Button variant="outline" onClick={handleSync} disabled={syncBilling.isPending}>
             {syncBilling.isPending ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -123,6 +179,10 @@ export function OrganizationsTab() {
               <RefreshCw className="mr-2 h-4 w-4" />
             )}
             Sync billing
+          </Button>
+          <Button onClick={openCreate}>
+            <Plus className="mr-2 h-4 w-4" />
+            Add organization
           </Button>
         </div>
       </div>
@@ -143,7 +203,11 @@ export function OrganizationsTab() {
             {list.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
-                  No organizations yet.
+                  No organizations yet.{' '}
+                  <button className="underline hover:text-foreground" onClick={openCreate}>
+                    Add the first one
+                  </button>
+                  .
                 </TableCell>
               </TableRow>
             ) : (
@@ -191,9 +255,20 @@ export function OrganizationsTab() {
                         : '—'}
                     </TableCell>
                     <TableCell>
-                      <Button variant="ghost" size="icon" onClick={() => setEditing(o)} title="Edit">
-                        <Pencil className="h-4 w-4" />
-                      </Button>
+                      <div className="flex items-center gap-1">
+                        <Button variant="ghost" size="icon" onClick={() => openEdit(o)} title="Edit">
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => setDeleting(o)}
+                          title="Delete"
+                          className="text-muted-foreground hover:text-destructive"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 );
@@ -203,7 +278,42 @@ export function OrganizationsTab() {
         </Table>
       </div>
 
-      <EditOrgDialog org={editing} open={!!editing} onOpenChange={(o) => !o && setEditing(null)} />
+      <EditOrgDialog
+        org={editing}
+        open={dialogOpen}
+        onOpenChange={(o) => {
+          setDialogOpen(o);
+          if (!o) setEditing(null);
+        }}
+      />
+
+      {/* Hard delete with no cascade and no soft-delete column — unrecoverable,
+          so it is confirmed by name rather than fired straight from the icon. */}
+      <AlertDialog open={!!deleting} onOpenChange={(o) => !o && setDeleting(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete organization?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently deletes <strong>{deleting?.name}</strong> and its billing
+              links. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteOrg.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                handleDelete();
+              }}
+              disabled={deleteOrg.isPending}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deleteOrg.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

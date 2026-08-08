@@ -5,11 +5,21 @@ import { supabase } from '@/integrations/supabase/client';
 // simply gets [] from the query — the UI is additionally gated on isSuperAdmin.
 export interface Organization {
   id: string;
-  user_id: string;
+  // Nullable since 20260807120000: an organization is a CRM record first and a
+  // platform account second. NULL = no linked auth.users row yet. UNIQUE is
+  // still enforced, but Postgres treats NULLs as distinct, so any number of
+  // user-less orgs coexist while linked ones stay 1:1.
+  user_id: string | null;
   name: string;
   contact_name: string | null;
   contact_email: string | null;
   contact_phone: string | null;
+  // Split contact name — additive alongside contact_name, which remains what
+  // the table's Contact column renders. Nothing is derived between them.
+  first_name: string | null;
+  last_name: string | null;
+  linkedin_url: string | null;
+  domain: string | null;
   notes: string | null;
   is_active: boolean;
   manual_monthly_cents: number | null;
@@ -53,6 +63,55 @@ export function useUpdateOrganization() {
     mutationFn: async (patch: Partial<Organization> & { id: string }) => {
       const { id, ...fields } = patch;
       const { error } = await supabase.from('organizations').update(fields).eq('id', id);
+      if (error) throw new Error(error.message);
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['organizations'] }),
+  });
+}
+
+// Fields a superadmin can set when creating an org by hand. user_id is
+// deliberately absent: manual records start unlinked and are associated with an
+// account later, which is what nullable user_id bought us.
+export type NewOrganization = Pick<
+  Organization,
+  | 'name'
+  | 'contact_name'
+  | 'contact_email'
+  | 'contact_phone'
+  | 'first_name'
+  | 'last_name'
+  | 'linkedin_url'
+  | 'domain'
+  | 'notes'
+  | 'is_active'
+  | 'manual_monthly_cents'
+>;
+
+export function useCreateOrganization() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (fields: NewOrganization): Promise<Organization> => {
+      const { data, error } = await supabase
+        .from('organizations')
+        .insert(fields)
+        .select()
+        .single();
+      if (error) throw new Error(error.message);
+      return data as Organization;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['organizations'] }),
+  });
+}
+
+// Hard delete. Safe: nothing references organizations — verified against prod
+// and dev, zero inbound foreign keys, zero views, zero functions. There is no
+// cascade and no soft-delete column, so this is unrecoverable; the caller is
+// responsible for confirming first.
+export function useDeleteOrganization() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from('organizations').delete().eq('id', id);
       if (error) throw new Error(error.message);
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['organizations'] }),
