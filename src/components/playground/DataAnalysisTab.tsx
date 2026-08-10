@@ -1,3 +1,14 @@
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { useIsPlatformAdmin } from '@/hooks/useIsPlatformAdmin';
 import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import ReactMarkdown from 'react-markdown';
@@ -14,22 +25,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import {
-  ArrowLeft,
-  Loader2,
-  Plus,
-  Sparkles,
-  Send,
-  MessageSquare,
-  Linkedin,
-  Mail,
-  AlertTriangle,
-  Percent,
-  Pencil,
-  Trash2,
-  History,
-  Share2,
-} from 'lucide-react';
+import { ArrowLeft, Loader2, Plus, Sparkles, Send, MessageSquare, Linkedin, Mail, AlertTriangle, Percent, Pencil, Trash2, History, Share2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
 import {
@@ -438,6 +434,8 @@ function DataAnalysisDetail({
   // a per-client one.
   const [editingAnalysis, setEditingAnalysis] = useState(false);
   const [draftAnalysis, setDraftAnalysis] = useState('');
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const { isPlatformAdmin } = useIsPlatformAdmin();
 
   const saveAnalysisMutation = useMutation({
     mutationFn: async (text: string) => {
@@ -454,6 +452,30 @@ function DataAnalysisDetail({
       queryClient.invalidateQueries({ queryKey: ['client_analysis', clientId] });
     },
     onError: (err: Error) => toast.error(`Save failed: ${err.message}`),
+  });
+
+  // ---- Delete snapshot (platform admins only) -----------------------------
+  // Hard delete: client_analysis_snapshots has no soft-delete column and no
+  // backup, so this is unrecoverable — hence the confirm dialog. Gated in the
+  // UI by useIsPlatformAdmin and, independently, by the
+  // "Platform admins can delete any snapshot" RLS policy (20260808130000).
+  const deleteSnapshotMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase
+        .from('client_analysis_snapshots')
+        .delete()
+        .eq('id', id);
+      if (error) throw error;
+    },
+    onSuccess: (_d, deletedId) => {
+      toast.success('Snapshot deleted');
+      // The deleted snapshot may be the one on screen — clear the selection so
+      // the list falls back to the newest remaining one on refetch.
+      if (selectedSnapshotId === deletedId) setSelectedSnapshotId(null);
+      setPendingDeleteId(null);
+      queryClient.invalidateQueries({ queryKey: ['client_analysis', clientId] });
+    },
+    onError: (err: Error) => toast.error(`Delete failed: ${err.message}`),
   });
 
   // ---- Editable priorities ------------------------------------------------
@@ -628,6 +650,36 @@ function DataAnalysisDetail({
 
       {/* Snapshot picker — drives the stats + summary display below.
           Hidden until the client has at least one snapshot. */}
+      <AlertDialog open={!!pendingDeleteId} onOpenChange={(o) => !o && setPendingDeleteId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this snapshot?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {(() => {
+                const s2 = snapshots.find((x) => x.id === pendingDeleteId);
+                return s2
+                  ? `This permanently deletes the ${s2.range} snapshot for ${formatSnapshotLabel(s2.period_start, s2.period_end)}, including its saved summary and stats. This cannot be undone.`
+                  : 'This cannot be undone.';
+              })()}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteSnapshotMutation.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                if (pendingDeleteId) deleteSnapshotMutation.mutate(pendingDeleteId);
+              }}
+              disabled={deleteSnapshotMutation.isPending}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deleteSnapshotMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {snapshots.length > 0 && (
         <Card>
           <CardContent className="py-3 flex items-center justify-between gap-3 flex-wrap">
@@ -655,11 +707,28 @@ function DataAnalysisDetail({
                 </SelectContent>
               </Select>
             </div>
-            {selectedSnapshot && (
-              <span className="text-xs text-muted-foreground">
-                Generated {new Date(selectedSnapshot.created_at).toLocaleString()}
-              </span>
-            )}
+            <div className="flex items-center gap-3">
+              {selectedSnapshot && (
+                <span className="text-xs text-muted-foreground">
+                  Generated {new Date(selectedSnapshot.created_at).toLocaleString()}
+                </span>
+              )}
+              {/* Admin-only. Snapshots are append-only by design, so repeated
+                  Generate clicks leave exact-duplicate periods behind; this is
+                  the only way to remove one without hand-run SQL. */}
+              {isPlatformAdmin && selectedSnapshot && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                  title="Delete this snapshot"
+                  onClick={() => setPendingDeleteId(selectedSnapshot.id)}
+                  disabled={deleteSnapshotMutation.isPending}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              )}
+            </div>
           </CardContent>
         </Card>
       )}
