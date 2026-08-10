@@ -79,43 +79,10 @@ export function usePlaygroundStats() {
 
       if (contactsError) throw contactsError;
 
-      // ---- Total Contacts -----------------------------------------------
-      // COUNTED LIVE. Do NOT go back to summing synced_campaigns.stats.peopleCount
-      // here, however tempting the "we already have the campaigns" shortcut looks —
-      // that is the bug that has been "fixed" three times and keeps returning.
-      //
-      // peopleCount is a single JSONB key written by SIX functions that do not
-      // agree on what it means:
-      //   sync-reply-campaigns:332      pickNumber(raw, ['contacted'])   ← people CONTACTED
-      //   sync-reply-contacts:968       verifiedCount || contacts.length ← roster COUNT(*)
-      //   sync-reply-campaigns:634      em.peopleCount
-      //   sync-heyreach-campaigns:140   progressStats.totalUsers
-      //   sync-smartlead-campaigns:387  analytics fields
-      //   fetch-available-campaigns:213/283
-      // The first two run on different crons (campaigns hourly, contacts 6-hourly),
-      // so the hourly job overwrites the roster count with "contacted" for ~5 of
-      // every 6 hours — and Reply.io reports no `contacted` for LinkedIn-first
-      // sequences, so it writes 0 over real rosters. Measured on Avania Clinical:
-      // the summed aggregate read 3,558 against 18,590 actual contacts.
-      //
-      // NOR use `contacts.length` from the fetch above: PostgREST caps responses
-      // at 1000 rows (verified — a 5,000-row request returns exactly 1000), so
-      // that silently plateaus at 1000 and looks deliberate.
-      //
-      // head:true transfers no rows, and this is deliberately UNFILTERED so RLS
-      // (team_id = get_user_team_id(auth.uid())) supplies the scope — the exact
-      // query shape useSyncedContactsPaged uses for the People tab. Same table,
-      // same policy, no filters: the two screens cannot disagree by construction.
-      // ~5ms on the largest tenant (index-only scan on idx_synced_contacts_team).
-      const { count: liveContactCount, error: contactCountError } = await supabase
-        .from('synced_contacts')
-        .select('id', { count: 'exact', head: true });
-
-      if (contactCountError) throw contactCountError;
-
       // Calculate stats from campaigns
       let totalMessagesSent = 0;
       let totalReplies = 0;
+      let totalContacts = 0;
       let activeCampaigns = 0;
       let totalPeopleFinished = 0;
       let totalPeopleCount = 0;
@@ -148,12 +115,7 @@ export function usePlaygroundStats() {
           const sent = stats.sent || stats.delivered || 0;
           const replies = stats.replies || 0;
 
-          // totalContacts is NOT accumulated here any more — see the live
-          // count above. totalPeopleCount still is, deliberately: it is only
-          // the denominator of completionPercentage, whose numerator
-          // (peopleFinished) comes from this same stats blob. Swapping one
-          // side for a live row count would mix two different sources and
-          // silently distort that percentage.
+          totalContacts += stats.peopleCount || 0;
           totalPeopleFinished += stats.peopleFinished || 0;
           totalPeopleCount += stats.peopleCount || 0;
           outOfOfficeCount += stats.outOfOffice || 0;
@@ -258,7 +220,7 @@ export function usePlaygroundStats() {
       return {
         totalMessagesSent,
         totalReplies,
-        totalContacts: liveContactCount ?? 0,
+        totalContacts,
         activeCampaigns,
         completionPercentage,
         outOfOfficeCount,
