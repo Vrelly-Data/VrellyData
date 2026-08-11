@@ -41,10 +41,29 @@ function getCorsHeaders(req: Request) {
 // this assumes one exists: sequential calls, a delay between them, a single
 // backoff on 429, and a hard ceiling per run.
 const MAX_LEADS_PER_RUN = 100;
+// 200ms. Raising this to 400ms made rate limiting SEVEN TIMES WORSE
+// (429s went 3 -> 21 of 98, refreshed 95 -> 79), which rules out per-request
+// spacing as the constraint: Smartlead is enforcing a longer rolling window,
+// and the slower run simply overlapped more of the previous run's budget.
+// Total recent volume is what matters, so the mitigation is the hourly cadence
+// and the per-run cap, not the gap between calls. ~3 stragglers per run is
+// acceptable — they refresh on the next pass.
 const DELAY_MS = 200;
 const ACTIVE_WINDOW_DAYS = 7;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// Order-independent fingerprint of a thread, for change detection only.
+// Keys are read explicitly so jsonb's key reordering cannot make two identical
+// threads compare unequal.
+function canonical(thread: ThreadMessage[] | null | undefined): string {
+  if (!Array.isArray(thread)) return '';
+  return thread
+    .map((m) =>
+      [m?.role ?? '', m?.timestamp ?? '', m?.fromName ?? '', m?.content ?? ''].join('\u0001'),
+    )
+    .join('\u0002');
+}
 
 Deno.serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
@@ -91,7 +110,12 @@ Deno.serve(async (req) => {
       from ? senderByMailbox.get(from.toLowerCase()) ?? null : null;
 
     const since = new Date(Date.now() - ACTIVE_WINDOW_DAYS * 86400_000).toISOString();
-    const result = { scanned: 0, refreshed: 0, unchanged: 0, flagged: 0, errors: 0, rateLimited: 0 };
+    // `empty` is its own counter on purpose. The first prod run reported
+    // scanned=98 with every other counter at 0 and success:true, because a
+    // 200-with-no-usable-body fell through as neither refresh nor error. That
+    // silence is what hid a response-shape mismatch for the length of an
+    // investigation — an empty result must be countable.
+    const result = { scanned: 0, refreshed: 0, unchanged: 0, flagged: 0, empty: 0, errors: 0, rateLimited: 0 };
 
     for (const integration of integrations ?? []) {
       const apiKey = integration.api_key_encrypted as string | undefined;
@@ -142,6 +166,7 @@ Deno.serve(async (req) => {
 
           if (!res.thread) {
             if (res.status !== 200) result.errors++;
+            else result.empty++;
             await sleep(DELAY_MS);
             continue;
           }
@@ -150,8 +175,15 @@ Deno.serve(async (req) => {
           // churn on every lead every hour. (agent_leads' no-op guard is not
           // attached in either environment, so an unconditional update really
           // would re-stamp every row.)
-          const before = JSON.stringify(lead.reply_thread ?? null);
-          const after = JSON.stringify(res.thread);
+          //
+          // Compared FIELD BY FIELD, not via JSON.stringify of the raw values.
+          // Postgres returns jsonb with keys reordered (by length, then
+          // bytewise) while this code builds them in declaration order, so
+          // stringifying both never matched and this skip never once fired —
+          // every run rewrote all ~98 leads. Observed as unchanged:0 on a re-run
+          // that should have been almost entirely unchanged.
+          const before = canonical(lead.reply_thread as ThreadMessage[] | null);
+          const after = canonical(res.thread);
           if (before === after) {
             result.unchanged++;
             await sleep(DELAY_MS);

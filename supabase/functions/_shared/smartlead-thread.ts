@@ -111,16 +111,46 @@ export async function fetchSmartleadThread(opts: {
   }
 
   const body = await res.json().catch(() => null);
-  const messages = Array.isArray(body) ? body : [];
+
+  // RESPONSE SHAPE — verified against the live API 2026-08-11, not assumed.
+  // Smartlead returns { "history": [ … ] }, and each message uses `email_body`
+  // and `time`:
+  //   { stats_id, from, to, type: "SENT"|"REPLY", message_id, time,
+  //     email_body, subject, email_seq_number, … }
+  //
+  // The code this was extracted from (smartlead-webhook) expected a BARE ARRAY
+  // with `body` and `timestamp`. All three were wrong, so `Array.isArray(json)`
+  // was false, `messages` was always empty, and the webhook's "overwrite
+  // reply_thread with canonical history" step has never once executed —
+  // silently, because an empty history is indistinguishable from a lead with
+  // nothing to fetch. That is why Smartlead leads carry only the single-message
+  // seed: the canary holds 4 messages upstream (3 SENT, 1 REPLY) and 1 locally.
+  //
+  // The bare-array fallback is kept in case the shape ever changes back.
+  const messages: Array<Record<string, unknown>> = Array.isArray(body)
+    ? body
+    : Array.isArray((body as { history?: unknown } | null)?.history)
+      ? ((body as { history: Array<Record<string, unknown>> }).history)
+      : [];
   if (messages.length === 0) {
     return { thread: null, endsWithOutbound: false, status: res.status };
   }
 
   const remote: ThreadMessage[] = messages.map(
-    (msg: { type?: string; body?: string; timestamp?: string; from?: string }) => {
+    (raw) => {
+      const msg = raw as {
+        type?: string;
+        email_body?: string;
+        body?: string;
+        time?: string;
+        timestamp?: string;
+        from?: string;
+      };
+      const rawBody = msg.email_body ?? msg.body ?? "";
       const stripped = stripZendeskMarker(
-        (msg.body ?? "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " "),
+        rawBody.replace(/<[^>]+>/g, " ").replace(/\s+/g, " "),
       );
+      // type is "SENT" for our outbound, "REPLY" for the prospect.
       const isSender = msg.type === "SENT";
       const fromName = isSender && opts.senderNameFor
         ? opts.senderNameFor(msg.from ?? null)
@@ -128,7 +158,7 @@ export async function fetchSmartleadThread(opts: {
       return {
         role: isSender ? "sender" : "prospect",
         content: stripped,
-        timestamp: msg.timestamp || new Date().toISOString(),
+        timestamp: msg.time ?? msg.timestamp ?? new Date().toISOString(),
         channel: "email",
         ...(fromName ? { fromName } : {}),
       } as ThreadMessage;
