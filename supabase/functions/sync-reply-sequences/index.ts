@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { htmlToText } from "../_shared/html-to-text.ts";
 
 const allowedOrigins = [
   Deno.env.get("ALLOWED_ORIGIN") || "https://vrelly.com",
@@ -96,16 +97,12 @@ function minutesToDays(minutes: number): number {
   return Math.round(minutes / (60 * 24));
 }
 
-// Strip HTML tags for plain text version
+// Plain-text version of a sequence step body. Delegates to the one shared
+// cleaner: this local copy dropped <style>/<script> TAGS but kept their
+// CONTENTS (so a templated step with an inline stylesheet stored raw CSS), and
+// decoded only five entities — no numeric forms, no smart punctuation.
 function stripHtml(html: string): string {
-  return html
-    .replace(/<[^>]*>/g, '')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .trim();
+  return htmlToText(html);
 }
 
 Deno.serve(async (req) => {

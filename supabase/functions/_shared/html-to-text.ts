@@ -30,9 +30,24 @@ export function htmlToText(html: string): string {
   text = text.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, '');
   // 2. Block-level boundaries → newline (before tag-strip so structure survives).
   text = text.replace(/<\s*br\s*\/?\s*>/gi, '\n');
-  text = text.replace(/<\/\s*(p|div|tr|li|h[1-6]|table|blockquote)\s*>/gi, '\n');
-  // 3. Strip all remaining tags.
-  text = text.replace(/<[^>]+>/g, '');
+  // Both halves of a block tag break the line. Closing alone is not enough:
+  // Apple Mail writes signatures as "…CPA CFP CGMA<div>Sent from my iPhone</div>",
+  // which leaves the marker mid-line and invisible to classify-reply's
+  // line-anchored signature/quote patterns. Step 5 collapses the doubling.
+  text = text.replace(/<\/?\s*(p|div|tr|li|h[1-6]|table|blockquote)\b[^>]*>/gi, '\n');
+  // 3. Strip remaining tags. Inline formatting elements are removed with NO
+  //    separator, because Word/Outlook routinely split a single word across
+  //    them ("President/CEO/I<span>nsurance</span>" — a bare space here is how
+  //    the older strips produced "I nsurance"). Everything else — table cells,
+  //    and the OPENING half of the block tags handled above — leaves a space,
+  //    or adjacent words glue together ("<td>day</td><td>Martha" → "dayMartha",
+  //    which also hid the "Sent from my iPhone" signature marker from
+  //    classify-reply by moving it off the start of its line).
+  text = text.replace(
+    /<\/?\s*(b|i|u|em|strong|span|a|font|sub|sup|small|big|abbr|o:p|wbr)\b[^>]*>/gi,
+    '',
+  );
+  text = text.replace(/<[^>]+>/g, ' ');
   // 4. Decode common HTML entities (named + numeric); &amp; last.
   text = text
     .replace(/&nbsp;/gi, ' ')

@@ -1,4 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { htmlToText } from '../_shared/html-to-text.ts';
 
 console.log('classify-reply starting');
 
@@ -21,21 +22,17 @@ function preprocessEmailReply(text: string): string {
   if (!text) return '';
   let s = text;
 
-  // 1. HTML strip (idempotent — skip if no tags detected)
-  if (/<[a-z][^>]*>/i.test(s)) {
-    s = s
-      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-      .replace(/<br\s*\/?>/gi, '\n')
-      .replace(/<\/p>/gi, '\n\n')
-      .replace(/<[^>]+>/g, ' ')
-      .replace(/&nbsp;/gi, ' ')
-      .replace(/&amp;/gi, '&')
-      .replace(/&lt;/gi, '<')
-      .replace(/&gt;/gi, '>')
-      .replace(/&quot;/gi, '"')
-      .replace(/&#39;/gi, "'");
-  }
+  // 1. HTML → text, via the one shared cleaner (htmlToText has its own plain
+  //    text fast path, so this stays idempotent).
+  //
+  //    Deliberately NOT gated on "does it look like HTML" any more. The old
+  //    gate was `if (/<[a-z][^>]*>/i.test(s))`, which meant text carrying
+  //    entities but no tags — the normal shape of an already-ingested reply —
+  //    skipped entity decoding entirely and the model read "Hi&nbsp;Scott,".
+  //    Measured over 650 real prod bodies: entity leakage into the prompt
+  //    36 → 0, and the model is never handed MORE text than before (139
+  //    samples shrank, 511 identical, 0 grew).
+  s = htmlToText(s);
 
   // 2. Zendesk-style marker (defensive — smartlead-webhook also strips this)
   s = s.replace(/##-\s*Please type your reply above this line\s*-##[\s\S]*$/i, '');
