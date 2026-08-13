@@ -42,6 +42,12 @@
 // and the second check activates automatically.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+  fetchSmartleadThread,
+  loadSenderNameLookup,
+  stripZendeskMarker,
+  type ThreadMessage,
+} from "../_shared/smartlead-thread.ts";
 
 const allowedOrigins = [
   Deno.env.get("ALLOWED_ORIGIN") || "https://vrelly.com",
@@ -61,13 +67,6 @@ function getCorsHeaders(req: Request) {
 // anything after it. Full quoted-chain stripping (Gmail/Outlook headers,
 // "On <date> <name> wrote:" blocks, etc.) is deferred to Phase C in
 // classify-reply preprocessing.
-function stripZendeskMarker(text: string): string {
-  if (!text) return "";
-  const markerRe = /##-\s*Please type your reply above this line\s*-##/i;
-  const idx = text.search(markerRe);
-  return (idx >= 0 ? text.slice(0, idx) : text).trim();
-}
-
 const SKIPPABLE_EVENTS = new Set([
   "EMAIL_BOUNCE",
   "LEAD_UNSUBSCRIBED",
@@ -339,20 +338,12 @@ Deno.serve(async (req) => {
     // sender_name). NULL when the mailbox is unmapped or unknown — then the
     // sender entry carries no fromName and lands in the "Unmapped" filter
     // rather than spawning a per-mailbox sender.
-    let mailboxSenderName: string | null = null;
-    if (fromEmail) {
-      // fromEmail is already lowercased above; mailbox_email is stored
-      // lowercased by the sync — so an exact eq matches (and hits the unique
-      // index). Read and write must use the same normalization or attribution
-      // silently misses.
-      const { data: mb } = await supabase
-        .from("email_sender_mailboxes")
-        .select("sender_name")
-        .eq("user_id", integration.created_by)
-        .eq("mailbox_email", fromEmail)
-        .maybeSingle();
-      mailboxSenderName = (mb?.sender_name as string | null) ?? null;
-    }
+    // One user-scoped lookup serves both the seed below and the history mapper.
+    // Previously this resolved a SINGLE address and applied that one name to
+    // every outbound message in the thread — wrong once a thread spans two
+    // mailboxes. The shared lookup resolves per message.
+    const senderNameFor = await loadSenderNameLookup(supabase, integration.created_by);
+    const mailboxSenderName: string | null = senderNameFor(fromEmail);
 
     // === Build reply_thread (single-message seed) ===========================
     // The EMAIL_REPLY payload only carries the latest reply_message (and an
@@ -515,14 +506,19 @@ Deno.serve(async (req) => {
     );
 
     // === Best-effort full-thread sync =======================================
-    // Mirrors heyreach-webhook: the upsert payload only carries the latest
-    // reply, so overwrite reply_thread with Smartlead's canonical history
-    // via /campaigns/{campaign_id}/leads/{lead_id}/message-history. Errors
-    // are logged and non-fatal — the seed thread written by the upsert
-    // stays in place and the webhook still returns 200.
+    // The upsert payload only carries the latest reply, so replace the seed with
+    // Smartlead's canonical history. Errors are non-fatal — the seed stays and
+    // the webhook still returns 200.
     //
-    // api_key in QUERY STRING — never log the URL (contains the credential).
-    let fullReplyThread: typeof replyThread | null = null;
+    // DELEGATED to _shared/smartlead-thread.ts, which poll-smartlead-inbox also
+    // calls. This block used to be an inline copy, and the copy was WRONG: it
+    // read a bare array with `body`/`timestamp`, while the API returns
+    // {"history":[…]} with `email_body`/`time`. Array.isArray() was therefore
+    // always false, messages was always empty, and this "canonical history"
+    // overwrite NEVER ONCE EXECUTED — every Smartlead lead kept only the
+    // single-message seed. Two implementations of one mapping is what allowed
+    // that to go unnoticed for months; there is now exactly one.
+    let fullReplyThread: ThreadMessage[] | null = null;
     if (
       upsertedLead?.id &&
       smartleadCampaignId &&
@@ -530,65 +526,36 @@ Deno.serve(async (req) => {
       integration.api_key_encrypted
     ) {
       try {
-        const historyUrl = new URL(
-          `https://server.smartlead.ai/api/v1/campaigns/${encodeURIComponent(smartleadCampaignId)}/leads/${encodeURIComponent(smartleadLeadId)}/message-history`,
-        );
-        historyUrl.searchParams.set("api_key", integration.api_key_encrypted);
-
-        const historyRes = await fetch(historyUrl.toString(), {
-          headers: { Accept: "application/json" },
+        const history = await fetchSmartleadThread({
+          apiKey: integration.api_key_encrypted,
+          campaignId: String(smartleadCampaignId),
+          leadId: String(smartleadLeadId),
+          // Preserves any role:'system' breadcrumb (add-to-smartlead-campaign)
+          // that the API cannot return and a plain overwrite would destroy.
+          localThread: replyThread as ThreadMessage[],
+          senderNameFor,
         });
 
-        if (!historyRes.ok) {
-          const errBody = await historyRes.text().catch(() => "");
+        if (!history.thread) {
           console.warn(
-            `[smartlead-webhook v2] message-history ${historyRes.status} for campaign=${smartleadCampaignId} lead=${smartleadLeadId} — keeping seed thread. Body: ${errBody.substring(0, 200)}`,
+            `[smartlead-webhook v2] message-history ${history.status} / empty for campaign=${smartleadCampaignId} lead=${smartleadLeadId} — keeping seed thread`,
           );
         } else {
-          const history = await historyRes.json();
-          const messages = Array.isArray(history) ? history : [];
+          const { error: threadUpdateErr } = await supabase
+            .from("agent_leads")
+            .update({ reply_thread: history.thread })
+            .eq("id", upsertedLead.id);
 
-          fullReplyThread = messages.map(
-            (msg: { type?: string; body?: string; timestamp?: string }) => {
-              const rawBody = msg.body ?? "";
-              // Same strip-then-collapse approach used for the EMAIL_REPLY
-              // body, then Zendesk-marker truncation. Phase C will tackle
-              // full quoted-chain stripping in classify-reply preprocessing.
-              const stripped = stripZendeskMarker(
-                rawBody.replace(/<[^>]+>/g, " ").replace(/\s+/g, " "),
-              );
-              const isSender = msg.type === "SENT";
-              return {
-                role: isSender ? "sender" : "prospect",
-                content: stripped,
-                timestamp: msg.timestamp || new Date().toISOString(),
-                channel: "email",
-                // Attribute our outbound to the mailbox's mapped sender so the
-                // pipeline sender filter groups by SENDER, not per-mailbox.
-                ...(isSender && mailboxSenderName ? { fromName: mailboxSenderName } : {}),
-              };
-            },
-          );
-
-          if (fullReplyThread.length > 0) {
-            const { error: threadUpdateErr } = await supabase
-              .from("agent_leads")
-              .update({ reply_thread: fullReplyThread })
-              .eq("id", upsertedLead.id);
-
-            if (threadUpdateErr) {
-              console.warn(
-                `[smartlead-webhook v2] Full-thread UPDATE failed for lead ${upsertedLead.id}:`,
-                threadUpdateErr,
-              );
-              fullReplyThread = null;
-            } else {
-              console.log(
-                `[smartlead-webhook v2] Synced full thread (${fullReplyThread.length} msgs) for lead ${upsertedLead.id}`,
-              );
-            }
+          if (threadUpdateErr) {
+            console.warn(
+              `[smartlead-webhook v2] Full-thread UPDATE failed for lead ${upsertedLead.id}:`,
+              threadUpdateErr,
+            );
           } else {
-            fullReplyThread = null;
+            fullReplyThread = history.thread;
+            console.log(
+              `[smartlead-webhook v2] Synced full thread (${history.thread.length} msgs) for lead ${upsertedLead.id}`,
+            );
           }
         }
       } catch (historyErr) {

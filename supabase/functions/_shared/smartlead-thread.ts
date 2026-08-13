@@ -76,6 +76,40 @@ export function mergeThread(
   return [...remote, ...systemEntries].sort((a, b) => ts(a) - ts(b));
 }
 
+// Mailbox -> sender-name lookup, so our outbound groups by SENDER rather than
+// spawning one pseudo-sender per mailbox.
+//
+// SCOPED BY user_id. email_sender_mailboxes is not globally unique on
+// mailbox_email — two tenants can map the same address to different sender
+// names — so an unscoped map can attribute one client's outbound to another
+// client's sender. smartlead-webhook always scoped its single-address lookup
+// this way; the poller's first version did not, and this exists so both get it
+// right from one place.
+//
+// Returns a lookup rather than a Map so callers can't accidentally skip the
+// lowercase normalisation: mailbox_email is stored lowercased by the sync, and
+// read and write must normalise identically or attribution silently misses.
+export async function loadSenderNameLookup(
+  // deno-lint-ignore no-explicit-any
+  supabase: any,
+  userId: string,
+): Promise<(fromEmail: string | null | undefined) => string | null> {
+  const { data } = await supabase
+    .from("email_sender_mailboxes")
+    .select("mailbox_email, sender_name")
+    .eq("user_id", userId)
+    .not("sender_name", "is", null);
+
+  const map = new Map<string, string>();
+  for (const row of (data ?? []) as Array<Record<string, unknown>>) {
+    const email = (row.mailbox_email as string | null)?.trim().toLowerCase();
+    const name = row.sender_name as string | null;
+    if (email && name) map.set(email, name);
+  }
+  return (fromEmail) =>
+    fromEmail ? map.get(fromEmail.trim().toLowerCase()) ?? null : null;
+}
+
 /** Newest non-system message is ours → the prospect has already been answered. */
 export function threadEndsWithOutbound(thread: ThreadMessage[]): boolean {
   for (let i = thread.length - 1; i >= 0; i--) {

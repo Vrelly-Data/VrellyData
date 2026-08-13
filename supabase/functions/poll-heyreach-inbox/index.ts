@@ -6,6 +6,7 @@ ALTER TABLE public.synced_campaigns ADD COLUMN IF NOT EXISTS source TEXT DEFAULT
 */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { shouldResurface } from '../_shared/inbox-reply.ts';
 
 const allowedOrigins = [
   'https://vrelly.com',
@@ -206,11 +207,16 @@ Deno.serve(async (req) => {
               // Existing-lead lookup on (user_id, linkedin_url) — matches the
               // unique-index dedup key. If linkedin_url is missing we fall back
               // to external_id so legacy rows still resolve.
-              let existingLead: { id: string; last_reply_text: string | null } | null = null;
+              let existingLead: {
+                id: string;
+                last_reply_text: string | null;
+                disposition_tag: string | null;
+                last_surfaced_reply_at: string | null;
+              } | null = null;
               if (linkedinUrl) {
                 const { data } = await supabase
                   .from('agent_leads')
-                  .select('id, last_reply_text')
+                  .select('id, last_reply_text, disposition_tag, last_surfaced_reply_at')
                   .eq('user_id', userId)
                   .eq('linkedin_url', linkedinUrl)
                   .maybeSingle();
@@ -219,7 +225,7 @@ Deno.serve(async (req) => {
               if (!existingLead && externalId) {
                 const { data } = await supabase
                   .from('agent_leads')
-                  .select('id, last_reply_text')
+                  .select('id, last_reply_text, disposition_tag, last_surfaced_reply_at')
                   .eq('user_id', userId)
                   .eq('external_id', externalId)
                   .maybeSingle();
@@ -263,6 +269,49 @@ Deno.serve(async (req) => {
                 console.error(`[poll-heyreach-inbox] Failed to fetch chatroom for ${conversationId}:`, chatroomErr);
               }
 
+              // ---- Surface gate -------------------------------------------
+              // This upsert used to hard-code inbox_status:'pending', so EVERY
+              // conversation it wrote became actionable — including history it
+              // was seeing for the first time. When the poller's stale-key 401
+              // was fixed it ingested 257 previously-invisible conversations for
+              // one client, 204 of them over 90 days old and the oldest from
+              // 2024, straight into Pending Approval. Backfilled history is not
+              // work to do today.
+              //
+              // Mirrors poll-reply-inbox exactly (shared shouldResurface for the
+              // existing-lead case, a 24h recency gate for first sight) so the
+              // two pollers agree on what "actionable" means:
+              //   existing lead → resurface only on a genuinely NEW inbound that
+              //                   is newer than the surface watermark and not
+              //                   suppressed by disposition; otherwise LEAVE THE
+              //                   STATUS ALONE (omitted from the payload, so a
+              //                   dismissal sticks).
+              //   new lead      → 'pending' only if the newest message is an
+              //                   inbound reply from the last 24h; else
+              //                   'mirrored' (in neither inbox tab, still fully
+              //                   readable and still resurfaceable later).
+              const newest = replyThread.length > 0
+                ? replyThread.reduce((a, b) =>
+                    Date.parse(b.timestamp || '') > Date.parse(a.timestamp || '') ? b : a)
+                : null;
+              const newestRole = newest?.role ?? null;
+              const newestMs = newest ? Date.parse(newest.timestamp || '') : NaN;
+              const priorMs = existingLead?.last_surfaced_reply_at
+                ? Date.parse(existingLead.last_surfaced_reply_at)
+                : 0;
+              const newerThanPrior = Number.isFinite(newestMs) && newestMs > priorMs;
+              const isRecent = Number.isFinite(newestMs)
+                ? newestMs >= Date.now() - 24 * 60 * 60 * 1000
+                : false;
+
+              const surface = existingLead
+                ? shouldResurface({
+                    dispositionTag: existingLead.disposition_tag,
+                    newestRole,
+                    newerThanPrior,
+                  })
+                : (newestRole === 'prospect' && isRecent);
+
               const upsertPayload: Record<string, unknown> = {
                 user_id: userId,
                 agent_config_id: agentConfig.id,
@@ -271,7 +320,12 @@ Deno.serve(async (req) => {
                 linkedin_url: linkedinUrl,
                 last_reply_text: lastMessageText,
                 reply_thread: replyThread.length > 0 ? replyThread : undefined,
-                inbox_status: 'pending',
+                // Omitted entirely for an existing lead we are not surfacing —
+                // an omitted column is preserved on conflict, so a dismissal is
+                // not silently undone. A brand-new lead needs an explicit value.
+                ...(surface
+                  ? { inbox_status: 'pending', last_surfaced_reply_at: newest?.timestamp ?? null }
+                  : existingLead ? {} : { inbox_status: 'mirrored' }),
                 channel: 'linkedin',
                 source: 'heyreach',
                 heyreach_conversation_id: conversationId,

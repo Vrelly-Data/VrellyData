@@ -1,6 +1,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import {
   fetchSmartleadThread,
+  loadSenderNameLookup,
   type ThreadMessage,
 } from '../_shared/smartlead-thread.ts';
 
@@ -94,21 +95,6 @@ Deno.serve(async (req) => {
       .eq('platform', 'smartlead');
     if (intErr) return json({ error: intErr.message }, 500);
 
-    // Mailbox -> sender-name map, so our outbound groups by SENDER rather than
-    // per-mailbox (mirrors what smartlead-webhook does on the inbound path).
-    const { data: mailboxes } = await supabase
-      .from('email_sender_mailboxes')
-      .select('mailbox_email, sender_name')
-      .not('sender_name', 'is', null);
-    const senderByMailbox = new Map<string, string>();
-    for (const m of mailboxes ?? []) {
-      const email = (m.mailbox_email as string | null)?.toLowerCase();
-      const name = m.sender_name as string | null;
-      if (email && name) senderByMailbox.set(email, name);
-    }
-    const senderNameFor = (from: string | null) =>
-      from ? senderByMailbox.get(from.toLowerCase()) ?? null : null;
-
     const since = new Date(Date.now() - ACTIVE_WINDOW_DAYS * 86400_000).toISOString();
     // `empty` is its own counter on purpose. The first prod run reported
     // scanned=98 with every other counter at 0 and success:true, because a
@@ -120,6 +106,12 @@ Deno.serve(async (req) => {
     for (const integration of integrations ?? []) {
       const apiKey = integration.api_key_encrypted as string | undefined;
       if (!apiKey) continue;
+
+      // User-scoped, per integration. The first version loaded ONE global map
+      // for all tenants — email_sender_mailboxes is not unique on
+      // mailbox_email, so that could attribute one client's outbound to another
+      // client's sender. Shared with smartlead-webhook so both scope alike.
+      const senderNameFor = await loadSenderNameLookup(supabase, integration.created_by);
 
       // Candidates: recently-active leads, UNION anything still awaiting action
       // regardless of age. The second half is the point of the job — a stale
