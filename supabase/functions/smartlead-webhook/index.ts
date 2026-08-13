@@ -48,6 +48,7 @@ import {
   stripZendeskMarker,
   type ThreadMessage,
 } from "../_shared/smartlead-thread.ts";
+import { htmlToText } from "../_shared/html-to-text.ts";
 
 const allowedOrigins = [
   Deno.env.get("ALLOWED_ORIGIN") || "https://vrelly.com",
@@ -251,15 +252,14 @@ Deno.serve(async (req) => {
           )
         : null;
 
-    // Prefer the plain-text body; fall back to a quick HTML-strip if Smartlead
-    // ever omits .text. Zendesk-style "type your reply above this line" marker
-    // and anything after it is dropped here; full quoted-chain stripping is
-    // Phase C work in classify-reply preprocessing.
+    // Prefer the plain-text body; fall back to htmlToText if Smartlead ever
+    // omits .text. The bare tag-strip this replaced left <style> CONTENTS
+    // behind as literal CSS and decoded no entities — see the matching note in
+    // _shared/smartlead-thread.ts. Zendesk-style "type your reply above this
+    // line" marker and anything after it is dropped here; full quoted-chain
+    // stripping is Phase C work in classify-reply preprocessing.
     const replyText = stripZendeskMarker(
-      replyTextRaw ??
-        (replyHtml
-          ? replyHtml.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ")
-          : ""),
+      replyTextRaw ?? (replyHtml ? htmlToText(replyHtml) : ""),
     );
 
     if (!email) {

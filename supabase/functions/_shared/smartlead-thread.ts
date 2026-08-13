@@ -24,6 +24,8 @@
 // list endpoint — message-history is per-lead only — which is why this is a
 // per-lead poll and why it is Smartlead-specific.
 
+import { htmlToText } from "./html-to-text.ts";
+
 export interface ThreadMessage {
   role: "prospect" | "sender" | "system";
   content: string;
@@ -181,9 +183,15 @@ export async function fetchSmartleadThread(opts: {
         from?: string;
       };
       const rawBody = msg.email_body ?? msg.body ?? "";
-      const stripped = stripZendeskMarker(
-        rawBody.replace(/<[^>]+>/g, " ").replace(/\s+/g, " "),
-      );
+      // message-history returns email_body as HTML. The bare tag-strip this
+      // replaced deleted only the TAGS, so a <style> block's CONTENTS survived
+      // as literal CSS ("ReadMsgBody{ width: 100%;} .ExternalClass …") and no
+      // entity was ever decoded (&nbsp; rendered verbatim in the panel). Both
+      // were visible in a live client inbox. htmlToText — already used by
+      // reply-webhook and poll-reply-inbox — drops script/style blocks with
+      // their contents, keeps block boundaries as newlines, and decodes
+      // entities, so all four email ingest paths now produce the same shape.
+      const stripped = stripZendeskMarker(htmlToText(rawBody));
       // type is "SENT" for our outbound, "REPLY" for the prospect.
       const isSender = msg.type === "SENT";
       const fromName = isSender && opts.senderNameFor
