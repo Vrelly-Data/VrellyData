@@ -630,7 +630,7 @@ Use this campaign data to:
     const line = (label: string, value: string | null | undefined) =>
       value && value.trim() ? `${label}${value}` : '';
 
-    const promptVersion = 'phase3-v2';
+    const promptVersion = 'phase3-v3';
 
     // Compact persona list for Call 1 (titles + tags only). Full content of the
     // matched persona is looked up after Call 1 from the same `personas` array.
@@ -666,10 +666,23 @@ Use this campaign data to:
       }))
       .filter((m) => m.content.trim().length > 0);
 
-    // Anthropic requires the first message to be 'user'. Drop leading
-    // assistant turns — outbound sequences naturally start with the
-    // sender, but Claude needs a user-first conversation.
+    // Anthropic requires the first message to be 'user', so the turns before
+    // the prospect's first reply cannot stay in the message array.
+    //
+    // They used to be DISCARDED here, which quietly threw away the single most
+    // relevant piece of context on cold outbound: our own pitch. Measured over
+    // production threads, that hit 99.7% of Smartlead leads, 78.9% of Reply.io
+    // and 77.5% of HeyReach — up to 8 turns and ~2.7k characters — and in the
+    // common shape (a sequence of outbound, then one reply) it left the model
+    // with NO conversation at all, while the Call 2 prompt was still telling it
+    // to "reference specifics from the thread". A reply like "Not interested"
+    // or "Not 5 mil" is answering the outbound; without it there is nothing to
+    // answer.
+    //
+    // So they are carried into the system prompt instead — preserved, and
+    // attributed to the sender rather than fabricated as prospect turns.
     const firstUserIdx = mapped.findIndex((m) => m.role === 'user');
+    const leadingOutbound = firstUserIdx >= 0 ? mapped.slice(0, firstUserIdx) : mapped;
     const userFirst = firstUserIdx >= 0 ? mapped.slice(firstUserIdx) : [];
 
     // Collapse consecutive same-role turns with double-newline.
@@ -706,6 +719,17 @@ Use this campaign data to:
 
     const isFirstTouch = trimmedThread.length === 0;
 
+    // The outbound that preceded the prospect's first reply, rendered for the
+    // system prompt (see the note at `leadingOutbound`). Shared verbatim by
+    // BOTH calls so the classifier and the writer reason over the same facts.
+    const priorOutreachSection = leadingOutbound.length > 0
+      ? `\n## Our outreach before their first reply
+These ${leadingOutbound.length} message(s) were sent by ${effSenderName} to this prospect BEFORE the reply you are handling. The reply is very often answering the LAST one — read it in that light. Do not re-pitch points already made here.
+${leadingOutbound
+          .map((m, i) => `\n--- Outbound ${i + 1} of ${leadingOutbound.length} ---\n${m.content}`)
+          .join('')}\n`
+      : '';
+
     // ============================ CALL 1 — classify ========================
     const call1SystemPrompt = `You are an expert B2B sales analyst working on behalf of ${effSenderName} at ${company_name}. Your job is to read an inbound prospect reply and classify it precisely — you do NOT write the response, you analyze.
 
@@ -717,7 +741,7 @@ ${line("Who it's for: ", target_icp)}
 ${line('Name: ', leadName)}
 ${line('Title: ', leadJobTitle)}
 ${line('Company: ', leadCompany)}
-
+${priorOutreachSection}
 ## Known Buyer Personas
 Match the prospect to the single best-fit persona below, by its EXACT title. Judge fit from their title, company, and how they're replying. If none genuinely fit, use null — do not force a match.
 ${personaList}
@@ -919,6 +943,7 @@ ${line('Title: ', leadJobTitle)}
 ${line('Company: ', leadCompany)}
 ${line('LinkedIn: ', leadLinkedinUrl)}
 ${line('First contacted in: ', leadLastCampaignName)}
+${priorOutreachSection}
 ${prospectRead?.suggested_angle ? 'Suggested angle: ' + prospectRead.suggested_angle : ''}
 ${personaSection ? '\n' + personaSection : ''}
 

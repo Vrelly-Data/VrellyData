@@ -1141,50 +1141,27 @@ Deno.serve(async (req) => {
                   });
                 }
 
-                // 6. Classify reply if draft_response is empty and last_reply_text is not empty
-                if (
-                  upsertedLead &&
-                  !upsertedLead.draft_response &&
-                  upsertedLead.last_reply_text
-                ) {
-                  try {
-                    const classifyController = new AbortController();
-                    const classifyTimeout = setTimeout(() => classifyController.abort(), 5000);
-
-                    await fetch(`${supabaseUrl}/functions/v1/classify-reply`, {
-                      method: "POST",
-                      headers: {
-                        "Content-Type": "application/json",
-                        "x-agent-key": Deno.env.get("AGENT_API_KEY") || "",
-                      },
-                      signal: classifyController.signal,
-                      body: JSON.stringify({
-                        reply_text: upsertedLead.last_reply_text,
-                        agent_context: {
-                          offer_description: agentConfig.offer_description,
-                          desired_action: agentConfig.desired_action,
-                          outcome_delivered: agentConfig.outcome_delivered,
-                          target_icp: agentConfig.target_icp,
-                          sender_name: agentConfig.sender_name,
-                          sender_title: agentConfig.sender_title,
-                          sender_bio: agentConfig.sender_bio,
-                          company_name: agentConfig.company_name,
-                          company_url: agentConfig.company_url,
-                          communication_style: agentConfig.communication_style,
-                          avoid_phrases: agentConfig.avoid_phrases || [],
-                          sample_message: agentConfig.sample_message || "",
-                        },
-                        channel,
-                        user_id: agentConfig.user_id,
-                      }),
-                    });
-
-                    clearTimeout(classifyTimeout);
-                  } catch (classifyErr) {
-                    // Timeout or failure — continue without classification
-                    console.warn(`classify-reply failed for ${externalId}:`, classifyErr);
-                  }
-                }
+                // 6. NO classify-reply call here — deliberately.
+                //
+                // There used to be one. It was dead twice over:
+                //   * the whole agent_leads block is behind `populateAgentLeads`,
+                //     which defaults to false and which NOTHING in the codebase
+                //     ever sets — so it never ran on the 6h cron, the
+                //     reply-webhook fire-and-forget, or the Playground button;
+                //   * and it could not have worked if it had run. `lastReplyText`
+                //     is hard-coded "" above ("Not available from sync, only from
+                //     webhooks"), so its own `upsertedLead.last_reply_text` guard
+                //     was always falsy.
+                //
+                // It also passed no `thread_history` and no `lead_id`, so even on
+                // success it would have classified a reply it could not see and
+                // then thrown the draft away — classify-reply's write-back is
+                // gated on `if (lead_id)`.
+                //
+                // Drafting belongs to the paths that actually hold the reply and
+                // the thread: reply-webhook (real-time) and poll-reply-inbox
+                // (15-min backstop). This function syncs contacts and
+                // firmographics; it has no reply text to reason about.
               } catch (contactErr) {
                 console.warn(`Failed to upsert agent_lead for contact ${sc.email}:`, contactErr);
               }
