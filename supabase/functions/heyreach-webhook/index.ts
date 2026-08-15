@@ -53,6 +53,24 @@ function sameMessage(a: ThreadEntry, b: ThreadEntry): boolean {
   return Math.abs(at - bt) <= MERGE_TS_TOLERANCE_MS;
 }
 
+// Newest message timestamp in a thread, as an ISO string, or null when the
+// thread is empty or carries no parseable timestamp. Deliberately the same
+// quantity poll-heyreach-inbox derives for its resurface gate (a max over the
+// thread, not the last array element), so the watermark this webhook writes and
+// the value the poller compares against are computed identically.
+function newestThreadTimestamp(thread: ThreadEntry[]): string | null {
+  let bestMs = Number.NEGATIVE_INFINITY;
+  let best: string | null = null;
+  for (const e of thread ?? []) {
+    const ms = new Date(e?.timestamp ?? "").getTime();
+    if (Number.isFinite(ms) && ms > bestMs) {
+      bestMs = ms;
+      best = new Date(ms).toISOString();
+    }
+  }
+  return best;
+}
+
 function mergeReplyThreads(
   canonical: ThreadEntry[],
   partial: ThreadEntry[],
@@ -430,6 +448,19 @@ Deno.serve(async (req) => {
           last_reply_at: new Date().toISOString(),
           reply_thread: replyThread,
           inbox_status: "pending",
+          // Surface watermark — the newest message this pend is FOR.
+          //
+          // This used to be omitted, which is why 285 of 291 HeyReach leads
+          // carried a NULL watermark. poll-heyreach-inbox's resurface gate
+          // computes `newerThanPrior = newestMs > priorMs` with priorMs=0 when
+          // null, so every webhook-handled reply looked "new" to the poller
+          // forever. Nothing bad happened only because the poller had no draft
+          // trigger and its skippedSameText guard usually matched — neither is
+          // a real interlock (the guard misses whenever a sibling conversation
+          // holds different lastMessageText). Writing it here is what makes the
+          // poller's gate able to see what the webhook already did.
+          last_surfaced_reply_at: newestThreadTimestamp(replyThread) ??
+            new Date().toISOString(),
           channel: "linkedin",
           source: "heyreach",
           heyreach_conversation_id: conversationId,
@@ -512,9 +543,17 @@ Deno.serve(async (req) => {
               replyThread,
             );
 
+            // Keep the watermark in step with the thread we are persisting.
+            // mergedThread is a superset of the partial written at upsert, so
+            // its newest can only be equal or later — never a downgrade.
             const { error: threadUpdateErr } = await supabase
               .from("agent_leads")
-              .update({ reply_thread: mergedThread })
+              .update({
+                reply_thread: mergedThread,
+                ...(newestThreadTimestamp(mergedThread)
+                  ? { last_surfaced_reply_at: newestThreadTimestamp(mergedThread) }
+                  : {}),
+              })
               .eq("id", upsertedLead.id);
 
             if (threadUpdateErr) {

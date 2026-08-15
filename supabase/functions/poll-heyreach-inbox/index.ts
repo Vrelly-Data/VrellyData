@@ -6,7 +6,7 @@ ALTER TABLE public.synced_campaigns ADD COLUMN IF NOT EXISTS source TEXT DEFAULT
 */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { shouldResurface } from '../_shared/inbox-reply.ts';
+import { shouldResurface, fireClassifyReply } from '../_shared/inbox-reply.ts';
 
 const allowedOrigins = [
   'https://vrelly.com',
@@ -344,6 +344,33 @@ Deno.serve(async (req) => {
               if (upsertError) {
                 console.error(`[poll-heyreach-inbox] Upsert error for ${externalId}:`, upsertError.message);
                 continue;
+              }
+
+              // Trigger a draft, exactly as poll-reply-inbox does — same shared
+              // helper, same gate. This poller previously NEVER drafted, so a
+              // reply the webhook missed surfaced to Pending Approval with an
+              // empty draft.
+              //
+              // Gated on `surface`, which is what makes this safe against
+              // double-drafting alongside heyreach-webhook. Both paths write
+              // last_surfaced_reply_at now, so for a reply the webhook already
+              // handled the gate computes newestMs > priorMs with the two equal
+              // → false → no second call. The skippedSameText guard above is
+              // NOT the interlock: it compares our stored text against
+              // GetConversationsV2's lastMessageText, and misses whenever a
+              // sibling conversation for the same profile holds different text
+              // (73 such profiles in prod — see the collision note).
+              if (surface && upsertedLead) {
+                fireClassifyReply({
+                  supabaseUrl,
+                  agentKey: expectedKey || '',
+                  leadId: upsertedLead.id,
+                  replyText: lastMessageText,
+                  threadHistory: replyThread,
+                  agentConfig,
+                  channel: 'linkedin',
+                  userId,
+                });
               }
 
               if (upsertedLead && !existingLead) {
