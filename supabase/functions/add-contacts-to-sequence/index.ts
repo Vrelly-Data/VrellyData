@@ -155,6 +155,32 @@ Deno.serve(async (req) => {
       return json({ error: "Linked campaign is missing its external id" }, 400);
     }
 
+    // ---- platform / campaign consistency -----------------------------------
+    // agent_audiences.platform and synced_campaigns.source use DIFFERENT
+    // spellings for the same thing ('reply.io' vs 'reply_io'), so this cannot
+    // be a plain equality check and is easy to omit entirely — which is what
+    // happened here first.
+    //
+    // Without it, a reply.io audience pointing at a Smartlead campaign would
+    // send a Smartlead campaign id to Reply.io's move-to-sequence. Both are
+    // opaque identifiers, so that does not reliably fail: it could 404, or it
+    // could coincidentally match a real but WRONG sequence and enrol live
+    // prospects into it. Nothing downstream would notice.
+    const PLATFORM_TO_SOURCE: Record<string, string> = {
+      "smartlead": "smartlead",
+      "reply.io": "reply_io",
+    };
+    const expectedSource = PLATFORM_TO_SOURCE[audience.platform];
+    if (!expectedSource) {
+      return json({ error: `Unsupported platform: ${audience.platform}` }, 400);
+    }
+    if (campaign.source !== expectedSource) {
+      return json({
+        error: "Linked campaign does not belong to this audience's platform",
+        detail: `audience.platform=${audience.platform} expects synced_campaigns.source=${expectedSource}, but the linked campaign is ${campaign.source}`,
+      }, 400);
+    }
+
     // ---- the platform key --------------------------------------------------
     const { data: integration } = await supabase
       .from("outbound_integrations")
@@ -263,8 +289,27 @@ Deno.serve(async (req) => {
           if (!res.ok) {
             pushError = `Smartlead ${res.status}: ${(await res.text().catch(() => "")).slice(0, 200)}`;
           } else {
+            // external_ref is meant to be the PLATFORM's id for the thing we
+            // created, so a push can be traced back. Smartlead's response shape
+            // for this endpoint has not been observed yet, so rather than
+            // invent one, log it once and store whatever id-like field is
+            // actually present. Revisit at the first real push.
             const j = await res.json().catch(() => ({}));
-            externalRef = j?.upload_count !== undefined ? String(campaign.external_campaign_id) : null;
+            console.log(`[add-contacts-to-sequence] smartlead response keys: ${Object.keys(j ?? {}).join(",")}`);
+            const upserted = Array.isArray(j?.upload_status) ? j.upload_status[0] : null;
+            externalRef = upserted?.lead_id != null
+              ? String(upserted.lead_id)
+              : j?.lead_id != null
+              ? String(j.lead_id)
+              : null;
+            // A 200 does not guarantee the lead was accepted: Smartlead reports
+            // blocked/duplicate/unsubscribed leads in the body, not the status.
+            const blocked = Number(j?.already_added_to_campaign ?? 0) +
+              Number(j?.invalid_emails_count ?? 0) +
+              Number(j?.unsubscribed_leads_count ?? 0);
+            if (Number(j?.upload_count ?? 0) === 0 && blocked > 0) {
+              pushError = `Smartlead accepted the request but enrolled nobody (${JSON.stringify(j).slice(0, 160)})`;
+            }
           }
         } else if (audience.platform === "reply.io") {
           // Lifted from send-agent-reply, including its hard-won specifics:

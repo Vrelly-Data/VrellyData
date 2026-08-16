@@ -33,16 +33,33 @@ if (!configId) {
   console.log('NOTE: no agent_config for the test user; using', any.body?.[0]?.user_id);
   configId = any.body?.[0]?.id;
 }
+// MUST match the audience's platform: agent_audiences.platform 'smartlead'
+// maps to synced_campaigns.source 'smartlead' ('reply.io' -> 'reply_io').
+// The first version of this fixture took limit=1 regardless of source, which
+// silently built a mismatched audience — harmless only because no test reached
+// the platform call. The new consistency guard catches it, so pick properly.
+// Derive the audience platform FROM the campaign, rather than assuming.
+// synced_campaigns.source is 'smartlead' | 'reply_io'; agent_audiences.platform
+// is 'smartlead' | 'reply.io'. Dev currently holds only reply_io campaigns, so
+// hardcoding 'smartlead' built a mismatched fixture — which the new consistency
+// guard correctly rejected.
+const SOURCE_TO_PLATFORM = { smartlead: 'smartlead', reply_io: 'reply.io' };
 const camp = await rest('synced_campaigns?select=id,external_campaign_id,source&limit=1');
 const campaignId = camp.body?.[0]?.id;
-console.log(`fixture: agent_config=${configId ? 'ok' : 'MISSING'}  synced_campaign=${campaignId ? 'ok' : 'MISSING'}`);
-if (!configId || !campaignId) { console.log('cannot build fixture — aborting'); Deno?.exit?.(0); process.exit(0); }
+const campaignSource = camp.body?.[0]?.source;
+const platform = SOURCE_TO_PLATFORM[campaignSource];
+// A campaign of the OTHER source, for the mismatch test. May not exist in dev.
+const otherSource = campaignSource === 'smartlead' ? 'reply_io' : 'smartlead';
+const other = await rest(`synced_campaigns?source=eq.${otherSource}&select=id&limit=1`);
+const otherCampaignId = other.body?.[0]?.id;
+console.log(`fixture: agent_config=${configId ? 'ok' : 'MISSING'}  campaign=${campaignId ? campaignSource : 'MISSING'} -> platform=${platform}`);
+if (!configId || !campaignId || !platform) { console.log('cannot build fixture — aborting'); process.exit(0); }
 
 const aud = await rest('agent_audiences', {
   method: 'POST',
   body: JSON.stringify({
     user_id: USERID, agent_config_id: configId, name: '__verify__ push gates',
-    platform: 'smartlead', synced_campaign_id: campaignId, max_per_run: 5,
+    platform, synced_campaign_id: campaignId, max_per_run: 5,
   }),
 });
 if (aud.status !== 201) { console.log('audience insert failed:', aud.status, JSON.stringify(aud.body).slice(0,300)); process.exit(1); }
@@ -96,6 +113,40 @@ await rest(`agent_audiences?id=eq.${audienceId}`, { method: 'PATCH',
 r = await push({ audience_id: audienceId, contacts: [{ apollo_person_id: 'p_cap', email: '__verify__cap@example.com' }] });
 check('max_total reached -> skipped_cap', r.body?.results?.[0]?.outcome === 'skipped_cap',
       JSON.stringify(r.body?.results?.[0]));
+
+// ---- 6b. platform / campaign source MISMATCH -------------------------------
+// Dev holds only reply_io campaigns, so the other-source campaign is CREATED
+// here rather than skipped. An earlier version reported this as PASS when it
+// had simply been skipped — a false pass on the one gate that, if broken, could
+// enrol live prospects into the wrong platform's sequence.
+let mismatchCampaignId = otherCampaignId;
+let createdMismatchCampaign = false;
+if (!mismatchCampaignId) {
+  const src = await rest(`synced_campaigns?id=eq.${campaignId}&select=integration_id,team_id`);
+  const seed = src.body?.[0];
+  const made = await rest('synced_campaigns', { method: 'POST', body: JSON.stringify({
+    integration_id: seed?.integration_id, team_id: seed?.team_id,
+    external_campaign_id: '__verify__mismatch', name: '__verify__ mismatch campaign',
+    source: otherSource }) });
+  if (made.status === 201) { mismatchCampaignId = made.body[0].id; createdMismatchCampaign = true; }
+  else console.log('  (could not create mismatch campaign:', made.status, JSON.stringify(made.body).slice(0,160), ')');
+}
+if (mismatchCampaignId) {
+  const mism = await rest('agent_audiences', { method: 'POST', body: JSON.stringify({
+    user_id: USERID, agent_config_id: configId, name: '__verify__ mismatch',
+    platform, synced_campaign_id: mismatchCampaignId, max_per_run: 5 }) });
+  if (mism.status === 201) {
+    const r2 = await push({ audience_id: mism.body[0].id, contacts: [{ apollo_person_id: 'p_mm', email: '__verify__mm@example.com' }] });
+    check(`${platform} audience + ${otherSource} campaign -> 400`, r2.status === 400,
+          `HTTP ${r2.status} ${JSON.stringify(r2.body).slice(0,140)}`);
+    await rest(`agent_audiences?id=eq.${mism.body[0].id}`, { method: 'DELETE' });
+  } else check(`${platform} audience + ${otherSource} campaign -> 400`, false,
+               `could not create mismatch audience: ${mism.status}`);
+  if (createdMismatchCampaign) await rest(`synced_campaigns?id=eq.${mismatchCampaignId}`, { method: 'DELETE' });
+} else {
+  check(`${platform} audience + ${otherSource} campaign -> 400`, false,
+        'NOT EXERCISED - could not obtain an other-source campaign');
+}
 
 // ---- 7. no stray ledger rows from skipped contacts -------------------------
 const ledger = await rest(`agent_audience_pushes?audience_id=eq.${audienceId}&select=apollo_person_id`);
