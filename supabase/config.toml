@@ -135,6 +135,11 @@ verify_jwt = false
 [functions.validate-apollo-key]
 verify_jwt = false
 
+# Irreversible: enrols real prospects into a real sequence. JWT for the manual
+# push, x-agent-key for the Stage 4 cron runner; both checked in-function.
+[functions.add-contacts-to-sequence]
+verify_jwt = false
+
 [functions.sync-smartlead-campaigns]
 verify_jwt = false
 
