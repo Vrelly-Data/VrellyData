@@ -119,6 +119,17 @@ verify_jwt = false
 [functions.setup-smartlead-webhook]
 verify_jwt = false
 
+# Apollo (Agent Audience). Both accept EITHER a user JWT (the UI) or
+# x-agent-key (the Stage 4 cron runner), and both do their own auth check
+# in-function. verify_jwt must therefore be false, or the platform gateway
+# rejects the x-agent-key path before our code runs — the poll-smartlead-inbox
+# failure documented above.
+[functions.apollo-search]
+verify_jwt = false
+
+[functions.apollo-enrich]
+verify_jwt = false
+
 [functions.sync-smartlead-campaigns]
 verify_jwt = false
 
