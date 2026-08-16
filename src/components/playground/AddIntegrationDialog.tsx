@@ -27,6 +27,7 @@ const PLATFORMS = [
   { value: 'reply.io', label: 'Reply.io', icon: '📧', comingSoon: false },
   { value: 'heyreach', label: 'HeyReach', icon: '🤝', comingSoon: false },
   { value: 'smartlead', label: 'Smartlead', icon: '🎯', comingSoon: false },
+  { value: 'apollo', label: 'Apollo', icon: '🔭', comingSoon: false },
   { value: 'instantly', label: 'Instantly.ai', icon: '⚡', comingSoon: true },
   { value: 'lemlist', label: 'Lemlist', icon: '🍋', comingSoon: true },
 ];
@@ -49,6 +50,7 @@ async function validateApiKey(platform: string, apiKey: string): Promise<{ valid
     const PLATFORM_VALIDATORS: Record<string, string> = {
       smartlead: 'validate-smartlead-key',
       heyreach: 'validate-heyreach-key',
+      apollo: 'validate-apollo-key',
     };
     const functionName = PLATFORM_VALIDATORS[platform] ?? 'validate-api-key';
     // Platform-specific validators take just the key; the generic one needs to

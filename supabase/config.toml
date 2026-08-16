@@ -130,6 +130,11 @@ verify_jwt = false
 [functions.apollo-enrich]
 verify_jwt = false
 
+# Called from the Add Integration dialog BEFORE the user has an apollo row, by a
+# signed-in user. Mirrors validate-smartlead-key / validate-heyreach-key.
+[functions.validate-apollo-key]
+verify_jwt = false
+
 [functions.sync-smartlead-campaigns]
 verify_jwt = false
 
