@@ -140,6 +140,11 @@ verify_jwt = false
 [functions.add-contacts-to-sequence]
 verify_jwt = false
 
+# The runner. JWT for a manual run from the UI, x-agent-key for the scheduled
+# one; both checked in-function.
+[functions.run-agent-audience]
+verify_jwt = false
+
 [functions.sync-smartlead-campaigns]
 verify_jwt = false
 
