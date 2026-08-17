@@ -54,7 +54,26 @@ export function apolloHeaders(apiKey: string): Record<string, string> {
 // Search
 // ---------------------------------------------------------------------------
 
-/** The filter subset we expose. Names are Apollo's, verbatim. */
+/**
+ * The filter subset we expose. Names are Apollo's, verbatim.
+ *
+ * EVERY ONE OF THESE WAS VERIFIED LIVE (2026-08-17) by checking that adding it
+ * MOVES total_entries. That matters because api_search silently ignores unknown
+ * keys — a control param of pure nonsense returns the baseline count unchanged,
+ * so "no error" proves nothing. Several documented filters turned out not to
+ * exist, and several undocumented ones do.
+ *
+ * DELIBERATELY ABSENT:
+ *   organization_latest_funding_stage_cd — the VALUE is ignored. 'series_a' and
+ *     'TOTAL_GARBAGE_VALUE_XYZ' both return the identical count, so only the
+ *     parameter's presence filters (to "has funding data"). Exposing it would
+ *     let an operator pick a stage and silently get something else.
+ *   person_schools / education — genuinely unsupported; identical to the
+ *     nonsense control.
+ *   organization_industry_tag_ids, currently_using_*_technology_uids — real,
+ *     but keyed by Apollo IDs we have no resolver for. q_organization_keyword_tags
+ *     covers most of the industry intent with free text.
+ */
 export interface ApolloSearchFilters {
   person_titles?: string[];
   person_seniorities?: string[];
@@ -62,7 +81,19 @@ export interface ApolloSearchFilters {
   organization_locations?: string[];
   organization_num_employees_ranges?: string[]; // "1,10"
   q_organization_domains_list?: string[];
+  /**
+   * Only 'verified' | 'guessed' | 'unavailable' are real. Verified as the
+   * COMPLETE set: their counts sum to exactly the unfiltered baseline
+   * (937,949 + 44,534 + 761,787 = 1,744,270). The documented 'unverified' and
+   * 'likely_to_engage' are silently ignored.
+   */
   contact_email_status?: string[];
+  /** Free text; the practical stand-in for an industry filter. */
+  q_organization_keyword_tags?: string[];
+  /** OR union across values — sales + marketing returns their union. */
+  person_department_or_subdepartments?: string[];
+  /** Nested ints, not an array. Either bound may be omitted. */
+  revenue_range?: { min?: number; max?: number };
   q_keywords?: string;
   include_similar_titles?: boolean;
 }
@@ -75,6 +106,8 @@ const ARRAY_FILTERS = [
   "organization_num_employees_ranges",
   "q_organization_domains_list",
   "contact_email_status",
+  "q_organization_keyword_tags",
+  "person_department_or_subdepartments",
 ] as const;
 
 /**
@@ -105,6 +138,16 @@ export function buildSearchBody(
   }
   if (typeof filters.include_similar_titles === "boolean") {
     body.include_similar_titles = filters.include_similar_titles;
+  }
+  // revenue_range is a nested object, not an array. Send only the bounds that
+  // are real numbers, and omit the key entirely when neither is — an empty
+  // object would read as "has revenue data" and silently narrow the search,
+  // which is the same class of trap that got funding-stage dropped.
+  if (filters.revenue_range) {
+    const rr: Record<string, number> = {};
+    if (Number.isFinite(filters.revenue_range.min)) rr.min = Number(filters.revenue_range.min);
+    if (Number.isFinite(filters.revenue_range.max)) rr.max = Number(filters.revenue_range.max);
+    if (Object.keys(rr).length > 0) body.revenue_range = rr;
   }
   return body;
 }

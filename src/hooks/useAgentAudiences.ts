@@ -5,13 +5,22 @@ import { supabase } from '@/integrations/supabase/client';
 // Same pattern as useAgent.ts.
 const db = supabase as any;
 
-/** Apollo request parameters, stored verbatim in agent_audiences.filters. */
+/**
+ * Apollo request parameters, stored verbatim in agent_audiences.filters.
+ * Mirrors ApolloSearchFilters in supabase/functions/_shared/apollo.ts — every
+ * one verified live against api_search, which silently ignores unknown keys.
+ */
 export interface ApolloAudienceFilters {
   person_titles?: string[];
   person_seniorities?: string[];
   person_locations?: string[];
   organization_locations?: string[];
   organization_num_employees_ranges?: string[];
+  q_organization_domains_list?: string[];
+  contact_email_status?: string[];
+  q_organization_keyword_tags?: string[];
+  person_department_or_subdepartments?: string[];
+  revenue_range?: { min?: number; max?: number };
   q_keywords?: string;
 }
 

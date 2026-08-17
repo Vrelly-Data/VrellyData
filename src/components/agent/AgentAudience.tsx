@@ -31,6 +31,19 @@ const EMPLOYEE_RANGES = [
   '1,10', '11,20', '21,50', '51,100', '101,200',
   '201,500', '501,1000', '1001,2000', '2001,5000', '5001,10000', '10001,1000000',
 ];
+// Only these three are real. Verified live: their counts sum to exactly the
+// unfiltered baseline, so this is the COMPLETE set. Apollo's docs also list
+// 'unverified' and 'likely_to_engage' — both are silently ignored, so offering
+// them would be a dead option that looks like it did something.
+const EMAIL_STATUSES = [
+  { label: 'Verified', value: 'verified' },
+  { label: 'Guessed', value: 'guessed' },
+  { label: 'Unavailable', value: 'unavailable' },
+];
+const DEPARTMENTS = [
+  'sales', 'marketing', 'engineering', 'finance',
+  'human_resources', 'operations', 'information_technology', 'c_suite',
+];
 
 const EMPTY: AudienceInput = {
   name: '', default_platform: null, default_synced_campaign_id: null,
@@ -80,9 +93,17 @@ export function AgentAudience() {
     setOpen(true);
   };
 
-  const hasFilter = Object.entries(form.filters).some(
-    ([, v]) => (Array.isArray(v) ? v.length > 0 : !!v),
-  );
+  // An "effective" filter, matching what buildSearchBody will actually send.
+  // The object case is load-bearing: revenue_range with both bounds cleared is
+  // {min: undefined, max: undefined}, and a plain truthiness test says that is a
+  // filter. It is not — buildSearchBody omits it — so Save would enable and the
+  // run would then fail at search with "At least one search filter is required".
+  const isSet = (v: unknown): boolean => {
+    if (Array.isArray(v)) return v.length > 0;
+    if (v && typeof v === 'object') return Object.values(v).some((x) => x !== undefined && x !== null && x !== '');
+    return v !== undefined && v !== null && v !== '';
+  };
+  const hasFilter = Object.values(form.filters).some(isSet);
 
   const save = async () => {
     try {
@@ -363,6 +384,77 @@ export function AgentAudience() {
                   value={form.filters.q_keywords ?? ''}
                   placeholder="healthcare"
                   onChange={(e) => setFilter('q_keywords', e.target.value)}
+                />
+              </div>
+
+              <div>
+                <Label>Industry / company keywords</Label>
+                <TagInput
+                  value={form.filters.q_organization_keyword_tags ?? []}
+                  onChange={(v) => setFilter('q_organization_keyword_tags', v)}
+                  placeholder="saas, logistics — Enter to add"
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  Apollo has no true industry filter on this endpoint; these tags are the
+                  closest equivalent.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label>Email status</Label>
+                  <MultiSelectDropdown
+                    options={EMAIL_STATUSES}
+                    selected={form.filters.contact_email_status ?? []}
+                    onChange={(v) => setFilter('contact_email_status', v)}
+                    placeholder="Any"
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Restricting to Verified reduces wasted enrichment credits and bounces.
+                  </p>
+                </div>
+                <div>
+                  <Label>Department</Label>
+                  <MultiSelectDropdown
+                    options={DEPARTMENTS}
+                    selected={form.filters.person_department_or_subdepartments ?? []}
+                    onChange={(v) => setFilter('person_department_or_subdepartments', v)}
+                    placeholder="Any department"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label>Company revenue (min)</Label>
+                  <Input
+                    type="number" min={0} placeholder="no minimum"
+                    value={form.filters.revenue_range?.min ?? ''}
+                    onChange={(e) => setFilter('revenue_range', {
+                      ...form.filters.revenue_range,
+                      min: e.target.value ? Number(e.target.value) : undefined,
+                    })}
+                  />
+                </div>
+                <div>
+                  <Label>Company revenue (max)</Label>
+                  <Input
+                    type="number" min={0} placeholder="no maximum"
+                    value={form.filters.revenue_range?.max ?? ''}
+                    onChange={(e) => setFilter('revenue_range', {
+                      ...form.filters.revenue_range,
+                      max: e.target.value ? Number(e.target.value) : undefined,
+                    })}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <Label>Company domains</Label>
+                <TagInput
+                  value={form.filters.q_organization_domains_list ?? []}
+                  onChange={(v) => setFilter('q_organization_domains_list', v)}
+                  placeholder="acme.com — Enter to add"
                 />
               </div>
 
