@@ -5,6 +5,12 @@
 // re-run harmlessly; this one puts real prospects into a real sequence and
 // cannot be undone from here.
 //
+// DESTINATION IS PER-PUSH. platform + synced_campaign_id arrive in the REQUEST,
+// not from the audience row. An audience describes WHO to target; the same one
+// can feed Reply.io this month and Smartlead next. The audience's default
+// destination exists only for unattended runs, and the runner resolves it
+// before calling here.
+//
 // UNLIKE add-to-smartlead-campaign / add-to-heyreach-campaign, this takes RAW
 // CONTACTS, not a lead_id. Apollo results are never written to agent_leads —
 // nothing about the search is persisted — so there is no lead row to point at.
@@ -130,54 +136,61 @@ Deno.serve(async (req) => {
     if (!audienceId) return json({ error: "audience_id is required" }, 400);
     if (contacts.length === 0) return json({ error: "contacts is empty" }, 400);
 
+    // ---- destination comes from the REQUEST, not the audience ---------------
+    // An audience describes WHO to target, not WHERE to send them, so the same
+    // audience can feed Reply.io this month and Smartlead next. The caller
+    // states the destination for THIS push; the audience only supplies a
+    // default for unattended runs, which the runner resolves before calling us.
+    const platform: string | undefined = body.platform;
+    const campaignId: string | undefined = body.synced_campaign_id;
+    if (!platform) return json({ error: "platform is required" }, 400);
+    if (!campaignId) return json({ error: "synced_campaign_id is required" }, 400);
+
     // ---- audience, scoped to the caller ------------------------------------
     // .eq('user_id') is the ownership guard: a JWT caller passing someone
     // else's audience_id gets a 404, not their campaign.
     const { data: audience } = await supabase
       .from("agent_audiences")
-      .select("id, user_id, platform, synced_campaign_id, max_per_run, max_total, total_pushed")
+      .select("id, user_id, max_per_run, max_total, total_pushed")
       .eq("id", audienceId)
       .eq("user_id", userId)
       .maybeSingle();
 
     if (!audience) return json({ error: "Audience not found" }, 404);
-    if (!audience.synced_campaign_id) {
-      return json({ error: "Audience has no linked campaign" }, 400);
-    }
 
     const { data: campaign } = await supabase
       .from("synced_campaigns")
       .select("id, external_campaign_id, name, source, integration_id")
-      .eq("id", audience.synced_campaign_id)
+      .eq("id", campaignId)
       .maybeSingle();
 
     if (!campaign?.external_campaign_id) {
-      return json({ error: "Linked campaign is missing its external id" }, 400);
+      return json({ error: "Campaign not found, or missing its external id" }, 400);
     }
 
     // ---- platform / campaign consistency -----------------------------------
-    // agent_audiences.platform and synced_campaigns.source use DIFFERENT
-    // spellings for the same thing ('reply.io' vs 'reply_io'), so this cannot
-    // be a plain equality check and is easy to omit entirely — which is what
-    // happened here first.
+    // platform and synced_campaigns.source use DIFFERENT spellings for the same
+    // thing ('reply.io' vs 'reply_io'), so this cannot be a plain equality
+    // check and is easy to omit entirely — which is what happened here first.
     //
-    // Without it, a reply.io audience pointing at a Smartlead campaign would
+    // It matters MORE now that the destination is caller-supplied rather than
+    // stored: without it, a reply.io push aimed at a Smartlead campaign would
     // send a Smartlead campaign id to Reply.io's move-to-sequence. Both are
-    // opaque identifiers, so that does not reliably fail: it could 404, or it
+    // opaque identifiers, so that does not reliably fail — it could 404, or it
     // could coincidentally match a real but WRONG sequence and enrol live
-    // prospects into it. Nothing downstream would notice.
+    // prospects into it, with nothing downstream noticing.
     const PLATFORM_TO_SOURCE: Record<string, string> = {
       "smartlead": "smartlead",
       "reply.io": "reply_io",
     };
-    const expectedSource = PLATFORM_TO_SOURCE[audience.platform];
+    const expectedSource = PLATFORM_TO_SOURCE[platform];
     if (!expectedSource) {
-      return json({ error: `Unsupported platform: ${audience.platform}` }, 400);
+      return json({ error: `Unsupported platform: ${platform}` }, 400);
     }
     if (campaign.source !== expectedSource) {
       return json({
-        error: "Linked campaign does not belong to this audience's platform",
-        detail: `audience.platform=${audience.platform} expects synced_campaigns.source=${expectedSource}, but the linked campaign is ${campaign.source}`,
+        error: "Campaign does not belong to the requested platform",
+        detail: `platform=${platform} expects synced_campaigns.source=${expectedSource}, but that campaign is ${campaign.source}`,
       }, 400);
     }
 
@@ -190,7 +203,7 @@ Deno.serve(async (req) => {
       .maybeSingle();
 
     if (!integration?.api_key_encrypted) {
-      return json({ error: `No active ${audience.platform} integration for this campaign` }, 400);
+      return json({ error: `No active ${platform} integration for this campaign` }, 400);
     }
     const apiKey = integration.api_key_encrypted as string;
 
@@ -247,7 +260,8 @@ Deno.serve(async (req) => {
           apollo_person_id: apolloId ?? `email:${emailKey}`,
           email_key: emailKey,
           linkedin_key: linkedinKey,
-          synced_campaign_id: audience.synced_campaign_id,
+          synced_campaign_id: campaignId,
+          platform,
         })
         .select("id")
         .single();
@@ -265,7 +279,7 @@ Deno.serve(async (req) => {
       let pushError: string | null = null;
 
       try {
-        if (audience.platform === "smartlead") {
+        if (platform === "smartlead") {
           // api_key travels in the QUERY STRING — never log this URL.
           const url = new URL(
             `${SMARTLEAD_API_BASE}/campaigns/${encodeURIComponent(String(campaign.external_campaign_id))}/leads`,
@@ -311,7 +325,7 @@ Deno.serve(async (req) => {
               pushError = `Smartlead accepted the request but enrolled nobody (${JSON.stringify(j).slice(0, 160)})`;
             }
           }
-        } else if (audience.platform === "reply.io") {
+        } else if (platform === "reply.io") {
           // Lifted from send-agent-reply, including its hard-won specifics:
           // POST /v3/contacts is CREATE-ONLY and 400s on a duplicate email, and
           // the create-body LinkedIn field is `linkedInUrl` (v3 silently drops
@@ -372,7 +386,7 @@ Deno.serve(async (req) => {
             }
           }
         } else {
-          pushError = `Unsupported platform: ${audience.platform}`;
+          pushError = `Unsupported platform: ${platform}`;
         }
       } catch (e) {
         pushError = `push threw: ${e instanceof Error ? e.message : String(e)}`;
@@ -403,7 +417,7 @@ Deno.serve(async (req) => {
     }, {});
 
     console.log(
-      `[add-contacts-to-sequence] audience=${audience.id} platform=${audience.platform} ` +
+      `[add-contacts-to-sequence] audience=${audience.id} platform=${platform} ` +
         `campaign=${campaign.external_campaign_id} received=${contacts.length} ` +
         `${Object.entries(tally).map(([k, v]) => `${k}=${v}`).join(" ")}`,
     );

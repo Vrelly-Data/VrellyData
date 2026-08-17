@@ -148,7 +148,7 @@ export async function preflightSmartlead(
   }
 }
 
-/** Dispatch on agent_audiences.platform. */
+/** Dispatch on the run's platform ('smartlead' | 'reply.io'). */
 export function preflightCampaign(
   platform: string,
   externalCampaignId: string,

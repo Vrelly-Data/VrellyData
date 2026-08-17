@@ -22,8 +22,11 @@ export interface AgentAudience {
   name: string;
   filters: ApolloAudienceFilters;
   filters_version: number;
-  platform: 'smartlead' | 'reply.io';
-  synced_campaign_id: string | null;
+  // DEFAULT destination, used only by scheduled runs. Manual pushes choose a
+  // destination per push, so both may be null on a perfectly valid audience —
+  // it simply cannot be armed until they are set.
+  default_platform: 'smartlead' | 'reply.io' | null;
+  default_synced_campaign_id: string | null;
   is_active: boolean;
   cadence: 'manual' | 'daily' | 'weekly';
   max_per_run: number;
@@ -89,8 +92,11 @@ export function useAudienceCampaigns(platform: string | undefined) {
 
 export interface AudienceInput {
   name: string;
-  platform: 'smartlead' | 'reply.io';
-  synced_campaign_id: string | null;
+  // DEFAULT destination, used only by scheduled runs. Manual pushes choose a
+  // destination per push, so both may be null on a perfectly valid audience —
+  // it simply cannot be armed until they are set.
+  default_platform: 'smartlead' | 'reply.io' | null;
+  default_synced_campaign_id: string | null;
   cadence: 'manual' | 'daily' | 'weekly';
   max_per_run: number;
   max_total: number | null;
@@ -144,7 +150,8 @@ export function useUpdateAudience() {
  *
  * Activation is guarded IN THE DATABASE: agent_audiences_guard_activation
  * rejects false->true unless a run has already completed with status='success',
- * and unless a campaign is linked. The client does NOT pre-check that — a
+ * and unless a DEFAULT destination is set — a scheduled run has nobody to ask
+ * which campaign to use. The client does NOT pre-check that — a
  * duplicated rule drifts. It surfaces the database's own message instead, which
  * names the reason.
  */

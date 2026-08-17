@@ -11,6 +11,11 @@
 //   CRON    { audience_id }                     unattended, so it runs the
 //           saved filters itself and takes the top N (N = max_per_run).
 //
+// DESTINATION IS PER-RUN, not per-audience. The caller may pass platform +
+// synced_campaign_id; otherwise the audience's DEFAULT destination is used.
+// A scheduled run has nobody to ask, which is why the activation guard refuses
+// to arm an audience that has no default. One run = one destination.
+//
 // ORDER MATTERS, and it is ordered around SPEND and HARM:
 //   1. claim the audience          (no two runs of the same audience at once)
 //   2. open the run row            (so a crash leaves evidence, not silence)
@@ -120,7 +125,7 @@ Deno.serve(async (req) => {
 
     const { data: current, error: readErr } = await supabase
       .from("agent_audiences")
-      .select("id, user_id, platform, synced_campaign_id, filters, max_per_run, max_total, total_pushed, last_run_status, last_run_at, consecutive_failures")
+      .select("id, user_id, default_platform, default_synced_campaign_id, filters, max_per_run, max_total, total_pushed, last_run_status, last_run_at, consecutive_failures")
       .eq("id", audienceId)
       .eq("user_id", userId)
       .maybeSingle();
@@ -159,10 +164,35 @@ Deno.serve(async (req) => {
     }
     const claimed = current;
 
-    // ---- 2. open the run row ------------------------------------------------
+    // ---- 2. resolve the destination, then open the run row -------------------
+    // A run targets exactly ONE destination. A manual caller states it; a
+    // scheduled run falls back to the audience default, which the activation
+    // guard requires before an audience can be armed. Splitting a batch across
+    // two platforms is two runs — that keeps every counter on this row meaning
+    // one thing.
+    const platform: string | null = body.platform ?? claimed.default_platform ?? null;
+    const campaignId: string | null =
+      body.synced_campaign_id ?? claimed.default_synced_campaign_id ?? null;
+
+    if (!platform || !campaignId) {
+      // Released rather than left claimed: no run row exists yet, so leaving
+      // last_run_status='running' would wedge the audience until the stale
+      // timeout.
+      await supabase.from("agent_audiences")
+        .update({ last_run_status: claimed.last_run_status, last_run_at: claimed.last_run_at })
+        .eq("id", claimed.id);
+      return json({
+        error: "No destination for this run",
+        detail: "Pass platform + synced_campaign_id, or set a default destination on the audience.",
+      }, 400);
+    }
+
     const { data: run } = await supabase
       .from("agent_audience_runs")
-      .insert({ audience_id: claimed.id, user_id: userId, trigger, status: "running" })
+      .insert({
+        audience_id: claimed.id, user_id: userId, trigger, status: "running",
+        platform, synced_campaign_id: campaignId,
+      })
       .select("id").single();
     runId = run?.id ?? null;
 
@@ -188,11 +218,11 @@ Deno.serve(async (req) => {
     const { data: campaign } = await supabase
       .from("synced_campaigns")
       .select("id, external_campaign_id, name, source, integration_id")
-      .eq("id", claimed.synced_campaign_id).maybeSingle();
+      .eq("id", campaignId).maybeSingle();
 
     if (!campaign?.external_campaign_id) {
-      await finish("failed", { stage: "preflight", reason: "audience has no usable linked campaign" });
-      return json({ error: "Audience has no usable linked campaign", run_id: runId }, 400);
+      await finish("failed", { stage: "preflight", reason: "campaign not found, or missing its external id" });
+      return json({ error: "Campaign not found, or missing its external id", run_id: runId }, 400);
     }
 
     const { data: integration } = await supabase
@@ -205,10 +235,10 @@ Deno.serve(async (req) => {
     }
 
     const pf = await preflightCampaign(
-      claimed.platform, String(campaign.external_campaign_id), integration.api_key_encrypted,
+      platform, String(campaign.external_campaign_id), integration.api_key_encrypted,
     );
     console.log(
-      `[run-agent-audience] preflight audience=${claimed.id} platform=${claimed.platform} ` +
+      `[run-agent-audience] preflight audience=${claimed.id} platform=${platform} ` +
         `campaign=${campaign.external_campaign_id} exists=${pf.exists} status=${pf.status} ` +
         `emailAccounts=${pf.emailAccounts} steps=${pf.steps} canSendEmail=${pf.canSendEmail}`,
     );
@@ -318,7 +348,10 @@ Deno.serve(async (req) => {
     const pr = await fetch(`${supabaseUrl}/functions/v1/add-contacts-to-sequence`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-agent-key": agentApiKey },
-      body: JSON.stringify({ user_id: userId, audience_id: claimed.id, run_id: runId, contacts }),
+      body: JSON.stringify({
+        user_id: userId, audience_id: claimed.id, run_id: runId,
+        platform, synced_campaign_id: campaignId, contacts,
+      }),
     });
     if (!pr.ok) {
       const d = (await pr.text().catch(() => "")).slice(0, 300);

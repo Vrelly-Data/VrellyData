@@ -8,7 +8,10 @@
 // Apollo spend, real prospects enrolled in real sequences — happens only for
 // rows that pass the filter below. It is deliberately narrow:
 //
-//     is_active = true          the operator armed it, explicitly
+//     is_active = true          the operator armed it, explicitly, which the
+//                               activation guard only permits once a default
+//                               destination is set — a scheduled run has nobody
+//                               to ask which campaign to use
 //     cadence  <> 'manual'      manual audiences are never scheduled
 //     due by cadence            daily = 24h since last_run_at, weekly = 7d
 //     consecutive_failures < 3  else it is auto-paused instead of retried
@@ -71,7 +74,7 @@ Deno.serve(async (req) => {
     // by the schedule even if it were somehow marked active.
     const { data: candidates, error } = await supabase
       .from("agent_audiences")
-      .select("id, user_id, name, cadence, last_run_at, last_run_status, consecutive_failures")
+      .select("id, user_id, name, cadence, last_run_at, last_run_status, consecutive_failures, default_platform, default_synced_campaign_id")
       .eq("is_active", true)
       .neq("cadence", "manual");
 
@@ -129,7 +132,13 @@ Deno.serve(async (req) => {
         const res = await fetch(`${supabaseUrl}/functions/v1/run-agent-audience`, {
           method: "POST",
           headers: { "Content-Type": "application/json", "x-agent-key": agentApiKey },
-          body: JSON.stringify({ audience_id: a.id, user_id: a.user_id, trigger: "cron" }),
+          // The default destination is passed explicitly rather than left for
+          // the runner to look up, so what the schedule targeted is visible in
+          // this function's log too.
+          body: JSON.stringify({
+            audience_id: a.id, user_id: a.user_id, trigger: "cron",
+            platform: a.default_platform, synced_campaign_id: a.default_synced_campaign_id,
+          }),
         });
         dispatched.push({ id: a.id, status: res.status, body: await res.json().catch(() => null) });
       } catch (e) {

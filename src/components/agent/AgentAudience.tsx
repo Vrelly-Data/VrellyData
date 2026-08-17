@@ -33,7 +33,7 @@ const EMPLOYEE_RANGES = [
 ];
 
 const EMPTY: AudienceInput = {
-  name: '', platform: 'reply.io', synced_campaign_id: null,
+  name: '', default_platform: null, default_synced_campaign_id: null,
   cadence: 'manual', max_per_run: 25, max_total: null, filters: {},
 };
 
@@ -61,7 +61,7 @@ export function AgentAudience() {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Audience | null>(null);
   const [form, setForm] = useState<AudienceInput>(EMPTY);
-  const { data: campaigns = [] } = useAudienceCampaigns(form.platform);
+  const { data: campaigns = [] } = useAudienceCampaigns(form.default_platform ?? undefined);
 
   const setFilter = <K extends keyof ApolloAudienceFilters>(
     key: K, value: ApolloAudienceFilters[K],
@@ -71,7 +71,9 @@ export function AgentAudience() {
   const openEdit = (a: Audience) => {
     setEditing(a);
     setForm({
-      name: a.name, platform: a.platform, synced_campaign_id: a.synced_campaign_id,
+      name: a.name,
+      default_platform: a.default_platform,
+      default_synced_campaign_id: a.default_synced_campaign_id,
       cadence: a.cadence, max_per_run: a.max_per_run, max_total: a.max_total,
       filters: a.filters ?? {},
     });
@@ -109,7 +111,7 @@ export function AgentAudience() {
   };
 
   const campaignName = (a: Audience) =>
-    campaigns.find((c) => c.id === a.synced_campaign_id)?.name ?? null;
+    campaigns.find((c) => c.id === a.default_synced_campaign_id)?.name ?? null;
 
   return (
     <div className="p-6 space-y-6">
@@ -152,14 +154,18 @@ export function AgentAudience() {
                 <TableRow key={a.id}>
                   <TableCell className="font-medium">{a.name}</TableCell>
                   <TableCell className="text-sm">
-                    <span className="capitalize">{a.platform}</span>
-                    <span className="text-muted-foreground">
-                      {' · '}{campaignName(a) ?? (
-                        <span className="inline-flex items-center gap-1 text-amber-600">
-                          <AlertTriangle className="h-3 w-3" />no campaign linked
+                    {a.default_platform ? (
+                      <>
+                        <span className="capitalize">{a.default_platform}</span>
+                        <span className="text-muted-foreground">
+                          {' · '}{campaignName(a) ?? '(campaign unavailable)'}
                         </span>
-                      )}
-                    </span>
+                      </>
+                    ) : (
+                      // Not a fault: an audience with no default is valid and
+                      // fully usable manually. It just cannot be scheduled.
+                      <span className="text-muted-foreground">Chosen at push time</span>
+                    )}
                   </TableCell>
                   <TableCell className="capitalize text-sm">{a.cadence}</TableCell>
                   <TableCell className="text-right text-sm">
@@ -215,38 +221,56 @@ export function AgentAudience() {
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="border-t pt-4 space-y-3">
               <div>
-                <Label>Platform</Label>
-                <Select
-                  value={form.platform}
-                  onValueChange={(v: 'smartlead' | 'reply.io') =>
-                    // Campaigns are platform-specific, so switching platform
-                    // must clear the link rather than leave a mismatched one —
-                    // the server rejects a mismatch outright.
-                    setForm({ ...form, platform: v, synced_campaign_id: null })}
-                >
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="reply.io">Reply.io</SelectItem>
-                    <SelectItem value="smartlead">Smartlead</SelectItem>
-                  </SelectContent>
-                </Select>
+                <p className="text-sm font-medium">Default destination</p>
+                <p className="text-xs text-muted-foreground">
+                  Optional. Manual pushes pick a destination each time — this is only
+                  used by scheduled runs, and is required before an audience can be armed.
+                </p>
               </div>
-              <div>
-                <Label>Campaign</Label>
-                <Select
-                  value={form.synced_campaign_id ?? ''}
-                  onValueChange={(v) => setForm({ ...form, synced_campaign_id: v })}
-                >
-                  <SelectTrigger><SelectValue placeholder="Select a campaign" /></SelectTrigger>
-                  <SelectContent>
-                    {campaigns.map((c) => (
-                      <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label>Platform</Label>
+                  <Select
+                    value={form.default_platform ?? ''}
+                    onValueChange={(v: 'smartlead' | 'reply.io') =>
+                      // Campaigns are platform-specific, so switching platform must
+                      // clear the link rather than leave a mismatched one — the
+                      // server rejects a platform/source mismatch outright.
+                      setForm({ ...form, default_platform: v, default_synced_campaign_id: null })}
+                  >
+                    <SelectTrigger><SelectValue placeholder="None (manual only)" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="reply.io">Reply.io</SelectItem>
+                      <SelectItem value="smartlead">Smartlead</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label>Campaign</Label>
+                  <Select
+                    value={form.default_synced_campaign_id ?? ''}
+                    onValueChange={(v) => setForm({ ...form, default_synced_campaign_id: v })}
+                    disabled={!form.default_platform}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder={form.default_platform ? 'Select a campaign' : 'Pick a platform first'} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {campaigns.map((c) => (
+                        <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
+              {form.cadence !== 'manual' && !form.default_synced_campaign_id && (
+                <p className="text-xs text-amber-600 flex items-center gap-1">
+                  <AlertTriangle className="h-3 w-3" />
+                  A {form.cadence} audience needs a default destination before it can be armed.
+                </p>
+              )}
             </div>
 
             <div className="grid grid-cols-3 gap-3">

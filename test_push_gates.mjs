@@ -16,7 +16,11 @@ const rest = async (path, opts = {}) => {
   const t = await r.text();
   return { status: r.status, body: t ? JSON.parse(t) : null };
 };
+// Destination is per-push now, so it is injected into every call unless the
+// case is specifically testing its absence.
 const push = async (payload) => {
+  if (payload.__noDest) { delete payload.__noDest; }
+  else payload = { platform, synced_campaign_id: campaignId, ...payload };
   const r = await fetch(`${DEV}/functions/v1/add-contacts-to-sequence`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${TOKEN}`, apikey: ANON, 'Content-Type': 'application/json' },
@@ -59,7 +63,7 @@ const aud = await rest('agent_audiences', {
   method: 'POST',
   body: JSON.stringify({
     user_id: USERID, agent_config_id: configId, name: '__verify__ push gates',
-    platform, synced_campaign_id: campaignId, max_per_run: 5,
+    max_per_run: 5,
   }),
 });
 if (aud.status !== 201) { console.log('audience insert failed:', aud.status, JSON.stringify(aud.body).slice(0,300)); process.exit(1); }
@@ -134,9 +138,11 @@ if (!mismatchCampaignId) {
 if (mismatchCampaignId) {
   const mism = await rest('agent_audiences', { method: 'POST', body: JSON.stringify({
     user_id: USERID, agent_config_id: configId, name: '__verify__ mismatch',
-    platform, synced_campaign_id: mismatchCampaignId, max_per_run: 5 }) });
+    max_per_run: 5 }) });
   if (mism.status === 201) {
-    const r2 = await push({ audience_id: mism.body[0].id, contacts: [{ apollo_person_id: 'p_mm', email: '__verify__mm@example.com' }] });
+    const r2 = await push({ audience_id: mism.body[0].id, platform,
+      synced_campaign_id: mismatchCampaignId,
+      contacts: [{ apollo_person_id: 'p_mm', email: '__verify__mm@example.com' }] });
     check(`${platform} audience + ${otherSource} campaign -> 400`, r2.status === 400,
           `HTTP ${r2.status} ${JSON.stringify(r2.body).slice(0,140)}`);
     await rest(`agent_audiences?id=eq.${mism.body[0].id}`, { method: 'DELETE' });
@@ -148,8 +154,17 @@ if (mismatchCampaignId) {
         'NOT EXERCISED - could not obtain an other-source campaign');
 }
 
+// ---- 6c. destination is REQUIRED per push ----------------------------------
+r = await push({ __noDest: true, audience_id: audienceId, synced_campaign_id: campaignId,
+                 contacts: [{ apollo_person_id: 'p_np', email: '__verify__np@example.com' }] });
+check('push without platform -> 400', r.status === 400, `HTTP ${r.status} ${JSON.stringify(r.body).slice(0,90)}`);
+
+r = await push({ __noDest: true, audience_id: audienceId, platform,
+                 contacts: [{ apollo_person_id: 'p_nc', email: '__verify__nc@example.com' }] });
+check('push without synced_campaign_id -> 400', r.status === 400, `HTTP ${r.status} ${JSON.stringify(r.body).slice(0,90)}`);
+
 // ---- 7. no stray ledger rows from skipped contacts -------------------------
-const ledger = await rest(`agent_audience_pushes?audience_id=eq.${audienceId}&select=apollo_person_id`);
+const ledger = await rest(`agent_audience_pushes?audience_id=eq.${audienceId}&select=apollo_person_id,platform,synced_campaign_id`);
 const ids = (ledger.body || []).map(x => x.apollo_person_id).sort();
 check('skipped contacts leave NO ledger rows', ids.length === 1 && ids[0] === 'p_dup',
       `ledger=${JSON.stringify(ids)}`);
