@@ -1,0 +1,370 @@
+import { useState } from 'react';
+import { Plus, Loader2, Pencil, Trash2, AlertTriangle, Telescope } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
+} from '@/components/ui/dialog';
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { TagInput } from '@/components/ui/tag-input';
+import { MultiSelectDropdown } from '@/components/search/MultiSelectDropdown';
+import { useToast } from '@/hooks/use-toast';
+import {
+  useAgentAudiences, useAudienceCampaigns, useCreateAudience, useUpdateAudience,
+  useToggleAudienceActive, useDeleteAudience,
+  type AgentAudience as Audience, type AudienceInput, type ApolloAudienceFilters,
+} from '@/hooks/useAgentAudiences';
+
+// Apollo's own vocabulary, verbatim — these strings go straight into the
+// api_search body, so they must not be prettified.
+const SENIORITIES = [
+  'owner', 'founder', 'c_suite', 'partner', 'vp', 'head',
+  'director', 'manager', 'senior', 'entry', 'intern',
+];
+const EMPLOYEE_RANGES = [
+  '1,10', '11,20', '21,50', '51,100', '101,200',
+  '201,500', '501,1000', '1001,2000', '2001,5000', '5001,10000', '10001,1000000',
+];
+
+const EMPTY: AudienceInput = {
+  name: '', platform: 'reply.io', synced_campaign_id: null,
+  cadence: 'manual', max_per_run: 25, max_total: null, filters: {},
+};
+
+function statusBadge(a: Audience) {
+  if (a.consecutive_failures >= 3) {
+    return <Badge variant="destructive">Paused ({a.consecutive_failures} failures)</Badge>;
+  }
+  switch (a.last_run_status) {
+    case 'success': return <Badge variant="secondary">Success</Badge>;
+    case 'partial': return <Badge variant="outline">Partial</Badge>;
+    case 'failed': return <Badge variant="destructive">Failed</Badge>;
+    case 'running': return <Badge variant="outline">Running…</Badge>;
+    default: return <Badge variant="outline">Never run</Badge>;
+  }
+}
+
+export function AgentAudience() {
+  const { toast } = useToast();
+  const { data: audiences = [], isLoading } = useAgentAudiences();
+  const createAudience = useCreateAudience();
+  const updateAudience = useUpdateAudience();
+  const toggleActive = useToggleAudienceActive();
+  const deleteAudience = useDeleteAudience();
+
+  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState<Audience | null>(null);
+  const [form, setForm] = useState<AudienceInput>(EMPTY);
+  const { data: campaigns = [] } = useAudienceCampaigns(form.platform);
+
+  const setFilter = <K extends keyof ApolloAudienceFilters>(
+    key: K, value: ApolloAudienceFilters[K],
+  ) => setForm((f) => ({ ...f, filters: { ...f.filters, [key]: value } }));
+
+  const openCreate = () => { setEditing(null); setForm(EMPTY); setOpen(true); };
+  const openEdit = (a: Audience) => {
+    setEditing(a);
+    setForm({
+      name: a.name, platform: a.platform, synced_campaign_id: a.synced_campaign_id,
+      cadence: a.cadence, max_per_run: a.max_per_run, max_total: a.max_total,
+      filters: a.filters ?? {},
+    });
+    setOpen(true);
+  };
+
+  const hasFilter = Object.entries(form.filters).some(
+    ([, v]) => (Array.isArray(v) ? v.length > 0 : !!v),
+  );
+
+  const save = async () => {
+    try {
+      if (editing) await updateAudience.mutateAsync({ id: editing.id, updates: form });
+      else await createAudience.mutateAsync(form);
+      toast({ title: editing ? 'Audience updated' : 'Audience created' });
+      setOpen(false);
+    } catch (e: any) {
+      toast({ title: 'Could not save', description: e?.message, variant: 'destructive' });
+    }
+  };
+
+  // The DB trigger owns the activation rule. Surface its message rather than
+  // duplicating the rule here, where it would drift.
+  const onToggle = async (a: Audience, next: boolean) => {
+    try {
+      await toggleActive.mutateAsync({ id: a.id, is_active: next });
+      toast({ title: next ? 'Audience armed' : 'Audience paused' });
+    } catch (e: any) {
+      toast({
+        title: next ? "Can't arm this audience yet" : 'Could not pause',
+        description: e?.message ?? 'Unknown error',
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const campaignName = (a: Audience) =>
+    campaigns.find((c) => c.id === a.synced_campaign_id)?.name ?? null;
+
+  return (
+    <div className="p-6 space-y-6">
+      <div className="flex items-start justify-between">
+        <div>
+          <h2 className="text-xl font-semibold flex items-center gap-2">
+            <Telescope className="h-5 w-5" /> Agent Audience
+          </h2>
+          <p className="text-sm text-muted-foreground mt-1">
+            Saved Apollo searches that feed contacts into a campaign.
+          </p>
+        </div>
+        <Button onClick={openCreate}><Plus className="h-4 w-4 mr-2" />New audience</Button>
+      </div>
+
+      {isLoading ? (
+        <div className="flex justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
+      ) : audiences.length === 0 ? (
+        <div className="border rounded-lg py-16 text-center text-muted-foreground">
+          <Telescope className="h-8 w-8 mx-auto mb-3 opacity-40" />
+          <p className="font-medium">No audiences yet</p>
+          <p className="text-sm mt-1">Create one to preview matching contacts before pushing any.</p>
+        </div>
+      ) : (
+        <div className="border rounded-lg">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead>Destination</TableHead>
+                <TableHead>Cadence</TableHead>
+                <TableHead className="text-right">Pushed</TableHead>
+                <TableHead>Last run</TableHead>
+                <TableHead className="text-center">Active</TableHead>
+                <TableHead className="w-20" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {audiences.map((a) => (
+                <TableRow key={a.id}>
+                  <TableCell className="font-medium">{a.name}</TableCell>
+                  <TableCell className="text-sm">
+                    <span className="capitalize">{a.platform}</span>
+                    <span className="text-muted-foreground">
+                      {' · '}{campaignName(a) ?? (
+                        <span className="inline-flex items-center gap-1 text-amber-600">
+                          <AlertTriangle className="h-3 w-3" />no campaign linked
+                        </span>
+                      )}
+                    </span>
+                  </TableCell>
+                  <TableCell className="capitalize text-sm">{a.cadence}</TableCell>
+                  <TableCell className="text-right text-sm">
+                    {a.total_pushed}{a.max_total ? ` / ${a.max_total}` : ''}
+                  </TableCell>
+                  <TableCell>{statusBadge(a)}</TableCell>
+                  <TableCell className="text-center">
+                    <Switch
+                      checked={a.is_active}
+                      onCheckedChange={(v) => onToggle(a, v)}
+                      disabled={toggleActive.isPending}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex gap-1">
+                      <Button variant="ghost" size="icon" onClick={() => openEdit(a)}>
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost" size="icon"
+                        onClick={async () => {
+                          if (!confirm(`Delete "${a.name}"? Its run history and push log go too.`)) return;
+                          await deleteAudience.mutateAsync(a.id);
+                          toast({ title: 'Audience deleted' });
+                        }}
+                      >
+                        <Trash2 className="h-4 w-4 text-destructive" />
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{editing ? 'Edit audience' : 'New audience'}</DialogTitle>
+            <DialogDescription>
+              Filters are sent to Apollo as-is. Nothing is pushed until you preview and confirm.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div>
+              <Label>Name</Label>
+              <Input
+                value={form.name} placeholder="CEOs in healthcare"
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Platform</Label>
+                <Select
+                  value={form.platform}
+                  onValueChange={(v: 'smartlead' | 'reply.io') =>
+                    // Campaigns are platform-specific, so switching platform
+                    // must clear the link rather than leave a mismatched one —
+                    // the server rejects a mismatch outright.
+                    setForm({ ...form, platform: v, synced_campaign_id: null })}
+                >
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="reply.io">Reply.io</SelectItem>
+                    <SelectItem value="smartlead">Smartlead</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Campaign</Label>
+                <Select
+                  value={form.synced_campaign_id ?? ''}
+                  onValueChange={(v) => setForm({ ...form, synced_campaign_id: v })}
+                >
+                  <SelectTrigger><SelectValue placeholder="Select a campaign" /></SelectTrigger>
+                  <SelectContent>
+                    {campaigns.map((c) => (
+                      <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <Label>Cadence</Label>
+                <Select
+                  value={form.cadence}
+                  onValueChange={(v: 'manual' | 'daily' | 'weekly') => setForm({ ...form, cadence: v })}
+                >
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="manual">Manual only</SelectItem>
+                    <SelectItem value="daily">Daily</SelectItem>
+                    <SelectItem value="weekly">Weekly</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Max per run</Label>
+                <Input
+                  type="number" min={1} max={100} value={form.max_per_run}
+                  onChange={(e) => setForm({ ...form, max_per_run: Number(e.target.value) })}
+                />
+              </div>
+              <div>
+                <Label>Lifetime cap</Label>
+                <Input
+                  type="number" min={1} placeholder="none"
+                  value={form.max_total ?? ''}
+                  onChange={(e) =>
+                    setForm({ ...form, max_total: e.target.value ? Number(e.target.value) : null })}
+                />
+              </div>
+            </div>
+
+            <div className="border-t pt-4 space-y-4">
+              <p className="text-sm font-medium">Apollo filters</p>
+
+              <div>
+                <Label>Job titles</Label>
+                <TagInput
+                  value={form.filters.person_titles ?? []}
+                  onChange={(v) => setFilter('person_titles', v)}
+                  placeholder="CEO, VP Sales — Enter to add"
+                />
+              </div>
+
+              <div>
+                <Label>Seniority</Label>
+                <MultiSelectDropdown
+                  options={SENIORITIES}
+                  selected={form.filters.person_seniorities ?? []}
+                  onChange={(v) => setFilter('person_seniorities', v)}
+                  placeholder="Any seniority"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label>Person location</Label>
+                  <TagInput
+                    value={form.filters.person_locations ?? []}
+                    onChange={(v) => setFilter('person_locations', v)}
+                    placeholder="California, US"
+                  />
+                </div>
+                <div>
+                  <Label>Company HQ location</Label>
+                  <TagInput
+                    value={form.filters.organization_locations ?? []}
+                    onChange={(v) => setFilter('organization_locations', v)}
+                    placeholder="United States"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <Label>Company size</Label>
+                <MultiSelectDropdown
+                  options={EMPLOYEE_RANGES.map((r) => ({ label: r.replace(',', '–'), value: r }))}
+                  selected={form.filters.organization_num_employees_ranges ?? []}
+                  onChange={(v) => setFilter('organization_num_employees_ranges', v)}
+                  placeholder="Any size"
+                />
+              </div>
+
+              <div>
+                <Label>Keywords</Label>
+                <Input
+                  value={form.filters.q_keywords ?? ''}
+                  placeholder="healthcare"
+                  onChange={(e) => setFilter('q_keywords', e.target.value)}
+                />
+              </div>
+
+              {!hasFilter && (
+                <p className="text-xs text-amber-600 flex items-center gap-1">
+                  <AlertTriangle className="h-3 w-3" />
+                  At least one filter is required — Apollo refuses an unfiltered search.
+                </p>
+              )}
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
+            <Button
+              onClick={save}
+              disabled={!form.name || !hasFilter || createAudience.isPending || updateAudience.isPending}
+            >
+              {(createAudience.isPending || updateAudience.isPending) && (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              )}
+              {editing ? 'Save changes' : 'Create audience'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}

@@ -145,6 +145,13 @@ verify_jwt = false
 [functions.run-agent-audience]
 verify_jwt = false
 
+# Cron-invoked via x-agent-key ONLY (no JWT branch). Without this entry it
+# deploys with Supabase's default verify_jwt = true and the PLATFORM GATEWAY
+# rejects the cron before any of our code runs, while cron.job_run_details
+# still reports "succeeded" — the poll-smartlead-inbox failure from 40e075f.
+[functions.dispatch-agent-audiences]
+verify_jwt = false
+
 [functions.sync-smartlead-campaigns]
 verify_jwt = false
 
