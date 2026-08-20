@@ -210,7 +210,36 @@ Deno.serve(async (req) => {
       null;
     const email = emailRaw ? emailRaw.toLowerCase() : null;
 
-    const fullName = (payload.to_name as string | undefined) ?? null;
+    // to_name is DIRECTIONAL, exactly like to_email — the same inversion the
+    // header documents, which was fixed for the address and missed for the name.
+    //
+    // to_name describes whoever the message was addressed TO, which is the
+    // prospect only when Smartlead reports OUR outbound. On the prospect's
+    // reply the message is addressed to US, so to_name is our own sender —
+    // and because the webhook fires on every message, the last one to arrive
+    // won. That is how "Alia Ballout" (a SourceCo sender) ended up as the
+    // contact name on costa@actioncolors.com.
+    //
+    // The test is directional, not a name blacklist: trust to_name ONLY when
+    // to_email IS the canonical prospect. Verified against all 177 stored
+    // production payloads — 150 trustworthy, 27 correctly rejected, and every
+    // rejected value was either one of our senders (Mason Ruppel, Max Garside,
+    // Alia Ballout), a bounce daemon, or a no-reply address.
+    //
+    // A rejected name yields null, and null is STRIPPED from the upsert below,
+    // so a good stored name is never overwritten by a bad one. 17 prospects
+    // have no trustworthy name in any event; they keep whatever they already
+    // have rather than being blanked.
+    const toEmailForName = (payload.to_email as string | undefined)?.trim().toLowerCase() ?? null;
+    const toNameRaw = (payload.to_name as string | undefined)?.trim() || null;
+    const nameIsForProspect = !!email && !!toEmailForName && toEmailForName === email;
+    const fullName = nameIsForProspect ? toNameRaw : null;
+
+    if (toNameRaw && !nameIsForProspect) {
+      console.log(
+        `[smartlead-webhook v2] to_name "${toNameRaw}" ignored — addressed to ${toEmailForName}, not the prospect (${email})`,
+      );
+    }
 
     // The SENDER mailbox (inversion gotcha: from_email is OURS, not the
     // prospect's). Used to attribute the reply to the mailbox's mapped sender
@@ -466,7 +495,12 @@ Deno.serve(async (req) => {
       external_id: externalId,
       email,
       email_address: emailForKey,
-      full_name: fullName,
+      // Spread-conditional, NOT `full_name: fullName`. PostgREST builds the
+      // ON CONFLICT DO UPDATE SET clause only from keys present in the object,
+      // so omitting it preserves the stored value; writing null would clobber a
+      // good name on every inverted event — turning one bug into a worse one.
+      // Same null-clobber guard as campaign_external_id in heyreach-webhook.
+      ...(fullName ? { full_name: fullName } : {}),
       channel: "email",
       source: "smartlead",
       smartlead_lead_id: smartleadLeadId,
