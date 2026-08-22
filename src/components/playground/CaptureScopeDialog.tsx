@@ -88,6 +88,8 @@ export function CaptureScopeDialog({
   );
   const turningOff = changes.filter((c) => !c.captureEnabled).length;
 
+  const isFiltered = searchQuery.trim().length > 0;
+
   const filtered = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return campaigns;
@@ -116,7 +118,13 @@ export function CaptureScopeDialog({
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent className="max-w-3xl max-h-[85vh] flex flex-col">
           <DialogHeader>
-            <DialogTitle>Capture Scope{platformLabel ? ` — ${platformLabel}` : ''}</DialogTitle>
+            {/* Same user-facing name as Reply.io's dialog: it is the same
+                concept to the user. The separate implementation underneath is
+                an engineering safety decision, not a product distinction. The
+                two buttons are mutually exclusive per integration row
+                (isReplyIo vs isCaptureScopePlatform), so they never appear
+                together and the shared label cannot be ambiguous. */}
+            <DialogTitle>Manage Campaigns{platformLabel ? ` — ${platformLabel}` : ''}</DialogTitle>
             <DialogDescription>
               Choose which campaigns Vrelly listens to. Replies from campaigns that are switched
               off are not captured at all — no lead is created and no draft is written. This is
@@ -157,14 +165,23 @@ export function CaptureScopeDialog({
               </div>
             )}
 
+            {/* Bulk actions apply to the CURRENT SEARCH RESULTS, not the whole
+                list. With 379 campaigns that distinction is the difference
+                between enabling 12 and enabling everything, so the label says
+                "matching" whenever a search is narrowing the set rather than
+                leaving the count to be read ambiguously. */}
             <div className="flex items-center gap-3 text-sm flex-wrap">
               <Button variant="ghost" size="sm" className="h-8"
+                disabled={filtered.length === 0}
                 onClick={() => setMany(filtered, true)}>
-                Enable all ({filtered.length})
+                {isFiltered
+                  ? `Enable ${filtered.length} matching`
+                  : `Enable all (${filtered.length})`}
               </Button>
               <Button variant="ghost" size="sm" className="h-8"
+                disabled={filtered.length === 0}
                 onClick={() => setMany(filtered, false)}>
-                Disable all
+                {isFiltered ? `Disable ${filtered.length} matching` : 'Disable all'}
               </Button>
               {sendersAvailable && (
                 <Button

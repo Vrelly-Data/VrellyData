@@ -145,7 +145,7 @@ function IntegrationRow({ integration, onToggle, onDelete, onSync, onEdit, onRes
             className="h-8"
           >
             <Settings2 className="h-4 w-4" />
-            <span className="ml-1.5">Capture Scope</span>
+            <span className="ml-1.5">Manage Campaigns</span>
           </Button>
         )}
         {isStuck ? (
