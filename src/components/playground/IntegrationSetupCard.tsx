@@ -11,6 +11,7 @@ import { EditIntegrationDialog } from './EditIntegrationDialog';
 import { LinkedInStatsUploadDialog } from './LinkedInStatsUploadDialog';
 import { EmailStatsUploadDialog } from './EmailStatsUploadDialog';
 import { ManageCampaignsDialog } from './ManageCampaignsDialog';
+import { CaptureScopeDialog } from './CaptureScopeDialog';
 import { formatDistanceToNow } from 'date-fns';
 
 function formatElapsedTime(seconds: number): string {
@@ -56,17 +57,23 @@ interface IntegrationRowProps {
   onEdit: (integration: OutboundIntegration) => void;
   onResetSync: (id: string) => void;
   onManageCampaigns: (integration: OutboundIntegration) => void;
+  // Capture Scope (Smartlead/HeyReach). Separate from onManageCampaigns, which
+  // stays Reply.io-only and unchanged.
+  onCaptureScope: (integration: OutboundIntegration) => void;
   isSyncing: boolean;
   elapsedSeconds?: number;
 }
 
-function IntegrationRow({ integration, onToggle, onDelete, onSync, onEdit, onResetSync, onManageCampaigns, isSyncing, elapsedSeconds }: IntegrationRowProps) {
+function IntegrationRow({ integration, onToggle, onDelete, onSync, onEdit, onResetSync, onManageCampaigns, onCaptureScope, isSyncing, elapsedSeconds }: IntegrationRowProps) {
   const icon = platformIcons[integration.platform.toLowerCase()] || '🔌';
   const isCurrentlySyncing = isSyncing || integration.sync_status === 'syncing';
   // Access reply_team_id from extended integration type
   const replyTeamId = (integration as OutboundIntegration & { reply_team_id?: string }).reply_team_id;
   const isReplyIo = integration.platform.toLowerCase() === 'reply.io';
   const isHeyReach = integration.platform.toLowerCase() === 'heyreach';
+  // Platforms Capture Scope manages. Reply.io is deliberately absent: its
+  // capture scope is unmanaged by design and fetch-capture-scope rejects it.
+  const isCaptureScopePlatform = ['smartlead', 'heyreach'].includes(integration.platform.toLowerCase());
   
   // Check if sync is stuck (syncing for more than 5 minutes)
   const isStuck = integration.sync_status === 'syncing' && integration.updated_at && 
@@ -127,6 +134,18 @@ function IntegrationRow({ integration, onToggle, onDelete, onSync, onEdit, onRes
           >
             <Settings2 className="h-4 w-4" />
             <span className="ml-1.5">Manage Campaigns</span>
+          </Button>
+        )}
+        {isCaptureScopePlatform && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => onCaptureScope(integration)}
+            disabled={!integration.is_active}
+            className="h-8"
+          >
+            <Settings2 className="h-4 w-4" />
+            <span className="ml-1.5">Capture Scope</span>
           </Button>
         )}
         {isStuck ? (
@@ -194,6 +213,7 @@ export function IntegrationSetupCard() {
   const [linkedInUploadOpen, setLinkedInUploadOpen] = useState(false);
   const [emailUploadOpen, setEmailUploadOpen] = useState(false);
   const [manageCampaignsOpen, setManageCampaignsOpen] = useState(false);
+  const [captureScopeOpen, setCaptureScopeOpen] = useState(false);
   const [editingIntegration, setEditingIntegration] = useState<OutboundIntegration | null>(null);
   const [managingIntegration, setManagingIntegration] = useState<OutboundIntegration | null>(null);
   const [syncingId, setSyncingId] = useState<string | null>(null);
@@ -268,6 +288,11 @@ export function IntegrationSetupCard() {
     setManageCampaignsOpen(true);
   };
 
+  const handleCaptureScope = (integration: OutboundIntegration) => {
+    setManagingIntegration(integration);
+    setCaptureScopeOpen(true);
+  };
+
   return (
     <>
       <Card>
@@ -320,6 +345,7 @@ export function IntegrationSetupCard() {
                   onEdit={handleEdit}
                   onResetSync={handleResetSync}
                   onManageCampaigns={handleManageCampaigns}
+                  onCaptureScope={handleCaptureScope}
                   isSyncing={syncingId === integration.id}
                   elapsedSeconds={elapsedTimes[integration.id]}
                 />
@@ -348,6 +374,12 @@ export function IntegrationSetupCard() {
         onOpenChange={setManageCampaignsOpen}
         integrationId={managingIntegration?.id ?? null}
         onAddWorkspace={() => setDialogOpen(true)}
+      />
+      <CaptureScopeDialog
+        open={captureScopeOpen}
+        onOpenChange={setCaptureScopeOpen}
+        integrationId={managingIntegration?.id ?? null}
+        platformLabel={managingIntegration?.platform}
       />
     </>
   );
