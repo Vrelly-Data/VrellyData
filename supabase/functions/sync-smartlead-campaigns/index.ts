@@ -296,7 +296,39 @@ Deno.serve(async (req) => {
     // === Per-campaign sync ==================================================
     let synced = 0;
     let failed = 0;
+    let skippedAnalytics = 0;
     let analyticsKeysLogged = false;
+
+    // Existing rows, so a terminal campaign that already has stats can skip its
+    // ~600ms /analytics call, and so is_linked survives the upsert below. One
+    // query rather than one per campaign.
+    //
+    // Scoped by integration_id — the SAME key the upsert conflicts on. Scoping
+    // by (team_id, source) instead would let a team with two Smartlead
+    // integrations sharing an external_campaign_id read one integration's row
+    // and write its is_linked onto the other's.
+    const existingByExternalId = new Map<
+      string,
+      { stats: Record<string, unknown> | null; isLinked: boolean }
+    >();
+    {
+      const { data: existingRows } = await supabase
+        .from("synced_campaigns")
+        .select("external_campaign_id, stats, is_linked")
+        .eq("integration_id", integration.id);
+      for (const r of existingRows ?? []) {
+        existingByExternalId.set(
+          String((r as { external_campaign_id: string }).external_campaign_id),
+          {
+            stats: (r as { stats: Record<string, unknown> | null }).stats ?? null,
+            isLinked: (r as { is_linked: boolean }).is_linked,
+          },
+        );
+      }
+      console.log(
+        `[sync-smartlead-campaigns] Loaded ${existingByExternalId.size} existing campaign row(s) for analytics-skip + is_linked preservation`,
+      );
+    }
 
     for (const c of campaigns) {
       const externalId =
@@ -317,8 +349,31 @@ Deno.serve(async (req) => {
       // Per-campaign analytics. Failures here do NOT abort the whole sync —
       // we still upsert the campaign with zeroed stats so the row appears in
       // the playground.
+      // FIX 2 — skip /analytics for campaigns whose stats cannot have moved.
+      //
+      // /analytics is ~600ms per campaign and was ~60% of this function's
+      // runtime. At 379 campaigns the loop took ~5.4 minutes and was being
+      // KILLED by the edge wall-clock limit partway through: on 2026-08-20 it
+      // updated 312 of 379 and died, leaving sync_status stuck on 'syncing'
+      // with no error, because neither the success nor the failure handler was
+      // ever reached. The UI could only report "sync failed" with no reason.
+      //
+      // A completed/stopped/archived campaign sends nothing more, so its totals
+      // are final. We fetch analytics for it ONCE (when the row has no stats
+      // yet) and skip it forever after. Live campaigns are always refreshed.
+      // FIX 1 also removed a fixed 200ms sleep per campaign (~76s); no rate
+      // limiting was observed across probes, so it was unnecessary caution.
+      const isTerminal = ["completed", "stopped", "archived"].includes(
+        normalizedStatus ?? "",
+      );
+      const priorStats = existingByExternalId.get(externalId)?.stats ?? null;
+      const hasPriorStats = !!priorStats && Object.keys(priorStats).length > 0;
+      const skipAnalytics = isTerminal && hasPriorStats;
+      if (skipAnalytics) skippedAnalytics++;
+
       let analytics: Record<string, unknown> = {};
       try {
+        if (skipAnalytics) throw { __skip: true };
         const aRes = await smartleadGet(
           `/campaigns/${encodeURIComponent(externalId)}/analytics`,
           apiKey,
@@ -340,10 +395,13 @@ Deno.serve(async (req) => {
           );
         }
       } catch (analyticsErr) {
-        console.warn(
-          `[sync-smartlead-campaigns] /analytics fetch error for campaign ${externalId}:`,
-          analyticsErr,
-        );
+        // The skip sentinel is control flow, not a failure.
+        if (!(analyticsErr as { __skip?: boolean })?.__skip) {
+          console.warn(
+            `[sync-smartlead-campaigns] /analytics fetch error for campaign ${externalId}:`,
+            analyticsErr,
+          );
+        }
       }
 
       // Map analytics → stats keys. Field-name candidates are deliberately
@@ -432,7 +490,14 @@ Deno.serve(async (req) => {
             channel: "email",
             stats,
             raw_data: c,
-            is_linked: true,
+            // Preserve is_linked: it is the user's Data Analysis scope choice,
+            // NOT a capture switch, and this upsert is the only thing that
+            // ever writes it during a sync. Hardcoding `true` here silently
+            // reverted any campaign an operator had unlinked, on every cron
+            // run. New campaigns still default to true — the COLUMN default
+            // is false, so the key must be sent explicitly rather than
+            // omitted. Same contract as sync-reply-campaigns.
+            is_linked: existingByExternalId.get(externalId)?.isLinked ?? true,
             // last_synced_at column doesn't exist on synced_campaigns;
             // updated_at is bumped by the existing trigger on UPDATE.
           },
@@ -449,9 +514,6 @@ Deno.serve(async (req) => {
       }
 
       synced++;
-
-      // Gentle pacing between analytics calls.
-      await new Promise((resolve) => setTimeout(resolve, 200));
     }
 
     // === Final integration status ==========================================
@@ -472,7 +534,8 @@ Deno.serve(async (req) => {
       .eq("id", integration.id);
 
     console.log(
-      `[sync-smartlead-campaigns] Done. Integration ${integration.id}: synced=${synced}, failed=${failed}, total=${campaigns.length}`,
+      `[sync-smartlead-campaigns] Done. Integration ${integration.id}: synced=${synced}, failed=${failed}, ` +
+        `skippedAnalytics=${skippedAnalytics}, total=${campaigns.length}`,
     );
 
     return new Response(

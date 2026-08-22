@@ -93,6 +93,21 @@ Deno.serve(async (req) => {
         .eq('id', integration.id);
 
       try {
+        // Existing is_linked per campaign, loaded once per integration so the
+        // upsert below can preserve it. See the note at the upsert for why
+        // this cannot be handled by simply omitting the key.
+        const linkedByExternalId = new Map<string, boolean>();
+        {
+          const { data: existingRows } = await supabase
+            .from('synced_campaigns')
+            .select('external_campaign_id, is_linked')
+            .eq('integration_id', integration.id);
+          for (const r of existingRows ?? []) {
+            linkedByExternalId.set(String(r.external_campaign_id), r.is_linked);
+          }
+          console.log(`[sync-heyreach-campaigns] Loaded ${linkedByExternalId.size} existing campaign row(s) for is_linked preservation`);
+        }
+
         // Paginate through all campaigns using POST /campaign/GetAll
         let offset = 0;
         const limit = 100;
@@ -142,8 +157,13 @@ Deno.serve(async (req) => {
               progressStats,
             };
 
-            // Auto-link HeyReach campaigns so they appear in the Data Playground
-            // without manual linking (HeyReach has no "Manage Campaigns" UI).
+            // Auto-link NEW HeyReach campaigns so they appear in the Data
+            // Playground without manual linking (HeyReach has no "Manage
+            // Campaigns" UI), but preserve the stored value for campaigns we
+            // already have — hardcoding `true` reverted any campaign an
+            // operator had unlinked, on every cron run. The key must be sent
+            // explicitly rather than omitted: the COLUMN default is false, so
+            // omitting it would make every new campaign unlinked instead.
             // team_id is required by schema (NOT NULL) and RLS filters all
             // synced_campaigns SELECTs by team_id, so without it the row is
             // invisible to the frontend even if the insert succeeds.
@@ -157,7 +177,7 @@ Deno.serve(async (req) => {
                 team_id: integration.team_id,
                 stats,
                 raw_data: campaign,
-                is_linked: true,
+                is_linked: linkedByExternalId.get(externalId) ?? true,
                 // HeyReach is LinkedIn-only by construction. Hardcoded so
                 // the channel column is correct without any per-row
                 // detection. See 20260619130000 migration header.
