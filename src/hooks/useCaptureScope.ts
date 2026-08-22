@@ -49,6 +49,7 @@ interface CaptureScopeResponse {
   ungroupedCount: number;
   counts: { total: number; captureEnabled: number; captureDisabled: number };
   sendersAvailable: boolean;
+  sendersDeferred: boolean;
   maxSenderLookup: number;
 }
 
@@ -150,6 +151,8 @@ export function useCaptureScope(integrationId: string | null, enabled = true) {
     ungroupedCount: query.data?.ungroupedCount ?? 0,
     counts: query.data?.counts ?? { total: 0, captureEnabled: 0, captureDisabled: 0 },
     sendersAvailable: query.data?.sendersAvailable ?? false,
+    // false => senders already arrived with the list; no second call needed.
+    sendersDeferred: query.data?.sendersDeferred ?? false,
     maxSenderLookup: maxLookup,
     sendersLoadedFor: senders,
     isLoading: query.isLoading,

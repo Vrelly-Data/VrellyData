@@ -60,7 +60,7 @@ export function CaptureScopeDialog({
   open, onOpenChange, integrationId, platformLabel,
 }: CaptureScopeDialogProps) {
   const {
-    campaigns, groups, counts, sendersAvailable, sendersLoadedFor,
+    campaigns, groups, counts, sendersAvailable, sendersDeferred, sendersLoadedFor,
     isLoading, error, refetch, loadSenders, sendersLoading, sendersProgress,
     save, isSaving,
   } = useCaptureScope(integrationId, open);
@@ -185,7 +185,7 @@ export function CaptureScopeDialog({
                 onClick={() => setMany(filtered, false)}>
                 {isFiltered ? `Disable ${filtered.length} matching` : 'Disable all'}
               </Button>
-              {sendersAvailable && (
+              {sendersAvailable && sendersDeferred && (
                 <Button
                   variant="outline" size="sm" className="h-8"
                   disabled={sendersLoading || filtered.length === 0}
@@ -227,7 +227,7 @@ export function CaptureScopeDialog({
                       key={c.externalId}
                       campaign={c}
                       checked={effective(c)}
-                      sendersFetched={c.externalId in sendersLoadedFor}
+                      sendersFetched={!sendersDeferred || c.externalId in sendersLoadedFor}
                       expanded={expanded.has(c.externalId)}
                       sendersAvailable={sendersAvailable}
                       onToggle={() => {
@@ -244,7 +244,9 @@ export function CaptureScopeDialog({
                           // request, ~1s — as opposed to the bulk button,
                           // which walks every filtered campaign and takes
                           // minutes against the vendor rate limit.
-                          if (!(c.externalId in sendersLoadedFor)) loadSenders([c.externalId]);
+                          // Only Smartlead needs the extra call; HeyReach
+                          // senders arrive with the list already.
+                          if (sendersDeferred && !(c.externalId in sendersLoadedFor)) loadSenders([c.externalId]);
                         }
                         setExpanded(next);
                       }}

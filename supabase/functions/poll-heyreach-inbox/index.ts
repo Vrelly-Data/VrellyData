@@ -108,6 +108,7 @@ Deno.serve(async (req) => {
     let skippedSenderMe = 0;
     let skippedSameText = 0;
     let integrationsSkippedNoKey = 0;
+    let integrationsSkippedAllDisabled = 0;
     let integrationsSkippedNoAgentConfig = 0;
 
     for (const integration of integrations ?? []) {
@@ -135,6 +136,69 @@ Deno.serve(async (req) => {
           continue;
         }
 
+        // === Capture Scope gate ==============================================
+        // Enforcement point 4 of 4, and the reason HeyReach needed its own
+        // stage. This poller is a lead-CREATING path that bypasses points 1-3
+        // entirely: it reads the whole inbox rather than reacting to a webhook.
+        //
+        // It also has no attribution to filter on after the fact — verified
+        // against the live API, a GetConversationsV2 conversation carries
+        // id/read/groupChat/lastMessage*/linkedInAccountId/correspondentProfile
+        // and NO campaign field whatsoever. So the scope must be applied at the
+        // REQUEST, via the campaignIds filter. Confirmed additive against prod:
+        // 518402 alone = 49, 508828 alone = 39, both = 88; all three with
+        // 507230 = 129. It is a true multi-value allow-list, not first-id-wins.
+        //
+        // THE TRAP: campaignIds: [] means "every campaign", so "nothing is
+        // enabled" and "nothing is synced yet" must not produce the same
+        // request. They are handled as three distinct cases below.
+        const { data: scopeRows, error: scopeErr } = await supabase
+          .from('synced_campaigns')
+          .select('external_campaign_id, capture_enabled')
+          .eq('integration_id', integration.id);
+
+        let campaignIdFilter: number[] = [];
+        if (scopeErr) {
+          // Fail open — a transient lookup failure must not silently stop
+          // capture for a whole integration.
+          console.warn(
+            `[poll-heyreach-inbox] capture scope lookup failed for integration ` +
+            `${integration.id} (${scopeErr.message}) — polling unfiltered (fail-open)`,
+          );
+        } else if (!scopeRows || scopeRows.length === 0) {
+          // Case A: campaigns have never been synced for this integration.
+          // Filtering on an empty allow-list would mean "all" anyway, and this
+          // is indistinguishable from a brand-new integration, so poll
+          // unfiltered exactly as before.
+          console.log(
+            `[poll-heyreach-inbox] No synced campaigns for integration ${integration.id} — ` +
+            `polling unfiltered (run sync-heyreach-campaigns to enable scoping)`,
+          );
+        } else {
+          const enabled = scopeRows
+            .filter((r) => r.capture_enabled === true)
+            .map((r) => Number(r.external_campaign_id))
+            .filter((n) => Number.isFinite(n));
+
+          if (enabled.length === 0) {
+            // Case C: campaigns exist and the operator has disabled ALL of
+            // them. Passing [] here would poll everything — the exact opposite
+            // of what was asked for. Skip the integration instead.
+            console.log(
+              `[poll-heyreach-inbox] All ${scopeRows.length} campaign(s) have capture disabled ` +
+              `for integration ${integration.id} — skipping entirely`,
+            );
+            integrationsSkippedAllDisabled++;
+            continue;
+          }
+          // Case B: scope to the enabled campaigns.
+          campaignIdFilter = enabled;
+          console.log(
+            `[poll-heyreach-inbox] Scoping to ${enabled.length} of ${scopeRows.length} ` +
+            `campaign(s) with capture enabled for integration ${integration.id}`,
+          );
+        }
+
         // Paginate through conversations using POST /inbox/GetConversationsV2
         let offset = 0;
         const limit = 100;
@@ -151,7 +215,10 @@ Deno.serve(async (req) => {
             body: JSON.stringify({
               filters: {
                 linkedInAccountIds: [],
-                campaignIds: [],
+                // Capture Scope: [] means "all campaigns". Populated only in
+                // case B above; cases A and the fail-open path deliberately
+                // leave it empty, and case C never reaches this call.
+                campaignIds: campaignIdFilter,
                 searchString: '',
               },
               offset,

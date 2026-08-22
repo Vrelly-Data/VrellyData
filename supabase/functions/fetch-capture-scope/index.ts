@@ -29,10 +29,12 @@ import {
   type CaptureScopeIntegration,
 } from "../_shared/capture-scope.ts";
 import { smartleadCaptureScopeAdapter } from "../_shared/capture-scope-smartlead.ts";
+import { heyreachCaptureScopeAdapter } from "../_shared/capture-scope-heyreach.ts";
 
-// HeyReach lands in Stage 5. Registering only what is implemented keeps the
-// error message honest rather than failing deeper with a confusing message.
+// Registering only implemented adapters keeps the error message honest: an
+// unsupported platform (reply.io) gets a clear 400 rather than failing deeper.
 registerAdapter(smartleadCaptureScopeAdapter);
+registerAdapter(heyreachCaptureScopeAdapter);
 
 const allowedOrigins = [
   Deno.env.get("ALLOWED_ORIGIN") || "https://vrelly.com",
@@ -164,8 +166,16 @@ Deno.serve(async (req) => {
         captureEnabled: campaigns.filter((c) => c.captureEnabled).length,
         captureDisabled: campaigns.filter((c) => !c.captureEnabled).length,
       },
-      // Tells the UI that empty senders[] means "not fetched yet", not "none".
-      sendersAvailable: !!adapter.listSenders,
+      // Two DIFFERENT questions, and conflating them hid HeyReach's senders:
+      //   sendersAvailable — can this platform show senders at all? Drives
+      //     whether the UI renders the reveal control.
+      //   sendersDeferred  — must the UI make a second call to get them?
+      //     True for Smartlead (one API call per campaign, rate-limited so it
+      //     has to be lazy and paged); false for HeyReach, whose campaigns
+      //     carry campaignAccountIds in already-synced raw_data and so arrive
+      //     fully populated from `list`.
+      sendersAvailable: !!adapter.listSenders || campaigns.some((c) => c.senders.length > 0),
+      sendersDeferred: !!adapter.listSenders,
       maxSenderLookup: MAX_SENDER_LOOKUP,
     });
   } catch (e) {

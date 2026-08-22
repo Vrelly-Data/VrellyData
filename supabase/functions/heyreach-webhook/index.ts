@@ -425,6 +425,46 @@ Deno.serve(async (req) => {
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
+    // === Capture Scope gate =================================================
+    // Enforcement point 3 of 4 for HeyReach. Mirrors smartlead-webhook: placed
+    // immediately before the first agent_leads write so a disabled campaign
+    // produces NO lead row at all — not a mirrored one.
+    //
+    // Fails OPEN on a missing row, a lookup error, or an event with no
+    // campaignId at all. HeyReach reply payloads do not always carry one (see
+    // the attribution note below), and dropping a real reply because the event
+    // was unattributed would be far worse than capturing one the operator can
+    // switch off. Only an explicit capture_enabled === false suppresses.
+    if (campaignExternalId) {
+      const { data: scopeRow, error: scopeErr } = await supabase
+        .from("synced_campaigns")
+        .select("capture_enabled, name")
+        .eq("integration_id", integration.id)
+        .eq("external_campaign_id", String(campaignExternalId))
+        .maybeSingle();
+
+      if (scopeErr) {
+        console.warn(
+          `[heyreach-webhook] capture scope lookup failed for campaign ${campaignExternalId} ` +
+          `(${scopeErr.message}) — proceeding (fail-open)`,
+        );
+      } else if (scopeRow && scopeRow.capture_enabled === false) {
+        console.log(
+          `[heyreach-webhook] capture disabled for campaign ${campaignExternalId} ` +
+          `("${scopeRow.name}") — dropping ${eventType} without creating a lead`,
+        );
+        return new Response(
+          JSON.stringify({
+            success: true,
+            skipped: "capture_disabled",
+            campaignId: String(campaignExternalId),
+            eventType,
+          }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+    }
+
     // campaign_external_id is spread CONDITIONALLY (null-clobber guard).
     // PostgREST builds the ON CONFLICT DO UPDATE SET clause only from keys
     // present in the values object — omitting the key means it's not in the

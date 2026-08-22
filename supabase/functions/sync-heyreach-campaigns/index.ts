@@ -97,13 +97,15 @@ Deno.serve(async (req) => {
         // upsert below can preserve it. See the note at the upsert for why
         // this cannot be handled by simply omitting the key.
         const linkedByExternalId = new Map<string, boolean>();
+        const captureByExternalId = new Map<string, boolean>();
         {
           const { data: existingRows } = await supabase
             .from('synced_campaigns')
-            .select('external_campaign_id, is_linked')
+            .select('external_campaign_id, is_linked, capture_enabled')
             .eq('integration_id', integration.id);
           for (const r of existingRows ?? []) {
             linkedByExternalId.set(String(r.external_campaign_id), r.is_linked);
+            captureByExternalId.set(String(r.external_campaign_id), r.capture_enabled === true);
           }
           console.log(`[sync-heyreach-campaigns] Loaded ${linkedByExternalId.size} existing campaign row(s) for is_linked preservation`);
         }
@@ -175,9 +177,27 @@ Deno.serve(async (req) => {
                 status: status.toLowerCase(),
                 integration_id: integration.id,
                 team_id: integration.team_id,
+                // MUST be set explicitly. synced_campaigns.source DEFAULTS TO
+                // 'reply_io', so omitting it silently filed every HeyReach
+                // campaign as a Reply.io one — which both polluted Reply.io's
+                // Data Analysis scope (these rows carry is_linked=true) and
+                // made any source-scoped query miss them entirely. Latent
+                // until now only because prod had never synced HeyReach
+                // campaigns. Same hardcoding rationale as sync-smartlead-
+                // campaigns and the note in fetch-available-campaigns.
+                source: 'heyreach',
                 stats,
                 raw_data: campaign,
                 is_linked: linkedByExternalId.get(externalId) ?? true,
+                // Capture Scope enforcement point 1 of 4: a newly discovered
+                // campaign must not start capturing on its own. Existing rows
+                // keep the operator's choice; only new campaigns are affected,
+                // and they arrive OFF.
+                //
+                // Deliberately the opposite default to is_linked above:
+                // is_linked is reporting scope and harmless when on, capture is
+                // not. See migration 20260822020000.
+                capture_enabled: captureByExternalId.get(externalId) ?? false,
                 // HeyReach is LinkedIn-only by construction. Hardcoded so
                 // the channel column is correct without any per-row
                 // detection. See 20260619130000 migration header.
