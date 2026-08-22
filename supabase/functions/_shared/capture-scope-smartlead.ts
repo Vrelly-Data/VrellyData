@@ -113,7 +113,9 @@ export const smartleadCaptureScopeAdapter: CaptureScopeAdapter = {
       const groupId = readGroupId(row.raw_data as Record<string, unknown> | null);
       return {
         externalId: String(row.external_campaign_id),
-        name: String(row.name ?? "Unnamed campaign"),
+        // ?? only catches null/undefined; Smartlead returns "" for some
+        // draft campaigns, which rendered as a blank row in the dialog.
+        name: String(row.name ?? "").trim() || `Untitled campaign ${row.external_campaign_id}`,
         status: normalizeStatus(String(row.status ?? "")),
         rawStatus: (row.raw_status as string | null) ?? null,
         captureEnabled: row.capture_enabled === true,

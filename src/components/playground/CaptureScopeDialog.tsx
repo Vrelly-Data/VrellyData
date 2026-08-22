@@ -28,7 +28,7 @@ import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Loader2, Search, Users, Building2, Mail } from 'lucide-react';
+import { Loader2, Search, Users, Building2, Mail, ChevronRight, ChevronDown } from 'lucide-react';
 import { useCaptureScope, type CaptureScopeCampaign } from '@/hooks/useCaptureScope';
 
 interface CaptureScopeDialogProps {
@@ -68,6 +68,7 @@ export function CaptureScopeDialog({
   const [searchQuery, setSearchQuery] = useState('');
   const [selections, setSelections] = useState<Map<string, boolean>>(new Map());
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   // Reset local state whenever the dialog is opened for an integration, so a
   // previous session's unsaved edits can never leak into a new one.
@@ -75,6 +76,7 @@ export function CaptureScopeDialog({
     if (!open) return;
     setSearchQuery('');
     setSelections(new Map());
+    setExpanded(new Set());
     refetch();
   }, [open, integrationId]);
 
@@ -195,7 +197,7 @@ export function CaptureScopeDialog({
                       {sendersProgress ? `${sendersProgress.done}/${sendersProgress.total}` : 'Loading'}
                     </>
                   ) : (
-                    <><Mail className="h-3.5 w-3.5 mr-1.5" />Load senders</>
+                    <><Mail className="h-3.5 w-3.5 mr-1.5" />Load senders for all {filtered.length}</>
                   )}
                 </Button>
               )}
@@ -226,10 +228,25 @@ export function CaptureScopeDialog({
                       campaign={c}
                       checked={effective(c)}
                       sendersFetched={c.externalId in sendersLoadedFor}
+                      expanded={expanded.has(c.externalId)}
+                      sendersAvailable={sendersAvailable}
                       onToggle={() => {
                         const next = new Map(selections);
                         next.set(c.externalId, !effective(c));
                         setSelections(next);
+                      }}
+                      onToggleExpand={() => {
+                        const next = new Set(expanded);
+                        if (next.has(c.externalId)) next.delete(c.externalId);
+                        else {
+                          next.add(c.externalId);
+                          // Fetch this one campaign's senders on demand. One
+                          // request, ~1s — as opposed to the bulk button,
+                          // which walks every filtered campaign and takes
+                          // minutes against the vendor rate limit.
+                          if (!(c.externalId in sendersLoadedFor)) loadSenders([c.externalId]);
+                        }
+                        setExpanded(next);
                       }}
                     />
                   ))}
@@ -280,46 +297,88 @@ export function CaptureScopeDialog({
 }
 
 function CampaignRow({
-  campaign, checked, sendersFetched, onToggle,
+  campaign, checked, sendersFetched, expanded, sendersAvailable, onToggle, onToggleExpand,
 }: {
   campaign: CaptureScopeCampaign;
   checked: boolean;
   sendersFetched: boolean;
+  expanded: boolean;
+  sendersAvailable: boolean;
   onToggle: () => void;
+  onToggleExpand: () => void;
 }) {
   const { volume, senders, group } = campaign;
   const personas = [...new Set(senders.map((s) => s.label))];
 
   return (
-    <div
-      className="flex items-start gap-3 px-4 py-3 hover:bg-muted/50 cursor-pointer"
-      onClick={onToggle}
-    >
-      <Checkbox checked={checked} onCheckedChange={onToggle}
-        onClick={(e) => e.stopPropagation()} className="mt-0.5" />
-      <div className="flex-1 min-w-0">
-        <div className="font-medium truncate">{campaign.name}</div>
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-xs text-muted-foreground">
-          <span className="font-mono">{campaign.externalId}</span>
-          {group && <Badge variant="secondary" className="text-[10px]">{group.label}</Badge>}
-          {sendersFetched && (
-            personas.length > 0
-              ? <span className="truncate">{personas.slice(0, 2).join(', ')}
-                  {personas.length > 2 ? ` +${personas.length - 2}` : ''}
-                  {senders.length > 0 ? ` · ${senders.length} inbox${senders.length === 1 ? '' : 'es'}` : ''}
-                </span>
-              : <span className="italic">no sender accounts</span>
-          )}
+    <div className="px-4 py-3 hover:bg-muted/50">
+      <div className="flex items-start gap-3 cursor-pointer" onClick={onToggle}>
+        <Checkbox checked={checked} onCheckedChange={onToggle}
+          onClick={(e) => e.stopPropagation()} className="mt-0.5" />
+        <div className="flex-1 min-w-0">
+          <div className="font-medium truncate">{campaign.name}</div>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-xs text-muted-foreground">
+            <span className="font-mono">{campaign.externalId}</span>
+            {group && <Badge variant="secondary" className="text-[10px]">{group.label}</Badge>}
+            {/* The sender summary is a CONTROL, not a label. Every inbox on a
+                campaign usually shares one from_name, so "Marcus Reid · 30
+                inboxes" collapsed 30 distinct addresses into what read as a
+                bare count — the addresses were fetched and held in state but
+                never rendered anywhere. This toggle reveals them. */}
+            {sendersAvailable && (
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); onToggleExpand(); }}
+                className="inline-flex items-center gap-1 hover:text-foreground underline-offset-2 hover:underline"
+                aria-expanded={expanded}
+              >
+                {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                {!sendersFetched
+                  ? 'Show senders'
+                  : senders.length === 0
+                    ? 'No sender accounts'
+                    : `${personas.slice(0, 2).join(', ')}${personas.length > 2 ? ` +${personas.length - 2}` : ''} · ${senders.length} inbox${senders.length === 1 ? '' : 'es'}`}
+              </button>
+            )}
+          </div>
         </div>
+        {statusBadge(campaign.status)}
+        {/* null volume means unknown, so render nothing rather than a false 0 */}
+        {volume.sent !== null && (
+          <div className="flex items-center gap-1 text-sm text-muted-foreground shrink-0">
+            <Users className="h-3.5 w-3.5" />
+            <span className="tabular-nums">{volume.sent.toLocaleString()}</span>
+            {volume.replies !== null && (
+              <span className="tabular-nums">· {volume.replies.toLocaleString()} repl</span>
+            )}
+          </div>
+        )}
       </div>
-      {statusBadge(campaign.status)}
-      {/* null volume means unknown, so render nothing rather than a false 0 */}
-      {volume.sent !== null && (
-        <div className="flex items-center gap-1 text-sm text-muted-foreground shrink-0">
-          <Users className="h-3.5 w-3.5" />
-          <span className="tabular-nums">{volume.sent.toLocaleString()}</span>
-          {volume.replies !== null && (
-            <span className="tabular-nums">· {volume.replies.toLocaleString()} repl</span>
+
+      {/* The actual sending inboxes. This is the thing the counts were hiding:
+          which addresses a campaign sends from, which is how you tell whose
+          campaign it is. */}
+      {expanded && (
+        <div className="mt-2 ml-7 rounded-md border bg-muted/30 px-3 py-2">
+          {!sendersFetched ? (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" /> Loading senders…
+            </div>
+          ) : senders.length === 0 ? (
+            <div className="text-xs text-muted-foreground italic">
+              No sender accounts are attached to this campaign in Smartlead.
+            </div>
+          ) : (
+            <ul className="grid gap-x-6 gap-y-1 sm:grid-cols-2">
+              {senders.map((s) => (
+                <li key={s.identifier} className="text-xs min-w-0">
+                  <span className="font-medium">{s.label}</span>
+                  {s.label !== s.identifier && (
+                    <span className="text-muted-foreground font-mono block truncate">{s.identifier}</span>
+                  )}
+                </li>
+              ))}
+            </ul>
           )}
         </div>
       )}
