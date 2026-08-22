@@ -175,10 +175,22 @@ Deno.serve(async (req) => {
       `?secret=${encodeURIComponent(sharedSecret)}&t=${encodeURIComponent(routingToken)}`;
 
     // --- Campaigns to register on ----------------------------------------
+    // Capture Scope enforcement point 2 of 4: never register a webhook on a
+    // campaign the operator has switched capture off for. Cheaper and cleaner
+    // than registering and then rejecting the events at ingest — though point 3
+    // in smartlead-webhook still rejects them, because a registration can also
+    // exist from a failed deregistration or from outside Vrelly entirely.
+    //
+    // Scoped by source too: capture_enabled is meaningless on a reply_io row
+    // (Reply.io's capture scope is unmanaged by design and its rows keep the
+    // column default), so an unscoped filter here would be reading a column
+    // that platform never populates.
     let campaignQuery = supabase
       .from("synced_campaigns")
       .select("external_campaign_id, name, status")
       .eq("team_id", integration.team_id)
+      .eq("source", "smartlead")
+      .eq("capture_enabled", true)
       .in("status", statuses)
       .order("created_at", { ascending: false });
     if (campaignIds.length > 0) campaignQuery = campaignQuery.in("external_campaign_id", campaignIds);

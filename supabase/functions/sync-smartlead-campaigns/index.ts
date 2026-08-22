@@ -309,12 +309,12 @@ Deno.serve(async (req) => {
     // and write its is_linked onto the other's.
     const existingByExternalId = new Map<
       string,
-      { stats: Record<string, unknown> | null; isLinked: boolean }
+      { stats: Record<string, unknown> | null; isLinked: boolean; captureEnabled: boolean }
     >();
     {
       const { data: existingRows } = await supabase
         .from("synced_campaigns")
-        .select("external_campaign_id, stats, is_linked")
+        .select("external_campaign_id, stats, is_linked, capture_enabled")
         .eq("integration_id", integration.id);
       for (const r of existingRows ?? []) {
         existingByExternalId.set(
@@ -322,6 +322,7 @@ Deno.serve(async (req) => {
           {
             stats: (r as { stats: Record<string, unknown> | null }).stats ?? null,
             isLinked: (r as { is_linked: boolean }).is_linked,
+            captureEnabled: (r as { capture_enabled: boolean }).capture_enabled === true,
           },
         );
       }
@@ -498,6 +499,20 @@ Deno.serve(async (req) => {
             // is false, so the key must be sent explicitly rather than
             // omitted. Same contract as sync-reply-campaigns.
             is_linked: existingByExternalId.get(externalId)?.isLinked ?? true,
+            // Capture Scope enforcement point 1 of 4: a newly discovered
+            // campaign must NOT start capturing on its own. Existing rows keep
+            // whatever the operator chose; only genuinely new campaigns are
+            // affected, and they arrive OFF.
+            //
+            // This is the SourceCo failure in one line: 45 out-of-scope
+            // campaigns — four of them a different business's — were captured
+            // automatically because discovery implied consent. It no longer
+            // does. The campaign is still synced and still listed in Manage
+            // Campaigns; only capture is withheld until someone enables it.
+            //
+            // Note the default differs from is_linked directly above: is_linked
+            // is reporting scope and harmless when on, capture is not.
+            capture_enabled: existingByExternalId.get(externalId)?.captureEnabled ?? false,
             // last_synced_at column doesn't exist on synced_campaigns;
             // updated_at is bumped by the existing trigger on UPDATE.
           },

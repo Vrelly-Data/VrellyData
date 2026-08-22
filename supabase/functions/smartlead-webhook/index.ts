@@ -389,6 +389,53 @@ Deno.serve(async (req) => {
       },
     ];
 
+    // === Capture Scope gate =================================================
+    // Enforcement point 3 of 4, and the one that actually makes the feature
+    // safe. Points 1 and 2 stop us CREATING a registration; this stops us
+    // ACTING on an event, which still arrives when a deregistration failed,
+    // when a webhook was added in Smartlead's own UI, or in the window before
+    // a disable propagates.
+    //
+    // Placed immediately before the first write to agent_leads and after the
+    // integration lookup, so a disabled campaign produces NO lead row at all —
+    // not a mirrored one. That was the explicit product decision: capture off
+    // means full silence, not quiet record-keeping.
+    //
+    // Fail OPEN on a missing row or a lookup error: an unknown campaign is one
+    // the sync has not caught up with yet, and dropping a real reply is worse
+    // than capturing one the operator may later switch off. Only an explicit
+    // capture_enabled === false suppresses.
+    if (smartleadCampaignId) {
+      const { data: scopeRow, error: scopeErr } = await supabase
+        .from("synced_campaigns")
+        .select("capture_enabled, name")
+        .eq("integration_id", integration.id)
+        .eq("external_campaign_id", String(smartleadCampaignId))
+        .maybeSingle();
+
+      if (scopeErr) {
+        console.warn(
+          `[smartlead-webhook v2] capture scope lookup failed for campaign ` +
+          `${smartleadCampaignId} (${scopeErr.message}) — proceeding (fail-open)`,
+        );
+      } else if (scopeRow && scopeRow.capture_enabled === false) {
+        console.log(
+          `[smartlead-webhook v2] capture disabled for campaign ` +
+          `${smartleadCampaignId} ("${scopeRow.name}") — dropping ${eventType} ` +
+          `without creating a lead`,
+        );
+        return new Response(
+          JSON.stringify({
+            success: true,
+            skipped: "capture_disabled",
+            campaignId: String(smartleadCampaignId),
+            eventType,
+          }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+    }
+
     // === Upsert agent_leads =================================================
     // Dedup on (user_id, email_address) — the natural per-prospect identifier
     // for email. external_id stays informational. Empty/missing email is
