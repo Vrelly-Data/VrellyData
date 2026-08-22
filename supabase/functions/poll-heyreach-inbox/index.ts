@@ -7,6 +7,7 @@ ALTER TABLE public.synced_campaigns ADD COLUMN IF NOT EXISTS source TEXT DEFAULT
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { shouldResurface, fireClassifyReply } from '../_shared/inbox-reply.ts';
+import { cleanReplyPreview } from '../_shared/reply-text.ts';
 
 const allowedOrigins = [
   'https://vrelly.com',
@@ -318,7 +319,7 @@ Deno.serve(async (req) => {
                 external_id: externalId,
                 full_name: fullName,
                 linkedin_url: linkedinUrl,
-                last_reply_text: lastMessageText,
+                last_reply_text: cleanReplyPreview(lastMessageText),
                 reply_thread: replyThread.length > 0 ? replyThread : undefined,
                 // Omitted entirely for an existing lead we are not surfacing —
                 // an omitted column is preserved on conflict, so a dismissal is

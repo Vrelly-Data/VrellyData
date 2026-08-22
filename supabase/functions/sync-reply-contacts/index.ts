@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { cleanReplyPreview } from '../_shared/reply-text.ts';
 
 const allowedOrigins = [
   Deno.env.get("ALLOWED_ORIGIN") || "https://vrelly.com",
@@ -937,7 +938,7 @@ Deno.serve(async (req) => {
           external_id: c.external_contact_id!,
           full_name: [c.first_name, c.last_name].filter(Boolean).join(" ") || null,
           email: c.email,
-          last_reply_text: c.engagement_data.lastReplyText,
+          last_reply_text: cleanReplyPreview(c.engagement_data.lastReplyText),
           inbox_status: "pending",
           channel: "email",
           source: "reply_io",
@@ -1116,7 +1117,7 @@ Deno.serve(async (req) => {
                       pipeline_stage: "replied",
                       inbox_status: "pending",
                       last_reply_at: lastReplyAt,
-                      last_reply_text: lastReplyText,
+                      last_reply_text: cleanReplyPreview(lastReplyText),
                     },
                     {
                       onConflict: "user_id,external_id",

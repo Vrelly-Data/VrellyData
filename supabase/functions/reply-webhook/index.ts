@@ -6,6 +6,7 @@ import {
 } from '../_shared/lead-dedup.ts';
 import { htmlToText } from '../_shared/html-to-text.ts';
 import { isSuppressed, fireClassifyReply } from '../_shared/inbox-reply.ts';
+import { cleanReplyPreview } from '../_shared/reply-text.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -589,7 +590,7 @@ Deno.serve(async (req) => {
               const { error: legacyUpdErr } = await supabase
                 .from('agent_leads')
                 .update({
-                  last_reply_text: engagement.lastReplyText as string,
+                  last_reply_text: cleanReplyPreview(engagement.lastReplyText as string),
                   inbox_status: 'pending',
                 })
                 .eq('id', legacyMatch.id);
@@ -602,7 +603,7 @@ Deno.serve(async (req) => {
                   external_id: String(externalId),
                   full_name: legacyName,
                   email: contactEmail,
-                  last_reply_text: engagement.lastReplyText as string,
+                  last_reply_text: cleanReplyPreview(engagement.lastReplyText as string),
                   inbox_status: 'pending',
                   channel: 'email',
                   source: 'reply_io',
@@ -764,7 +765,7 @@ Deno.serve(async (req) => {
                 job_title: jobTitle || undefined,
                 channel,
                 last_reply_at: replyAt,
-                last_reply_text: replyText,
+                last_reply_text: cleanReplyPreview(replyText),
                 // reply_thread DELIBERATELY NOT WRITTEN. poll-reply-inbox is the
                 // sole owner: it builds the thread from Reply.io's PER-MESSAGE
                 // bodies (GET /v3/inbox/threads/{id}/messages), which arrive
@@ -810,7 +811,7 @@ Deno.serve(async (req) => {
                 last_reply_at: replyAt,
                 // New lead lands actionable → seed the surface watermark.
                 last_surfaced_reply_at: newMsg.timestamp,
-                last_reply_text: replyText,
+                last_reply_text: cleanReplyPreview(replyText),
                 // reply_thread NOT written here either — same ownership split.
                 // A webhook-created lead therefore has an empty thread until the
                 // next poll (<=15 min) populates it. Verified safe: the inbox

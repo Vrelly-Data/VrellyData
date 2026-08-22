@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { shouldResurface } from "../_shared/inbox-reply.ts";
+import { cleanReplyPreview } from "../_shared/reply-text.ts";
 
 const allowedOrigins = [
   Deno.env.get("ALLOWED_ORIGIN") || "https://vrelly.com",
@@ -500,7 +501,7 @@ Deno.serve(async (req) => {
           email,
           job_title: jobTitle,
           company,
-          last_reply_text: replyText,
+          last_reply_text: cleanReplyPreview(replyText),
           last_reply_at: new Date().toISOString(),
           reply_thread: replyThread,
           // inbox_status + the surface watermark are written ONLY when we are

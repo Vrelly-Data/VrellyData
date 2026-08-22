@@ -49,6 +49,7 @@ import {
   type ThreadMessage,
 } from "../_shared/smartlead-thread.ts";
 import { htmlToText } from "../_shared/html-to-text.ts";
+import { cleanReplyPreview } from "../_shared/reply-text.ts";
 
 const allowedOrigins = [
   Deno.env.get("ALLOWED_ORIGIN") || "https://vrelly.com",
@@ -508,7 +509,7 @@ Deno.serve(async (req) => {
       smartlead_email_stats_id: smartleadEmailStatsId,
       last_campaign_name: lastCampaignName,
       reply_message_id: replyMessageId,
-      last_reply_text: replyText,
+      last_reply_text: cleanReplyPreview(replyText),
       last_reply_raw_html: replyHtml,
       last_reply_at: replyTimestamp,
       reply_thread: replyThread,

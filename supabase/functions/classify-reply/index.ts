@@ -1,5 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { htmlToText } from '../_shared/html-to-text.ts';
+import { preprocessEmailReply } from '../_shared/reply-text.ts';
 
 console.log('classify-reply starting');
 
@@ -18,79 +19,6 @@ const MODEL = Deno.env.get('ANTHROPIC_MODEL') ?? 'claude-sonnet-4-6';
 // blank-line collapse. Each step trims off everything FROM the first
 // matched marker onward, so signature/quote markers earlier in the text
 // take precedence over later ones.
-function preprocessEmailReply(text: string): string {
-  if (!text) return '';
-  let s = text;
-
-  // 1. HTML → text, via the one shared cleaner (htmlToText has its own plain
-  //    text fast path, so this stays idempotent).
-  //
-  //    Deliberately NOT gated on "does it look like HTML" any more. The old
-  //    gate was `if (/<[a-z][^>]*>/i.test(s))`, which meant text carrying
-  //    entities but no tags — the normal shape of an already-ingested reply —
-  //    skipped entity decoding entirely and the model read "Hi&nbsp;Scott,".
-  //    Measured over 650 real prod bodies: entity leakage into the prompt
-  //    36 → 0, and the model is never handed MORE text than before (139
-  //    samples shrank, 511 identical, 0 grew).
-  s = htmlToText(s);
-
-  // 2. Zendesk-style marker (defensive — smartlead-webhook also strips this)
-  s = s.replace(/##-\s*Please type your reply above this line\s*-##[\s\S]*$/i, '');
-
-  // 3. Quoted-reply chains. Each pattern matches the START of a quote block;
-  // we cut from the earliest match.
-  const quoteMarkers: RegExp[] = [
-    /^On\s+.+?\swrote:\s*$/m,                  // "On <date>, <name> wrote:"
-    /^From:\s.+?\nSent:\s/m,                   // Outlook header block (Sent:)
-    /^From:\s.+?\nDate:\s/m,                   // Apple Mail / iOS header block
-    /^_{20,}\s*$/m,                            // Outlook horizontal-rule divider
-    /^>\s.+$/m,                                // Gmail/Apple ">" quoted lines
-  ];
-  let earliestQuote = -1;
-  for (const re of quoteMarkers) {
-    const m = s.search(re);
-    if (m >= 0 && (earliestQuote === -1 || m < earliestQuote)) {
-      earliestQuote = m;
-    }
-  }
-  if (earliestQuote >= 0) {
-    s = s.slice(0, earliestQuote);
-  }
-
-  // 4. Signature markers — cut from the earliest match.
-  const sigMarkers: RegExp[] = [
-    /^--\s*$/m,                                // RFC "-- " standard
-    /^Sent from my iPhone\b/im,
-    /^Sent from my iPad\b/im,
-    /^Get Outlook for (iOS|Android)\b/im,
-    /^Sent from Outlook\b/im,
-  ];
-  let earliestSig = -1;
-  for (const re of sigMarkers) {
-    const m = s.search(re);
-    if (m >= 0 && (earliestSig === -1 || m < earliestSig)) {
-      earliestSig = m;
-    }
-  }
-  if (earliestSig >= 0) {
-    s = s.slice(0, earliestSig);
-  }
-
-  // 5. Closing + name pattern: "Best,\n<Name>" / "Thanks,\n<Name>" etc.
-  // Match the closing word at the start of a line followed by a short
-  // name line (≤60 chars, letters/spaces/hyphens/periods/apostrophes).
-  const closingRe =
-    /^(Best|Thanks|Thank you|Regards|Best regards|Kind regards|Cheers|Sincerely|Yours)[,!.]?\s*\n\s*[A-Za-z][A-Za-z\s.\-']{0,60}\s*$/im;
-  const closingMatch = s.search(closingRe);
-  if (closingMatch >= 0) {
-    s = s.slice(0, closingMatch);
-  }
-
-  // 6. Collapse runs of 3+ blank lines and trim.
-  s = s.replace(/\n{3,}/g, '\n\n').trim();
-
-  return s;
-}
 
 const allowedOrigins = [
   'https://vrelly.com',

@@ -6,6 +6,7 @@ import {
 } from '../_shared/lead-dedup.ts';
 import { htmlToText } from '../_shared/html-to-text.ts';
 import { shouldResurface, fireClassifyReply } from '../_shared/inbox-reply.ts';
+import { cleanReplyPreview } from '../_shared/reply-text.ts';
 
 const allowedOrigins = [
   'https://vrelly.com',
@@ -456,7 +457,7 @@ Deno.serve(async (req) => {
                 .update({
                   inbox_status: targetInboxStatus,
                   last_reply_at: lastReplyDate || nowIso,
-                  last_reply_text: replyText,
+                  last_reply_text: cleanReplyPreview(replyText),
                   reply_thread: replyThread,
                   updated_at: nowIso,
                   // Advance the SURFACE watermark ONLY when we actually surface
@@ -542,7 +543,7 @@ Deno.serve(async (req) => {
                   pipeline_stage: 'replied',
                   inbox_status: targetInboxStatus,
                   last_reply_at: lastReplyDate || nowIso,
-                  last_reply_text: replyText,
+                  last_reply_text: cleanReplyPreview(replyText),
                   reply_thread: replyThread,
                   // Seed the surface watermark when the new lead lands actionable.
                   ...(targetInboxStatus === 'pending'
