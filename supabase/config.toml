@@ -41,6 +41,9 @@ verify_jwt = false
 [functions.fetch-available-campaigns]
 verify_jwt = false
 
+[functions.fetch-capture-scope]
+verify_jwt = false
+
 [functions.sync-reply-contacts]
 verify_jwt = false
 
