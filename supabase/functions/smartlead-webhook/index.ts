@@ -42,6 +42,14 @@
 // and the second check activates automatically.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+  fetchSmartleadThread,
+  loadSenderNameLookup,
+  stripZendeskMarker,
+  type ThreadMessage,
+} from "../_shared/smartlead-thread.ts";
+import { htmlToText } from "../_shared/html-to-text.ts";
+import { cleanReplyPreview } from "../_shared/reply-text.ts";
 
 const allowedOrigins = [
   Deno.env.get("ALLOWED_ORIGIN") || "https://vrelly.com",
@@ -61,13 +69,6 @@ function getCorsHeaders(req: Request) {
 // anything after it. Full quoted-chain stripping (Gmail/Outlook headers,
 // "On <date> <name> wrote:" blocks, etc.) is deferred to Phase C in
 // classify-reply preprocessing.
-function stripZendeskMarker(text: string): string {
-  if (!text) return "";
-  const markerRe = /##-\s*Please type your reply above this line\s*-##/i;
-  const idx = text.search(markerRe);
-  return (idx >= 0 ? text.slice(0, idx) : text).trim();
-}
-
 const SKIPPABLE_EVENTS = new Set([
   "EMAIL_BOUNCE",
   "LEAD_UNSUBSCRIBED",
@@ -210,7 +211,36 @@ Deno.serve(async (req) => {
       null;
     const email = emailRaw ? emailRaw.toLowerCase() : null;
 
-    const fullName = (payload.to_name as string | undefined) ?? null;
+    // to_name is DIRECTIONAL, exactly like to_email — the same inversion the
+    // header documents, which was fixed for the address and missed for the name.
+    //
+    // to_name describes whoever the message was addressed TO, which is the
+    // prospect only when Smartlead reports OUR outbound. On the prospect's
+    // reply the message is addressed to US, so to_name is our own sender —
+    // and because the webhook fires on every message, the last one to arrive
+    // won. That is how "Alia Ballout" (a SourceCo sender) ended up as the
+    // contact name on costa@actioncolors.com.
+    //
+    // The test is directional, not a name blacklist: trust to_name ONLY when
+    // to_email IS the canonical prospect. Verified against all 177 stored
+    // production payloads — 150 trustworthy, 27 correctly rejected, and every
+    // rejected value was either one of our senders (Mason Ruppel, Max Garside,
+    // Alia Ballout), a bounce daemon, or a no-reply address.
+    //
+    // A rejected name yields null, and null is STRIPPED from the upsert below,
+    // so a good stored name is never overwritten by a bad one. 17 prospects
+    // have no trustworthy name in any event; they keep whatever they already
+    // have rather than being blanked.
+    const toEmailForName = (payload.to_email as string | undefined)?.trim().toLowerCase() ?? null;
+    const toNameRaw = (payload.to_name as string | undefined)?.trim() || null;
+    const nameIsForProspect = !!email && !!toEmailForName && toEmailForName === email;
+    const fullName = nameIsForProspect ? toNameRaw : null;
+
+    if (toNameRaw && !nameIsForProspect) {
+      console.log(
+        `[smartlead-webhook v2] to_name "${toNameRaw}" ignored — addressed to ${toEmailForName}, not the prospect (${email})`,
+      );
+    }
 
     // The SENDER mailbox (inversion gotcha: from_email is OURS, not the
     // prospect's). Used to attribute the reply to the mailbox's mapped sender
@@ -252,15 +282,14 @@ Deno.serve(async (req) => {
           )
         : null;
 
-    // Prefer the plain-text body; fall back to a quick HTML-strip if Smartlead
-    // ever omits .text. Zendesk-style "type your reply above this line" marker
-    // and anything after it is dropped here; full quoted-chain stripping is
-    // Phase C work in classify-reply preprocessing.
+    // Prefer the plain-text body; fall back to htmlToText if Smartlead ever
+    // omits .text. The bare tag-strip this replaced left <style> CONTENTS
+    // behind as literal CSS and decoded no entities — see the matching note in
+    // _shared/smartlead-thread.ts. Zendesk-style "type your reply above this
+    // line" marker and anything after it is dropped here; full quoted-chain
+    // stripping is Phase C work in classify-reply preprocessing.
     const replyText = stripZendeskMarker(
-      replyTextRaw ??
-        (replyHtml
-          ? replyHtml.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ")
-          : ""),
+      replyTextRaw ?? (replyHtml ? htmlToText(replyHtml) : ""),
     );
 
     if (!email) {
@@ -339,20 +368,12 @@ Deno.serve(async (req) => {
     // sender_name). NULL when the mailbox is unmapped or unknown — then the
     // sender entry carries no fromName and lands in the "Unmapped" filter
     // rather than spawning a per-mailbox sender.
-    let mailboxSenderName: string | null = null;
-    if (fromEmail) {
-      // fromEmail is already lowercased above; mailbox_email is stored
-      // lowercased by the sync — so an exact eq matches (and hits the unique
-      // index). Read and write must use the same normalization or attribution
-      // silently misses.
-      const { data: mb } = await supabase
-        .from("email_sender_mailboxes")
-        .select("sender_name")
-        .eq("user_id", integration.created_by)
-        .eq("mailbox_email", fromEmail)
-        .maybeSingle();
-      mailboxSenderName = (mb?.sender_name as string | null) ?? null;
-    }
+    // One user-scoped lookup serves both the seed below and the history mapper.
+    // Previously this resolved a SINGLE address and applied that one name to
+    // every outbound message in the thread — wrong once a thread spans two
+    // mailboxes. The shared lookup resolves per message.
+    const senderNameFor = await loadSenderNameLookup(supabase, integration.created_by);
+    const mailboxSenderName: string | null = senderNameFor(fromEmail);
 
     // === Build reply_thread (single-message seed) ===========================
     // The EMAIL_REPLY payload only carries the latest reply_message (and an
@@ -367,6 +388,53 @@ Deno.serve(async (req) => {
         channel: "email",
       },
     ];
+
+    // === Capture Scope gate =================================================
+    // Enforcement point 3 of 4, and the one that actually makes the feature
+    // safe. Points 1 and 2 stop us CREATING a registration; this stops us
+    // ACTING on an event, which still arrives when a deregistration failed,
+    // when a webhook was added in Smartlead's own UI, or in the window before
+    // a disable propagates.
+    //
+    // Placed immediately before the first write to agent_leads and after the
+    // integration lookup, so a disabled campaign produces NO lead row at all —
+    // not a mirrored one. That was the explicit product decision: capture off
+    // means full silence, not quiet record-keeping.
+    //
+    // Fail OPEN on a missing row or a lookup error: an unknown campaign is one
+    // the sync has not caught up with yet, and dropping a real reply is worse
+    // than capturing one the operator may later switch off. Only an explicit
+    // capture_enabled === false suppresses.
+    if (smartleadCampaignId) {
+      const { data: scopeRow, error: scopeErr } = await supabase
+        .from("synced_campaigns")
+        .select("capture_enabled, name")
+        .eq("integration_id", integration.id)
+        .eq("external_campaign_id", String(smartleadCampaignId))
+        .maybeSingle();
+
+      if (scopeErr) {
+        console.warn(
+          `[smartlead-webhook v2] capture scope lookup failed for campaign ` +
+          `${smartleadCampaignId} (${scopeErr.message}) — proceeding (fail-open)`,
+        );
+      } else if (scopeRow && scopeRow.capture_enabled === false) {
+        console.log(
+          `[smartlead-webhook v2] capture disabled for campaign ` +
+          `${smartleadCampaignId} ("${scopeRow.name}") — dropping ${eventType} ` +
+          `without creating a lead`,
+        );
+        return new Response(
+          JSON.stringify({
+            success: true,
+            skipped: "capture_disabled",
+            campaignId: String(smartleadCampaignId),
+            eventType,
+          }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+    }
 
     // === Upsert agent_leads =================================================
     // Dedup on (user_id, email_address) — the natural per-prospect identifier
@@ -475,7 +543,12 @@ Deno.serve(async (req) => {
       external_id: externalId,
       email,
       email_address: emailForKey,
-      full_name: fullName,
+      // Spread-conditional, NOT `full_name: fullName`. PostgREST builds the
+      // ON CONFLICT DO UPDATE SET clause only from keys present in the object,
+      // so omitting it preserves the stored value; writing null would clobber a
+      // good name on every inverted event — turning one bug into a worse one.
+      // Same null-clobber guard as campaign_external_id in heyreach-webhook.
+      ...(fullName ? { full_name: fullName } : {}),
       channel: "email",
       source: "smartlead",
       smartlead_lead_id: smartleadLeadId,
@@ -483,7 +556,7 @@ Deno.serve(async (req) => {
       smartlead_email_stats_id: smartleadEmailStatsId,
       last_campaign_name: lastCampaignName,
       reply_message_id: replyMessageId,
-      last_reply_text: replyText,
+      last_reply_text: cleanReplyPreview(replyText),
       last_reply_raw_html: replyHtml,
       last_reply_at: replyTimestamp,
       reply_thread: replyThread,
@@ -515,14 +588,19 @@ Deno.serve(async (req) => {
     );
 
     // === Best-effort full-thread sync =======================================
-    // Mirrors heyreach-webhook: the upsert payload only carries the latest
-    // reply, so overwrite reply_thread with Smartlead's canonical history
-    // via /campaigns/{campaign_id}/leads/{lead_id}/message-history. Errors
-    // are logged and non-fatal — the seed thread written by the upsert
-    // stays in place and the webhook still returns 200.
+    // The upsert payload only carries the latest reply, so replace the seed with
+    // Smartlead's canonical history. Errors are non-fatal — the seed stays and
+    // the webhook still returns 200.
     //
-    // api_key in QUERY STRING — never log the URL (contains the credential).
-    let fullReplyThread: typeof replyThread | null = null;
+    // DELEGATED to _shared/smartlead-thread.ts, which poll-smartlead-inbox also
+    // calls. This block used to be an inline copy, and the copy was WRONG: it
+    // read a bare array with `body`/`timestamp`, while the API returns
+    // {"history":[…]} with `email_body`/`time`. Array.isArray() was therefore
+    // always false, messages was always empty, and this "canonical history"
+    // overwrite NEVER ONCE EXECUTED — every Smartlead lead kept only the
+    // single-message seed. Two implementations of one mapping is what allowed
+    // that to go unnoticed for months; there is now exactly one.
+    let fullReplyThread: ThreadMessage[] | null = null;
     if (
       upsertedLead?.id &&
       smartleadCampaignId &&
@@ -530,65 +608,36 @@ Deno.serve(async (req) => {
       integration.api_key_encrypted
     ) {
       try {
-        const historyUrl = new URL(
-          `https://server.smartlead.ai/api/v1/campaigns/${encodeURIComponent(smartleadCampaignId)}/leads/${encodeURIComponent(smartleadLeadId)}/message-history`,
-        );
-        historyUrl.searchParams.set("api_key", integration.api_key_encrypted);
-
-        const historyRes = await fetch(historyUrl.toString(), {
-          headers: { Accept: "application/json" },
+        const history = await fetchSmartleadThread({
+          apiKey: integration.api_key_encrypted,
+          campaignId: String(smartleadCampaignId),
+          leadId: String(smartleadLeadId),
+          // Preserves any role:'system' breadcrumb (add-to-smartlead-campaign)
+          // that the API cannot return and a plain overwrite would destroy.
+          localThread: replyThread as ThreadMessage[],
+          senderNameFor,
         });
 
-        if (!historyRes.ok) {
-          const errBody = await historyRes.text().catch(() => "");
+        if (!history.thread) {
           console.warn(
-            `[smartlead-webhook v2] message-history ${historyRes.status} for campaign=${smartleadCampaignId} lead=${smartleadLeadId} — keeping seed thread. Body: ${errBody.substring(0, 200)}`,
+            `[smartlead-webhook v2] message-history ${history.status} / empty for campaign=${smartleadCampaignId} lead=${smartleadLeadId} — keeping seed thread`,
           );
         } else {
-          const history = await historyRes.json();
-          const messages = Array.isArray(history) ? history : [];
+          const { error: threadUpdateErr } = await supabase
+            .from("agent_leads")
+            .update({ reply_thread: history.thread })
+            .eq("id", upsertedLead.id);
 
-          fullReplyThread = messages.map(
-            (msg: { type?: string; body?: string; timestamp?: string }) => {
-              const rawBody = msg.body ?? "";
-              // Same strip-then-collapse approach used for the EMAIL_REPLY
-              // body, then Zendesk-marker truncation. Phase C will tackle
-              // full quoted-chain stripping in classify-reply preprocessing.
-              const stripped = stripZendeskMarker(
-                rawBody.replace(/<[^>]+>/g, " ").replace(/\s+/g, " "),
-              );
-              const isSender = msg.type === "SENT";
-              return {
-                role: isSender ? "sender" : "prospect",
-                content: stripped,
-                timestamp: msg.timestamp || new Date().toISOString(),
-                channel: "email",
-                // Attribute our outbound to the mailbox's mapped sender so the
-                // pipeline sender filter groups by SENDER, not per-mailbox.
-                ...(isSender && mailboxSenderName ? { fromName: mailboxSenderName } : {}),
-              };
-            },
-          );
-
-          if (fullReplyThread.length > 0) {
-            const { error: threadUpdateErr } = await supabase
-              .from("agent_leads")
-              .update({ reply_thread: fullReplyThread })
-              .eq("id", upsertedLead.id);
-
-            if (threadUpdateErr) {
-              console.warn(
-                `[smartlead-webhook v2] Full-thread UPDATE failed for lead ${upsertedLead.id}:`,
-                threadUpdateErr,
-              );
-              fullReplyThread = null;
-            } else {
-              console.log(
-                `[smartlead-webhook v2] Synced full thread (${fullReplyThread.length} msgs) for lead ${upsertedLead.id}`,
-              );
-            }
+          if (threadUpdateErr) {
+            console.warn(
+              `[smartlead-webhook v2] Full-thread UPDATE failed for lead ${upsertedLead.id}:`,
+              threadUpdateErr,
+            );
           } else {
-            fullReplyThread = null;
+            fullReplyThread = history.thread;
+            console.log(
+              `[smartlead-webhook v2] Synced full thread (${history.thread.length} msgs) for lead ${upsertedLead.id}`,
+            );
           }
         }
       } catch (historyErr) {

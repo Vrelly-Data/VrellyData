@@ -6,6 +6,8 @@ ALTER TABLE public.synced_campaigns ADD COLUMN IF NOT EXISTS source TEXT DEFAULT
 */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { shouldResurface, fireClassifyReply } from '../_shared/inbox-reply.ts';
+import { cleanReplyPreview } from '../_shared/reply-text.ts';
 
 const allowedOrigins = [
   'https://vrelly.com',
@@ -106,6 +108,7 @@ Deno.serve(async (req) => {
     let skippedSenderMe = 0;
     let skippedSameText = 0;
     let integrationsSkippedNoKey = 0;
+    let integrationsSkippedAllDisabled = 0;
     let integrationsSkippedNoAgentConfig = 0;
 
     for (const integration of integrations ?? []) {
@@ -133,6 +136,69 @@ Deno.serve(async (req) => {
           continue;
         }
 
+        // === Capture Scope gate ==============================================
+        // Enforcement point 4 of 4, and the reason HeyReach needed its own
+        // stage. This poller is a lead-CREATING path that bypasses points 1-3
+        // entirely: it reads the whole inbox rather than reacting to a webhook.
+        //
+        // It also has no attribution to filter on after the fact — verified
+        // against the live API, a GetConversationsV2 conversation carries
+        // id/read/groupChat/lastMessage*/linkedInAccountId/correspondentProfile
+        // and NO campaign field whatsoever. So the scope must be applied at the
+        // REQUEST, via the campaignIds filter. Confirmed additive against prod:
+        // 518402 alone = 49, 508828 alone = 39, both = 88; all three with
+        // 507230 = 129. It is a true multi-value allow-list, not first-id-wins.
+        //
+        // THE TRAP: campaignIds: [] means "every campaign", so "nothing is
+        // enabled" and "nothing is synced yet" must not produce the same
+        // request. They are handled as three distinct cases below.
+        const { data: scopeRows, error: scopeErr } = await supabase
+          .from('synced_campaigns')
+          .select('external_campaign_id, capture_enabled')
+          .eq('integration_id', integration.id);
+
+        let campaignIdFilter: number[] = [];
+        if (scopeErr) {
+          // Fail open — a transient lookup failure must not silently stop
+          // capture for a whole integration.
+          console.warn(
+            `[poll-heyreach-inbox] capture scope lookup failed for integration ` +
+            `${integration.id} (${scopeErr.message}) — polling unfiltered (fail-open)`,
+          );
+        } else if (!scopeRows || scopeRows.length === 0) {
+          // Case A: campaigns have never been synced for this integration.
+          // Filtering on an empty allow-list would mean "all" anyway, and this
+          // is indistinguishable from a brand-new integration, so poll
+          // unfiltered exactly as before.
+          console.log(
+            `[poll-heyreach-inbox] No synced campaigns for integration ${integration.id} — ` +
+            `polling unfiltered (run sync-heyreach-campaigns to enable scoping)`,
+          );
+        } else {
+          const enabled = scopeRows
+            .filter((r) => r.capture_enabled === true)
+            .map((r) => Number(r.external_campaign_id))
+            .filter((n) => Number.isFinite(n));
+
+          if (enabled.length === 0) {
+            // Case C: campaigns exist and the operator has disabled ALL of
+            // them. Passing [] here would poll everything — the exact opposite
+            // of what was asked for. Skip the integration instead.
+            console.log(
+              `[poll-heyreach-inbox] All ${scopeRows.length} campaign(s) have capture disabled ` +
+              `for integration ${integration.id} — skipping entirely`,
+            );
+            integrationsSkippedAllDisabled++;
+            continue;
+          }
+          // Case B: scope to the enabled campaigns.
+          campaignIdFilter = enabled;
+          console.log(
+            `[poll-heyreach-inbox] Scoping to ${enabled.length} of ${scopeRows.length} ` +
+            `campaign(s) with capture enabled for integration ${integration.id}`,
+          );
+        }
+
         // Paginate through conversations using POST /inbox/GetConversationsV2
         let offset = 0;
         const limit = 100;
@@ -149,7 +215,10 @@ Deno.serve(async (req) => {
             body: JSON.stringify({
               filters: {
                 linkedInAccountIds: [],
-                campaignIds: [],
+                // Capture Scope: [] means "all campaigns". Populated only in
+                // case B above; cases A and the fail-open path deliberately
+                // leave it empty, and case C never reaches this call.
+                campaignIds: campaignIdFilter,
                 searchString: '',
               },
               offset,
@@ -206,11 +275,16 @@ Deno.serve(async (req) => {
               // Existing-lead lookup on (user_id, linkedin_url) — matches the
               // unique-index dedup key. If linkedin_url is missing we fall back
               // to external_id so legacy rows still resolve.
-              let existingLead: { id: string; last_reply_text: string | null } | null = null;
+              let existingLead: {
+                id: string;
+                last_reply_text: string | null;
+                disposition_tag: string | null;
+                last_surfaced_reply_at: string | null;
+              } | null = null;
               if (linkedinUrl) {
                 const { data } = await supabase
                   .from('agent_leads')
-                  .select('id, last_reply_text')
+                  .select('id, last_reply_text, disposition_tag, last_surfaced_reply_at')
                   .eq('user_id', userId)
                   .eq('linkedin_url', linkedinUrl)
                   .maybeSingle();
@@ -219,7 +293,7 @@ Deno.serve(async (req) => {
               if (!existingLead && externalId) {
                 const { data } = await supabase
                   .from('agent_leads')
-                  .select('id, last_reply_text')
+                  .select('id, last_reply_text, disposition_tag, last_surfaced_reply_at')
                   .eq('user_id', userId)
                   .eq('external_id', externalId)
                   .maybeSingle();
@@ -263,15 +337,63 @@ Deno.serve(async (req) => {
                 console.error(`[poll-heyreach-inbox] Failed to fetch chatroom for ${conversationId}:`, chatroomErr);
               }
 
+              // ---- Surface gate -------------------------------------------
+              // This upsert used to hard-code inbox_status:'pending', so EVERY
+              // conversation it wrote became actionable — including history it
+              // was seeing for the first time. When the poller's stale-key 401
+              // was fixed it ingested 257 previously-invisible conversations for
+              // one client, 204 of them over 90 days old and the oldest from
+              // 2024, straight into Pending Approval. Backfilled history is not
+              // work to do today.
+              //
+              // Mirrors poll-reply-inbox exactly (shared shouldResurface for the
+              // existing-lead case, a 24h recency gate for first sight) so the
+              // two pollers agree on what "actionable" means:
+              //   existing lead → resurface only on a genuinely NEW inbound that
+              //                   is newer than the surface watermark and not
+              //                   suppressed by disposition; otherwise LEAVE THE
+              //                   STATUS ALONE (omitted from the payload, so a
+              //                   dismissal sticks).
+              //   new lead      → 'pending' only if the newest message is an
+              //                   inbound reply from the last 24h; else
+              //                   'mirrored' (in neither inbox tab, still fully
+              //                   readable and still resurfaceable later).
+              const newest = replyThread.length > 0
+                ? replyThread.reduce((a, b) =>
+                    Date.parse(b.timestamp || '') > Date.parse(a.timestamp || '') ? b : a)
+                : null;
+              const newestRole = newest?.role ?? null;
+              const newestMs = newest ? Date.parse(newest.timestamp || '') : NaN;
+              const priorMs = existingLead?.last_surfaced_reply_at
+                ? Date.parse(existingLead.last_surfaced_reply_at)
+                : 0;
+              const newerThanPrior = Number.isFinite(newestMs) && newestMs > priorMs;
+              const isRecent = Number.isFinite(newestMs)
+                ? newestMs >= Date.now() - 24 * 60 * 60 * 1000
+                : false;
+
+              const surface = existingLead
+                ? shouldResurface({
+                    dispositionTag: existingLead.disposition_tag,
+                    newestRole,
+                    newerThanPrior,
+                  })
+                : (newestRole === 'prospect' && isRecent);
+
               const upsertPayload: Record<string, unknown> = {
                 user_id: userId,
                 agent_config_id: agentConfig.id,
                 external_id: externalId,
                 full_name: fullName,
                 linkedin_url: linkedinUrl,
-                last_reply_text: lastMessageText,
+                last_reply_text: cleanReplyPreview(lastMessageText),
                 reply_thread: replyThread.length > 0 ? replyThread : undefined,
-                inbox_status: 'pending',
+                // Omitted entirely for an existing lead we are not surfacing —
+                // an omitted column is preserved on conflict, so a dismissal is
+                // not silently undone. A brand-new lead needs an explicit value.
+                ...(surface
+                  ? { inbox_status: 'pending', last_surfaced_reply_at: newest?.timestamp ?? null }
+                  : existingLead ? {} : { inbox_status: 'mirrored' }),
                 channel: 'linkedin',
                 source: 'heyreach',
                 heyreach_conversation_id: conversationId,
@@ -290,6 +412,33 @@ Deno.serve(async (req) => {
               if (upsertError) {
                 console.error(`[poll-heyreach-inbox] Upsert error for ${externalId}:`, upsertError.message);
                 continue;
+              }
+
+              // Trigger a draft, exactly as poll-reply-inbox does — same shared
+              // helper, same gate. This poller previously NEVER drafted, so a
+              // reply the webhook missed surfaced to Pending Approval with an
+              // empty draft.
+              //
+              // Gated on `surface`, which is what makes this safe against
+              // double-drafting alongside heyreach-webhook. Both paths write
+              // last_surfaced_reply_at now, so for a reply the webhook already
+              // handled the gate computes newestMs > priorMs with the two equal
+              // → false → no second call. The skippedSameText guard above is
+              // NOT the interlock: it compares our stored text against
+              // GetConversationsV2's lastMessageText, and misses whenever a
+              // sibling conversation for the same profile holds different text
+              // (73 such profiles in prod — see the collision note).
+              if (surface && upsertedLead) {
+                fireClassifyReply({
+                  supabaseUrl,
+                  agentKey: expectedKey || '',
+                  leadId: upsertedLead.id,
+                  replyText: lastMessageText,
+                  threadHistory: replyThread,
+                  agentConfig,
+                  channel: 'linkedin',
+                  userId,
+                });
               }
 
               if (upsertedLead && !existingLead) {

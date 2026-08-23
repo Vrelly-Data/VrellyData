@@ -41,6 +41,9 @@ verify_jwt = false
 [functions.fetch-available-campaigns]
 verify_jwt = false
 
+[functions.fetch-capture-scope]
+verify_jwt = false
+
 [functions.sync-reply-contacts]
 verify_jwt = false
 
@@ -102,6 +105,15 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.poll-heyreach-inbox]
+verify_jwt = false
+
+# Cron-invoked via x-agent-key, exactly like the two pollers above. Without
+# this entry the function deploys with Supabase's default verify_jwt = true and
+# the PLATFORM GATEWAY rejects the cron before any of our code runs — the job
+# still reports "succeeded" in cron.job_run_details, because net.http_post is
+# async and only records that the statement queued. That combination hid a
+# dead poller for four hours: five green cron runs, every one a 401.
+[functions.poll-smartlead-inbox]
 verify_jwt = false
 
 [functions.smartlead-webhook]

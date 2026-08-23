@@ -1,4 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { shouldResurface } from "../_shared/inbox-reply.ts";
+import { cleanReplyPreview } from "../_shared/reply-text.ts";
 
 const allowedOrigins = [
   Deno.env.get("ALLOWED_ORIGIN") || "https://vrelly.com",
@@ -51,6 +53,24 @@ function sameMessage(a: ThreadEntry, b: ThreadEntry): boolean {
   const bt = new Date(b.timestamp).getTime();
   if (Number.isNaN(at) || Number.isNaN(bt)) return false;
   return Math.abs(at - bt) <= MERGE_TS_TOLERANCE_MS;
+}
+
+// Newest message timestamp in a thread, as an ISO string, or null when the
+// thread is empty or carries no parseable timestamp. Deliberately the same
+// quantity poll-heyreach-inbox derives for its resurface gate (a max over the
+// thread, not the last array element), so the watermark this webhook writes and
+// the value the poller compares against are computed identically.
+function newestThreadTimestamp(thread: ThreadEntry[]): string | null {
+  let bestMs = Number.NEGATIVE_INFINITY;
+  let best: string | null = null;
+  for (const e of thread ?? []) {
+    const ms = new Date(e?.timestamp ?? "").getTime();
+    if (Number.isFinite(ms) && ms > bestMs) {
+      bestMs = ms;
+      best = new Date(ms).toISOString();
+    }
+  }
+  return best;
 }
 
 function mergeReplyThreads(
@@ -405,6 +425,46 @@ Deno.serve(async (req) => {
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
+    // === Capture Scope gate =================================================
+    // Enforcement point 3 of 4 for HeyReach. Mirrors smartlead-webhook: placed
+    // immediately before the first agent_leads write so a disabled campaign
+    // produces NO lead row at all — not a mirrored one.
+    //
+    // Fails OPEN on a missing row, a lookup error, or an event with no
+    // campaignId at all. HeyReach reply payloads do not always carry one (see
+    // the attribution note below), and dropping a real reply because the event
+    // was unattributed would be far worse than capturing one the operator can
+    // switch off. Only an explicit capture_enabled === false suppresses.
+    if (campaignExternalId) {
+      const { data: scopeRow, error: scopeErr } = await supabase
+        .from("synced_campaigns")
+        .select("capture_enabled, name")
+        .eq("integration_id", integration.id)
+        .eq("external_campaign_id", String(campaignExternalId))
+        .maybeSingle();
+
+      if (scopeErr) {
+        console.warn(
+          `[heyreach-webhook] capture scope lookup failed for campaign ${campaignExternalId} ` +
+          `(${scopeErr.message}) — proceeding (fail-open)`,
+        );
+      } else if (scopeRow && scopeRow.capture_enabled === false) {
+        console.log(
+          `[heyreach-webhook] capture disabled for campaign ${campaignExternalId} ` +
+          `("${scopeRow.name}") — dropping ${eventType} without creating a lead`,
+        );
+        return new Response(
+          JSON.stringify({
+            success: true,
+            skipped: "capture_disabled",
+            campaignId: String(campaignExternalId),
+            eventType,
+          }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+    }
+
     // campaign_external_id is spread CONDITIONALLY (null-clobber guard).
     // PostgREST builds the ON CONFLICT DO UPDATE SET clause only from keys
     // present in the values object — omitting the key means it's not in the
@@ -416,6 +476,61 @@ Deno.serve(async (req) => {
     //   * later reply with a DIFFERENT campaignId → attribution overwritten
     //     (this last case is rare; reusing the same prospect across two
     //     campaigns isn't common but the spec is "set", not "first-wins").
+    // ---- Surface gate ------------------------------------------------------
+    // This upsert used to hard-code inbox_status:'pending' on every delivery,
+    // with no notion of whether the reply was NEW. HeyReach re-delivers events:
+    // on 2026-08-16 it re-sent the webhook for a 2026-08-04 message, which
+    // un-dismissed a lead the operator had already tagged 'in_progress' and
+    // spent a full classify-reply call drafting an answer to a message that had
+    // already been handled. The live GetChatroom for that conversation held two
+    // messages, both from 08-04 — there was no new reply at all.
+    //
+    // Now mirrors poll-heyreach-inbox exactly, via the same shared
+    // shouldResurface, so the two HeyReach paths agree on what "actionable"
+    // means and share ONE watermark interlock:
+    //   existing lead → resurface only on an inbound that is genuinely newer
+    //                   than last_surfaced_reply_at and not suppressed;
+    //                   otherwise inbox_status is OMITTED from the payload, so
+    //                   an omitted column is preserved on conflict and the
+    //                   operator's dismissal stands.
+    //   new lead      → surface, unchanged. There is no watermark to compare
+    //                   against, and a first-sight inbound reply is actionable.
+    const { data: existingLead } = await supabase
+      .from("agent_leads")
+      .select("id, disposition_tag, last_surfaced_reply_at")
+      .eq("user_id", integration.created_by)
+      .eq("linkedin_url", linkedinUrlForKey)
+      .maybeSingle();
+
+    const newestEntry = replyThread.length > 0
+      ? replyThread.reduce((a, b) =>
+        Date.parse(b.timestamp || "") > Date.parse(a.timestamp || "") ? b : a
+      )
+      : null;
+    const newestMs = newestEntry ? Date.parse(newestEntry.timestamp || "") : NaN;
+    const priorMs = existingLead?.last_surfaced_reply_at
+      ? Date.parse(existingLead.last_surfaced_reply_at)
+      : 0;
+    // NOTE: replyThread falls back to new Date() when a message carries no
+    // creation_time, so a timestamp-less payload reads as "now" and surfaces.
+    // That is deliberate: failing OPEN risks a redundant draft, failing closed
+    // would silently swallow a real reply.
+    const newerThanPrior = Number.isFinite(newestMs) && newestMs > priorMs;
+
+    const surface = existingLead
+      ? shouldResurface({
+        dispositionTag: existingLead.disposition_tag,
+        newestRole: newestEntry?.role ?? null,
+        newerThanPrior,
+      })
+      : true;
+
+    console.log(
+      `[heyreach-webhook] surface=${surface} existing=${!!existingLead} ` +
+        `newestRole=${newestEntry?.role ?? "none"} newest=${newestEntry?.timestamp ?? "none"} ` +
+        `prior=${existingLead?.last_surfaced_reply_at ?? "null"} disposition=${existingLead?.disposition_tag ?? "null"}`,
+    );
+
     const { data: upsertedLead, error: upsertError } = await supabase
       .from("agent_leads")
       .upsert(
@@ -426,10 +541,27 @@ Deno.serve(async (req) => {
           email,
           job_title: jobTitle,
           company,
-          last_reply_text: replyText,
+          last_reply_text: cleanReplyPreview(replyText),
           last_reply_at: new Date().toISOString(),
           reply_thread: replyThread,
-          inbox_status: "pending",
+          // inbox_status + the surface watermark are written ONLY when we are
+          // actually surfacing. Omitting a key means it is absent from
+          // PostgREST's ON CONFLICT DO UPDATE SET clause, so the stored value
+          // survives — which is what makes a dismissal stick.
+          //
+          // The watermark is the shared interlock with poll-heyreach-inbox:
+          // whichever path surfaces first records the message it surfaced FOR,
+          // and the other path's `newestMs > priorMs` then reads false and
+          // declines to act. Before it was written here, 285 of 291 HeyReach
+          // leads carried a NULL watermark, making priorMs 0 and every
+          // webhook-handled reply look permanently "new" to the poller.
+          ...(surface
+            ? {
+              inbox_status: "pending",
+              last_surfaced_reply_at: newestThreadTimestamp(replyThread) ??
+                new Date().toISOString(),
+            }
+            : {}),
           channel: "linkedin",
           source: "heyreach",
           heyreach_conversation_id: conversationId,
@@ -512,9 +644,19 @@ Deno.serve(async (req) => {
               replyThread,
             );
 
+            // Keep the watermark in step with the thread we are persisting —
+            // but ONLY when this delivery surfaced. On a non-surfacing
+            // delivery the thread is still worth storing (it is canonical
+            // history), while advancing the watermark would move the interlock
+            // for a pend that never happened.
             const { error: threadUpdateErr } = await supabase
               .from("agent_leads")
-              .update({ reply_thread: mergedThread })
+              .update({
+                reply_thread: mergedThread,
+                ...(surface && newestThreadTimestamp(mergedThread)
+                  ? { last_surfaced_reply_at: newestThreadTimestamp(mergedThread) }
+                  : {}),
+              })
               .eq("id", upsertedLead.id);
 
             if (threadUpdateErr) {
@@ -551,7 +693,13 @@ Deno.serve(async (req) => {
 
     // Fire classify-reply asynchronously so the webhook can return 200 fast.
     // Runs after the response thanks to EdgeRuntime.waitUntil.
-    if (upsertedLead?.id) {
+    //
+    // Gated on `surface` for the same reason reply-webhook gates on `resurface`:
+    // a re-delivery, or a reply on an opted-out lead, records the message
+    // silently and must NOT produce a draft. This is the specific gate that
+    // stops the 2026-08-16 case — a re-sent 08-04 event that generated a draft
+    // (22,589 input tokens) for a message already handled.
+    if (surface && upsertedLead?.id) {
       const { data: agentConfig } = await supabase
         .from("agent_configs")
         .select("*")
@@ -617,6 +765,13 @@ Deno.serve(async (req) => {
           `No active agent_config for user ${integration.created_by} — skipping classify-reply`,
         );
       }
+    } else if (upsertedLead?.id) {
+      // Reply recorded, status and watermark left alone, no draft. Logged so a
+      // suppressed re-delivery is visible rather than looking like a dropped
+      // webhook.
+      console.log(
+        `[heyreach-webhook] reply recorded without surfacing (surface=false) for lead ${upsertedLead.id} — no draft generated`,
+      );
     }
 
     return new Response(JSON.stringify({ success: true }), {
