@@ -2,6 +2,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import {
   resolveExistingLead,
   fetchReplyIoCandidates,
+  isValidReplyThreadId,
   type LeadCandidate,
 } from '../_shared/lead-dedup.ts';
 import { htmlToText } from '../_shared/html-to-text.ts';
@@ -477,14 +478,30 @@ Deno.serve(async (req) => {
                   // null external_id with 400 thread_unresolved. The poll already
                   // holds the authoritative thread id, so it fills the gap here.
                   //
-                  // ONLY when the stored value is NULL. This deliberately does
-                  // NOT relax the "DO NOT touch external_id" rule above: that rule
-                  // exists so a later capture can't OVERWRITE an established
-                  // identity (the masked-stub <-> real-email downgrade). Writing
-                  // into a null is not an overwrite — there is no identity to
-                  // downgrade — so the guarantee is preserved. A non-null
-                  // external_id, right or wrong, is still never touched here.
-                  ...(existingLead.external_id == null ? { external_id: externalId } : {}),
+                  // WIDENED from "NULL only" to "NULL or not a valid thread id".
+                  //
+                  // The null-only form was dead code: no reply_io lead in prod
+                  // has a NULL external_id, while 1,577 carry a value that is
+                  // not a thread id at all — 'backfill:<sha1>' keys from one-off
+                  // pipeline scripts, contact ids, email addresses. Those leads
+                  // updated correctly on every new reply (thread, timestamp,
+                  // status) while the one field that makes them SENDABLE stayed
+                  // frozen, because a non-null bad value was treated as an
+                  // identity worth protecting. It never was.
+                  //
+                  // The original guarantee is untouched: a VALID thread id is
+                  // still never overwritten, so the masked-stub <-> real-email
+                  // downgrade this rule was written to prevent cannot occur.
+                  // Verified against all 2,520 prod reply_io leads: the two sets
+                  // are strictly complementary, 0 overlap.
+                  //
+                  // Identity safety comes from resolveExistingLead, which has
+                  // already matched this thread to this lead by external_id ->
+                  // linkedin_url -> email. A backfill key never matches by id,
+                  // so the match was made on a real identity field.
+                  ...(isValidReplyThreadId(existingLead.external_id)
+                    ? {}
+                    : { external_id: externalId }),
                 })
                 .eq('id', existingLead.id)
                 .select('id')
@@ -502,7 +519,7 @@ Deno.serve(async (req) => {
               // Mirror the repair into the in-run candidate so a LATER thread for
               // the same contact in this same run sees a non-null value and does
               // not overwrite the id we just set.
-              if (existingLead.external_id == null) {
+              if (!isValidReplyThreadId(existingLead.external_id)) {
                 existingLead.external_id = externalId;
                 repairedThisRun.set(String(existingLead.id), String(externalId));
                 console.log(

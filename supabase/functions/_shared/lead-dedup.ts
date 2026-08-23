@@ -107,3 +107,23 @@ export async function fetchReplyIoCandidates(supabase: any, userId: string): Pro
     .eq('source', 'reply_io');
   return (data ?? []) as LeadCandidate[];
 }
+
+// Is this external_id a real Reply.io INBOX THREAD id?
+//
+// agent_leads.external_id is contractually the thread id for reply_io rows —
+// send-agent-reply posts to /v3/inbox/threads/{external_id}/messages. But the
+// column has historically also held:
+//   * CONTACT ids            (reply-webhook, pre-fix)      — numeric, >= 5e8
+//   * email addresses        (sync-reply-contacts, pre-gate)
+//   * 'backfill:<sha1>' keys (one-off pipeline backfill scripts)
+// Each of those 404s as inboxThread.notFound at send time, so the lead looks
+// healthy — full thread, fresh reply, generated draft — and is unsendable.
+//
+// Observed live ranges: thread ids 3.5e8-4.1e8, contact ids > 7e8. 5e8 is the
+// discriminator, matching the guard in send-agent-reply.
+export function isValidReplyThreadId(v: string | number | null | undefined): boolean {
+  if (v === null || v === undefined) return false;
+  const s = String(v).trim();
+  if (!/^\d+$/.test(s)) return false;
+  return Number(s) < 5e8;
+}
