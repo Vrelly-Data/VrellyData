@@ -187,3 +187,149 @@ export function useDeleteAudience() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['agent-audiences'] }),
   });
 }
+
+/**
+ * Invoke an edge function and surface the REAL failure message.
+ *
+ * functions.invoke() reports every non-2xx as the same opaque string ("Edge
+ * Function returned a non-2xx status code") and puts the actual body on
+ * error.context. That default is unusable here: run-agent-audience answers a
+ * dead campaign with 409 + {error, detail}, where the detail is the only thing
+ * that tells the operator WHY nothing was pushed ("no email accounts attached",
+ * "0 steps"). Losing it would leave the run looking inexplicably broken.
+ */
+async function invokeFn<T>(name: string, body: unknown): Promise<T> {
+  const { data, error } = await supabase.functions.invoke(name, { body });
+  if (error) {
+    let detail: string | null = null;
+    const ctx = (error as unknown as { context?: Response })?.context;
+    if (ctx && typeof ctx.json === 'function') {
+      try {
+        const j = await ctx.json();
+        detail = [j?.error, j?.detail].filter(Boolean).join(' — ') || null;
+      } catch {
+        // Body was not JSON; fall back to the generic message below.
+      }
+    }
+    throw new Error(detail || error.message || `${name} failed`);
+  }
+  // Some functions answer 200 with an error payload.
+  if ((data as { error?: string } | null)?.error) {
+    throw new Error((data as { error: string }).error);
+  }
+  return data as T;
+}
+
+/** One row of the preview table. Mirrors mapSearchPerson in _shared/apollo.ts. */
+export interface ApolloPreviewPerson {
+  apollo_person_id: string;
+  first_name: string | null;
+  last_name_obfuscated: string | null;
+  title: string | null;
+  organization_name: string | null;
+  has_email: boolean;
+  has_direct_phone: boolean;
+  has_city: boolean;
+  has_state: boolean;
+  has_country: boolean;
+}
+
+export interface AudiencePreview {
+  people: ApolloPreviewPerson[];
+  pagination: {
+    page: number;
+    per_page: number;
+    total_entries: number | null;
+    total_pages: number | null;
+  };
+  notice: string;
+  credits_consumed: number;
+  key_source: 'client' | 'shared';
+}
+
+/**
+ * Preview an audience's filters against Apollo. FREE — api_search costs no
+ * credits and returns no email or phone, with surnames masked. Enrichment is
+ * the paid step, and it happens inside run-agent-audience at push time.
+ */
+export function usePreviewAudience() {
+  return useMutation({
+    mutationFn: async (
+      { filters, page = 1, per_page = 25 }:
+      { filters: ApolloAudienceFilters; page?: number; per_page?: number },
+    ): Promise<AudiencePreview> =>
+      invokeFn<AudiencePreview>('apollo-search', { filters, page, per_page }),
+  });
+}
+
+/**
+ * Which of these Apollo people has this client already pushed?
+ *
+ * run-agent-audience drops already-pushed ids BEFORE paying to enrich (its step
+ * 5). Mirroring that here means the operator never spends a selection slot on
+ * someone the server would silently skip. Dedup is client-wide by design, so
+ * this is scoped by user and not by audience.
+ */
+export function useAlreadyPushed(apolloPersonIds: string[]) {
+  const key = [...apolloPersonIds].sort().join(',');
+  return useQuery({
+    queryKey: ['audience-already-pushed', key],
+    enabled: apolloPersonIds.length > 0,
+    queryFn: async (): Promise<Set<string>> => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('Not authenticated');
+      const { data, error } = await db
+        .from('agent_audience_pushes')
+        .select('apollo_person_id')
+        .eq('user_id', user.id)
+        .in('apollo_person_id', apolloPersonIds);
+      if (error) throw error;
+      return new Set((data ?? []).map((r: { apollo_person_id: string }) => r.apollo_person_id));
+    },
+  });
+}
+
+export interface AudienceRunResult {
+  success?: boolean;
+  run_id: string | null;
+  status?: 'success' | 'partial' | 'failed';
+  searched: number;
+  enriched: number;
+  credits_spent: number;
+  pushed: number;
+  skipped_duplicate: number;
+  failed: number;
+  note?: string;
+}
+
+/**
+ * Run an audience against an explicit list of people.
+ *
+ * This is the MANUAL entry shape documented in run-agent-audience: passing
+ * person_ids skips the search entirely and uses the ticked ids verbatim, so
+ * what the operator saw in the preview is exactly what gets enriched and
+ * pushed. Destination is per-run — passing it explicitly means a manual push
+ * never depends on the audience having a default set.
+ */
+export function useRunAudience() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (
+      { audience_id, person_ids, platform, synced_campaign_id }: {
+        audience_id: string;
+        person_ids: string[];
+        platform: string;
+        synced_campaign_id: string;
+      },
+    ): Promise<AudienceRunResult> =>
+      invokeFn<AudienceRunResult>('run-agent-audience', {
+        audience_id, person_ids, platform, synced_campaign_id, trigger: 'manual',
+      }),
+    onSuccess: () => {
+      // The run rewrites last_run_status/total_pushed, and a successful run is
+      // what unlocks arming — so the list must refetch, not just the row.
+      qc.invalidateQueries({ queryKey: ['agent-audiences'] });
+      qc.invalidateQueries({ queryKey: ['audience-already-pushed'] });
+    },
+  });
+}

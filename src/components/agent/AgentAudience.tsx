@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Plus, Loader2, Pencil, Trash2, AlertTriangle, Telescope } from 'lucide-react';
+import { Plus, Loader2, Pencil, Trash2, AlertTriangle, Telescope, Rocket } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
@@ -15,6 +15,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { TagInput } from '@/components/ui/tag-input';
 import { MultiSelectDropdown } from '@/components/search/MultiSelectDropdown';
 import { useToast } from '@/hooks/use-toast';
+import { AudiencePreviewDialog } from './AudiencePreviewDialog';
 import {
   useAgentAudiences, useAudienceCampaigns, useCreateAudience, useUpdateAudience,
   useToggleAudienceActive, useDeleteAudience,
@@ -73,6 +74,7 @@ export function AgentAudience() {
 
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Audience | null>(null);
+  const [previewing, setPreviewing] = useState<Audience | null>(null);
   const [form, setForm] = useState<AudienceInput>(EMPTY);
   const { data: campaigns = [] } = useAudienceCampaigns(form.default_platform ?? undefined);
 
@@ -167,7 +169,7 @@ export function AgentAudience() {
                 <TableHead className="text-right">Pushed</TableHead>
                 <TableHead>Last run</TableHead>
                 <TableHead className="text-center">Active</TableHead>
-                <TableHead className="w-20" />
+                <TableHead className="w-56" />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -201,7 +203,14 @@ export function AgentAudience() {
                     />
                   </TableCell>
                   <TableCell>
-                    <div className="flex gap-1">
+                    <div className="flex gap-1 justify-end">
+                      {/* The only way to produce a run. The activation guard
+                          refuses to arm an audience until one has succeeded, so
+                          this is also the path to arming — it must not be a bare
+                          icon the operator has to guess at. */}
+                      <Button variant="outline" size="sm" onClick={() => setPreviewing(a)}>
+                        <Rocket className="h-4 w-4 mr-2" />Preview &amp; run
+                      </Button>
                       <Button variant="ghost" size="icon" onClick={() => openEdit(a)}>
                         <Pencil className="h-4 w-4" />
                       </Button>
@@ -481,6 +490,12 @@ export function AgentAudience() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AudiencePreviewDialog
+        audience={previewing}
+        open={!!previewing}
+        onOpenChange={(v) => { if (!v) setPreviewing(null); }}
+      />
     </div>
   );
 }
