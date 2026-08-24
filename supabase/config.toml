@@ -122,6 +122,39 @@ verify_jwt = false
 [functions.setup-smartlead-webhook]
 verify_jwt = false
 
+# Apollo (Agent Audience). Both accept EITHER a user JWT (the UI) or
+# x-agent-key (the Stage 4 cron runner), and both do their own auth check
+# in-function. verify_jwt must therefore be false, or the platform gateway
+# rejects the x-agent-key path before our code runs — the poll-smartlead-inbox
+# failure documented above.
+[functions.apollo-search]
+verify_jwt = false
+
+[functions.apollo-enrich]
+verify_jwt = false
+
+# Called from the Add Integration dialog BEFORE the user has an apollo row, by a
+# signed-in user. Mirrors validate-smartlead-key / validate-heyreach-key.
+[functions.validate-apollo-key]
+verify_jwt = false
+
+# Irreversible: enrols real prospects into a real sequence. JWT for the manual
+# push, x-agent-key for the Stage 4 cron runner; both checked in-function.
+[functions.add-contacts-to-sequence]
+verify_jwt = false
+
+# The runner. JWT for a manual run from the UI, x-agent-key for the scheduled
+# one; both checked in-function.
+[functions.run-agent-audience]
+verify_jwt = false
+
+# Cron-invoked via x-agent-key ONLY (no JWT branch). Without this entry it
+# deploys with Supabase's default verify_jwt = true and the PLATFORM GATEWAY
+# rejects the cron before any of our code runs, while cron.job_run_details
+# still reports "succeeded" — the poll-smartlead-inbox failure from 40e075f.
+[functions.dispatch-agent-audiences]
+verify_jwt = false
+
 [functions.sync-smartlead-campaigns]
 verify_jwt = false
 
