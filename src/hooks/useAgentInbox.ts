@@ -56,6 +56,14 @@ export interface AgentLead {
   auto_handled: boolean;
   notes: string;
   last_campaign_name?: string | null;
+  // Campaign IDs the lead was captured from. Populated at ingest even where
+  // last_campaign_name is not (smartlead-webhook only copies a name when the
+  // vendor payload carries one; the HeyReach paths never write one), so the
+  // inbox resolves these to a name via useCampaignNames when the stored name is
+  // missing. Both are TEXT and both match synced_campaigns.external_campaign_id.
+  // get-agent-inbox already select('*')s them — this only declares them to TS.
+  smartlead_campaign_id?: string | null;
+  campaign_external_id?: string | null;
   // HeyReach LinkedIn sender account that owns this conversation. Written by
   // poll-heyreach-inbox; null for every other source. get-agent-inbox already
   // select('*')s it — this only declares it to TS. Resolved to a display name
