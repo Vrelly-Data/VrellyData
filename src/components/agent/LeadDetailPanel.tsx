@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { Send, UserPlus, Loader2, X, Linkedin, Mail, Check, Sparkles, Plus, Trash2 } from 'lucide-react';
 import { LinkedInProfileLink } from '@/components/LinkedInProfileLink';
 import { Badge } from '@/components/ui/badge';
@@ -41,6 +41,7 @@ import {
 } from '@/hooks/useSmartlead';
 import { useAgentConfig } from '@/hooks/useAgent';
 import { useAgentDocuments } from '@/hooks/useAgentDocuments';
+import { resolveCampaignName, type CampaignNameMaps } from '@/hooks/useCampaignNames';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { supabase } from '@/integrations/supabase/client';
@@ -282,6 +283,28 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
   const { data: smartleadCampaigns = [], isLoading: smartleadCampaignsLoading } =
     useSmartleadCampaigns();
   const [selectedSmartleadCampaignId, setSelectedSmartleadCampaignId] = useState('');
+
+  // Campaign History falls back to resolving the lead's captured campaign id
+  // when no write path recorded a name — same gap and same precedence as the
+  // inbox list (see useCampaignNames). Built from the two campaign lists this
+  // panel ALREADY loads for the Add to Campaign dropdowns rather than calling
+  // useCampaignNames: they are the same synced_campaigns rows, already scoped
+  // by integration platform, so this costs no extra request while keeping the
+  // two maps separate — which is what stops a Reply.io lead's
+  // campaign_external_id resolving against a colliding HeyReach campaign id.
+  const campaignNames = useMemo<CampaignNameMaps>(() => {
+    const build = (rows: Array<{ name: string; external_campaign_id: string }>) => {
+      const m = new Map<string, string>();
+      for (const c of rows) {
+        const n = c.name?.trim();
+        if (n && c.external_campaign_id && !m.has(String(c.external_campaign_id))) {
+          m.set(String(c.external_campaign_id), n);
+        }
+      }
+      return m;
+    };
+    return { smartlead: build(smartleadCampaigns), heyreach: build(heyreachCampaigns) };
+  }, [smartleadCampaigns, heyreachCampaigns]);
 
   // Sync draft text when live data brings in a new draft
   const [lastSyncedDraft, setLastSyncedDraft] = useState(lead.draft_response || '');
@@ -1179,16 +1202,22 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
           <div className="space-y-2">
             <h4 className="text-sm font-medium text-muted-foreground">Campaign History</h4>
             <div className="border rounded-lg px-3 py-2.5 text-sm">
-              {lead.last_campaign_name ? (
-                <>
-                  <span className="text-muted-foreground">Currently in: </span>
-                  <span className="font-medium">{lead.last_campaign_name}</span>
-                </>
-              ) : (
-                <span className="text-muted-foreground italic">
-                  In progress — campaign name not recorded.
-                </span>
-              )}
+              {(() => {
+                // Stored name first, then the captured campaign id. Can only
+                // fill the "not recorded" case — never changes a name that
+                // already renders.
+                const campaign = resolveCampaignName(lead, campaignNames);
+                return campaign ? (
+                  <>
+                    <span className="text-muted-foreground">Currently in: </span>
+                    <span className="font-medium">{campaign}</span>
+                  </>
+                ) : (
+                  <span className="text-muted-foreground italic">
+                    In progress — campaign name not recorded.
+                  </span>
+                );
+              })()}
             </div>
           </div>
         )}

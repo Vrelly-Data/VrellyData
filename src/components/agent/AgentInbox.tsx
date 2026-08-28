@@ -12,6 +12,7 @@ import {
 } from '@/hooks/useAgentInbox';
 import { useAgentConfig } from '@/hooks/useAgent';
 import { useHeyReachAccountNames } from '@/hooks/useHeyReachAccounts';
+import { useCampaignNames, resolveCampaignName } from '@/hooks/useCampaignNames';
 import {
   LeadDetailPanel,
   IntentBadge,
@@ -64,6 +65,20 @@ export function AgentInbox() {
   // a HeyReach lead — Reply.io/Smartlead-only tenants make no request at all.
   const heyReachAccountNames = useHeyReachAccountNames(
     leads.some((l) => l.heyreach_account_id != null),
+  );
+
+  // Campaign names for the Smartlead/HeyReach leads whose ingest recorded a
+  // campaign id but no last_campaign_name. Same gating as above: only fetched
+  // when the visible list holds a lead that would actually use it, so a
+  // Reply.io-only tenant makes no request and its cards are untouched.
+  const campaignNames = useCampaignNames(
+    leads.some(
+      (l) =>
+        (l.smartlead_campaign_id != null && !l.last_campaign_name) ||
+        (l.campaign_external_id != null &&
+          !l.last_campaign_name &&
+          (l.source === 'heyreach' || l.heyreach_account_id != null)),
+    ),
   );
   const { data: agentConfig } = useAgentConfig();
   const classifyLead = useClassifyLead();
@@ -210,7 +225,14 @@ export function AgentInbox() {
                         ?? (lead.heyreach_account_id != null
                           ? heyReachAccountNames.get(lead.heyreach_account_id) ?? null
                           : null);
-                      const campaign = lead.last_campaign_name;
+                      // Stored last_campaign_name first (Reply.io, and any
+                      // lead pushed via Add to Campaign); fall back to
+                      // resolving the lead's captured campaign id against
+                      // synced_campaigns, which is the only thing the
+                      // Smartlead and HeyReach ingests record. Fallback can
+                      // only fill a blank line — never change one that
+                      // already renders.
+                      const campaign = resolveCampaignName(lead, campaignNames);
                       if (!campaign && !sender) return null;
                       return (
                         <p className="text-xs text-muted-foreground truncate">
