@@ -116,7 +116,7 @@ export default function ResourceArticle() {
             )}
 
             {/* Content */}
-            <article className="prose prose-neutral max-w-none">
+            <article className="prose prose-slate dark:prose-invert max-w-none">
               <ReactMarkdown>{resource.content_markdown}</ReactMarkdown>
             </article>
 
