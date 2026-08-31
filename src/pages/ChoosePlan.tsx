@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { PLANS } from '@/data/plans';
 import { useSubscriptionActions } from '@/hooks/useSubscription';
 import { useAuthStore } from '@/stores/authStore';
+import { ResourcesTeaser } from '@/components/landing/ResourcesTeaser';
 
 export default function ChoosePlan() {
   const { createCheckoutSession } = useSubscriptionActions();
@@ -188,6 +189,8 @@ export default function ChoosePlan() {
           );
         })}
       </div>
+
+      <ResourcesTeaser title="From the blog" limit={2} />
 
       {user && (
         <Button

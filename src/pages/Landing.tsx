@@ -9,6 +9,7 @@ import { AIAgentsSection } from '@/components/landing/AIAgentsSection';
 import { PricingSection } from '@/components/landing/PricingSection';
 import { SignUpSection } from '@/components/landing/SignUpSection';
 import { Footer } from '@/components/landing/Footer';
+import { ResourcesTeaser } from '@/components/landing/ResourcesTeaser';
 
 const Landing = () => {
   const location = useLocation();
@@ -37,6 +38,7 @@ const Landing = () => {
       <HowItWorksSection />
       <FeaturesSection />
       <AIAgentsSection />
+      <ResourcesTeaser />
       <PricingSection />
       <SignUpSection />
       <Footer />
