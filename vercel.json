@@ -3,7 +3,11 @@
   "rewrites": [
     { "source": "/resources/:slug", "destination": "/api/article/:slug" },
     { "source": "/sitemap.xml", "destination": "/api/sitemap" },
-    { "source": "/(.*)", "destination": "/index.html" }
+    { "source": "/resources", "destination": "/api/marketing?name=resources" },
+    { "source": "/pricing", "destination": "/api/marketing?name=pricing" },
+    { "source": "/features", "destination": "/api/marketing?name=features" },
+    { "source": "/comparisons", "destination": "/api/marketing?name=comparisons" },
+    { "source": "/:path((?!api/).*)", "destination": "/index.html" }
   ],
   "redirects": [
     { "source": "/blog", "destination": "/resources", "statusCode": 301 },
