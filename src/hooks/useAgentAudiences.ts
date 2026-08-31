@@ -232,6 +232,17 @@ export interface ApolloPreviewPerson {
   has_city: boolean;
   has_state: boolean;
   has_country: boolean;
+  // Organisation availability flags + record freshness. api_search returns NO
+  // organisation values beyond `name` (verified live 2026-08-30 across three
+  // filter shapes), so these say what enrichment WILL yield rather than what it
+  // already has. Optional because the mapper change and this deploy are two
+  // steps: a response from the older apollo-search omits them, and every
+  // consumer below treats undefined as "unknown" and simply renders nothing.
+  org_has_industry?: boolean;
+  org_has_employee_count?: boolean;
+  org_has_revenue?: boolean;
+  org_has_phone?: boolean;
+  last_refreshed_at?: string | null;
 }
 
 export interface AudiencePreview {
@@ -285,6 +296,112 @@ export function useAlreadyPushed(apolloPersonIds: string[]) {
         .in('apollo_person_id', apolloPersonIds);
       if (error) throw error;
       return new Set((data ?? []).map((r: { apollo_person_id: string }) => r.apollo_person_id));
+    },
+  });
+}
+
+/**
+ * One person as Apollo returns them from ENRICHMENT — real surname, real email,
+ * real location. Mirrors ApolloEnrichedPerson in _shared/apollo.ts.
+ *
+ * Everything here is paid-for data. The preview type above (ApolloPreviewPerson)
+ * is its free counterpart and deliberately shares no fields beyond the id: the
+ * two must never be confused at a call site, because one is safe to show for
+ * free and the other cost money to obtain.
+ */
+export interface RevealedPerson {
+  apollo_person_id: string;
+  first_name: string | null;
+  last_name: string | null;
+  name: string | null;
+  title: string | null;
+  email: string | null;
+  email_status: string | null;
+  linkedin_url: string | null;
+  organization_name: string | null;
+  organization_domain: string | null;
+  organization_industry: string | null;
+  organization_employee_count: number | null;
+  organization_revenue: string | null;
+  city: string | null;
+  state: string | null;
+  country: string | null;
+  revealed_for_current_team: boolean | null;
+  contact_id: string | null;
+}
+
+export interface RevealResult {
+  people: RevealedPerson[];
+  requested: number;
+  /** How many came from apollo_enrichment_cache and therefore cost nothing. */
+  served_from_cache: number;
+  cache_ttl_days: number;
+  /**
+   * Ids Apollo has NO RECORD FOR — a permanent fact, free to learn, and safe to
+   * act on by greying the row out for good. Chunks that failed at the HTTP
+   * level are NOT in here (see apollo-enrich); they are in failed_chunks, where
+   * the right response is to try again rather than to write the person off.
+   */
+  unmatched: string[];
+  /** Transient failures. Retryable — these people may be perfectly reachable. */
+  failed_chunks: Array<{ ids: string[]; status: number }>;
+  credits_spent: number;
+  already_revealed_for_team: number;
+  key_source: 'client' | 'shared';
+}
+
+/**
+ * Mirrors ENRICH_MAX_PER_CALL in _shared/apollo.ts.
+ *
+ * The server REFUSES a larger batch rather than truncating it, so this is not a
+ * nicety — a bulk reveal of 25 selected people sent as one call would 400 and
+ * reveal nobody. Chunking happens below.
+ */
+export const REVEAL_MAX_PER_CALL = 10;
+
+/**
+ * Reveal people — the paid step, made explicit.
+ *
+ * WHY THIS IS SAFE TO OFFER AS A BUTTON. apollo-enrich is a read-through cache
+ * over apollo_enrichment_cache: a person revealed here is stored, and the push
+ * that follows is served from that store rather than bought a second time. So
+ * Reveal costs at most what the push would have cost anyway, and pressing it
+ * twice costs nothing the second time. Without that cache this hook would
+ * double the price of every push it preceded.
+ *
+ * Chunks are sent SEQUENTIALLY, not in parallel. Apollo rate-limits per account
+ * and a 429 mid-reveal would leave the operator with a partial result they had
+ * still been charged for.
+ */
+export function useRevealPeople() {
+  return useMutation({
+    mutationFn: async (
+      { person_ids, refresh = false }: { person_ids: string[]; refresh?: boolean },
+    ): Promise<RevealResult> => {
+      const ids = [...new Set(person_ids.filter(Boolean))];
+      const merged: RevealResult = {
+        people: [], requested: 0, served_from_cache: 0, cache_ttl_days: 0,
+        unmatched: [], failed_chunks: [], credits_spent: 0,
+        already_revealed_for_team: 0, key_source: 'shared',
+      };
+
+      for (let i = 0; i < ids.length; i += REVEAL_MAX_PER_CALL) {
+        const chunk = ids.slice(i, i + REVEAL_MAX_PER_CALL);
+        const r = await invokeFn<RevealResult>('apollo-enrich', {
+          person_ids: chunk,
+          ...(refresh ? { refresh: true } : {}),
+        });
+        merged.people.push(...(r.people ?? []));
+        merged.requested += r.requested ?? chunk.length;
+        merged.served_from_cache += r.served_from_cache ?? 0;
+        merged.unmatched.push(...(r.unmatched ?? []));
+        merged.failed_chunks.push(...(r.failed_chunks ?? []));
+        merged.credits_spent += r.credits_spent ?? 0;
+        merged.already_revealed_for_team += r.already_revealed_for_team ?? 0;
+        merged.cache_ttl_days = r.cache_ttl_days ?? merged.cache_ttl_days;
+        merged.key_source = r.key_source ?? merged.key_source;
+      }
+      return merged;
     },
   });
 }
