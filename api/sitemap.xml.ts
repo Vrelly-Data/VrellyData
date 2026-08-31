@@ -1,6 +1,4 @@
-export const config = {
-  runtime: "edge",
-};
+// Node.js runtime Vercel Function
 
 type Resource = {
   slug: string;
@@ -48,7 +46,7 @@ async function fetchPublishedResources(): Promise<Resource[]> {
   return rows ?? [];
 }
 
-export default async function handler(): Promise<Response> {
+export default async function handler(_: any, res: any) {
   const today = new Date();
   const staticPages: { path: string; changefreq: string; priority: string }[] = [
     { path: "/", changefreq: "weekly", priority: "1.0" },
@@ -90,11 +88,10 @@ ${urls.join("\n")}
 </urlset>
 `;
 
-  return new Response(xml, {
-    headers: {
-      "content-type": "application/xml; charset=utf-8",
-      "cache-control": "public, s-maxage=600, max-age=60, stale-while-revalidate=86400",
-    },
-  });
+  res
+    .status(200)
+    .setHeader("content-type", "application/xml; charset=utf-8")
+    .setHeader("cache-control", "public, s-maxage=600, max-age=60, stale-while-revalidate=86400")
+    .send(xml);
 }
 

@@ -1,6 +1,4 @@
-export const config = {
-  runtime: "edge",
-};
+// Node.js runtime Vercel Function (Edge not required)
 
 type Resource = {
   slug: string;
@@ -150,34 +148,37 @@ function updateHtmlWithSeo(htmlIn: string, params: { title: string; description:
   return html;
 }
 
-export default async function handler(req: Request): Promise<Response> {
-  const url = new URL(req.url);
+export default async function handler(req: any, res: any) {
+  const proto = (req.headers?.["x-forwarded-proto"] as string) || "https";
+  const host = (req.headers?.host as string) || DEFAULT_SITE_HOST;
+  const fullUrl = `${proto}://${host}${req.url || "/api/article"}`;
+  const url = new URL(fullUrl);
   const slugParam = url.searchParams.get("slug");
   const slug = (slugParam || "").trim();
 
   if (!slug) {
-    return new Response("Not Found", { status: 404 });
+    res.status(404).setHeader("content-type", "text/plain; charset=utf-8").send("Not Found");
+    return;
   }
 
   const resource = await fetchArticle(slug);
   if (!resource) {
     // Real 404 for unknown/unpublished slugs
-    return new Response("Not Found", {
-      status: 404,
-      headers: {
-        "content-type": "text/plain; charset=utf-8",
-        "cache-control": "public, max-age=60, s-maxage=60",
-      },
-    });
+    res
+      .status(404)
+      .setHeader("content-type", "text/plain; charset=utf-8")
+      .setHeader("cache-control", "public, max-age=60, s-maxage=60")
+      .send("Not Found");
+    return;
   }
 
   // Fetch the base index HTML from the same host so asset URLs remain correct.
-  const originIndexUrl = `${url.origin}/`;
+  const originIndexUrl = `${proto}://${host}/`;
   const baseResp = await fetch(originIndexUrl, {
     headers: {
       // Forward basic headers to ensure correct locale/variants if any
-      "user-agent": req.headers.get("user-agent") || "",
-      accept: req.headers.get("accept") || "text/html",
+      "user-agent": (req.headers?.["user-agent"] as string) || "",
+      accept: (req.headers?.accept as string) || "text/html",
     },
   });
 
@@ -197,14 +198,10 @@ export default async function handler(req: Request): Promise<Response> {
     twitterDescription: description,
   });
 
-  const headers = new Headers({
-    "content-type": "text/html; charset=utf-8",
-    "cache-control": "public, s-maxage=600, max-age=60, stale-while-revalidate=86400",
-  });
-
-  return new Response(updatedHtml, {
-    status: 200,
-    headers,
-  });
+  res
+    .status(200)
+    .setHeader("content-type", "text/html; charset=utf-8")
+    .setHeader("cache-control", "public, s-maxage=600, max-age=60, stale-while-revalidate=86400")
+    .send(updatedHtml);
 }
 
