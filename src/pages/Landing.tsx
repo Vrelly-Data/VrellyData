@@ -30,6 +30,7 @@ const Landing = () => {
       <Helmet>
         <title>Vrelly | AI Sales Agent Platform &amp; B2B Prospect Data</title>
         <meta name="description" content="Vrelly is an AI-powered B2B sales agent platform. Connect HeyReach or Smartlead, let AI handle replies, and book more meetings — powered by your real campaign data." />
+        <link rel="canonical" href="https://www.vrelly.com/" />
       </Helmet>
       <Navbar />
       <HeroSection />

@@ -38,6 +38,7 @@ const Demo = () => {
           name="description"
           content="See Vrelly in action. Book a 30-minute demo with the team to see how the AI sales agent plugs into your outbound."
         />
+        <link rel="canonical" href="https://www.vrelly.com/demo" />
       </Helmet>
 
       <Navbar />

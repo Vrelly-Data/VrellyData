@@ -41,6 +41,11 @@ export default function ResourceArticle() {
 
   return (
     <div className="min-h-screen bg-background">
+      {slug && (
+        <Helmet>
+          <link rel="canonical" href={`https://www.vrelly.com/resources/${slug}`} />
+        </Helmet>
+      )}
       {resource && (
         <Helmet>
           <title>{resource.title} | Vrelly</title>
