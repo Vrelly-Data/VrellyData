@@ -42,6 +42,27 @@ export const ENRICH_CHUNK_SIZE = 10;
  */
 export const ENRICH_MAX_PER_CALL = 10;
 
+/**
+ * How long an apollo_enrichment_cache row may be served before we pay again.
+ *
+ * The cache exists so Reveal-then-push does not buy the same person twice (see
+ * the migration header). This number is where that saving stops: past it, the
+ * row is re-fetched at full price.
+ *
+ * 30 days is chosen against the failure mode, not the saving. A cached email
+ * that has gone dead does not announce itself — it is spent as a real send into
+ * a real sequence, and the bounce lands on the client's sending domain. That is
+ * a reputational cost with no undo, and it dwarfs one Apollo credit. Apollo's
+ * own `last_refreshed_at` (surfaced in the preview table) shows records
+ * routinely months old, so a long TTL here would be compounding staleness on
+ * top of staleness.
+ *
+ * If refresh_count across the table climbs steeply, this is too short for how
+ * the account actually works and should be raised deliberately — not widened by
+ * accident.
+ */
+export const ENRICH_CACHE_TTL_DAYS = 30;
+
 export function apolloHeaders(apiKey: string): Record<string, string> {
   return {
     "Content-Type": "application/json",
