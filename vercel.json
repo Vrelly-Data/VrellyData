@@ -3,6 +3,11 @@
   "rewrites": [
     { "source": "/resources/:slug", "destination": "/api/article/:slug" },
     { "source": "/sitemap.xml", "destination": "/api/sitemap" },
+    { "source": "/resources", "destination": "/api/marketing?name=resources" },
+    { "source": "/pricing", "destination": "/api/marketing?name=pricing" },
+    { "source": "/features", "destination": "/api/marketing?name=features" },
+    { "source": "/comparisons", "destination": "/api/marketing?name=comparisons" },
+    { "handle": "filesystem" },
     { "source": "/(.*)", "destination": "/index.html" }
   ],
   "redirects": [
