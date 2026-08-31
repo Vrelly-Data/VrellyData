@@ -1,3 +1,27 @@
 {
+  "rewrites": [
+    {
+      "source": "/resources/:slug",
+      "destination": "/api/article?slug=:slug"
+    },
+    {
+      "source": "/sitemap.xml",
+      "destination": "/api/sitemap.xml"
+    }
+  ],
+  "redirects": [
+    {
+      "source": "/blog",
+      "destination": "/resources",
+      "statusCode": 301
+    },
+    {
+      "source": "/blog/",
+      "destination": "/resources",
+      "statusCode": 301
+    }
+  ]
+}
+{
   "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
 }
