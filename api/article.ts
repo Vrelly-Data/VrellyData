@@ -64,6 +64,92 @@ async function fetchArticle(slug: string): Promise<Resource | null> {
   return rows[0] ?? null;
 }
 
+function escapeHtml(input: string): string {
+  return input
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function replaceOrInsert(html: string, pattern: RegExp, replacement: string, fallbackInsertion: string): string {
+  if (pattern.test(html)) {
+    return html.replace(pattern, replacement);
+  }
+  // Insert before </head>
+  return html.replace(/<\/head>/i, `${fallbackInsertion}\n</head>`);
+}
+
+function updateHtmlWithSeo(htmlIn: string, params: { title: string; description: string; canonical: string; ogTitle: string; ogDescription: string; ogUrl: string; twitterTitle: string; twitterDescription: string; }): string {
+  let html = htmlIn;
+  const { title, description, canonical, ogTitle, ogDescription, ogUrl, twitterTitle, twitterDescription } = params;
+
+  const escTitle = escapeHtml(title);
+  const escDesc = escapeHtml(description);
+  const escCanonical = escapeHtml(canonical);
+
+  // <title>
+  html = replaceOrInsert(
+    html,
+    /<title>.*?<\/title>/is,
+    `<title>${escTitle}</title>`,
+    `<title>${escTitle}</title>`
+  );
+
+  // meta description
+  html = replaceOrInsert(
+    html,
+    /<meta[^>]*name=["']description["'][^>]*>/i,
+    `<meta name="description" content="${escDesc}" />`,
+    `<meta name="description" content="${escDesc}" />`
+  );
+
+  // canonical link
+  html = replaceOrInsert(
+    html,
+    /<link[^>]*rel=["']canonical["'][^>]*>/i,
+    `<link rel="canonical" href="${escCanonical}" />`,
+    `<link rel="canonical" href="${escCanonical}" />`
+  );
+
+  // Open Graph
+  html = replaceOrInsert(
+    html,
+    /<meta[^>]*property=["']og:title["'][^>]*>/i,
+    `<meta property="og:title" content="${escapeHtml(ogTitle)}" />`,
+    `<meta property="og:title" content="${escapeHtml(ogTitle)}" />`
+  );
+  html = replaceOrInsert(
+    html,
+    /<meta[^>]*property=["']og:description["'][^>]*>/i,
+    `<meta property="og:description" content="${escapeHtml(ogDescription)}" />`,
+    `<meta property="og:description" content="${escapeHtml(ogDescription)}" />`
+  );
+  html = replaceOrInsert(
+    html,
+    /<meta[^>]*property=["']og:url["'][^>]*>/i,
+    `<meta property="og:url" content="${escapeHtml(ogUrl)}" />`,
+    `<meta property="og:url" content="${escapeHtml(ogUrl)}" />`
+  );
+
+  // Twitter
+  html = replaceOrInsert(
+    html,
+    /<meta[^>]*name=["']twitter:title["'][^>]*>/i,
+    `<meta name="twitter:title" content="${escapeHtml(twitterTitle)}" />`,
+    `<meta name="twitter:title" content="${escapeHtml(twitterTitle)}" />`
+  );
+  html = replaceOrInsert(
+    html,
+    /<meta[^>]*name=["']twitter:description["'][^>]*>/i,
+    `<meta name="twitter:description" content="${escapeHtml(twitterDescription)}" />`,
+    `<meta name="twitter:description" content="${escapeHtml(twitterDescription)}" />`
+  );
+
+  return html;
+}
+
 export default async function handler(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const slugParam = url.searchParams.get("slug");
@@ -99,55 +185,25 @@ export default async function handler(req: Request): Promise<Response> {
   const description = toDescription(resource);
   const canonical = buildCanonical(resource.slug);
 
-  const rewriter = new HTMLRewriter()
-    .on("title", {
-      element(el) {
-        el.setInnerContent(title);
-      },
-    })
-    .on('meta[name="description"]', {
-      element(el) {
-        el.setAttribute("content", description);
-      },
-    })
-    .on('link[rel="canonical"]', {
-      element(el) {
-        el.setAttribute("href", canonical);
-      },
-    })
-    .on('meta[property="og:title"]', {
-      element(el) {
-        el.setAttribute("content", resource.title);
-      },
-    })
-    .on('meta[property="og:description"]', {
-      element(el) {
-        el.setAttribute("content", description);
-      },
-    })
-    .on('meta[property="og:url"]', {
-      element(el) {
-        el.setAttribute("content", canonical);
-      },
-    })
-    .on('meta[name="twitter:title"]', {
-      element(el) {
-        el.setAttribute("content", resource.title);
-      },
-    })
-    .on('meta[name="twitter:description"]', {
-      element(el) {
-        el.setAttribute("content", description);
-      },
-    });
+  const baseHtml = await baseResp.text();
+  const updatedHtml = updateHtmlWithSeo(baseHtml, {
+    title,
+    description,
+    canonical,
+    ogTitle: resource.title,
+    ogDescription: description,
+    ogUrl: canonical,
+    twitterTitle: resource.title,
+    twitterDescription: description,
+  });
 
-  const transformed = rewriter.transform(baseResp);
-  // Add caching headers while allowing relatively quick updates.
-  const headers = new Headers(transformed.headers);
-  headers.set("cache-control", "public, s-maxage=600, max-age=60, stale-while-revalidate=86400");
+  const headers = new Headers({
+    "content-type": "text/html; charset=utf-8",
+    "cache-control": "public, s-maxage=600, max-age=60, stale-while-revalidate=86400",
+  });
 
-  return new Response(transformed.body, {
-    status: transformed.status,
+  return new Response(updatedHtml, {
+    status: 200,
     headers,
   });
 }
