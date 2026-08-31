@@ -1,3 +1,12 @@
 {
-  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "rewrites": [
+    { "source": "/resources/:slug", "destination": "/api/article/:slug" },
+    { "source": "/sitemap.xml", "destination": "/api/sitemap" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ],
+  "redirects": [
+    { "source": "/blog", "destination": "/resources", "statusCode": 301 },
+    { "source": "/blog/", "destination": "/resources", "statusCode": 301 }
+  ]
 }
