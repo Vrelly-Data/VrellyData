@@ -36,7 +36,7 @@ export const SignUpSection = () => {
             onClick={() => navigate('/demo')}
             className="text-base px-8 py-6 border-white/30 bg-transparent !text-white hover:bg-white/10 hover:border-white/50"
           >
-            See Demo
+            Book a demo
           </Button>
         </div>
       </div>
