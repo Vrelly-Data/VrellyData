@@ -116,7 +116,7 @@ export default function ResourceArticle() {
             )}
 
             {/* Content */}
-            <article className="prose prose-neutral max-w-none">
+            <article className="prose max-w-none text-foreground prose-headings:text-foreground prose-p:text-foreground prose-li:text-foreground prose-strong:text-foreground prose-blockquote:text-foreground prose-a:text-foreground prose-code:text-foreground dark:prose-invert [--tw-prose-body:hsl(var(--foreground))] [--tw-prose-headings:hsl(var(--foreground))] [--tw-prose-bold:hsl(var(--foreground))] [--tw-prose-quotes:hsl(var(--foreground))] [--tw-prose-counters:hsl(var(--foreground))] [--tw-prose-bullets:hsl(var(--foreground))] [--tw-prose-links:hsl(var(--foreground))] [--tw-prose-code:hsl(var(--foreground))]">
               <ReactMarkdown>{resource.content_markdown}</ReactMarkdown>
             </article>
 
