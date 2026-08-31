@@ -58,12 +58,52 @@ function replaceOrInsert(html: string, pattern: RegExp, replacement: string, fal
   return html.replace(/<\/head>/i, `${fallbackInsertion}\n</head>`);
 }
 
-function updateHtmlWithSeo(htmlIn: string, params: { title: string; description: string; canonical: string; ogTitle: string; ogDescription: string; ogUrl: string; twitterTitle: string; twitterDescription: string; }): string {
+function buildArticleJsonLd(resource: Resource, canonical: string): string {
+  const image = resource.cover_image_url || "https://www.vrelly.com/og-image.png?v=2";
+  const payload: any = {
+    "@context": "https://schema.org",
+    "@type": "Article",
+    headline: resource.title,
+    datePublished: resource.published_at || new Date().toISOString(),
+    author: { "@type": "Organization", name: "Vrelly Team" },
+    mainEntityOfPage: canonical,
+  };
+  if (image) payload.image = [image];
+  return `<script type="application/ld+json">${JSON.stringify(payload)}</script>`;
+}
+
+function updateHtmlWithSeo(
+  htmlIn: string,
+  params: {
+    title: string;
+    description: string;
+    canonical: string;
+    ogTitle: string;
+    ogDescription: string;
+    ogUrl: string;
+    twitterTitle: string;
+    twitterDescription: string;
+    ogImage?: string;
+    jsonLd?: string;
+  }
+): string {
   let html = htmlIn;
-  const { title, description, canonical, ogTitle, ogDescription, ogUrl, twitterTitle, twitterDescription } = params;
+  const {
+    title,
+    description,
+    canonical,
+    ogTitle,
+    ogDescription,
+    ogUrl,
+    twitterTitle,
+    twitterDescription,
+    ogImage,
+    jsonLd,
+  } = params;
   const escTitle = escapeHtml(title);
   const escDesc = escapeHtml(description);
   const escCanonical = escapeHtml(canonical);
+  const image = ogImage || "https://www.vrelly.com/og-image.png?v=2";
 
   html = replaceOrInsert(html, /<title>.*?<\/title>/is, `<title>${escTitle}</title>`, `<title>${escTitle}</title>`);
   html = replaceOrInsert(html, /<meta[^>]*name=["']description["'][^>]*>/i, `<meta name="description" content="${escDesc}" />`, `<meta name="description" content="${escDesc}" />`);
@@ -71,8 +111,14 @@ function updateHtmlWithSeo(htmlIn: string, params: { title: string; description:
   html = replaceOrInsert(html, /<meta[^>]*property=["']og:title["'][^>]*>/i, `<meta property="og:title" content="${escapeHtml(ogTitle)}" />`, `<meta property="og:title" content="${escapeHtml(ogTitle)}" />`);
   html = replaceOrInsert(html, /<meta[^>]*property=["']og:description["'][^>]*>/i, `<meta property="og:description" content="${escapeHtml(ogDescription)}" />`, `<meta property="og:description" content="${escapeHtml(ogDescription)}" />`);
   html = replaceOrInsert(html, /<meta[^>]*property=["']og:url["'][^>]*>/i, `<meta property="og:url" content="${escapeHtml(ogUrl)}" />`, `<meta property="og:url" content="${escapeHtml(ogUrl)}" />`);
+  html = replaceOrInsert(html, /<meta[^>]*property=["']og:image["'][^>]*>/i, `<meta property="og:image" content="${escapeHtml(image)}" />`, `<meta property="og:image" content="${escapeHtml(image)}" />`);
   html = replaceOrInsert(html, /<meta[^>]*name=["']twitter:title["'][^>]*>/i, `<meta name="twitter:title" content="${escapeHtml(twitterTitle)}" />`, `<meta name="twitter:title" content="${escapeHtml(twitterTitle)}" />`);
   html = replaceOrInsert(html, /<meta[^>]*name=["']twitter:description["'][^>]*>/i, `<meta name="twitter:description" content="${escapeHtml(twitterDescription)}" />`, `<meta name="twitter:description" content="${escapeHtml(twitterDescription)}" />`);
+  html = replaceOrInsert(html, /<meta[^>]*name=["']twitter:card["'][^>]*>/i, `<meta name="twitter:card" content="summary_large_image" />`, `<meta name="twitter:card" content="summary_large_image" />`);
+  html = replaceOrInsert(html, /<meta[^>]*name=["']twitter:image["'][^>]*>/i, `<meta name="twitter:image" content="${escapeHtml(image)}" />`, `<meta name="twitter:image" content="${escapeHtml(image)}" />`);
+  if (jsonLd) {
+    html = html.replace(/<\/head>/i, `${jsonLd}\n</head>`);
+  }
   return html;
 }
 
@@ -108,6 +154,8 @@ export default async function handler(req: any, res: any) {
   const description = toDescription(resource);
   const canonical = buildCanonical(resource.slug);
   const baseHtml = await baseResp.text();
+  const ogImage = resource.cover_image_url || "https://www.vrelly.com/og-image.png?v=2";
+  const jsonLd = buildArticleJsonLd(resource, canonical);
   const updatedHtml = updateHtmlWithSeo(baseHtml, {
     title,
     description,
@@ -117,6 +165,8 @@ export default async function handler(req: any, res: any) {
     ogUrl: canonical,
     twitterTitle: resource.title,
     twitterDescription: description,
+    ogImage,
+    jsonLd,
   });
 
   res
