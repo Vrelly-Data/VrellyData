@@ -36,18 +36,52 @@ export const Navbar = () => {
           />
 
           <div className="hidden md:flex items-center gap-6 text-sm text-slate-300">
-            <button onClick={() => scrollToSection('features')} className="hover:text-white transition-colors">
+            {/* Use real hrefs for crawlability; enhance with smooth scroll on home */}
+            <a
+              href="/features"
+              onClick={(e) => {
+                if (location.pathname === '/') {
+                  e.preventDefault();
+                  scrollToSection('features');
+                }
+              }}
+              className="hover:text-white transition-colors"
+            >
               Features
-            </button>
-            <button onClick={() => scrollToSection('how-it-works')} className="hover:text-white transition-colors">
+            </a>
+            <a
+              href="/#how-it-works"
+              onClick={(e) => {
+                if (location.pathname === '/') {
+                  e.preventDefault();
+                  scrollToSection('how-it-works');
+                }
+              }}
+              className="hover:text-white transition-colors"
+            >
               How It Works
-            </button>
-            <button onClick={() => scrollToSection('pricing')} className="hover:text-white transition-colors">
+            </a>
+            <a
+              href="/pricing"
+              onClick={(e) => {
+                if (location.pathname === '/') {
+                  e.preventDefault();
+                  scrollToSection('pricing');
+                }
+              }}
+              className="hover:text-white transition-colors"
+            >
               Pricing
-            </button>
-            <button onClick={() => navigate('/comparisons')} className="hover:text-white transition-colors">
+            </a>
+            <a href="/comparisons" className="hover:text-white transition-colors">
               Compare
-            </button>
+            </a>
+            <a href="/resources" className="hover:text-white transition-colors">
+              Resources
+            </a>
+            <a href="/agents" className="hover:text-white transition-colors">
+              Agents
+            </a>
           </div>
 
           <div className="flex items-center gap-3">
@@ -58,12 +92,9 @@ export const Navbar = () => {
             >
               Log In
             </Button>
-            <Button
-              onClick={() => navigate('/demo')}
-              className="text-sm bg-[#2563eb] hover:bg-[#2563eb]/90 text-white"
-            >
-              See Demo
-            </Button>
+            <a href="/demo" className="text-sm bg-[#2563eb] hover:bg-[#2563eb]/90 text-white px-4 py-2 rounded-md">
+              Book a demo
+            </a>
           </div>
         </div>
       </div>

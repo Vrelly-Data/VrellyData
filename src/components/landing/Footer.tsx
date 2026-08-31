@@ -29,17 +29,41 @@ export const Footer = () => {
               flex-wrap + a tighter mobile gap keeps it inside the viewport; on
               md+ there is ample room, so gap-8 on one line is unchanged. */}
           <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-3 md:gap-8 text-sm text-slate-400">
-            <button onClick={() => scrollToSection('features')} className="hover:text-white transition-colors">
+            <a
+              href="/features"
+              onClick={(e) => {
+                if (window.location.pathname === '/') {
+                  e.preventDefault();
+                  scrollToSection('features');
+                }
+              }}
+              className="hover:text-white transition-colors"
+            >
               Features
-            </button>
-            <button onClick={() => scrollToSection('pricing')} className="hover:text-white transition-colors">
+            </a>
+            <a
+              href="/pricing"
+              onClick={(e) => {
+                if (window.location.pathname === '/') {
+                  e.preventDefault();
+                  scrollToSection('pricing');
+                }
+              }}
+              className="hover:text-white transition-colors"
+            >
               Pricing
-            </button>
+            </a>
             <a href="/comparisons" className="hover:text-white transition-colors">
               Compare
             </a>
             <a href="/resources" className="hover:text-white transition-colors">
               Blog
+            </a>
+            <a href="/agents" className="hover:text-white transition-colors">
+              Agents
+            </a>
+            <a href="/demo" className="hover:text-white transition-colors">
+              Demo
             </a>
             <a href="/privacy" className="hover:text-white transition-colors">
               Privacy
