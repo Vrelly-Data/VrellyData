@@ -3,7 +3,7 @@
   "rewrites": [
     {
       "source": "/resources/:slug",
-      "destination": "/api/article?slug=:slug"
+      "destination": "/api/article/:slug"
     },
     {
       "source": "/sitemap.xml",
