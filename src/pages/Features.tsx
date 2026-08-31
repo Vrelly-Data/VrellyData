@@ -5,6 +5,7 @@ import { Database, Sparkles, Bot, ArrowRight, Check } from 'lucide-react';
 import { Navbar } from '@/components/landing/Navbar';
 import { Footer } from '@/components/landing/Footer';
 import { Button } from '@/components/ui/button';
+import { ResourcesTeaser } from '@/components/landing/ResourcesTeaser';
 
 const pillars = [
   {
@@ -159,6 +160,8 @@ const Features = () => {
           </div>
         </section>
       ))}
+
+      <ResourcesTeaser className="bg-white" />
 
       {/* Bottom CTA */}
       <section className="py-24 bg-gradient-to-b from-[#0f1729] to-[#1a2d5a]">

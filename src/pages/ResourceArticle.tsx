@@ -7,11 +7,12 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Calendar, Clock, ArrowLeft, User } from 'lucide-react';
 import { Navbar } from '@/components/landing/Navbar';
 import { Footer } from '@/components/landing/Footer';
-import { useResource } from '@/hooks/useResources';
+import { useResource, useResources, Resource } from '@/hooks/useResources';
 
 export default function ResourceArticle() {
   const { slug } = useParams<{ slug: string }>();
   const { data: resource, isLoading, isError } = useResource(slug ?? '');
+  const { data: allResources = [] } = useResources();
 
   const formatDate = (dateStr: string | null) => {
     if (!dateStr) return '';
@@ -21,6 +22,30 @@ export default function ResourceArticle() {
   const estimateReadTime = (content: string) => {
     const words = content.split(' ').length;
     return `${Math.max(3, Math.ceil(words / 200))} min read`;
+  };
+
+  const getRelated = (current: Resource | null, candidates: Resource[]): Resource[] => {
+    if (!current) return [];
+    const others = candidates.filter((r) => r.slug !== current.slug);
+    if (others.length === 0) return [];
+    const currentTags = new Set(current.tags ?? []);
+    const scored = others.map((r) => {
+      const tags = new Set(r.tags ?? []);
+      let overlap = 0;
+      if (currentTags.size > 0 && tags.size > 0) {
+        for (const t of tags) {
+          if (currentTags.has(t)) overlap += 1;
+        }
+      }
+      return { r, overlap };
+    });
+    scored.sort((a, b) => {
+      if (b.overlap !== a.overlap) return b.overlap - a.overlap;
+      const ad = new Date(a.r.published_at || a.r.created_at).getTime();
+      const bd = new Date(b.r.published_at || b.r.created_at).getTime();
+      return bd - ad;
+    });
+    return scored.map((s) => s.r).slice(0, 3);
   };
 
   if (isError) {
@@ -120,13 +145,59 @@ export default function ResourceArticle() {
               <ReactMarkdown>{resource.content_markdown}</ReactMarkdown>
             </article>
 
+            {/* Related articles */}
+            {getRelated(resource, allResources).length > 0 && (
+              <section className="mt-14">
+                <h3 className="text-lg font-semibold mb-4">Related articles</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {getRelated(resource, allResources).map((rel) => (
+                    <Link
+                      key={rel.id}
+                      to={`/resources/${rel.slug}`}
+                      className="group rounded-xl border bg-card hover:border-primary/40 hover:shadow-sm transition-all duration-200 overflow-hidden flex flex-col"
+                    >
+                      {rel.cover_image_url && (
+                        <div className="aspect-video overflow-hidden bg-muted">
+                          <img
+                            src={rel.cover_image_url}
+                            alt={rel.title}
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                            loading="lazy"
+                          />
+                        </div>
+                      )}
+                      <div className="p-5">
+                        {rel.tags && rel.tags.length > 0 && (
+                          <div className="flex flex-wrap gap-1.5 mb-2">
+                            {rel.tags.slice(0, 2).map((tag) => (
+                              <Badge key={tag} variant="secondary" className="text-xs">
+                                {tag}
+                              </Badge>
+                            ))}
+                          </div>
+                        )}
+                        <h4 className="text-base font-semibold leading-snug group-hover:text-primary transition-colors">
+                          {rel.title}
+                        </h4>
+                      </div>
+                    </Link>
+                  ))}
+                </div>
+              </section>
+            )}
+
             {/* Footer CTA */}
             <div className="mt-16 p-8 rounded-xl bg-primary/5 border border-primary/20 text-center">
-              <h3 className="text-xl font-semibold mb-2">Ready to build your outbound strategy?</h3>
-              <p className="text-muted-foreground mb-4">Vrelly gives you enriched B2B data and AI-powered sales intelligence to scale your pipeline.</p>
-              <Button asChild>
-                <Link to="/auth">Get Started Free</Link>
-              </Button>
+              <h3 className="text-xl font-semibold mb-2">See an AI sales agent trained on your campaigns</h3>
+              <p className="text-muted-foreground mb-4">Book a live demo of Vrelly’s agent — it learns from your real campaigns to qualify replies and book meetings.</p>
+              <div className="flex flex-col items-center gap-2">
+                <Button asChild>
+                  <Link to="/demo">Book a demo</Link>
+                </Button>
+                <Link to="/auth" className="text-sm text-muted-foreground hover:text-foreground underline underline-offset-4">
+                  Or start free
+                </Link>
+              </div>
             </div>
           </>
         ) : null}
