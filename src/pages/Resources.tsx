@@ -26,6 +26,7 @@ export default function Resources() {
       <Helmet>
         <title>Sales Resources &amp; Guides | Vrelly</title>
         <meta name="description" content="Expert guides, playbooks, and data-driven insights on B2B outreach, sales sequences, and audience building. Learn from 200,000+ real campaigns." />
+        <link rel="canonical" href="https://www.vrelly.com/resources" />
       </Helmet>
       <Navbar />
 

@@ -72,6 +72,7 @@ const Features = () => {
           name="description"
           content="Everything you need to scale outbound sales: 100M+ verified prospects, data-driven insights, and an AI sales agent that learns from your campaigns."
         />
+        <link rel="canonical" href="https://www.vrelly.com/features" />
       </Helmet>
 
       <Navbar />

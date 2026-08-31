@@ -172,6 +172,7 @@ const Comparisons = () => {
       <Helmet>
         <title>Vrelly vs Competitors | Side-by-Side Comparison</title>
         <meta name="description" content="See how Vrelly compares to Apollo, ZoomInfo, Seamless, and standard AI tools for B2B data enrichment and sales copy generation." />
+        <link rel="canonical" href="https://www.vrelly.com/comparisons" />
       </Helmet>
       <Navbar />
 
