@@ -71,6 +71,14 @@ export const Footer = () => {
             <a href="/terms" className="hover:text-white transition-colors">
               Terms
             </a>
+            <a
+              href="https://www.linkedin.com/company/109149450/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:text-white transition-colors"
+            >
+              LinkedIn
+            </a>
           </div>
         </div>
 
