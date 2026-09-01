@@ -5,20 +5,18 @@ import { ArrowRight } from 'lucide-react';
 
 const rotatingWords = ['Outbound', 'Inbound'];
 
-// Trusted-by logos. NB: source filenames do NOT match brand content
-// (e.g. alphascend.png renders the Avania mark) — alt text maps to what
-// actually renders. See public/logos/.
+// Trusted-by logos. Alt text now matches the filename brand.
 const logos = [
-  { src: '/logos/alphascend.png', alt: 'Avania' },
-  { src: '/logos/avania.png', alt: 'Axiom' },
-  { src: '/logos/big-brain.png', alt: 'SourceCo' },
-  { src: '/logos/codecomet.png', alt: 'QuoteWerks' },
+  { src: '/logos/alphascend.png', alt: 'Alphascend' },
+  { src: '/logos/avania.png', alt: 'Avania' },
+  { src: '/logos/big-brain.png', alt: 'Big Brain' },
+  { src: '/logos/codecomet.png', alt: 'CodeComet' },
   { src: '/logos/fiit.png', alt: 'FIIT' },
-  { src: '/logos/pestshare.png', alt: 'Four Rooms' },
-  { src: '/logos/quotewerks.png', alt: 'CodeComet' },
-  { src: '/logos/sourceco.png', alt: 'Pest Share' },
-  { src: '/logos/toptalenthq.png', alt: 'Big Brain' },
-  { src: '/logos/transform.png', alt: 'Alphascend' },
+  { src: '/logos/pestshare.png', alt: 'Pest Share' },
+  { src: '/logos/quotewerks.png', alt: 'QuoteWerks' },
+  { src: '/logos/sourceco.png', alt: 'SourceCo' },
+  { src: '/logos/toptalenthq.png', alt: 'TopTalentHQ' },
+  { src: '/logos/transform.png', alt: 'Transform' },
 ];
 
 export const HeroSection = () => {
@@ -100,7 +98,7 @@ export const HeroSection = () => {
               onClick={() => navigate('/demo')}
               className="text-base px-8 py-6 border-white/20 bg-transparent !text-white hover:bg-white/10 hover:border-white/30"
             >
-              See How It Works
+              Book a demo
             </Button>
           </div>
         </div>

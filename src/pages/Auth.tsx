@@ -150,14 +150,14 @@ export default function Auth() {
           <div className="flex justify-center">
             <img 
               src={vrellyLogo} 
-              alt="Vrelly Data" 
+              alt="Vrelly" 
               className="h-36 cursor-pointer" 
               onClick={() => navigate('/')}
             />
           </div>
           <div className="space-y-2">
-            <CardTitle className="text-2xl text-center">Welcome to Vrelly Data</CardTitle>
-            <CardDescription className="text-center">Sign in to access your B2B audience intelligence platform</CardDescription>
+            <CardTitle className="text-2xl text-center">Welcome to Vrelly</CardTitle>
+            <CardDescription className="text-center">Sign in to access your AI sales agent platform</CardDescription>
           </div>
         </CardHeader>
         <CardContent>

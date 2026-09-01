@@ -1,6 +1,15 @@
 const DEFAULT_SITE_HOST = "www.vrelly.com";
 
-type MarketingPage = "resources" | "pricing" | "features" | "comparisons";
+// Add new marketing pages plus special modes
+type MarketingPage =
+  | "resources"
+  | "pricing"
+  | "features"
+  | "comparisons"
+  | "demo"
+  | "privacy"
+  | "terms"
+  | "agents";
 
 function escapeHtml(input: string): string {
   return input
@@ -47,10 +56,37 @@ function getDefaultsFor(page: MarketingPage) {
         description: "Compare Vrelly with alternatives and pick the best fit for your sales team.",
         canonical: buildCanonical("/comparisons"),
       };
+    case "demo":
+      return {
+        title: "Book a Demo | Vrelly",
+        description: "Book a 30-minute walkthrough of Vrelly’s AI sales agent. See how it books more meetings using your data.",
+        canonical: buildCanonical("/demo"),
+      };
+    case "privacy":
+      return {
+        title: "Privacy Policy | Vrelly",
+        description: "Read how Vrelly protects your data and privacy.",
+        canonical: buildCanonical("/privacy"),
+      };
+    case "terms":
+      return {
+        title: "Terms of Service | Vrelly",
+        description: "Review the terms and conditions for using Vrelly.",
+        canonical: buildCanonical("/terms"),
+      };
+    case "agents":
+      return {
+        title: "AI Sales Agent That Books More Meetings | Vrelly",
+        description: "Deploy your AI sales agent trained on your data to book more meetings, handle replies, and grow pipeline automatically.",
+        canonical: buildCanonical("/agents"),
+      };
   }
 }
 
-function updateHtmlWithSeo(htmlIn: string, params: { title: string; description: string; canonical: string; ogImage?: string }) {
+function updateHtmlWithSeo(
+  htmlIn: string,
+  params: { title: string; description: string; canonical: string; ogImage?: string; robots?: string }
+) {
   const { title, description, canonical, ogImage } = params;
   let html = htmlIn;
   const escTitle = escapeHtml(title);
@@ -124,19 +160,48 @@ function updateHtmlWithSeo(htmlIn: string, params: { title: string; description:
     `<meta name="twitter:image" content="${escapeHtml(image)}" />`
   );
 
+  // Optional robots
+  if ((params as any).robots) {
+    const robots = escapeHtml((params as any).robots as string);
+    html = replaceOrInsert(
+      html,
+      /<meta[^>]*name=[\"']robots[\"'][^>]*>/i,
+      `<meta name="robots" content="${robots}" />`,
+      `<meta name="robots" content="${robots}" />`
+    );
+  }
+
   return html;
 }
 
 export default async function handler(req: any, res: any) {
-  const pageName = (req.query?.name as string) as MarketingPage | undefined;
-  if (!pageName || !["resources", "pricing", "features", "comparisons"].includes(pageName)) {
-    res.status(404).setHeader("content-type", "text/plain; charset=utf-8").send("Not Found");
-    return;
-  }
+  const pageNameRaw = (req.query?.name as string) || "";
+  const pageName = pageNameRaw as MarketingPage | "private" | "not-found";
 
   const proto = (req.headers?.["x-forwarded-proto"] as string) || "https";
   const host = (req.headers?.host as string) || DEFAULT_SITE_HOST;
   const originIndexUrl = `${proto}://${host}/`;
+
+  // Handle special modes first
+  if (pageName === "not-found") {
+    const html404 = `<!doctype html>
+<html lang="en"><head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Not Found | Vrelly</title>
+<meta name="robots" content="noindex, nofollow" />
+</head>
+<body>
+  <h1>404 Not Found</h1>
+  <p>The page you are looking for does not exist.</p>
+</body></html>`;
+    res
+      .status(404)
+      .setHeader("content-type", "text/html; charset=utf-8")
+      .setHeader("cache-control", "public, max-age=60, s-maxage=60")
+      .send(html404);
+    return;
+  }
 
   const baseResp = await fetch(originIndexUrl, {
     headers: {
@@ -145,6 +210,30 @@ export default async function handler(req: any, res: any) {
     },
   });
   const baseHtml = await baseResp.text();
+
+  if (pageName === "private") {
+    // For app/private routes: preserve SPA shell but ensure noindex,nofollow and self-canonical
+    const path = (req.url?.split("?")[0] || "/").trim() || "/";
+    const canonical = buildCanonical(path);
+    const updatedHtml = updateHtmlWithSeo(baseHtml, {
+      title: "Vrelly",
+      description: "Vrelly application",
+      canonical,
+      robots: "noindex, nofollow",
+    });
+    res
+      .status(200)
+      .setHeader("content-type", "text/html; charset=utf-8")
+      .setHeader("cache-control", "public, s-maxage=600, max-age=60, stale-while-revalidate=86400")
+      .send(updatedHtml);
+    return;
+  }
+
+  // Known marketing pages
+  if (!pageName || !["resources", "pricing", "features", "comparisons", "demo", "privacy", "terms", "agents"].includes(pageName)) {
+    res.status(404).setHeader("content-type", "text/plain; charset=utf-8").send("Not Found");
+    return;
+  }
 
   const defs = getDefaultsFor(pageName as MarketingPage)!;
   const updatedHtml = updateHtmlWithSeo(baseHtml, {

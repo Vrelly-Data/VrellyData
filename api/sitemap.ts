@@ -53,7 +53,9 @@ export default async function handler(_: any, res: any) {
     { path: "/resources", changefreq: "weekly", priority: "0.8" },
     { path: "/comparisons", changefreq: "monthly", priority: "0.7" },
     { path: "/pricing", changefreq: "monthly", priority: "0.8" },
-    { path: "/features", changefreq: "monthly", priority: "0.7" }
+    { path: "/features", changefreq: "monthly", priority: "0.7" },
+    { path: "/agents", changefreq: "monthly", priority: "0.8" },
+    { path: "/demo", changefreq: "monthly", priority: "0.6" }
   ];
 
   const resources = await fetchPublishedResources();
