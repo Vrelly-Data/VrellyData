@@ -640,6 +640,7 @@ Deno.serve(async (req) => {
                     : '') ||
                   externalId;
                 if (personKey) {
+                  const srid = `${externalId}:${lastReplyDate || nowIso}`;
                   await supabase.from('inference_events').upsert(
                     {
                       team_id: integration.team_id,
@@ -660,7 +661,7 @@ Deno.serve(async (req) => {
                       disposition_tag: null,
                       occurred_at: lastReplyDate || nowIso,
                       source: 'poll_reply_inbox',
-                      source_row_id: null,
+                      source_row_id: srid,
                       metadata: { source: 'poll' }
                     },
                     // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
