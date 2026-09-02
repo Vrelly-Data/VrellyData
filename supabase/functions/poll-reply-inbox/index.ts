@@ -670,6 +670,33 @@ Deno.serve(async (req) => {
               } catch (e) {
                 console.warn('[poll-reply-inbox] inference_events write failed (non-fatal):', e);
               }
+              // Best-effort: upsert people directory snapshot
+              try {
+                const pkey =
+                  (contact?.email && contact.email.trim()
+                    ? contact.email.trim().toLowerCase()
+                    : '') ||
+                  (contact?.linkedInProfileUrl && contact.linkedInProfileUrl.trim()
+                    ? contact.linkedInProfileUrl.trim()
+                    : '') ||
+                  externalId;
+                if (pkey) {
+                  const person: Record<string, unknown> = {
+                    team_id: integration.team_id,
+                    person_key: pkey,
+                    source: 'poll_reply_inbox',
+                    last_seen_at: lastReplyDate || nowIso,
+                  };
+                  if (contact?.email) person.email = contact.email.trim().toLowerCase();
+                  if (contact?.linkedInProfileUrl) person.linkedin_url = contact.linkedInProfileUrl;
+                  if (fullName) person.full_name = fullName;
+                  if (contact?.title) person.job_title = contact.title;
+                  if (company) person.company_name = company;
+                  await supabase.from('people').upsert(person, { onConflict: 'team_id,person_key' });
+                }
+              } catch (e) {
+                console.warn('[poll-reply-inbox] people upsert failed (non-fatal):', e);
+              }
             }
           } catch (threadErr) {
             console.error(`[poll-reply-inbox] Error processing thread ${thread.id}:`, threadErr);
