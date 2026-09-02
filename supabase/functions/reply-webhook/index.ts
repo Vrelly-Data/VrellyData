@@ -857,6 +857,43 @@ Deno.serve(async (req) => {
               channel,
               userId: agentUserId,
             });
+            // Best-effort: record 'replied' inference event (non-blocking)
+            try {
+              const personKey =
+                (contactEmail && contactEmail.trim() ? contactEmail.trim().toLowerCase() : '') ||
+                (linkedinUrl && linkedinUrl.trim() ? linkedinUrl.trim() : '') ||
+                (externalId ?? '');
+              if (personKey) {
+                await supabase.from('inference_events').upsert(
+                  {
+                    team_id: integration.team_id,
+                    agent_config_id: agentConfig.id,
+                    person_key: personKey,
+                    email: contactEmail ? contactEmail.trim().toLowerCase() : null,
+                    linkedin_url: linkedinUrl ?? null,
+                    full_name: fullName || null,
+                    job_title: jobTitle || null,
+                    company_name: company || null,
+                    channel,
+                    campaign_external_id: campaignId || null,
+                    campaign_name: campaign?.name ?? null,
+                    event_type: 'replied',
+                    intent: null,
+                    is_objection: null,
+                    pipeline_stage: 'replied',
+                    disposition_tag: null,
+                    occurred_at: replyAt,
+                    source: 'reply_webhook',
+                    source_row_id: null,
+                    metadata: { raw_event_type: eventType }
+                  },
+                  // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
+                  { onConflict: 'source,source_row_id,event_type' }
+                );
+              }
+            } catch (e) {
+              console.warn('[reply-webhook] inference_events write failed (non-fatal):', e);
+            }
           } else {
             console.log(`[inbox-routing] reply recorded without resurfacing (resurface=${resurface}) for lead_id=${upsertedLead?.id}`);
           }

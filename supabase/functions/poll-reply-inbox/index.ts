@@ -629,6 +629,47 @@ Deno.serve(async (req) => {
                 channel,
                 userId,
               });
+              // Best-effort: record 'replied' inference event (non-blocking)
+              try {
+                const personKey =
+                  (contact?.email && contact.email.trim()
+                    ? contact.email.trim().toLowerCase()
+                    : '') ||
+                  (contact?.linkedInProfileUrl && contact.linkedInProfileUrl.trim()
+                    ? contact.linkedInProfileUrl.trim()
+                    : '') ||
+                  externalId;
+                if (personKey) {
+                  await supabase.from('inference_events').upsert(
+                    {
+                      team_id: integration.team_id,
+                      agent_config_id: agentConfig.id,
+                      person_key: personKey,
+                      email: contact?.email ? contact.email.trim().toLowerCase() : null,
+                      linkedin_url: contact?.linkedInProfileUrl ?? null,
+                      full_name: fullName || null,
+                      job_title: contact?.title || null,
+                      company_name: company || null,
+                      channel,
+                      campaign_external_id: thread.sequence?.id ? String(thread.sequence.id) : null,
+                      campaign_name: thread.sequence?.name ?? null,
+                      event_type: 'replied',
+                      intent: null,
+                      is_objection: null,
+                      pipeline_stage: 'replied',
+                      disposition_tag: null,
+                      occurred_at: lastReplyDate || nowIso,
+                      source: 'poll_reply_inbox',
+                      source_row_id: null,
+                      metadata: { source: 'poll' }
+                    },
+                    // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
+                    { onConflict: 'source,source_row_id,event_type' }
+                  );
+                }
+              } catch (e) {
+                console.warn('[poll-reply-inbox] inference_events write failed (non-fatal):', e);
+              }
             }
           } catch (threadErr) {
             console.error(`[poll-reply-inbox] Error processing thread ${thread.id}:`, threadErr);

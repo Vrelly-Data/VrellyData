@@ -760,6 +760,43 @@ Deno.serve(async (req) => {
           // Fallback for non-Edge runtimes — await synchronously
           await classifyPromise;
         }
+        // Best-effort: record 'replied' inference event (non-blocking)
+        try {
+          const personKey =
+            (email && email.trim() ? email.trim().toLowerCase() : "") ||
+            (linkedinUrlForKey && linkedinUrlForKey.trim() ? linkedinUrlForKey.trim() : "") ||
+            (externalId ?? "");
+          if (personKey) {
+            await supabase.from("inference_events").upsert(
+              {
+                team_id: integration.team_id,
+                agent_config_id: agentConfig.id,
+                person_key: personKey,
+                email: email ? email.trim().toLowerCase() : null,
+                linkedin_url: linkedinUrlForKey ?? null,
+                full_name: fullName || null,
+                job_title: jobTitle || null,
+                company_name: company || null,
+                channel: "linkedin",
+                campaign_external_id: campaignExternalId || null,
+                campaign_name: null,
+                event_type: "replied",
+                intent: null,
+                is_objection: null,
+                pipeline_stage: "replied",
+                disposition_tag: null,
+                occurred_at: newestThreadTimestamp(replyThread) ?? new Date().toISOString(),
+                source: "heyreach_webhook",
+                source_row_id: null,
+                metadata: { lead_category: leadCategory }
+              },
+              // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
+              { onConflict: "source,source_row_id,event_type" }
+            );
+          }
+        } catch (e) {
+          console.warn("[heyreach-webhook] inference_events write failed (non-fatal):", e);
+        }
       } else {
         console.log(
           `No active agent_config for user ${integration.created_by} — skipping classify-reply`,

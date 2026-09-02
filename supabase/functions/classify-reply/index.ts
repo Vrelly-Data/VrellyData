@@ -484,7 +484,10 @@ Use this campaign data to:
     let leadJobTitle: string | null = null;
     let leadCompany: string | null = null;
     let leadLinkedinUrl: string | null = null;
+    let leadEmail: string | null = null;
     let leadLastCampaignName: string | null = null;
+    let leadCampaignExternalId: string | null = null;
+    let leadDispositionTag: string | null = null;
     // Most recent role:'sender' fromName in the thread — identifies which sender
     // owns this conversation, for multi-sender voice matching below.
     let threadSenderName: string | null = null;
@@ -492,7 +495,7 @@ Use this campaign data to:
       try {
         const { data: leadRow } = await supabase
           .from('agent_leads')
-          .select('full_name, job_title, company, linkedin_url, last_campaign_name, reply_thread')
+          .select('full_name, job_title, company, linkedin_url, email, last_campaign_name, campaign_external_id, disposition_tag, reply_thread')
           .eq('id', lead_id)
           .eq('user_id', user_id)
           .maybeSingle();
@@ -501,7 +504,10 @@ Use this campaign data to:
           leadJobTitle = leadRow.job_title ?? null;
           leadCompany = leadRow.company ?? null;
           leadLinkedinUrl = leadRow.linkedin_url ?? null;
+          leadEmail = leadRow.email ?? null;
           leadLastCampaignName = leadRow.last_campaign_name ?? null;
+          leadCampaignExternalId = leadRow.campaign_external_id ?? null;
+          leadDispositionTag = leadRow.disposition_tag ?? null;
           const rt = Array.isArray(leadRow.reply_thread) ? leadRow.reply_thread : [];
           for (let i = rt.length - 1; i >= 0; i--) {
             const m = rt[i] as { role?: string; fromName?: string };
@@ -1044,6 +1050,65 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
       status: 200,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
+    // Best-effort: record inference event (non-blocking). Fire AFTER sending response
+    // semantics preserved by EdgeRuntime.waitUntil when available; otherwise try/catch.
+    // Event: 'classified'
+    try {
+      const personKey =
+        (leadEmail && leadEmail.trim() ? leadEmail.trim().toLowerCase() : '') ||
+        (leadLinkedinUrl && leadLinkedinUrl.trim() ? leadLinkedinUrl.trim() : '') ||
+        (lead_id ?? '');
+      if (personKey) {
+        const row: Record<string, unknown> = {
+          team_id: teamId ?? null,
+          agent_config_id: null,
+          person_key: personKey,
+          email: leadEmail ? leadEmail.trim().toLowerCase() : null,
+          linkedin_url: leadLinkedinUrl ?? null,
+          full_name: leadName,
+          job_title: leadJobTitle,
+          seniority: prospectRead?.seniority ?? null,
+          department: null,
+          company_name: leadCompany,
+          industry: null,
+          city: null,
+          state: null,
+          country: null,
+          company_size: null,
+          channel,
+          campaign_external_id: leadCampaignExternalId ?? null,
+          campaign_name: leadLastCampaignName ?? null,
+          sequence_step_type: null,
+          copy_fingerprint: null,
+          subject: null,
+          event_type: 'classified',
+          intent,
+          is_objection: isObjection,
+          pipeline_stage: nextPipelineStage,
+          disposition_tag: leadDispositionTag,
+          occurred_at: new Date().toISOString(),
+          source: 'classify_reply',
+          source_row_id: lead_id ?? null,
+          metadata: {
+            intent_confidence: intentConfidence,
+            matched_persona: matchedTitle,
+            prospect_read: prospectRead ?? null,
+          },
+        };
+        const write = supabase.from('inference_events')
+          // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
+          .upsert(row, { onConflict: 'source,source_row_id,event_type' });
+        // @ts-ignore EdgeRuntime provided by Supabase
+        if (typeof EdgeRuntime !== 'undefined' && typeof EdgeRuntime.waitUntil === 'function') {
+          // @ts-ignore
+          EdgeRuntime.waitUntil(write);
+        } else {
+          await write;
+        }
+      }
+    } catch (e) {
+      console.warn('[classify-reply] inference_events write failed (non-fatal):', e);
+    }
   } catch (error) {
     console.error('classify-reply error:', error);
     return new Response(JSON.stringify(SAFE_FALLBACK), {
