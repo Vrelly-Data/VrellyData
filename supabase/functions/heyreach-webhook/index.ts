@@ -766,34 +766,67 @@ Deno.serve(async (req) => {
             (email && email.trim() ? email.trim().toLowerCase() : "") ||
             (linkedinUrlForKey && linkedinUrlForKey.trim() ? linkedinUrlForKey.trim() : "") ||
             (externalId ?? "");
-          if (personKey) {
-            await supabase.from("inference_events").upsert(
-              {
-                team_id: integration.team_id,
-                agent_config_id: agentConfig.id,
-                person_key: personKey,
-                email: email ? email.trim().toLowerCase() : null,
-                linkedin_url: linkedinUrlForKey ?? null,
-                full_name: fullName || null,
-                job_title: jobTitle || null,
-                company_name: company || null,
-                channel: "linkedin",
-                campaign_external_id: campaignExternalId || null,
-                campaign_name: null,
-                event_type: "replied",
-                intent: null,
-                is_objection: null,
-                pipeline_stage: "replied",
-                disposition_tag: null,
-                occurred_at: newestThreadTimestamp(replyThread) ?? new Date().toISOString(),
-                source: "heyreach_webhook",
-                source_row_id: null,
-                metadata: { lead_category: leadCategory }
-              },
-              // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
-              { onConflict: "source,source_row_id,event_type" }
+          const occurredAt = newestThreadTimestamp(fullReplyThread ?? replyThread);
+          const stableId = conversationId && occurredAt ? `${conversationId}:${occurredAt}` : null;
+          if (personKey && stableId) {
+            const writes: Array<Promise<unknown>> = [];
+            writes.push(
+              supabase.from("inference_events").upsert(
+                {
+                  team_id: integration.team_id,
+                  agent_config_id: agentConfig.id,
+                  person_key: personKey,
+                  email: email ? email.trim().toLowerCase() : null,
+                  linkedin_url: linkedinUrlForKey ?? null,
+                  full_name: fullName || null,
+                  job_title: jobTitle || null,
+                  company_name: company || null,
+                  channel: "linkedin",
+                  campaign_external_id: campaignExternalId || null,
+                  campaign_name: null,
+                  event_type: "replied",
+                  intent: null,
+                  is_objection: null,
+                  pipeline_stage: "replied",
+                  disposition_tag: null,
+                  occurred_at: occurredAt,
+                  source: "heyreach_webhook",
+                  source_row_id: stableId,
+                  metadata: { lead_category: leadCategory }
+                },
+                // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
+                { onConflict: "source,source_row_id,event_type" }
+              )
             );
-          }
+            // Optional additive people upsert (non-fatal)
+            writes.push(
+              // @ts-ignore onConflict supports column-list
+              supabase.from("people").upsert(
+                {
+                  team_id: integration.team_id,
+                  person_key: personKey,
+                  email: email ? email.trim().toLowerCase() : null,
+                  linkedin_url: linkedinUrlForKey ?? null,
+                  full_name: fullName || null,
+                  job_title: jobTitle || null,
+                  company_name: company || null,
+                  industry: null,
+                  city: null,
+                  state: null,
+                  country: null,
+                  company_size: null,
+                } as any,
+                { onConflict: "team_id,person_key" }
+              )
+            );
+            // @ts-ignore EdgeRuntime is injected by Supabase runtime
+            if (typeof EdgeRuntime !== "undefined" && typeof EdgeRuntime.waitUntil === "function") {
+              // @ts-ignore
+              EdgeRuntime.waitUntil(Promise.allSettled(writes));
+            } else {
+              await Promise.allSettled(writes);
+            }
+          } // else skip when no stable source id
         } catch (e) {
           console.warn("[heyreach-webhook] inference_events write failed (non-fatal):", e);
         }

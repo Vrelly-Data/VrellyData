@@ -863,34 +863,67 @@ Deno.serve(async (req) => {
                 (contactEmail && contactEmail.trim() ? contactEmail.trim().toLowerCase() : '') ||
                 (linkedinUrl && linkedinUrl.trim() ? linkedinUrl.trim() : '') ||
                 (externalId ?? '');
-              if (personKey) {
-                await supabase.from('inference_events').upsert(
-                  {
-                    team_id: integration.team_id,
-                    agent_config_id: agentConfig.id,
-                    person_key: personKey,
-                    email: contactEmail ? contactEmail.trim().toLowerCase() : null,
-                    linkedin_url: linkedinUrl ?? null,
-                    full_name: fullName || null,
-                    job_title: jobTitle || null,
-                    company_name: company || null,
-                    channel,
-                    campaign_external_id: campaignId || null,
-                    campaign_name: campaign?.name ?? null,
-                    event_type: 'replied',
-                    intent: null,
-                    is_objection: null,
-                    pipeline_stage: 'replied',
-                    disposition_tag: null,
-                    occurred_at: replyAt,
-                    source: 'reply_webhook',
-                    source_row_id: null,
-                    metadata: { raw_event_type: eventType }
-                  },
-                  // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
-                  { onConflict: 'source,source_row_id,event_type' }
+              const stableId = externalId && replyAt ? `${externalId}:${replyAt}` : null;
+              if (personKey && stableId) {
+                const writes: Array<Promise<unknown>> = [];
+                writes.push(
+                  supabase.from('inference_events').upsert(
+                    {
+                      team_id: integration.team_id,
+                      agent_config_id: agentConfig.id,
+                      person_key: personKey,
+                      email: contactEmail ? contactEmail.trim().toLowerCase() : null,
+                      linkedin_url: linkedinUrl ?? null,
+                      full_name: fullName || null,
+                      job_title: jobTitle || null,
+                      company_name: company || null,
+                      channel,
+                      campaign_external_id: campaignId || null,
+                      campaign_name: campaign?.name ?? null,
+                      event_type: 'replied',
+                      intent: null,
+                      is_objection: null,
+                      pipeline_stage: 'replied',
+                      disposition_tag: null,
+                      occurred_at: replyAt,
+                      source: 'reply_webhook',
+                      source_row_id: stableId,
+                      metadata: { raw_event_type: eventType }
+                    },
+                    // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
+                    { onConflict: 'source,source_row_id,event_type' }
+                  )
                 );
-              }
+                // Optional additive people upsert (non-fatal)
+                writes.push(
+                  // @ts-ignore onConflict supports column-list
+                  supabase.from('people').upsert(
+                    {
+                      team_id: integration.team_id,
+                      person_key: personKey,
+                      email: contactEmail ? contactEmail.trim().toLowerCase() : null,
+                      linkedin_url: linkedinUrl ?? null,
+                      full_name: fullName || null,
+                      job_title: jobTitle || null,
+                      company_name: company || null,
+                      industry: null,
+                      city: null,
+                      state: null,
+                      country: null,
+                      company_size: null,
+                    } as any,
+                    { onConflict: 'team_id,person_key' }
+                  )
+                );
+                // In web runtime, just await; in Edge, allow to continue after response
+                // @ts-ignore
+                if (typeof EdgeRuntime !== 'undefined' && typeof EdgeRuntime.waitUntil === 'function') {
+                  // @ts-ignore
+                  EdgeRuntime.waitUntil(Promise.allSettled(writes));
+                } else {
+                  await Promise.allSettled(writes);
+                }
+              } // else skip when no stable id
             } catch (e) {
               console.warn('[reply-webhook] inference_events write failed (non-fatal):', e);
             }
