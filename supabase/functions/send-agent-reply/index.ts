@@ -449,7 +449,7 @@ Deno.serve(async (req) => {
     // 3. Fetch Reply.io integration
     const { data: integration, error: intError } = await supabase
       .from('outbound_integrations')
-      .select('id, api_key_encrypted, reply_team_id')
+      .select('id, api_key_encrypted, reply_team_id, team_id')
       .eq('created_by', userId)
       .eq('platform', 'reply.io')
       .eq('is_active', true)
@@ -681,6 +681,44 @@ Deno.serve(async (req) => {
         metadata: { intent, channel: lead.channel, direct: true },
       });
 
+      // Best-effort: record 'sent' inference event (non-blocking)
+      try {
+        const personKey =
+          (lead.email && String(lead.email).trim() ? String(lead.email).trim().toLowerCase() : '') ||
+          (lead.linkedin_url && String(lead.linkedin_url).trim() ? String(lead.linkedin_url).trim() : '') ||
+          String(leadId);
+        if (personKey) {
+          await supabase.from('inference_events').upsert(
+            {
+              team_id: integration.team_id ?? null,
+              agent_config_id: agentConfig.id,
+              person_key: personKey,
+              email: lead.email ? String(lead.email).trim().toLowerCase() : null,
+              linkedin_url: lead.linkedin_url ?? null,
+              full_name: lead.full_name ?? null,
+              job_title: lead.job_title ?? null,
+              company_name: lead.company ?? null,
+              channel: lead.channel,
+              campaign_external_id: null,
+              campaign_name: lead.last_campaign_name ?? null,
+              event_type: 'sent',
+              intent: intent ?? null,
+              is_objection: null,
+              pipeline_stage: pipelineStage,
+              disposition_tag: lead.disposition_tag ?? null,
+              occurred_at: new Date().toISOString(),
+              source: 'send_agent_reply',
+              source_row_id: String(leadId),
+              metadata: { path: 'direct_thread_reply' }
+            },
+            // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
+            { onConflict: 'source,source_row_id,event_type' }
+          );
+        }
+      } catch (e) {
+        console.warn('[send-agent-reply] inference_events write failed (non-fatal):', e);
+      }
+
       return new Response(JSON.stringify({ success: true }), {
         status: 200,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -903,6 +941,44 @@ Deno.serve(async (req) => {
       description: `Reply sent to ${lead.full_name} via Reply.io campaign`,
       metadata: { intent, campaignId, channel: lead.channel },
     });
+
+    // Best-effort: record 'sent' inference event (non-blocking)
+    try {
+      const personKey =
+        (lead.email && String(lead.email).trim() ? String(lead.email).trim().toLowerCase() : '') ||
+        (lead.linkedin_url && String(lead.linkedin_url).trim() ? String(lead.linkedin_url).trim() : '') ||
+        String(leadId);
+      if (personKey) {
+        await supabase.from('inference_events').upsert(
+          {
+            team_id: integration.team_id ?? null,
+            agent_config_id: agentConfig.id,
+            person_key: personKey,
+            email: lead.email ? String(lead.email).trim().toLowerCase() : null,
+            linkedin_url: lead.linkedin_url ?? null,
+            full_name: lead.full_name ?? null,
+            job_title: lead.job_title ?? null,
+            company_name: lead.company ?? null,
+            channel: lead.channel,
+            campaign_external_id: campaignId ?? null,
+            campaign_name: (leadUpdate.last_campaign_name as string | null | undefined) ?? null,
+            event_type: 'sent',
+            intent: intent ?? null,
+            is_objection: null,
+            pipeline_stage: pipelineStage,
+            disposition_tag: lead.disposition_tag ?? null,
+            occurred_at: new Date().toISOString(),
+            source: 'send_agent_reply',
+            source_row_id: String(leadId),
+            metadata: { path: 'campaign_move_to_sequence' }
+          },
+          // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
+          { onConflict: 'source,source_row_id,event_type' }
+        );
+      }
+    } catch (e) {
+      console.warn('[send-agent-reply] inference_events write failed (non-fatal):', e);
+    }
 
     return new Response(JSON.stringify({ success: true }), {
       status: 200,
