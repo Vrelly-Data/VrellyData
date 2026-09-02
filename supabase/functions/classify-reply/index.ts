@@ -1105,6 +1105,28 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
         } else {
           await write;
         }
+        // Best-effort: upsert people directory snapshot (omit empty fields so we never null good data)
+        const person: Record<string, unknown> = {
+          team_id: teamId ?? null,
+          person_key: personKey,
+          source: 'classify_reply',
+          last_seen_at: new Date().toISOString(),
+        };
+        if (leadEmail) person.email = leadEmail.trim().toLowerCase();
+        if (leadLinkedinUrl) person.linkedin_url = leadLinkedinUrl;
+        if (leadName) person.full_name = leadName;
+        if (leadJobTitle) person.job_title = leadJobTitle;
+        if (leadCompany) person.company_name = leadCompany;
+        if (prospectRead?.seniority) person.seniority = prospectRead.seniority;
+        // @ts-ignore
+        const pwrite = supabase.from('people').upsert(person, { onConflict: 'team_id,person_key' });
+        // @ts-ignore
+        if (typeof EdgeRuntime !== 'undefined' && typeof EdgeRuntime.waitUntil === 'function') {
+          // @ts-ignore
+          EdgeRuntime.waitUntil(pwrite);
+        } else {
+          await pwrite;
+        }
       }
     } catch (e) {
       console.warn('[classify-reply] inference_events write failed (non-fatal):', e);
