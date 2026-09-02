@@ -1,5 +1,9 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
+import {
+  getAudienceSource, resolveEdgeFunctions, DEFAULT_SOURCE,
+  type AudienceSourceId,
+} from '@/lib/audienceSources';
 
 // Cast until Supabase types are regenerated for the agent_audience_* tables.
 // Same pattern as useAgent.ts.
@@ -31,6 +35,12 @@ export interface AgentAudience {
   name: string;
   filters: ApolloAudienceFilters;
   filters_version: number;
+  /**
+   * Which data source this audience searches. Rows created before the source
+   * column existed read as 'apollo', which is what they are.
+   * See src/lib/audienceSources.ts.
+   */
+  source: AudienceSourceId;
   // DEFAULT destination, used only by scheduled runs. Manual pushes choose a
   // destination per push, so both may be null on a perfectly valid audience —
   // it simply cannot be armed until they are set.
@@ -110,6 +120,8 @@ export interface AudienceInput {
   max_per_run: number;
   max_total: number | null;
   filters: ApolloAudienceFilters;
+  /** Omit to create an Apollo audience — the only source wired up today. */
+  source?: AudienceSourceId;
 }
 
 export function useCreateAudience() {
@@ -266,10 +278,18 @@ export interface AudiencePreview {
 export function usePreviewAudience() {
   return useMutation({
     mutationFn: async (
-      { filters, page = 1, per_page = 25 }:
-      { filters: ApolloAudienceFilters; page?: number; per_page?: number },
-    ): Promise<AudiencePreview> =>
-      invokeFn<AudiencePreview>('apollo-search', { filters, page, per_page }),
+      { filters, page = 1, per_page = 25, source = DEFAULT_SOURCE }:
+      {
+        filters: ApolloAudienceFilters; page?: number; per_page?: number;
+        source?: AudienceSourceId;
+      },
+    ): Promise<AudiencePreview> => {
+      // Resolved through the registry rather than hardcoded, but Apollo still
+      // resolves to 'apollo-search' with an identical body — this is a rename
+      // of where the string lives, not a change to the request.
+      const { search } = resolveEdgeFunctions(getAudienceSource(source));
+      return invokeFn<AudiencePreview>(search, { filters, page, per_page });
+    },
   });
 }
 
@@ -376,8 +396,17 @@ export const REVEAL_MAX_PER_CALL = 10;
 export function useRevealPeople() {
   return useMutation({
     mutationFn: async (
-      { person_ids, refresh = false }: { person_ids: string[]; refresh?: boolean },
+      { person_ids, refresh = false, source = DEFAULT_SOURCE }:
+      { person_ids: string[]; refresh?: boolean; source?: AudienceSourceId },
     ): Promise<RevealResult> => {
+      const src = getAudienceSource(source);
+      // A source with nothing withheld has nothing to reveal. Refusing here
+      // means a future caller cannot quietly bill an Apollo reveal against a
+      // free source by passing the wrong id.
+      if (!src.requiresReveal) {
+        throw new Error(`${src.label} records are already complete — there is nothing to reveal.`);
+      }
+      const { reveal } = resolveEdgeFunctions(src);
       const ids = [...new Set(person_ids.filter(Boolean))];
       const merged: RevealResult = {
         people: [], requested: 0, served_from_cache: 0, cache_ttl_days: 0,
@@ -387,7 +416,7 @@ export function useRevealPeople() {
 
       for (let i = 0; i < ids.length; i += REVEAL_MAX_PER_CALL) {
         const chunk = ids.slice(i, i + REVEAL_MAX_PER_CALL);
-        const r = await invokeFn<RevealResult>('apollo-enrich', {
+        const r = await invokeFn<RevealResult>(reveal, {
           person_ids: chunk,
           ...(refresh ? { refresh: true } : {}),
         });
