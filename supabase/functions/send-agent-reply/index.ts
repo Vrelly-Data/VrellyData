@@ -714,6 +714,23 @@ Deno.serve(async (req) => {
             // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
             { onConflict: 'source,source_row_id,event_type' }
           );
+          // Best-effort: upsert people directory snapshot
+          try {
+            const person: Record<string, unknown> = {
+              team_id: integration.team_id ?? null,
+              person_key: personKey,
+              source: 'send_agent_reply',
+              last_seen_at: new Date().toISOString(),
+            };
+            if (lead.email) person.email = String(lead.email).trim().toLowerCase();
+            if (lead.linkedin_url) person.linkedin_url = lead.linkedin_url;
+            if (lead.full_name) person.full_name = lead.full_name;
+            if (lead.job_title) person.job_title = lead.job_title;
+            if (lead.company) person.company_name = lead.company;
+            await supabase.from('people').upsert(person, { onConflict: 'team_id,person_key' });
+          } catch (e) {
+            console.warn('[send-agent-reply] people upsert failed (non-fatal):', e);
+          }
         }
       } catch (e) {
         console.warn('[send-agent-reply] inference_events write failed (non-fatal):', e);
@@ -975,6 +992,23 @@ Deno.serve(async (req) => {
           // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
           { onConflict: 'source,source_row_id,event_type' }
         );
+        // Best-effort: upsert people directory snapshot
+        try {
+          const person: Record<string, unknown> = {
+            team_id: integration.team_id ?? null,
+            person_key: personKey,
+            source: 'send_agent_reply',
+            last_seen_at: new Date().toISOString(),
+          };
+          if (lead.email) person.email = String(lead.email).trim().toLowerCase();
+          if (lead.linkedin_url) person.linkedin_url = lead.linkedin_url;
+          if (lead.full_name) person.full_name = lead.full_name;
+          if (lead.job_title) person.job_title = lead.job_title;
+          if (lead.company) person.company_name = lead.company;
+          await supabase.from('people').upsert(person, { onConflict: 'team_id,person_key' });
+        } catch (e) {
+          console.warn('[send-agent-reply] people upsert failed (non-fatal):', e);
+        }
       }
     } catch (e) {
       console.warn('[send-agent-reply] inference_events write failed (non-fatal):', e);
