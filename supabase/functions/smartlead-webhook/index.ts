@@ -734,8 +734,12 @@ Deno.serve(async (req) => {
               (emailForKey && emailForKey.trim() ? emailForKey.trim().toLowerCase() : "") ||
               (externalId ?? "");
             if (personKey) {
-              await supabase.from("inference_events").upsert(
-                {
+              const srid = replyMessageId
+                ? String(replyMessageId)
+                : (emailForKey ? `${emailForKey}:${replyTimestamp || new Date().toISOString()}` : null);
+              if (srid) {
+                await supabase.from("inference_events").upsert(
+                  {
                   team_id: integration.team_id,
                   agent_config_id: agentConfig.id,
                   person_key: personKey,
@@ -754,12 +758,13 @@ Deno.serve(async (req) => {
                   disposition_tag: null,
                   occurred_at: replyTimestamp || new Date().toISOString(),
                   source: "smartlead_webhook",
-                  source_row_id: replyMessageId || null,
+                    source_row_id: srid,
                   metadata: { mail_sender: fromEmail }
-                },
-                // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
-                { onConflict: "source,source_row_id,event_type" }
-              );
+                  },
+                  // @ts-ignore onConflict supports column-list
+                  { onConflict: "source,source_row_id,event_type" }
+                );
+              }
             }
           } catch (e) {
             console.warn("[smartlead-webhook v2] inference_events write failed (non-fatal):", e);
