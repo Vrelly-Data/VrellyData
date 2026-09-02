@@ -1046,12 +1046,7 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
       console.error('[classify-reply] draft_audit write failed (non-fatal):', auditErr);
     }
 
-    return new Response(JSON.stringify(classification), {
-      status: 200,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
-    // Best-effort: record inference event (non-blocking). Fire AFTER sending response
-    // semantics preserved by EdgeRuntime.waitUntil when available; otherwise try/catch.
+    // Best-effort: record inference event (non-fatal). Await so it runs in all envs; try/catch guards failures.
     // Event: 'classified'
     try {
       const personKey =
@@ -1088,22 +1083,17 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
           disposition_tag: leadDispositionTag,
           occurred_at: new Date().toISOString(),
           source: 'classify_reply',
-          source_row_id: lead_id ?? null,
+          source_row_id: lead_id ?? undefined,
           metadata: {
             intent_confidence: intentConfidence,
             matched_persona: matchedTitle,
             prospect_read: prospectRead ?? null,
           },
         };
-        const write = supabase.from('inference_events')
-          // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
-          .upsert(row, { onConflict: 'source,source_row_id,event_type' });
-        // @ts-ignore EdgeRuntime provided by Supabase
-        if (typeof EdgeRuntime !== 'undefined' && typeof EdgeRuntime.waitUntil === 'function') {
-          // @ts-ignore
-          EdgeRuntime.waitUntil(write);
-        } else {
-          await write;
+        if (row.source_row_id) {
+          await supabase.from('inference_events')
+            // @ts-ignore onConflict supports column-list
+            .upsert(row, { onConflict: 'source,source_row_id,event_type' });
         }
         // Best-effort: upsert people directory snapshot (omit empty fields so we never null good data)
         const person: Record<string, unknown> = {
@@ -1118,19 +1108,15 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
         if (leadJobTitle) person.job_title = leadJobTitle;
         if (leadCompany) person.company_name = leadCompany;
         if (prospectRead?.seniority) person.seniority = prospectRead.seniority;
-        // @ts-ignore
-        const pwrite = supabase.from('people').upsert(person, { onConflict: 'team_id,person_key' });
-        // @ts-ignore
-        if (typeof EdgeRuntime !== 'undefined' && typeof EdgeRuntime.waitUntil === 'function') {
-          // @ts-ignore
-          EdgeRuntime.waitUntil(pwrite);
-        } else {
-          await pwrite;
-        }
+        await supabase.from('people').upsert(person, { onConflict: 'team_id,person_key' });
       }
     } catch (e) {
       console.warn('[classify-reply] inference_events write failed (non-fatal):', e);
     }
+    return new Response(JSON.stringify(classification), {
+      status: 200,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
   } catch (error) {
     console.error('classify-reply error:', error);
     return new Response(JSON.stringify(SAFE_FALLBACK), {
