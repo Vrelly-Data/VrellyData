@@ -688,32 +688,57 @@ Deno.serve(async (req) => {
           (lead.linkedin_url && String(lead.linkedin_url).trim() ? String(lead.linkedin_url).trim() : '') ||
           String(leadId);
         if (personKey) {
-          await supabase.from('inference_events').upsert(
-            {
-              team_id: integration.team_id ?? null,
-              agent_config_id: agentConfig.id,
-              person_key: personKey,
-              email: lead.email ? String(lead.email).trim().toLowerCase() : null,
-              linkedin_url: lead.linkedin_url ?? null,
-              full_name: lead.full_name ?? null,
-              job_title: lead.job_title ?? null,
-              company_name: lead.company ?? null,
-              channel: lead.channel,
-              campaign_external_id: null,
-              campaign_name: lead.last_campaign_name ?? null,
-              event_type: 'sent',
-              intent: intent ?? null,
-              is_objection: null,
-              pipeline_stage: pipelineStage,
-              disposition_tag: lead.disposition_tag ?? null,
-              occurred_at: new Date().toISOString(),
-              source: 'send_agent_reply',
-              source_row_id: String(leadId),
-              metadata: { path: 'direct_thread_reply' }
-            },
-            // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
-            { onConflict: 'source,source_row_id,event_type' }
+          const writes: Array<Promise<unknown>> = [];
+          writes.push(
+            supabase.from('inference_events').upsert(
+              {
+                team_id: integration.team_id ?? null,
+                agent_config_id: agentConfig.id,
+                person_key: personKey,
+                email: lead.email ? String(lead.email).trim().toLowerCase() : null,
+                linkedin_url: lead.linkedin_url ?? null,
+                full_name: lead.full_name ?? null,
+                job_title: lead.job_title ?? null,
+                company_name: lead.company ?? null,
+                channel: lead.channel,
+                campaign_external_id: null,
+                campaign_name: lead.last_campaign_name ?? null,
+                event_type: 'sent',
+                intent: intent ?? null,
+                is_objection: null,
+                pipeline_stage: pipelineStage,
+                disposition_tag: lead.disposition_tag ?? null,
+                occurred_at: new Date().toISOString(),
+                source: 'send_agent_reply',
+                source_row_id: String(leadId),
+                metadata: { path: 'direct_thread_reply' }
+              },
+              // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
+              { onConflict: 'source,source_row_id,event_type' }
+            )
           );
+          // Optional additive people upsert (non-fatal)
+          writes.push(
+            // @ts-ignore onConflict supports column-list
+            supabase.from('people').upsert(
+              {
+                team_id: integration.team_id ?? null,
+                person_key: personKey,
+                email: lead.email ? String(lead.email).trim().toLowerCase() : null,
+                linkedin_url: lead.linkedin_url ?? null,
+                full_name: lead.full_name ?? null,
+                job_title: lead.job_title ?? null,
+                company_name: lead.company ?? null,
+                industry: null,
+                city: null,
+                state: null,
+                country: null,
+                company_size: null,
+              } as any,
+              { onConflict: 'team_id,person_key' }
+            )
+          );
+          await Promise.allSettled(writes);
         }
       } catch (e) {
         console.warn('[send-agent-reply] inference_events write failed (non-fatal):', e);
@@ -949,32 +974,57 @@ Deno.serve(async (req) => {
         (lead.linkedin_url && String(lead.linkedin_url).trim() ? String(lead.linkedin_url).trim() : '') ||
         String(leadId);
       if (personKey) {
-        await supabase.from('inference_events').upsert(
-          {
-            team_id: integration.team_id ?? null,
-            agent_config_id: agentConfig.id,
-            person_key: personKey,
-            email: lead.email ? String(lead.email).trim().toLowerCase() : null,
-            linkedin_url: lead.linkedin_url ?? null,
-            full_name: lead.full_name ?? null,
-            job_title: lead.job_title ?? null,
-            company_name: lead.company ?? null,
-            channel: lead.channel,
-            campaign_external_id: campaignId ?? null,
-            campaign_name: (leadUpdate.last_campaign_name as string | null | undefined) ?? null,
-            event_type: 'sent',
-            intent: intent ?? null,
-            is_objection: null,
-            pipeline_stage: pipelineStage,
-            disposition_tag: lead.disposition_tag ?? null,
-            occurred_at: new Date().toISOString(),
-            source: 'send_agent_reply',
-            source_row_id: String(leadId),
-            metadata: { path: 'campaign_move_to_sequence' }
-          },
-          // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
-          { onConflict: 'source,source_row_id,event_type' }
+        const writes: Array<Promise<unknown>> = [];
+        writes.push(
+          supabase.from('inference_events').upsert(
+            {
+              team_id: integration.team_id ?? null,
+              agent_config_id: agentConfig.id,
+              person_key: personKey,
+              email: lead.email ? String(lead.email).trim().toLowerCase() : null,
+              linkedin_url: lead.linkedin_url ?? null,
+              full_name: lead.full_name ?? null,
+              job_title: lead.job_title ?? null,
+              company_name: lead.company ?? null,
+              channel: lead.channel,
+              campaign_external_id: campaignId ?? null,
+              campaign_name: (leadUpdate.last_campaign_name as string | null | undefined) ?? null,
+              event_type: 'sent',
+              intent: intent ?? null,
+              is_objection: null,
+              pipeline_stage: pipelineStage,
+              disposition_tag: lead.disposition_tag ?? null,
+              occurred_at: new Date().toISOString(),
+              source: 'send_agent_reply',
+              source_row_id: String(leadId),
+              metadata: { path: 'campaign_move_to_sequence' }
+            },
+            // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
+            { onConflict: 'source,source_row_id,event_type' }
+          )
         );
+        // Optional additive people upsert (non-fatal)
+        writes.push(
+          // @ts-ignore onConflict supports column-list
+          supabase.from('people').upsert(
+            {
+              team_id: integration.team_id ?? null,
+              person_key: personKey,
+              email: lead.email ? String(lead.email).trim().toLowerCase() : null,
+              linkedin_url: lead.linkedin_url ?? null,
+              full_name: lead.full_name ?? null,
+              job_title: lead.job_title ?? null,
+              company_name: lead.company ?? null,
+              industry: null,
+              city: null,
+              state: null,
+              country: null,
+              company_size: null,
+            } as any,
+            { onConflict: 'team_id,person_key' }
+          )
+        );
+        await Promise.allSettled(writes);
       }
     } catch (e) {
       console.warn('[send-agent-reply] inference_events write failed (non-fatal):', e);

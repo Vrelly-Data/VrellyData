@@ -639,34 +639,61 @@ Deno.serve(async (req) => {
                     ? contact.linkedInProfileUrl.trim()
                     : '') ||
                   externalId;
-                if (personKey) {
-                  await supabase.from('inference_events').upsert(
-                    {
-                      team_id: integration.team_id,
-                      agent_config_id: agentConfig.id,
-                      person_key: personKey,
-                      email: contact?.email ? contact.email.trim().toLowerCase() : null,
-                      linkedin_url: contact?.linkedInProfileUrl ?? null,
-                      full_name: fullName || null,
-                      job_title: contact?.title || null,
-                      company_name: company || null,
-                      channel,
-                      campaign_external_id: thread.sequence?.id ? String(thread.sequence.id) : null,
-                      campaign_name: thread.sequence?.name ?? null,
-                      event_type: 'replied',
-                      intent: null,
-                      is_objection: null,
-                      pipeline_stage: 'replied',
-                      disposition_tag: null,
-                      occurred_at: lastReplyDate || nowIso,
-                      source: 'poll_reply_inbox',
-                      source_row_id: null,
-                      metadata: { source: 'poll' }
-                    },
-                    // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
-                    { onConflict: 'source,source_row_id,event_type' }
+                const stableId = thread?.id && lastReplyDate ? `${thread.id}:${lastReplyDate}` : null;
+                if (personKey && stableId) {
+                  const writes: Array<Promise<unknown>> = [];
+                  writes.push(
+                    supabase.from('inference_events').upsert(
+                      {
+                        team_id: integration.team_id,
+                        agent_config_id: agentConfig.id,
+                        person_key: personKey,
+                        email: contact?.email ? contact.email.trim().toLowerCase() : null,
+                        linkedin_url: contact?.linkedInProfileUrl ?? null,
+                        full_name: fullName || null,
+                        job_title: contact?.title || null,
+                        company_name: company || null,
+                        channel,
+                        campaign_external_id: thread.sequence?.id ? String(thread.sequence.id) : null,
+                        campaign_name: thread.sequence?.name ?? null,
+                        event_type: 'replied',
+                        intent: null,
+                        is_objection: null,
+                        pipeline_stage: 'replied',
+                        disposition_tag: null,
+                        occurred_at: lastReplyDate,
+                        source: 'poll_reply_inbox',
+                        source_row_id: stableId,
+                        metadata: { source: 'poll' }
+                      },
+                      // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
+                      { onConflict: 'source,source_row_id,event_type' }
+                    )
                   );
-                }
+                  // Optional additive people upsert (non-fatal)
+                  writes.push(
+                    // @ts-ignore onConflict supports column-list
+                    supabase.from('people').upsert(
+                      {
+                        team_id: integration.team_id,
+                        person_key: personKey,
+                        email: contact?.email ? contact.email.trim().toLowerCase() : null,
+                        linkedin_url: contact?.linkedInProfileUrl ?? null,
+                        full_name: fullName || null,
+                        job_title: contact?.title || null,
+                        company_name: company || null,
+                        industry: null,
+                        city: null,
+                        state: null,
+                        country: null,
+                        company_size: null,
+                      } as any,
+                      { onConflict: 'team_id,person_key' }
+                    )
+                  );
+                  // Just await here — this is a poller
+                  await Promise.allSettled(writes);
+                } // else skip when no stable id
               } catch (e) {
                 console.warn('[poll-reply-inbox] inference_events write failed (non-fatal):', e);
               }

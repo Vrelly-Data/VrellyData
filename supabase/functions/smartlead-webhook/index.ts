@@ -733,34 +733,65 @@ Deno.serve(async (req) => {
             const personKey =
               (emailForKey && emailForKey.trim() ? emailForKey.trim().toLowerCase() : "") ||
               (externalId ?? "");
-            if (personKey) {
-              await supabase.from("inference_events").upsert(
-                {
-                  team_id: integration.team_id,
-                  agent_config_id: agentConfig.id,
-                  person_key: personKey,
-                  email: emailForKey ? emailForKey.trim().toLowerCase() : null,
-                  linkedin_url: enrichedLinkedin ?? null,
-                  full_name: fullName || null,
-                  job_title: (enrichedJobTitle ?? existingLead?.job_title) || null,
-                  company_name: (enrichedCompany ?? existingLead?.company) || null,
-                  channel: "email",
-                  campaign_external_id: smartleadCampaignId || null,
-                  campaign_name: lastCampaignName || null,
-                  event_type: "replied",
-                  intent: null,
-                  is_objection: null,
-                  pipeline_stage: "replied",
-                  disposition_tag: null,
-                  occurred_at: replyTimestamp || new Date().toISOString(),
-                  source: "smartlead_webhook",
-                  source_row_id: replyMessageId || null,
-                  metadata: { mail_sender: fromEmail }
-                },
-                // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
-                { onConflict: "source,source_row_id,event_type" }
+            if (personKey && replyMessageId) {
+              const writes: Array<Promise<unknown>> = [];
+              writes.push(
+                supabase.from("inference_events").upsert(
+                  {
+                    team_id: integration.team_id,
+                    agent_config_id: agentConfig.id,
+                    person_key: personKey,
+                    email: emailForKey ? emailForKey.trim().toLowerCase() : null,
+                    linkedin_url: enrichedLinkedin ?? null,
+                    full_name: fullName || null,
+                    job_title: (enrichedJobTitle ?? existingLead?.job_title) || null,
+                    company_name: (enrichedCompany ?? existingLead?.company) || null,
+                    channel: "email",
+                    campaign_external_id: smartleadCampaignId || null,
+                    campaign_name: lastCampaignName || null,
+                    event_type: "replied",
+                    intent: null,
+                    is_objection: null,
+                    pipeline_stage: "replied",
+                    disposition_tag: null,
+                    occurred_at: replyTimestamp || new Date().toISOString(),
+                    source: "smartlead_webhook",
+                    source_row_id: replyMessageId,
+                    metadata: { mail_sender: fromEmail }
+                  },
+                  // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
+                  { onConflict: "source,source_row_id,event_type" }
+                )
               );
-            }
+              // Optional additive people upsert (non-fatal)
+              writes.push(
+                // @ts-ignore onConflict supports column-list
+                supabase.from("people").upsert(
+                  {
+                    team_id: integration.team_id,
+                    person_key: personKey,
+                    email: emailForKey ? emailForKey.trim().toLowerCase() : null,
+                    linkedin_url: enrichedLinkedin ?? null,
+                    full_name: fullName || null,
+                    job_title: (enrichedJobTitle ?? existingLead?.job_title) || null,
+                    company_name: (enrichedCompany ?? existingLead?.company) || null,
+                    industry: null,
+                    city: null,
+                    state: null,
+                    country: null,
+                    company_size: null,
+                  } as any,
+                  { onConflict: "team_id,person_key" }
+                )
+              );
+              // @ts-ignore EdgeRuntime is injected by Supabase runtime
+              if (typeof EdgeRuntime !== "undefined" && typeof EdgeRuntime.waitUntil === "function") {
+                // @ts-ignore
+                EdgeRuntime.waitUntil(Promise.allSettled(writes));
+              } else {
+                await Promise.allSettled(writes);
+              }
+            } // else skip when no stable id
           } catch (e) {
             console.warn("[smartlead-webhook v2] inference_events write failed (non-fatal):", e);
           }
