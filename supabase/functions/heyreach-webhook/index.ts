@@ -797,6 +797,29 @@ Deno.serve(async (req) => {
         } catch (e) {
           console.warn("[heyreach-webhook] inference_events write failed (non-fatal):", e);
         }
+        // Best-effort: upsert people directory snapshot
+        try {
+          const pkey =
+            (email && email.trim() ? email.trim().toLowerCase() : "") ||
+            (linkedinUrlForKey && linkedinUrlForKey.trim() ? linkedinUrlForKey.trim() : "") ||
+            (externalId ?? "");
+          if (pkey) {
+            const person: Record<string, unknown> = {
+              team_id: integration.team_id,
+              person_key: pkey,
+              source: "heyreach_webhook",
+              last_seen_at: newestThreadTimestamp(replyThread) ?? new Date().toISOString(),
+            };
+            if (email) person.email = email.trim().toLowerCase();
+            if (linkedinUrlForKey) person.linkedin_url = linkedinUrlForKey;
+            if (fullName) person.full_name = fullName;
+            if (jobTitle) person.job_title = jobTitle;
+            if (company) person.company_name = company;
+            await supabase.from("people").upsert(person, { onConflict: "team_id,person_key" });
+          }
+        } catch (e) {
+          console.warn("[heyreach-webhook] people upsert failed (non-fatal):", e);
+        }
       } else {
         console.log(
           `No active agent_config for user ${integration.created_by} — skipping classify-reply`,
