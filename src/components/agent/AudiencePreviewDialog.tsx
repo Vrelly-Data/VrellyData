@@ -20,6 +20,7 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
+import { getAudienceSource } from '@/lib/audienceSources';
 import {
   usePreviewAudience, useRunAudience, useAlreadyPushed, useAudienceCampaigns,
   useRevealPeople,
@@ -188,6 +189,10 @@ export function AudiencePreviewDialog(
   const runAudience = useRunAudience();
   const reveal = useRevealPeople();
 
+  // The audience's own source decides which endpoints answer below. Rows
+  // predating the source column resolve to Apollo, which is what they are.
+  const source = getAudienceSource(audience?.source);
+
   const [page, setPage] = useState(1);
   const [result, setResult] = useState<AudiencePreview | null>(null);
   const [selected, setSelected] = useState<Map<string, ApolloPreviewPerson>>(new Map());
@@ -238,7 +243,9 @@ export function AudiencePreviewDialog(
   const load = async (p: number) => {
     if (!audience) return;
     try {
-      const r = await preview.mutateAsync({ filters: audience.filters ?? {}, page: p, per_page: PER_PAGE });
+      const r = await preview.mutateAsync({
+        filters: audience.filters ?? {}, page: p, per_page: PER_PAGE, source: audience.source,
+      });
       setResult(r);
       setPage(p);
     } catch (e) {
@@ -330,7 +337,12 @@ export function AudiencePreviewDialog(
   // Apollo, is filtered out before we ask — re-revealing them would be a round
   // trip that buys nothing.
   const needsReveal = (ids: string[]) =>
-    ids.filter((id) => !revealed.has(id) && !unmatched.has(id));
+    // A source that withholds nothing has nothing to buy. Returning [] here
+    // rather than only hiding the buttons means no code path can reach
+    // doReveal for such a source — useRevealPeople would throw if one did.
+    source.requiresReveal
+      ? ids.filter((id) => !revealed.has(id) && !unmatched.has(id))
+      : [];
 
   const doReveal = async (ids: string[]) => {
     setRevealTargets([]);
@@ -339,7 +351,7 @@ export function AudiencePreviewDialog(
 
     setRevealing(new Set(targets));
     try {
-      const r = await reveal.mutateAsync({ person_ids: targets });
+      const r = await reveal.mutateAsync({ person_ids: targets, source: audience?.source });
 
       setRevealed((prev) => {
         const next = new Map(prev);
@@ -432,8 +444,10 @@ export function AudiencePreviewDialog(
           <DialogHeader>
             <DialogTitle>Preview &amp; run{audience ? ` — ${audience.name.trim()}` : ''}</DialogTitle>
             <DialogDescription>
-              Search is free and reveals nothing. Enrichment spends Apollo credits and the
-              push is irreversible — a pushed prospect is never offered to another audience.
+              {source.requiresReveal
+                ? `Search is free and reveals nothing. Enrichment spends ${source.label} credits and the push is irreversible`
+                : `${source.label} records are already complete, so nothing here spends credits. The push is irreversible`}
+              {' '}— a pushed prospect is never offered to another audience.
             </DialogDescription>
           </DialogHeader>
 
@@ -551,7 +565,7 @@ export function AudiencePreviewDialog(
                     </p>
                   )}
 
-                  {selected.size > 0 && (
+                  {source.requiresReveal && selected.size > 0 && (
                     <div className="flex items-center justify-between gap-3 rounded-md border bg-muted/40 px-3 py-2">
                       <p className="text-xs text-muted-foreground">
                         {revealableSelected.length > 0 ? (
@@ -667,7 +681,7 @@ export function AudiencePreviewDialog(
                                           is a dedup rule, not a reason the
                                           operator may not look at the record
                                           they already paid for. */}
-                                      {!unmatched.has(p.apollo_person_id) && (
+                                      {source.requiresReveal && !unmatched.has(p.apollo_person_id) && (
                                         <Button
                                           variant="ghost" size="sm"
                                           className="h-6 px-2 text-xs text-muted-foreground hover:text-foreground"
