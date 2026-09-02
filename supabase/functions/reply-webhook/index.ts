@@ -894,6 +894,29 @@ Deno.serve(async (req) => {
             } catch (e) {
               console.warn('[reply-webhook] inference_events write failed (non-fatal):', e);
             }
+            // Best-effort: upsert people directory snapshot
+            try {
+              const pkey =
+                (contactEmail && contactEmail.trim() ? contactEmail.trim().toLowerCase() : '') ||
+                (linkedinUrl && linkedinUrl.trim() ? linkedinUrl.trim() : '') ||
+                (externalId ?? '');
+              if (pkey) {
+                const person: Record<string, unknown> = {
+                  team_id: integration.team_id,
+                  person_key: pkey,
+                  source: 'reply_webhook',
+                  last_seen_at: replyAt,
+                };
+                if (contactEmail) person.email = contactEmail.trim().toLowerCase();
+                if (linkedinUrl) person.linkedin_url = linkedinUrl;
+                if (fullName) person.full_name = fullName;
+                if (jobTitle) person.job_title = jobTitle;
+                if (company) person.company_name = company;
+                await supabase.from('people').upsert(person, { onConflict: 'team_id,person_key' });
+              }
+            } catch (e) {
+              console.warn('[reply-webhook] people upsert failed (non-fatal):', e);
+            }
           } else {
             console.log(`[inbox-routing] reply recorded without resurfacing (resurface=${resurface}) for lead_id=${upsertedLead?.id}`);
           }
