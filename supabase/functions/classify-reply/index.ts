@@ -1096,6 +1096,11 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
             .from('inference_events')
           // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
             .upsert(eventRow, { onConflict: 'source,source_row_id,event_type' })
+            .then(({ error }) => {
+              if (error) {
+                console.warn('[classify-reply] inference_events upsert error (non-fatal):', error);
+              }
+            })
         );
         // Optional additive write: maintain a normalized person roster. Non-fatal.
         const peopleRow: Record<string, unknown> = {
