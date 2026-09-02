@@ -764,6 +764,28 @@ Deno.serve(async (req) => {
           } catch (e) {
             console.warn("[smartlead-webhook v2] inference_events write failed (non-fatal):", e);
           }
+          // Best-effort: upsert people directory snapshot
+          try {
+            const pkey =
+              (emailForKey && emailForKey.trim() ? emailForKey.trim().toLowerCase() : "") ||
+              (externalId ?? "");
+            if (pkey) {
+              const person: Record<string, unknown> = {
+                team_id: integration.team_id,
+                person_key: pkey,
+                source: "smartlead_webhook",
+                last_seen_at: replyTimestamp || new Date().toISOString(),
+              };
+              if (emailForKey) person.email = emailForKey.trim().toLowerCase();
+              if (enrichedLinkedin) person.linkedin_url = enrichedLinkedin;
+              if (fullName) person.full_name = fullName;
+              if (enrichedJobTitle ?? existingLead?.job_title) person.job_title = (enrichedJobTitle ?? existingLead?.job_title) as string;
+              if (enrichedCompany ?? existingLead?.company) person.company_name = (enrichedCompany ?? existingLead?.company) as string;
+              await supabase.from("people").upsert(person, { onConflict: "team_id,person_key" });
+            }
+          } catch (e) {
+            console.warn("[smartlead-webhook v2] people upsert failed (non-fatal):", e);
+          }
         } else {
           console.log(
             `[smartlead-webhook v2] No active agent_config for user ${integration.created_by} — skipping classify-reply`,
