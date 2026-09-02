@@ -1046,20 +1046,15 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
       console.error('[classify-reply] draft_audit write failed (non-fatal):', auditErr);
     }
 
-    return new Response(JSON.stringify(classification), {
-      status: 200,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
-    // Best-effort: record inference event (non-blocking). Fire AFTER sending response
-    // semantics preserved by EdgeRuntime.waitUntil when available; otherwise try/catch.
-    // Event: 'classified'
+    // Best-effort: record inference event (non-blocking). Must run BEFORE return so
+    // EdgeRuntime.waitUntil can catch it; otherwise await synchronously. Event: 'classified'
     try {
       const personKey =
         (leadEmail && leadEmail.trim() ? leadEmail.trim().toLowerCase() : '') ||
         (leadLinkedinUrl && leadLinkedinUrl.trim() ? leadLinkedinUrl.trim() : '') ||
         (lead_id ?? '');
       if (personKey) {
-        const row: Record<string, unknown> = {
+        const eventRow: Record<string, unknown> = {
           team_id: teamId ?? null,
           agent_config_id: null,
           person_key: personKey,
@@ -1095,20 +1090,47 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
             prospect_read: prospectRead ?? null,
           },
         };
-        const write = supabase.from('inference_events')
+        const writes: Array<Promise<unknown>> = [];
+        writes.push(
+          supabase
+            .from('inference_events')
           // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
-          .upsert(row, { onConflict: 'source,source_row_id,event_type' });
+            .upsert(eventRow, { onConflict: 'source,source_row_id,event_type' })
+        );
+        // Optional additive write: maintain a normalized person roster. Non-fatal.
+        const peopleRow: Record<string, unknown> = {
+          team_id: teamId ?? null,
+          person_key: personKey,
+          email: eventRow.email ?? null,
+          linkedin_url: eventRow.linkedin_url ?? null,
+          full_name: leadName ?? null,
+          job_title: leadJobTitle ?? null,
+          seniority: prospectRead?.seniority ?? null,
+          department: null,
+          company_name: leadCompany ?? null,
+          industry: null,
+          city: null,
+          state: null,
+          country: null,
+          company_size: null,
+        };
+        // @ts-ignore onConflict supports column-list
+        writes.push(supabase.from('people').upsert(peopleRow as any, { onConflict: 'team_id,person_key' }));
         // @ts-ignore EdgeRuntime provided by Supabase
         if (typeof EdgeRuntime !== 'undefined' && typeof EdgeRuntime.waitUntil === 'function') {
           // @ts-ignore
-          EdgeRuntime.waitUntil(write);
+          EdgeRuntime.waitUntil(Promise.allSettled(writes));
         } else {
-          await write;
+          await Promise.allSettled(writes);
         }
       }
     } catch (e) {
       console.warn('[classify-reply] inference_events write failed (non-fatal):', e);
     }
+    return new Response(JSON.stringify(classification), {
+      status: 200,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
   } catch (error) {
     console.error('classify-reply error:', error);
     return new Response(JSON.stringify(SAFE_FALLBACK), {
