@@ -767,8 +767,12 @@ Deno.serve(async (req) => {
             (linkedinUrlForKey && linkedinUrlForKey.trim() ? linkedinUrlForKey.trim() : "") ||
             (externalId ?? "");
           if (personKey) {
-            await supabase.from("inference_events").upsert(
-              {
+            const srid = conversationId
+              ? `${conversationId}:${(newestThreadTimestamp(replyThread) ?? new Date().toISOString())}`
+              : (externalId ? `${externalId}:${new Date().toISOString()}` : null);
+            if (srid) {
+              await supabase.from("inference_events").upsert(
+                {
                 team_id: integration.team_id,
                 agent_config_id: agentConfig.id,
                 person_key: personKey,
@@ -787,12 +791,13 @@ Deno.serve(async (req) => {
                 disposition_tag: null,
                 occurred_at: newestThreadTimestamp(replyThread) ?? new Date().toISOString(),
                 source: "heyreach_webhook",
-                source_row_id: null,
+                  source_row_id: srid,
                 metadata: { lead_category: leadCategory }
-              },
-              // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
-              { onConflict: "source,source_row_id,event_type" }
-            );
+                },
+                // @ts-ignore onConflict supports column-list
+                { onConflict: "source,source_row_id,event_type" }
+              );
+            }
           }
         } catch (e) {
           console.warn("[heyreach-webhook] inference_events write failed (non-fatal):", e);
