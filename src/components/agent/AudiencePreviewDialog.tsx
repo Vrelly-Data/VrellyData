@@ -24,8 +24,8 @@ import { getAudienceSource } from '@/lib/audienceSources';
 import {
   usePreviewAudience, useRunAudience, useAlreadyPushed, useAudienceCampaigns,
   useRevealPeople,
-  type AgentAudience, type ApolloPreviewPerson, type AudiencePreview,
-  type AudienceRunResult, type RevealedPerson,
+  type AgentAudience, type ApolloAudienceFilters, type ApolloPreviewPerson,
+  type AudiencePreview, type AudienceRunResult, type RevealedPerson,
 } from '@/hooks/useAgentAudiences';
 
 const PER_PAGE = 25;
@@ -84,6 +84,33 @@ function enrichAvailability(p: ApolloPreviewPerson): Record<string, boolean> | n
     headcount: !!p.org_has_employee_count,
     revenue: !!p.org_has_revenue,
   };
+}
+
+/**
+ * Why an empty search is empty, when the filters themselves give it away.
+ *
+ * Apollo AND-s every word in q_keywords and treats commas as ordinary
+ * characters, not separators — so "finance, loans, mortgages" asks for records
+ * carrying all three words, never any of them. Measured against dev on
+ * 2026-09-02 with person_titles ["CEO"]: the three terms match 4,265 / 280 / 65
+ * records on their own, 4 together, and 0 once the audience's location,
+ * headcount and email-status filters are added.
+ *
+ * Left undiagnosed this reads as a broken search rather than an
+ * over-constrained one — the operator sees a plausible filter set return
+ * nothing and concludes the feature is faulty. Naming the culprit is the
+ * difference between a dead end and a one-word fix.
+ */
+function emptyReason(filters: ApolloAudienceFilters | null | undefined): string | null {
+  const q = filters?.q_keywords?.trim();
+  if (!q) return null;
+  const terms = q.split(/[,;]+|\s+/).filter(Boolean);
+  if (terms.length < 2) return null;
+  // Only blame the comma when there is one. "private equity" hits the same AND
+  // rule, but telling someone a comma is not "or" when they typed no comma
+  // reads as a canned message and gets ignored.
+  const comma = /[,;]/.test(q) ? ' — a comma is not "or"' : '';
+  return `Keywords is "${q}". Apollo needs EVERY word there on the same record${comma}, so this asks for ${terms.map((t) => `"${t}"`).join(' and ')} together. Try a single term.`;
 }
 
 /** "5 wks ago" — coarse on purpose; the point is staleness, not precision. */
@@ -222,24 +249,6 @@ export function AudiencePreviewDialog(
   );
   const { data: alreadyPushed } = useAlreadyPushed(ids);
 
-  // A manual push may target anywhere, but defaulting to the audience's own
-  // destination is what the operator almost always means.
-  useEffect(() => {
-    if (!open || !audience) return;
-    setPage(1);
-    setSelected(new Map());
-    setResult(null);
-    setRunResult(null);
-    setRevealed(new Map());
-    setUnmatched(new Set());
-    setRevealTargets([]);
-    setPlatform(audience.default_platform);
-    setCampaignId(audience.default_synced_campaign_id);
-    // Keyed on identity, not the object: a refetch that returns an equal-but-new
-    // `audience` must not wipe the operator's in-progress selection.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, audience?.id]);
-
   const load = async (p: number) => {
     if (!audience) return;
     try {
@@ -257,8 +266,35 @@ export function AudiencePreviewDialog(
     }
   };
 
+  // Opening resets the dialog and immediately loads page 1.
+  //
+  // THIS MUST STAY ONE EFFECT. It was two — a reset that cleared `result`, and
+  // a loader guarded by `!result` — both keyed on [open, audience?.id]. Effects
+  // see the state of the render that scheduled them, so on the SECOND open the
+  // loader read the PREVIOUS audience's `result`, which was still set: the
+  // guard saw a truthy value and skipped the fetch, while the reset's
+  // setResult(null) landed anyway. The dialog then sat on "No preview yet."
+  // with no request, no error and nothing to look at. The first open of a
+  // session worked, so it looked like an audience-specific fault rather than a
+  // second-open one. Do not reintroduce a `!result` guard here: after the
+  // resets above it can only ever be reading a stale value.
+  //
+  // A manual push may target anywhere, but defaulting to the audience's own
+  // destination is what the operator almost always means.
   useEffect(() => {
-    if (open && audience && !result && !preview.isPending) void load(1);
+    if (!open || !audience) return;
+    setPage(1);
+    setSelected(new Map());
+    setResult(null);
+    setRunResult(null);
+    setRevealed(new Map());
+    setUnmatched(new Set());
+    setRevealTargets([]);
+    setPlatform(audience.default_platform);
+    setCampaignId(audience.default_synced_campaign_id);
+    void load(1);
+    // Keyed on identity, not the object: a refetch that returns an equal-but-new
+    // `audience` must not wipe the operator's in-progress selection.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, audience?.id]);
 
@@ -538,9 +574,20 @@ export function AudiencePreviewDialog(
                   No preview yet.
                 </div>
               ) : result.people.length === 0 ? (
-                <div className="border rounded-lg py-12 text-center text-muted-foreground">
+                <div className="border rounded-lg py-12 px-6 text-center text-muted-foreground">
                   <p className="font-medium">No matches</p>
-                  <p className="text-sm mt-1">Apollo returned nothing for these filters.</p>
+                  <p className="text-sm mt-1">
+                    {source.label} returned nothing for these filters.
+                  </p>
+                  {(() => {
+                    const why = emptyReason(audience?.filters);
+                    return why ? (
+                      <p className="text-sm mt-3 max-w-xl mx-auto text-amber-600 flex items-start gap-1.5 text-left">
+                        <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+                        <span>{why}</span>
+                      </p>
+                    ) : null;
+                  })()}
                 </div>
               ) : (
                 <>

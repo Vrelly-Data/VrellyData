@@ -419,6 +419,15 @@ export function AgentAudience() {
                   placeholder="healthcare"
                   onChange={(e) => setFilter('q_keywords', e.target.value)}
                 />
+                {/* The comma trap. Apollo ANDs every word here and does not
+                    treat a comma as a separator, so a list reads as one long
+                    phrase and matches almost nothing — silently, as an empty
+                    result rather than an error. */}
+                <p className="text-xs text-muted-foreground mt-1">
+                  One idea, not a list. Every word must appear on the same
+                  record and commas are not &ldquo;or&rdquo; — &ldquo;finance, loans&rdquo; finds only
+                  people matching both.
+                </p>
               </div>
 
               <div>
