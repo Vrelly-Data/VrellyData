@@ -728,6 +728,42 @@ Deno.serve(async (req) => {
           } else {
             await classifyPromise;
           }
+          // Best-effort: record 'replied' inference event (non-blocking)
+          try {
+            const personKey =
+              (emailForKey && emailForKey.trim() ? emailForKey.trim().toLowerCase() : "") ||
+              (externalId ?? "");
+            if (personKey) {
+              await supabase.from("inference_events").upsert(
+                {
+                  team_id: integration.team_id,
+                  agent_config_id: agentConfig.id,
+                  person_key: personKey,
+                  email: emailForKey ? emailForKey.trim().toLowerCase() : null,
+                  linkedin_url: enrichedLinkedin ?? null,
+                  full_name: fullName || null,
+                  job_title: (enrichedJobTitle ?? existingLead?.job_title) || null,
+                  company_name: (enrichedCompany ?? existingLead?.company) || null,
+                  channel: "email",
+                  campaign_external_id: smartleadCampaignId || null,
+                  campaign_name: lastCampaignName || null,
+                  event_type: "replied",
+                  intent: null,
+                  is_objection: null,
+                  pipeline_stage: "replied",
+                  disposition_tag: null,
+                  occurred_at: replyTimestamp || new Date().toISOString(),
+                  source: "smartlead_webhook",
+                  source_row_id: replyMessageId || null,
+                  metadata: { mail_sender: fromEmail }
+                },
+                // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
+                { onConflict: "source,source_row_id,event_type" }
+              );
+            }
+          } catch (e) {
+            console.warn("[smartlead-webhook v2] inference_events write failed (non-fatal):", e);
+          }
         } else {
           console.log(
             `[smartlead-webhook v2] No active agent_config for user ${integration.created_by} — skipping classify-reply`,
