@@ -17,9 +17,15 @@ SELECT
   COALESCE(NULLIF(lower(al.email), ''), NULLIF(al.linkedin_url, ''), al.external_id) AS person_key,
   NULLIF(lower(al.email), '')                                   AS email,
   NULLIF(al.linkedin_url, '')                                   AS linkedin_url,
-  al.full_name,
-  al.job_title,
-  al.company                                                    AS company_name,
+  COALESCE(NULLIF(al.full_name, ''), NULLIF(sc_e.first_name, '') || ' ' || NULLIF(sc_e.last_name, '')) AS full_name,
+  COALESCE(NULLIF(al.job_title, ''), NULLIF(sc_e.job_title, ''), NULLIF(sc_l.job_title, '')) AS job_title,
+  COALESCE(NULLIF(al.company, ''), NULLIF(sc_e.company, ''), NULLIF(sc_l.company, ''))       AS company_name,
+  -- below firmographics are only from synced_contacts when present
+  COALESCE(NULLIF(sc_e.industry, ''), NULLIF(sc_l.industry, ''))                               AS industry,
+  COALESCE(NULLIF(sc_e.city, ''), NULLIF(sc_l.city, ''))                                       AS city,
+  COALESCE(NULLIF(sc_e.state, ''), NULLIF(sc_l.state, ''))                                     AS state,
+  COALESCE(NULLIF(sc_e.country, ''), NULLIF(sc_l.country, ''))                                 AS country,
+  COALESCE(NULLIF(sc_e.company_size, ''), NULLIF(sc_l.company_size, ''))                       AS company_size,
   al.channel,
   al.campaign_external_id,
   al.last_campaign_name                                         AS campaign_name,
@@ -33,6 +39,14 @@ SELECT
   al.id::text                                                   AS source_row_id,
   jsonb_build_object('backfill', true)
 FROM public.agent_leads al
+LEFT JOIN public.synced_contacts sc_e
+  ON sc_e.team_id = public.get_user_team_id(al.user_id)
+ AND sc_e.email IS NOT NULL
+ AND lower(sc_e.email) = lower(al.email)
+LEFT JOIN public.synced_contacts sc_l
+  ON sc_l.team_id = public.get_user_team_id(al.user_id)
+ AND sc_l.linkedin_url IS NOT NULL
+ AND sc_l.linkedin_url = al.linkedin_url
 WHERE al.last_reply_at IS NOT NULL
   AND COALESCE(NULLIF(lower(al.email), ''), NULLIF(al.linkedin_url, ''), al.external_id) IS NOT NULL
 ON CONFLICT (source, source_row_id, event_type) DO NOTHING;
@@ -52,9 +66,14 @@ SELECT
   COALESCE(NULLIF(lower(al.email), ''), NULLIF(al.linkedin_url, ''), al.external_id) AS person_key,
   NULLIF(lower(al.email), '')                                   AS email,
   NULLIF(al.linkedin_url, '')                                   AS linkedin_url,
-  al.full_name,
-  al.job_title,
-  al.company                                                    AS company_name,
+  COALESCE(NULLIF(al.full_name, ''), NULLIF(sc_e.first_name, '') || ' ' || NULLIF(sc_e.last_name, '')) AS full_name,
+  COALESCE(NULLIF(al.job_title, ''), NULLIF(sc_e.job_title, ''), NULLIF(sc_l.job_title, ''))           AS job_title,
+  COALESCE(NULLIF(al.company, ''), NULLIF(sc_e.company, ''), NULLIF(sc_l.company, ''))                 AS company_name,
+  COALESCE(NULLIF(sc_e.industry, ''), NULLIF(sc_l.industry, ''))                                       AS industry,
+  COALESCE(NULLIF(sc_e.city, ''), NULLIF(sc_l.city, ''))                                               AS city,
+  COALESCE(NULLIF(sc_e.state, ''), NULLIF(sc_l.state, ''))                                             AS state,
+  COALESCE(NULLIF(sc_e.country, ''), NULLIF(sc_l.country, ''))                                         AS country,
+  COALESCE(NULLIF(sc_e.company_size, ''), NULLIF(sc_l.company_size, ''))                               AS company_size,
   al.channel,
   al.campaign_external_id,
   al.last_campaign_name                                         AS campaign_name,
@@ -68,6 +87,14 @@ SELECT
   al.id::text                                                   AS source_row_id,
   jsonb_build_object('backfill', true, 'prospect_read', al.prospect_read)
 FROM public.agent_leads al
+LEFT JOIN public.synced_contacts sc_e
+  ON sc_e.team_id = public.get_user_team_id(al.user_id)
+ AND sc_e.email IS NOT NULL
+ AND lower(sc_e.email) = lower(al.email)
+LEFT JOIN public.synced_contacts sc_l
+  ON sc_l.team_id = public.get_user_team_id(al.user_id)
+ AND sc_l.linkedin_url IS NOT NULL
+ AND sc_l.linkedin_url = al.linkedin_url
 WHERE al.last_reply_at IS NOT NULL
   AND NULLIF(al.intent, '') IS NOT NULL
   AND COALESCE(NULLIF(lower(al.email), ''), NULLIF(al.linkedin_url, ''), al.external_id) IS NOT NULL
