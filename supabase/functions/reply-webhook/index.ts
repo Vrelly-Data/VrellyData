@@ -892,7 +892,11 @@ Deno.serve(async (req) => {
                     },
                     // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
                     { onConflict: 'source,source_row_id,event_type' }
-                  )
+                  ).then(({ error }) => {
+                    if (error) {
+                      console.warn('[reply-webhook] inference_events upsert error (non-fatal):', error);
+                    }
+                  })
                 );
                 // Optional additive people upsert (non-fatal)
                 writes.push(
