@@ -864,8 +864,10 @@ Deno.serve(async (req) => {
                 (linkedinUrl && linkedinUrl.trim() ? linkedinUrl.trim() : '') ||
                 (externalId ?? '');
               if (personKey) {
-                await supabase.from('inference_events').upsert(
-                  {
+                const sourceRowId = externalId ? `${externalId}:${replyAt}` : null;
+                if (sourceRowId) {
+                  await supabase.from('inference_events').upsert(
+                    {
                     team_id: integration.team_id,
                     agent_config_id: agentConfig.id,
                     person_key: personKey,
@@ -884,12 +886,13 @@ Deno.serve(async (req) => {
                     disposition_tag: null,
                     occurred_at: replyAt,
                     source: 'reply_webhook',
-                    source_row_id: null,
+                      source_row_id: sourceRowId,
                     metadata: { raw_event_type: eventType }
-                  },
-                  // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
-                  { onConflict: 'source,source_row_id,event_type' }
-                );
+                    },
+                    // @ts-ignore onConflict supports column-list
+                    { onConflict: 'source,source_row_id,event_type' }
+                  );
+                }
               }
             } catch (e) {
               console.warn('[reply-webhook] inference_events write failed (non-fatal):', e);
