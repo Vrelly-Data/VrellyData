@@ -119,10 +119,11 @@ Deno.serve(async (req) => {
     // Read-then-write pattern; small race window on concurrent sends to
     // the same lead, acceptable for a single-user send flow.
     const existingThread = Array.isArray(lead.reply_thread) ? lead.reply_thread : [];
+    const sentAtIso = new Date().toISOString();
     const newMessage = {
       role: "sender",
       content: message,
-      timestamp: new Date().toISOString(),
+      timestamp: sentAtIso,
       channel: "linkedin",
     };
     const updatedThread = [...existingThread, newMessage];
@@ -157,7 +158,7 @@ Deno.serve(async (req) => {
         String(lead_id);
       if (personKey) {
         const fp = await computeCopyFingerprint(message, null);
-        const occurredAt = new Date().toISOString();
+        const occurredAt = sentAtIso;
         // Look up last campaign name if any was set earlier (optional)
         const { data: namedCampaign } = await supabase
           .from("agent_leads")
@@ -176,6 +177,16 @@ Deno.serve(async (req) => {
           .eq("is_active", true)
           .limit(1)
           .maybeSingle();
+        const { computeSentSourceId } = await import("../_shared/sent-source-id.ts");
+        const sentSourceId = await computeSentSourceId({
+          provider: "heyreach",
+          personKey,
+          occurredAt,
+          providerThreadId: conversationId ? String(conversationId) : null,
+          providerMessageId: null,
+          copyFingerprint: fp,
+          tag: "direct_linkedin_message"
+        });
         await serviceSupabase.from("inference_events")
           // @ts-ignore onConflict supports column-list
           .upsert({
@@ -200,7 +211,7 @@ Deno.serve(async (req) => {
             disposition_tag: null,
             occurred_at: occurredAt,
             source: "send_heyreach_message",
-            source_row_id: String(lead_id),
+            source_row_id: sentSourceId,
             metadata: {
               provider: "heyreach",
               path: "direct_linkedin_message",

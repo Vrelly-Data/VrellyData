@@ -290,6 +290,16 @@ Deno.serve(async (req) => {
           .eq("is_active", true)
           .limit(1)
           .maybeSingle();
+        const { computeSentSourceId } = await import("../_shared/sent-source-id.ts");
+        const sentSourceId = await computeSentSourceId({
+          provider: "smartlead",
+          personKey,
+          occurredAt,
+          providerThreadId: null,
+          providerMessageId: null,
+          copyFingerprint: fp,
+          tag: `campaign_add:${String(campaignId)}`
+        });
         await serviceSupabase.from("inference_events")
           // @ts-ignore onConflict supports column-list
           .upsert({
@@ -314,7 +324,7 @@ Deno.serve(async (req) => {
             disposition_tag: null,
             occurred_at: occurredAt,
             source: "add_to_smartlead_campaign",
-            source_row_id: String(leadId),
+            source_row_id: sentSourceId,
             metadata: {
               provider: "smartlead",
               path: "campaign_add",

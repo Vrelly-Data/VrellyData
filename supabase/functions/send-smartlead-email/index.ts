@@ -221,6 +221,7 @@ Deno.serve(async (req) => {
     // with the same small race window as send-heyreach-message — acceptable
     // for a single-user send flow.
     const existingThread = Array.isArray(lead.reply_thread) ? lead.reply_thread : [];
+    const sentAt = new Date().toISOString();
     const newMessage = {
       role: "sender",
       content: String(message),
@@ -274,6 +275,16 @@ Deno.serve(async (req) => {
           .eq("is_active", true)
           .limit(1)
           .maybeSingle();
+        const { computeSentSourceId } = await import("../_shared/sent-source-id.ts");
+        const sentSourceId = await computeSentSourceId({
+          provider: "smartlead",
+          personKey,
+          occurredAt,
+          providerThreadId: identity?.smartlead_email_stats_id ?? null,
+          providerMessageId: null,
+          copyFingerprint: fp,
+          tag: "reply_email_thread"
+        });
         await serviceSupabase.from("inference_events")
           // @ts-ignore onConflict supports column-list
           .upsert({
@@ -298,7 +309,7 @@ Deno.serve(async (req) => {
             disposition_tag: null,
             occurred_at: occurredAt,
             source: "send_smartlead_email",
-            source_row_id: String(leadId),
+            source_row_id: sentSourceId,
             metadata: {
               provider: "smartlead",
               path: "reply_email_thread",
