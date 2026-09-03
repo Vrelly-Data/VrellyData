@@ -419,14 +419,14 @@ export function AgentAudience() {
                   placeholder="healthcare"
                   onChange={(e) => setFilter('q_keywords', e.target.value)}
                 />
-                {/* The comma trap. Apollo ANDs every word here and does not
-                    treat a comma as a separator, so a list reads as one long
-                    phrase and matches almost nothing — silently, as an empty
-                    result rather than an error. */}
+                {/* Apollo itself has no OR here — apollo-search fans out one
+                    query per comma-separated term and merges. Words WITHIN a
+                    term are still AND-ed, which is the remaining trap and the
+                    only part worth spending a line on. */}
                 <p className="text-xs text-muted-foreground mt-1">
-                  One idea, not a list. Every word must appear on the same
-                  record and commas are not &ldquo;or&rdquo; — &ldquo;finance, loans&rdquo; finds only
-                  people matching both.
+                  Commas match any: &ldquo;finance, loans&rdquo; finds people matching
+                  either. Words inside one term must all appear, so
+                  &ldquo;private equity&rdquo; stays a single term. Up to 5 terms.
                 </p>
               </div>
 

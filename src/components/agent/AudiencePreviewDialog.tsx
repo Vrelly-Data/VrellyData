@@ -89,28 +89,31 @@ function enrichAvailability(p: ApolloPreviewPerson): Record<string, boolean> | n
 /**
  * Why an empty search is empty, when the filters themselves give it away.
  *
- * Apollo AND-s every word in q_keywords and treats commas as ordinary
- * characters, not separators — so "finance, loans, mortgages" asks for records
- * carrying all three words, never any of them. Measured against dev on
- * 2026-09-02 with person_titles ["CEO"]: the three terms match 4,265 / 280 / 65
- * records on their own, 4 together, and 0 once the audience's location,
- * headcount and email-status filters are added.
+ * Keywords now OR across comma-separated terms — apollo-search runs one query
+ * per term and merges (see splitKeywordTerms). What is still AND-ed is the
+ * words INSIDE a single term: "private equity" needs both words on the same
+ * record, because that is how Apollo's q_keywords works and there is no syntax
+ * to change it.
  *
- * Left undiagnosed this reads as a broken search rather than an
- * over-constrained one — the operator sees a plausible filter set return
- * nothing and concludes the feature is faulty. Naming the culprit is the
- * difference between a dead end and a one-word fix.
+ * So a zero-result search with keywords has two distinct causes, and telling
+ * them apart is the whole value: an over-long single term is a one-comma fix,
+ * whereas every term coming back empty means the other filters are the
+ * constraint and the keywords are innocent.
  */
 function emptyReason(filters: ApolloAudienceFilters | null | undefined): string | null {
   const q = filters?.q_keywords?.trim();
   if (!q) return null;
-  const terms = q.split(/[,;]+|\s+/).filter(Boolean);
-  if (terms.length < 2) return null;
-  // Only blame the comma when there is one. "private equity" hits the same AND
-  // rule, but telling someone a comma is not "or" when they typed no comma
-  // reads as a canned message and gets ignored.
-  const comma = /[,;]/.test(q) ? ' — a comma is not "or"' : '';
-  return `Keywords is "${q}". Apollo needs EVERY word there on the same record${comma}, so this asks for ${terms.map((t) => `"${t}"`).join(' and ')} together. Try a single term.`;
+  const terms = q.split(/[,;]+/).map((t) => t.trim()).filter(Boolean);
+  const multiWord = terms.filter((t) => t.split(/\s+/).length > 1);
+  if (multiWord.length > 0) {
+    return `Terms separated by commas are OR-ed, but the words inside one term are not — ${multiWord
+      .map((t) => `"${t}"`)
+      .join(' and ')} needs every word on the same record. Put a comma between them to match either.`;
+  }
+  if (terms.length > 1) {
+    return `None of ${terms.map((t) => `"${t}"`).join(', ')} matched under the other filters, so the keywords are not the constraint here — try widening location, headcount or email status.`;
+  }
+  return null;
 }
 
 /** "5 wks ago" — coarse on purpose; the point is staleness, not precision. */
@@ -593,7 +596,17 @@ export function AudiencePreviewDialog(
                 <>
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-muted-foreground">
-                      {totalEntries !== null ? `${totalEntries.toLocaleString()} matches` : 'Matches'}
+                      {/* A fanned-out count sums each term's total, so anyone
+                          matching two terms is counted twice. Say "about"
+                          rather than assert a number we cannot stand behind. */}
+                      {totalEntries !== null
+                        ? `${result.pagination.total_is_upper_bound ? 'about ' : ''}${totalEntries.toLocaleString()} matches`
+                        : 'Matches'}
+                      {result.keyword_terms && result.keyword_terms.length > 1 && (
+                        <span className="text-xs">
+                          {' '}(any of {result.keyword_terms.map((t) => `"${t}"`).join(', ')})
+                        </span>
+                      )}
                       {' · '}
                       <span className={selected.size >= allowance ? 'text-amber-600 font-medium' : ''}>
                         {selected.size} / {allowance} selected

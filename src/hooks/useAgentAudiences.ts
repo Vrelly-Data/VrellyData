@@ -264,8 +264,16 @@ export interface AudiencePreview {
     per_page: number;
     total_entries: number | null;
     total_pages: number | null;
+    /**
+     * True when total_entries is a SUM across OR-ed keyword terms and so may
+     * double-count anyone matching more than one. Absent on older deploys of
+     * apollo-search, where a single query made the count exact.
+     */
+    total_is_upper_bound?: boolean;
   };
   notice: string;
+  /** The OR-ed keyword terms, present only when the Keywords box fanned out. */
+  keyword_terms?: string[];
   credits_consumed: number;
   key_source: 'client' | 'shared';
 }

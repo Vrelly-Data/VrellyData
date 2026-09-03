@@ -132,6 +132,57 @@ const ARRAY_FILTERS = [
 ] as const;
 
 /**
+ * Ceiling on how many terms one Keywords box may fan out into.
+ *
+ * Each term is a separate api_search round trip, so this is a latency and
+ * rate-limit budget, not a taste judgement. Five covers every realistic
+ * "finance, loans, mortgages" case; beyond it the operator is describing a
+ * segment, not a keyword, and should use a different filter.
+ */
+export const KEYWORD_MAX_TERMS = 5;
+
+/**
+ * Split the Keywords box into the terms to OR together.
+ *
+ * WHY THIS EXISTS. Apollo's q_keywords is ONE AND-ed phrase and has no OR in
+ * any syntax — verified against live api_search on 2026-09-02 with
+ * person_titles ["CEO"], where the terms finance / loans / mortgages match
+ * 4,266 / 280 / 65 records alone:
+ *
+ *   "finance OR loans OR mortgages"        -> 0   (OR is just another token)
+ *   "\"finance\" OR \"loans\""              -> 0
+ *   "(finance OR loans OR mortgages)"      -> 0
+ *   "finance|loans|mortgages"              -> 4   (punctuation ignored -> AND)
+ *   "finance,loans,mortgages"              -> 4   (same)
+ *   ["finance","loans","mortgages"]        -> HTTP 500 (array is not accepted)
+ *
+ * So a comma-separated list cannot be expressed as one Apollo query at all.
+ * OR has to be built by asking Apollo once per term and merging, which is what
+ * the caller does with this list.
+ *
+ * Splitting on commas and semicolons ONLY — never on whitespace. A multi-word
+ * term is a real thing ("private equity"), and breaking it into "private" and
+ * "equity" would silently widen the search into nonsense.
+ */
+export function splitKeywordTerms(q: string | null | undefined): string[] {
+  if (!q) return [];
+  const seen = new Set<string>();
+  const terms: string[] = [];
+  for (const raw of q.split(/[,;]+/)) {
+    const t = raw.trim();
+    if (!t) continue;
+    // Case-insensitive dedup so "Finance, finance" is one round trip, but keep
+    // the operator's own casing for the query itself.
+    const k = t.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    terms.push(t);
+    if (terms.length >= KEYWORD_MAX_TERMS) break;
+  }
+  return terms;
+}
+
+/**
  * Build the api_search body, dropping empty values.
  *
  * Empty arrays are STRIPPED rather than sent: Apollo treats an empty array as a
