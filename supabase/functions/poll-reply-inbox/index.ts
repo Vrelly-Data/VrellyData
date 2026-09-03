@@ -8,6 +8,7 @@ import {
 import { htmlToText } from '../_shared/html-to-text.ts';
 import { shouldResurface, fireClassifyReply } from '../_shared/inbox-reply.ts';
 import { cleanReplyPreview } from '../_shared/reply-text.ts';
+import { detectLanguageCode } from '../_shared/language.ts';
 
 const allowedOrigins = [
   'https://vrelly.com',
@@ -643,6 +644,7 @@ Deno.serve(async (req) => {
                 // Inbound reply text from latest inbound message (already computed above)
                 const inboundText = replyText;
                 const externalMessageId = null; // Reply.io v3 messages endpoint used here does not return per-message id
+                const lang = detectLanguageCode(inboundText);
                 if (personKey && stableId) {
                   const writes: Array<Promise<unknown>> = [];
                   writes.push(
@@ -670,7 +672,18 @@ Deno.serve(async (req) => {
                         occurred_at: lastReplyDate,
                         source: 'poll_reply_inbox',
                         source_row_id: stableId,
-                        metadata: { source: 'poll', reply_text: inboundText, external_message_id: externalMessageId, thread_id: String(thread.id) }
+                        metadata: {
+                          source: 'poll',
+                          provider: 'reply_io',
+                          reply_text: inboundText,
+                          reply_language_code: lang.code,
+                          reply_language_method: lang.method,
+                          external_message_id: externalMessageId,
+                          subject: thread.subject ?? null,
+                          // Normalized provider ids
+                          provider_thread_id: String(thread.id),
+                          provider_message_id: externalMessageId
+                        }
                       },
                       // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
                       { onConflict: 'source,source_row_id,event_type' }

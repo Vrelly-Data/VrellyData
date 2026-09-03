@@ -717,7 +717,14 @@ Deno.serve(async (req) => {
                 occurred_at: new Date().toISOString(),
                 source: 'send_agent_reply',
                 source_row_id: String(leadId),
-                metadata: { path: 'direct_thread_reply', outbound_message: draftResponse }
+                metadata: {
+                  provider: 'reply_io',
+                  path: 'direct_thread_reply',
+                  outbound_message: draftResponse,
+                  // Normalized provider ids
+                  provider_thread_id: threadIdStr,
+                  provider_message_id: null
+                }
               },
               // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
               { onConflict: 'source,source_row_id,event_type' }
@@ -1012,7 +1019,14 @@ Deno.serve(async (req) => {
               occurred_at: new Date().toISOString(),
               source: 'send_agent_reply',
               source_row_id: String(leadId),
-              metadata: { path: 'campaign_move_to_sequence', outbound_message: draftResponse }
+              metadata: {
+                provider: 'reply_io',
+                path: 'campaign_move_to_sequence',
+                outbound_message: draftResponse,
+                // Normalized provider ids
+                provider_thread_id: null,
+                provider_message_id: null
+              }
             },
             // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
             { onConflict: 'source,source_row_id,event_type' }

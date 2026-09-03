@@ -50,6 +50,7 @@ import {
 } from "../_shared/smartlead-thread.ts";
 import { htmlToText } from "../_shared/html-to-text.ts";
 import { cleanReplyPreview } from "../_shared/reply-text.ts";
+import { detectLanguageCode } from "../_shared/language.ts";
 
 const allowedOrigins = [
   Deno.env.get("ALLOWED_ORIGIN") || "https://vrelly.com",
@@ -734,6 +735,7 @@ Deno.serve(async (req) => {
               (emailForKey && emailForKey.trim() ? emailForKey.trim().toLowerCase() : "") ||
               (externalId ?? "");
             if (personKey && replyMessageId) {
+              const lang = detectLanguageCode(replyText);
               const writes: Array<Promise<unknown>> = [];
               writes.push(
                 supabase.from("inference_events").upsert(
@@ -761,9 +763,15 @@ Deno.serve(async (req) => {
                     source: "smartlead_webhook",
                     source_row_id: replyMessageId,
                     metadata: {
+                      provider: "smartlead",
                       mail_sender: fromEmail,
                       reply_text: replyText,
+                      reply_language_code: lang.code,
+                      reply_language_method: lang.method,
                       external_message_id: replyMessageId,
+                      // Normalized provider ids
+                      provider_thread_id: smartleadEmailStatsId ?? null,
+                      provider_message_id: replyMessageId
                     }
                   },
                   // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id

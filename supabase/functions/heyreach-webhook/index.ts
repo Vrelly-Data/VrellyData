@@ -1,6 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { shouldResurface } from "../_shared/inbox-reply.ts";
 import { cleanReplyPreview } from "../_shared/reply-text.ts";
+import { detectLanguageCode } from "../_shared/language.ts";
 
 const allowedOrigins = [
   Deno.env.get("ALLOWED_ORIGIN") || "https://vrelly.com",
@@ -774,6 +775,7 @@ Deno.serve(async (req) => {
             : []);
           const inboundText = lastMsg?.length ? String(lastMsg[lastMsg.length - 1]?.message ?? "") : "";
           const externalMessageId = lastMsg?.length ? (lastMsg[lastMsg.length - 1]?.id ?? null) : null;
+          const lang = detectLanguageCode(inboundText);
           if (personKey && stableId) {
             const writes: Array<Promise<unknown>> = [];
             writes.push(
@@ -802,10 +804,16 @@ Deno.serve(async (req) => {
                   source: "heyreach_webhook",
                   source_row_id: stableId,
                   metadata: {
+                    provider: "heyreach",
                     lead_category: leadCategory,
                     reply_text: inboundText,
+                    reply_language_code: lang.code,
+                    reply_language_method: lang.method,
                     external_message_id: externalMessageId,
                     conversation_id: conversationId,
+                    // Normalized provider ids
+                    provider_thread_id: conversationId,
+                    provider_message_id: externalMessageId
                   }
                 },
                 // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
