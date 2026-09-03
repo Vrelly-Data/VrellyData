@@ -29,7 +29,7 @@ async function fetchDialerEventsForEmail(emailLower: string): Promise<DialerEven
   const { data: pbRows } = await supabase
     .from('phoneburner_contacts')
     .select('pb_contact_id')
-    .eq('person_key', emailLower)
+    .or(`person_key.eq.${emailLower},email.eq.${emailLower}`)
     .limit(200);
   const ids = (pbRows ?? []).map((r: any) => r.pb_contact_id).filter(Boolean);
   let b: DialerEvent[] = [];
