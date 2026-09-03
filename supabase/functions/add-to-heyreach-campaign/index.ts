@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { computeCopyFingerprint } from "../_shared/copy-fingerprint.ts";
 
 const allowedOrigins = [
   Deno.env.get("ALLOWED_ORIGIN") || "https://vrelly.com",
@@ -35,6 +36,10 @@ Deno.serve(async (req) => {
       throw new Error("Missing authorization header");
     }
 
+    const serviceSupabase = createClient(
+      Deno.env.get("SUPABASE_URL") ?? "",
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
+    );
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL") ?? "",
       Deno.env.get("SUPABASE_ANON_KEY") ?? "",
@@ -207,6 +212,63 @@ Deno.serve(async (req) => {
 
     if (updateError) {
       console.error("Failed to update lead status:", updateError);
+    }
+
+    // Best-effort: record 'sent' inference event (non-blocking)
+    try {
+      const personKey =
+        (lead.email && String(lead.email).trim() ? String(lead.email).trim().toLowerCase() : "") ||
+        (lead.linkedin_url && String(lead.linkedin_url).trim() ? String(lead.linkedin_url).trim() : "") ||
+        String(lead_id);
+      if (personKey) {
+        const fp = await computeCopyFingerprint(message, null);
+        const occurredAt = sentAtIso;
+        // Fetch team_id for this user+platform
+        const { data: intRow } = await serviceSupabase
+          .from("outbound_integrations")
+          .select("team_id")
+          .eq("platform", "heyreach")
+          .eq("created_by", user.id)
+          .eq("is_active", true)
+          .limit(1)
+          .maybeSingle();
+        await serviceSupabase.from("inference_events")
+          // @ts-ignore onConflict supports column-list
+          .upsert({
+            team_id: intRow?.team_id ?? null,
+            agent_config_id: null,
+            person_key: personKey,
+            email: lead.email ? String(lead.email).trim().toLowerCase() : null,
+            linkedin_url: lead.linkedin_url ?? null,
+            full_name: lead.full_name ?? null,
+            job_title: lead.job_title ?? null,
+            company_name: lead.company ?? null,
+            channel: "linkedin",
+            campaign_external_id: String(campaign_id),
+            campaign_name: campaignName ?? null,
+            sequence_step_type: "linkedin_message",
+            copy_fingerprint: fp,
+            subject: null,
+            event_type: "sent",
+            intent: null,
+            is_objection: null,
+            pipeline_stage: "in_progress",
+            disposition_tag: null,
+            occurred_at: occurredAt,
+            source: "add_to_heyreach_campaign",
+            source_row_id: String(lead_id),
+            metadata: {
+              provider: "heyreach",
+              path: "campaign_add",
+              outbound_message: message,
+              provider_thread_id: null,
+              provider_message_id: null,
+              campaign_id: Number(campaign_id)
+            }
+          }, { onConflict: "source,source_row_id,event_type" });
+      }
+    } catch (e) {
+      console.warn("[add-to-heyreach-campaign] inference_events write failed (non-fatal):", e);
     }
 
     return new Response(

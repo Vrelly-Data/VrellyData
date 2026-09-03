@@ -23,6 +23,7 @@
 // uses snake_case).
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { computeCopyFingerprint } from "../_shared/copy-fingerprint.ts";
 
 const allowedOrigins = [
   Deno.env.get("ALLOWED_ORIGIN") || "https://vrelly.com",
@@ -260,6 +261,72 @@ Deno.serve(async (req) => {
         "[add-to-smartlead-campaign v1] Failed to update lead status:",
         updateError,
       );
+    }
+
+    // Best-effort: record 'sent' inference event (non-blocking)
+    try {
+      const serviceSupabase = createClient(
+        Deno.env.get("SUPABASE_URL") ?? "",
+        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
+      );
+      // Fetch minimal identity for person key and team
+      const { data: identity } = await serviceSupabase
+        .from("agent_leads")
+        .select("id, full_name, email, job_title, company, linkedin_url, last_campaign_name, smartlead_campaign_id")
+        .eq("id", leadId)
+        .maybeSingle();
+      const personKey =
+        (identity?.email && String(identity.email).trim() ? String(identity.email).trim().toLowerCase() : "") ||
+        String(leadId);
+      if (personKey) {
+        const fp = await computeCopyFingerprint(String(message), null);
+        const occurredAt = sentAtIso;
+        // team_id for this user's smartlead integration
+        const { data: intRow } = await serviceSupabase
+          .from("outbound_integrations")
+          .select("team_id")
+          .eq("platform", "smartlead")
+          .eq("created_by", user.id)
+          .eq("is_active", true)
+          .limit(1)
+          .maybeSingle();
+        await serviceSupabase.from("inference_events")
+          // @ts-ignore onConflict supports column-list
+          .upsert({
+            team_id: intRow?.team_id ?? null,
+            agent_config_id: null,
+            person_key: personKey,
+            email: identity?.email ? String(identity.email).trim().toLowerCase() : null,
+            linkedin_url: identity?.linkedin_url ?? null,
+            full_name: identity?.full_name ?? null,
+            job_title: identity?.job_title ?? null,
+            company_name: identity?.company ?? null,
+            channel: "email",
+            campaign_external_id: String(campaignId),
+            campaign_name: campaignName ?? null,
+            sequence_step_type: "email",
+            copy_fingerprint: fp,
+            subject: null,
+            event_type: "sent",
+            intent: null,
+            is_objection: null,
+            pipeline_stage: "in_progress",
+            disposition_tag: null,
+            occurred_at: occurredAt,
+            source: "add_to_smartlead_campaign",
+            source_row_id: String(leadId),
+            metadata: {
+              provider: "smartlead",
+              path: "campaign_add",
+              outbound_message: String(message),
+              provider_thread_id: null,
+              provider_message_id: null,
+              campaign_id: String(campaignId)
+            }
+          }, { onConflict: "source,source_row_id,event_type" });
+      }
+    } catch (e) {
+      console.warn("[add-to-smartlead-campaign] inference_events write failed (non-fatal):", e);
     }
 
     return new Response(

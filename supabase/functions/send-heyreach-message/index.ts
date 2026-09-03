@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { computeCopyFingerprint } from "../_shared/copy-fingerprint.ts";
 
 const allowedOrigins = [
   Deno.env.get("ALLOWED_ORIGIN") || "https://vrelly.com",
@@ -33,6 +34,10 @@ Deno.serve(async (req) => {
       throw new Error("Missing authorization header");
     }
 
+    const serviceSupabase = createClient(
+      Deno.env.get("SUPABASE_URL") ?? "",
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
+    );
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL") ?? "",
       Deno.env.get("SUPABASE_ANON_KEY") ?? "",
@@ -135,6 +140,80 @@ Deno.serve(async (req) => {
 
     if (updateError) {
       console.error("Failed to update lead status:", updateError);
+    }
+
+    // Best-effort: record 'sent' inference event (non-blocking)
+    try {
+      // Re-fetch minimal fields needed for attribution and person key
+      const { data: leadRow } = await supabase
+        .from("agent_leads")
+        .select("id, full_name, email, job_title, company, linkedin_url, reply_thread")
+        .eq("id", lead_id)
+        .eq("user_id", user.id)
+        .maybeSingle();
+      const personKey =
+        (leadRow?.email && String(leadRow.email).trim() ? String(leadRow.email).trim().toLowerCase() : "") ||
+        (leadRow?.linkedin_url && String(leadRow.linkedin_url).trim() ? String(leadRow.linkedin_url).trim() : "") ||
+        String(lead_id);
+      if (personKey) {
+        const fp = await computeCopyFingerprint(message, null);
+        const occurredAt = new Date().toISOString();
+        // Look up last campaign name if any was set earlier (optional)
+        const { data: namedCampaign } = await supabase
+          .from("agent_leads")
+          .select("last_campaign_name")
+          .eq("id", lead_id)
+          .maybeSingle();
+        // Resolve conversation/account ids for normalized metadata
+        const conversationId = lead.heyreach_conversation_id ?? null;
+        const accountId = lead.heyreach_account_id ?? null;
+        // Fetch team_id (single HeyReach integration per user)
+        const { data: intRow } = await serviceSupabase
+          .from("outbound_integrations")
+          .select("team_id")
+          .eq("platform", "heyreach")
+          .eq("created_by", user.id)
+          .eq("is_active", true)
+          .limit(1)
+          .maybeSingle();
+        await serviceSupabase.from("inference_events")
+          // @ts-ignore onConflict supports column-list
+          .upsert({
+            team_id: intRow?.team_id ?? null,
+            agent_config_id: null,
+            person_key: personKey,
+            email: leadRow?.email ? String(leadRow.email).trim().toLowerCase() : null,
+            linkedin_url: leadRow?.linkedin_url ?? null,
+            full_name: leadRow?.full_name ?? null,
+            job_title: leadRow?.job_title ?? null,
+            company_name: leadRow?.company ?? null,
+            channel: "linkedin",
+            campaign_external_id: null,
+            campaign_name: (namedCampaign as any)?.last_campaign_name ?? null,
+            sequence_step_type: "linkedin_message",
+            copy_fingerprint: fp,
+            subject: null,
+            event_type: "sent",
+            intent: null,
+            is_objection: null,
+            pipeline_stage: null,
+            disposition_tag: null,
+            occurred_at: occurredAt,
+            source: "send_heyreach_message",
+            source_row_id: String(lead_id),
+            metadata: {
+              provider: "heyreach",
+              path: "direct_linkedin_message",
+              outbound_message: message,
+              provider_thread_id: conversationId ? String(conversationId) : null,
+              provider_message_id: null,
+              conversation_id: conversationId ? String(conversationId) : null,
+              account_id: accountId != null ? Number(accountId) : null
+            }
+          }, { onConflict: "source,source_row_id,event_type" });
+      }
+    } catch (e) {
+      console.warn("[send-heyreach-message] inference_events write failed (non-fatal):", e);
     }
 
     return new Response(
