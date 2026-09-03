@@ -1,4 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { computeCopyFingerprint } from '../_shared/copy-fingerprint.ts';
 
 const allowedOrigins = [
   Deno.env.get('ALLOWED_ORIGIN') || 'https://vrelly.com',
@@ -689,6 +690,8 @@ Deno.serve(async (req) => {
           String(leadId);
         if (personKey) {
           const writes: Array<Promise<unknown>> = [];
+          // Compute a stable fingerprint for the outbound copy (direct thread reply)
+          const copyFp = await computeCopyFingerprint(draftResponse, null);
           writes.push(
             supabase.from('inference_events').upsert(
               {
@@ -703,6 +706,9 @@ Deno.serve(async (req) => {
                 channel: lead.channel,
                 campaign_external_id: null,
                 campaign_name: lead.last_campaign_name ?? null,
+                sequence_step_type: lead.channel === 'linkedin' ? 'linkedin_message' : 'email',
+                copy_fingerprint: copyFp,
+                subject: null,
                 event_type: 'sent',
                 intent: intent ?? null,
                 is_objection: null,
@@ -711,7 +717,7 @@ Deno.serve(async (req) => {
                 occurred_at: new Date().toISOString(),
                 source: 'send_agent_reply',
                 source_row_id: String(leadId),
-                metadata: { path: 'direct_thread_reply' }
+                metadata: { path: 'direct_thread_reply', outbound_message: draftResponse }
               },
               // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
               { onConflict: 'source,source_row_id,event_type' }
@@ -979,6 +985,8 @@ Deno.serve(async (req) => {
         String(leadId);
       if (personKey) {
         const writes: Array<Promise<unknown>> = [];
+        // Compute a stable fingerprint for the outbound copy (campaign move-to-sequence)
+        const copyFp = await computeCopyFingerprint(draftResponse, null);
         writes.push(
           supabase.from('inference_events').upsert(
             {
@@ -993,6 +1001,9 @@ Deno.serve(async (req) => {
               channel: lead.channel,
               campaign_external_id: campaignId ?? null,
               campaign_name: (leadUpdate.last_campaign_name as string | null | undefined) ?? null,
+              sequence_step_type: lead.channel === 'linkedin' ? 'linkedin_message' : 'email',
+              copy_fingerprint: copyFp,
+              subject: null,
               event_type: 'sent',
               intent: intent ?? null,
               is_objection: null,
@@ -1001,7 +1012,7 @@ Deno.serve(async (req) => {
               occurred_at: new Date().toISOString(),
               source: 'send_agent_reply',
               source_row_id: String(leadId),
-              metadata: { path: 'campaign_move_to_sequence' }
+              metadata: { path: 'campaign_move_to_sequence', outbound_message: draftResponse }
             },
             // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
             { onConflict: 'source,source_row_id,event_type' }

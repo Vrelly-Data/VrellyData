@@ -768,6 +768,12 @@ Deno.serve(async (req) => {
             (externalId ?? "");
           const occurredAt = newestThreadTimestamp(fullReplyThread ?? replyThread);
           const stableId = conversationId && occurredAt ? `${conversationId}:${occurredAt}` : null;
+          // Inbound reply text — last message content from recent_messages (already normalized above)
+          const lastMsg = (Array.isArray((event as { recent_messages?: unknown }).recent_messages)
+            ? ((event as { recent_messages: any[] }).recent_messages)
+            : []);
+          const inboundText = lastMsg?.length ? String(lastMsg[lastMsg.length - 1]?.message ?? "") : "";
+          const externalMessageId = lastMsg?.length ? (lastMsg[lastMsg.length - 1]?.id ?? null) : null;
           if (personKey && stableId) {
             const writes: Array<Promise<unknown>> = [];
             writes.push(
@@ -784,6 +790,9 @@ Deno.serve(async (req) => {
                   channel: "linkedin",
                   campaign_external_id: campaignExternalId || null,
                   campaign_name: null,
+                  sequence_step_type: null,
+                  copy_fingerprint: null,
+                  subject: null,
                   event_type: "replied",
                   intent: null,
                   is_objection: null,
@@ -792,7 +801,12 @@ Deno.serve(async (req) => {
                   occurred_at: occurredAt,
                   source: "heyreach_webhook",
                   source_row_id: stableId,
-                  metadata: { lead_category: leadCategory }
+                  metadata: {
+                    lead_category: leadCategory,
+                    reply_text: inboundText,
+                    external_message_id: externalMessageId,
+                    conversation_id: conversationId,
+                  }
                 },
                 // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
                 { onConflict: "source,source_row_id,event_type" }

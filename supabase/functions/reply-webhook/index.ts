@@ -866,7 +866,18 @@ Deno.serve(async (req) => {
               const stableId = externalId && replyAt ? `${externalId}:${replyAt}` : null;
               if (personKey && stableId) {
                 const writes: Array<Promise<unknown>> = [];
-                writes.push(
+            // Extract external message id when present (v3 carries sent_email_id / linkedin_message_id)
+            const externalMessageId = String(
+              pick(
+                (event as any).sent_email_id,
+                (event as any).sentEmailId,
+                (event as any).linkedin_message_id,
+                (event as any).linkedinMessageId,
+                (event as any).message_id,
+                (event as any).messageId,
+              ) ?? ''
+            ).trim() || null;
+            writes.push(
                   supabase.from('inference_events').upsert(
                     {
                       team_id: integration.team_id,
@@ -880,6 +891,9 @@ Deno.serve(async (req) => {
                       channel,
                       campaign_external_id: campaignId || null,
                       campaign_name: campaign?.name ?? null,
+                      sequence_step_type: null,
+                      copy_fingerprint: null,
+                      subject: null,
                       event_type: 'replied',
                       intent: null,
                       is_objection: null,
@@ -888,7 +902,13 @@ Deno.serve(async (req) => {
                       occurred_at: replyAt,
                       source: 'reply_webhook',
                       source_row_id: stableId,
-                      metadata: { raw_event_type: eventType }
+                      metadata: {
+                        raw_event_type: eventType,
+                        reply_text: replyText,
+                        external_message_id: externalMessageId,
+                        thread_id: externalId ?? null,
+                        contact_id: contactId || null,
+                      }
                     },
                     // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
                     { onConflict: 'source,source_row_id,event_type' }
