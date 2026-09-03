@@ -749,6 +749,9 @@ Deno.serve(async (req) => {
                     channel: "email",
                     campaign_external_id: smartleadCampaignId || null,
                     campaign_name: lastCampaignName || null,
+                    sequence_step_type: null,
+                    copy_fingerprint: null,
+                    subject: null,
                     event_type: "replied",
                     intent: null,
                     is_objection: null,
@@ -757,7 +760,11 @@ Deno.serve(async (req) => {
                     occurred_at: replyTimestamp || new Date().toISOString(),
                     source: "smartlead_webhook",
                     source_row_id: replyMessageId,
-                    metadata: { mail_sender: fromEmail }
+                    metadata: {
+                      mail_sender: fromEmail,
+                      reply_text: replyText,
+                      external_message_id: replyMessageId,
+                    }
                   },
                   // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
                   { onConflict: "source,source_row_id,event_type" }

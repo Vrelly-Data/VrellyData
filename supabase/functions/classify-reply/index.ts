@@ -1,6 +1,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { htmlToText } from '../_shared/html-to-text.ts';
 import { preprocessEmailReply } from '../_shared/reply-text.ts';
+import { computeCopyFingerprint } from '../_shared/copy-fingerprint.ts';
 
 console.log('classify-reply starting');
 
@@ -1054,6 +1055,22 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
         (leadLinkedinUrl && leadLinkedinUrl.trim() ? leadLinkedinUrl.trim() : '') ||
         (lead_id ?? '');
       if (personKey) {
+        // Link to the most recent outbound that preceded this reply when available:
+        // derive from thread_history's last 'sender' entry.
+        let lastSenderBody: string | null = null;
+        if (Array.isArray(thread_history)) {
+          for (let i = thread_history.length - 1; i >= 0; i--) {
+            const m = thread_history[i];
+            if (m && typeof m === 'object' && (m as any).role === 'sender') {
+              const c = (m as any).content;
+              if (typeof c === 'string' && c.trim()) {
+                lastSenderBody = c;
+                break;
+              }
+            }
+          }
+        }
+        const copyFp = await computeCopyFingerprint(lastSenderBody, null);
         const eventRow: Record<string, unknown> = {
           team_id: teamId ?? null,
           agent_config_id: null,
@@ -1074,7 +1091,7 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
           campaign_external_id: leadCampaignExternalId ?? null,
           campaign_name: leadLastCampaignName ?? null,
           sequence_step_type: null,
-          copy_fingerprint: null,
+          copy_fingerprint: copyFp,
           subject: null,
           event_type: 'classified',
           intent,
@@ -1088,6 +1105,7 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
             intent_confidence: intentConfidence,
             matched_persona: matchedTitle,
             prospect_read: prospectRead ?? null,
+            reply_text,
           },
         };
         const writes: Array<Promise<unknown>> = [];

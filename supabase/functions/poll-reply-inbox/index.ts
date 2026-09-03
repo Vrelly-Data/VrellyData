@@ -640,6 +640,9 @@ Deno.serve(async (req) => {
                     : '') ||
                   externalId;
                 const stableId = thread?.id && lastReplyDate ? `${thread.id}:${lastReplyDate}` : null;
+                // Inbound reply text from latest inbound message (already computed above)
+                const inboundText = replyText;
+                const externalMessageId = null; // Reply.io v3 messages endpoint used here does not return per-message id
                 if (personKey && stableId) {
                   const writes: Array<Promise<unknown>> = [];
                   writes.push(
@@ -656,6 +659,9 @@ Deno.serve(async (req) => {
                         channel,
                         campaign_external_id: thread.sequence?.id ? String(thread.sequence.id) : null,
                         campaign_name: thread.sequence?.name ?? null,
+                        sequence_step_type: null,
+                        copy_fingerprint: null,
+                        subject: null,
                         event_type: 'replied',
                         intent: null,
                         is_objection: null,
@@ -664,7 +670,7 @@ Deno.serve(async (req) => {
                         occurred_at: lastReplyDate,
                         source: 'poll_reply_inbox',
                         source_row_id: stableId,
-                        metadata: { source: 'poll' }
+                        metadata: { source: 'poll', reply_text: inboundText, external_message_id: externalMessageId, thread_id: String(thread.id) }
                       },
                       // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
                       { onConflict: 'source,source_row_id,event_type' }
