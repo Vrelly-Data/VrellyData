@@ -7,6 +7,7 @@ import {
 import { htmlToText } from '../_shared/html-to-text.ts';
 import { isSuppressed, fireClassifyReply } from '../_shared/inbox-reply.ts';
 import { cleanReplyPreview } from '../_shared/reply-text.ts';
+import { detectLanguageCode } from '../_shared/language.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -877,6 +878,7 @@ Deno.serve(async (req) => {
                 (event as any).messageId,
               ) ?? ''
             ).trim() || null;
+            const lang = detectLanguageCode(replyText);
             writes.push(
                   supabase.from('inference_events').upsert(
                     {
@@ -903,11 +905,16 @@ Deno.serve(async (req) => {
                       source: 'reply_webhook',
                       source_row_id: stableId,
                       metadata: {
+                        provider: 'reply_io',
                         raw_event_type: eventType,
                         reply_text: replyText,
+                        reply_language_code: lang.code,
+                        reply_language_method: lang.method,
                         external_message_id: externalMessageId,
-                        thread_id: externalId ?? null,
                         contact_id: contactId || null,
+                        // Normalized provider ids
+                        provider_thread_id: externalId ?? null,
+                        provider_message_id: externalMessageId,
                       }
                     },
                     // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id

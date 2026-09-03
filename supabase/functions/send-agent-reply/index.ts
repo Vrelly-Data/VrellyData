@@ -654,10 +654,11 @@ Deno.serve(async (req) => {
       // outgoing message lands in the thread.
       const pipelineStage = INTENT_STAGE_MAP[intent] || lead.pipeline_stage;
       const existingThread = Array.isArray(lead.reply_thread) ? lead.reply_thread : [];
+      const sentAtIso = new Date().toISOString();
       const sentMessage = {
         role: 'sender',
         content: draftResponse,
-        timestamp: new Date().toISOString(),
+        timestamp: sentAtIso,
         channel: lead.channel,
       };
 
@@ -692,6 +693,17 @@ Deno.serve(async (req) => {
           const writes: Array<Promise<unknown>> = [];
           // Compute a stable fingerprint for the outbound copy (direct thread reply)
           const copyFp = await computeCopyFingerprint(draftResponse, null);
+          // Stable per-send identity (provider message id not returned here)
+          const { computeSentSourceId } = await import('../_shared/sent-source-id.ts');
+          const sentSourceId = await computeSentSourceId({
+            provider: 'reply_io',
+            personKey,
+            occurredAt: sentAtIso,
+            providerThreadId: threadIdStr,
+            providerMessageId: null,
+            copyFingerprint: copyFp,
+            tag: 'direct_thread_reply'
+          });
           writes.push(
             supabase.from('inference_events').upsert(
               {
@@ -714,10 +726,17 @@ Deno.serve(async (req) => {
                 is_objection: null,
                 pipeline_stage: pipelineStage,
                 disposition_tag: lead.disposition_tag ?? null,
-                occurred_at: new Date().toISOString(),
+                occurred_at: sentAtIso,
                 source: 'send_agent_reply',
-                source_row_id: String(leadId),
-                metadata: { path: 'direct_thread_reply', outbound_message: draftResponse }
+                source_row_id: sentSourceId,
+                metadata: {
+                  provider: 'reply_io',
+                  path: 'direct_thread_reply',
+                  outbound_message: draftResponse,
+                  // Normalized provider ids
+                  provider_thread_id: threadIdStr,
+                  provider_message_id: null
+                }
               },
               // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
               { onConflict: 'source,source_row_id,event_type' }
@@ -919,10 +938,11 @@ Deno.serve(async (req) => {
     // place the outgoing message lands in the thread. Read-then-write; small
     // race window on concurrent sends to one lead, fine for this single-user flow.
     const existingThread = Array.isArray(lead.reply_thread) ? lead.reply_thread : [];
+    const sentAtIso = new Date().toISOString();
     const sentMessage = {
       role: 'sender',
       content: draftResponse,
-      timestamp: new Date().toISOString(),
+      timestamp: sentAtIso,
       channel: lead.channel,
     };
 
@@ -987,6 +1007,16 @@ Deno.serve(async (req) => {
         const writes: Array<Promise<unknown>> = [];
         // Compute a stable fingerprint for the outbound copy (campaign move-to-sequence)
         const copyFp = await computeCopyFingerprint(draftResponse, null);
+        const { computeSentSourceId } = await import('../_shared/sent-source-id.ts');
+        const sentSourceId = await computeSentSourceId({
+          provider: 'reply_io',
+          personKey,
+          occurredAt: sentAtIso,
+          providerThreadId: null,
+          providerMessageId: null,
+          copyFingerprint: copyFp,
+          tag: `campaign_move_to_sequence:${campaignId ?? ''}`
+        });
         writes.push(
           supabase.from('inference_events').upsert(
             {
@@ -1009,10 +1039,17 @@ Deno.serve(async (req) => {
               is_objection: null,
               pipeline_stage: pipelineStage,
               disposition_tag: lead.disposition_tag ?? null,
-              occurred_at: new Date().toISOString(),
+              occurred_at: sentAtIso,
               source: 'send_agent_reply',
-              source_row_id: String(leadId),
-              metadata: { path: 'campaign_move_to_sequence', outbound_message: draftResponse }
+              source_row_id: sentSourceId,
+              metadata: {
+                provider: 'reply_io',
+                path: 'campaign_move_to_sequence',
+                outbound_message: draftResponse,
+                // Normalized provider ids
+                provider_thread_id: null,
+                provider_message_id: null
+              }
             },
             // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
             { onConflict: 'source,source_row_id,event_type' }

@@ -20,6 +20,7 @@
 //     can call this and send-heyreach-message with one body shape.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { computeCopyFingerprint } from "../_shared/copy-fingerprint.ts";
 
 const allowedOrigins = [
   Deno.env.get("ALLOWED_ORIGIN") || "https://vrelly.com",
@@ -220,6 +221,7 @@ Deno.serve(async (req) => {
     // with the same small race window as send-heyreach-message — acceptable
     // for a single-user send flow.
     const existingThread = Array.isArray(lead.reply_thread) ? lead.reply_thread : [];
+    const sentAt = new Date().toISOString();
     const newMessage = {
       role: "sender",
       content: String(message),
@@ -244,6 +246,82 @@ Deno.serve(async (req) => {
         "[send-smartlead-email v1] Failed to update lead status:",
         updateError,
       );
+    }
+
+    // Best-effort: record 'sent' inference event (non-blocking)
+    try {
+      const serviceSupabase = createClient(
+        Deno.env.get("SUPABASE_URL") ?? "",
+        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
+      );
+      // Fetch minimal identity for person key and team
+      const { data: identity } = await serviceSupabase
+        .from("agent_leads")
+        .select("id, full_name, email, job_title, company, linkedin_url, last_campaign_name, smartlead_campaign_id, smartlead_email_stats_id, reply_message_id")
+        .eq("id", leadId)
+        .maybeSingle();
+      const personKey =
+        (identity?.email && String(identity.email).trim() ? String(identity.email).trim().toLowerCase() : "") ||
+        String(leadId);
+      if (personKey) {
+        const fp = await computeCopyFingerprint(String(message), null);
+        const occurredAt = sentAt;
+        // team_id for this user's smartlead integration
+        const { data: intRow } = await serviceSupabase
+          .from("outbound_integrations")
+          .select("team_id")
+          .eq("platform", "smartlead")
+          .eq("created_by", user.id)
+          .eq("is_active", true)
+          .limit(1)
+          .maybeSingle();
+        const { computeSentSourceId } = await import("../_shared/sent-source-id.ts");
+        const sentSourceId = await computeSentSourceId({
+          provider: "smartlead",
+          personKey,
+          occurredAt,
+          providerThreadId: identity?.smartlead_email_stats_id ?? null,
+          providerMessageId: null,
+          copyFingerprint: fp,
+          tag: "reply_email_thread"
+        });
+        await serviceSupabase.from("inference_events")
+          // @ts-ignore onConflict supports column-list
+          .upsert({
+            team_id: intRow?.team_id ?? null,
+            agent_config_id: null,
+            person_key: personKey,
+            email: identity?.email ? String(identity.email).trim().toLowerCase() : null,
+            linkedin_url: identity?.linkedin_url ?? null,
+            full_name: identity?.full_name ?? null,
+            job_title: identity?.job_title ?? null,
+            company_name: identity?.company ?? null,
+            channel: "email",
+            campaign_external_id: identity?.smartlead_campaign_id ?? null,
+            campaign_name: identity?.last_campaign_name ?? null,
+            sequence_step_type: "email",
+            copy_fingerprint: fp,
+            subject: null,
+            event_type: "sent",
+            intent: null,
+            is_objection: null,
+            pipeline_stage: "replied",
+            disposition_tag: null,
+            occurred_at: occurredAt,
+            source: "send_smartlead_email",
+            source_row_id: sentSourceId,
+            metadata: {
+              provider: "smartlead",
+              path: "reply_email_thread",
+              outbound_message: String(message),
+              provider_thread_id: identity?.smartlead_email_stats_id ?? null,
+              provider_message_id: null,
+              reply_message_id: identity?.reply_message_id ?? null
+            }
+          }, { onConflict: "source,source_row_id,event_type" });
+      }
+    } catch (e) {
+      console.warn("[send-smartlead-email] inference_events write failed (non-fatal):", e);
     }
 
     return new Response(
