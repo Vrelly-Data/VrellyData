@@ -203,6 +203,29 @@ export function useOutboundIntegrations() {
           } catch (err) {
             console.error('Smartlead auto-sync error:', err);
           }
+        } else if (platform === 'phoneburner') {
+          // PhoneBurner: dialer integration. No campaign concept. On connect,
+          // seed a contacts pull and a recent calls poll (both additive).
+          try {
+            const { error: cErr } = await supabase.functions.invoke('sync-phoneburner-contacts', {
+              body: { integrationId: data.id },
+            });
+            if (cErr) {
+              console.warn('PhoneBurner contacts sync failed (non-fatal):', cErr);
+            }
+          } catch (e) {
+            console.warn('PhoneBurner contacts sync error (non-fatal):', e);
+          }
+          try {
+            const { error: pErr } = await supabase.functions.invoke('poll-phoneburner-calls', {
+              body: { integrationId: data.id, lookbackDays: 2 },
+            });
+            if (pErr) {
+              console.warn('PhoneBurner calls poll failed (non-fatal):', pErr);
+            }
+          } catch (e) {
+            console.warn('PhoneBurner calls poll error (non-fatal):', e);
+          }
         } else if (platform === 'reply.io' || platform === 'replyio') {
           // Reply.io sync chain
           try {
@@ -334,6 +357,22 @@ export function useOutboundIntegrations() {
 
         if (error) throw error;
         return data;
+      }
+
+      if (platform === 'phoneburner') {
+        // No campaigns — run contacts + recent calls. Both are additive and safe to call on demand.
+        const results: Record<string, unknown> = {};
+        const { data: cData, error: cErr } = await supabase.functions.invoke('sync-phoneburner-contacts', {
+          body: { integrationId },
+        });
+        if (cErr) throw cErr;
+        results.contacts = cData ?? null;
+        const { data: pData, error: pErr } = await supabase.functions.invoke('poll-phoneburner-calls', {
+          body: { integrationId, lookbackDays: 2 },
+        });
+        if (pErr) throw pErr;
+        results.calls = pData ?? null;
+        return results;
       }
 
       if (platform === 'reply.io' || platform === 'replyio') {
