@@ -13,13 +13,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Progress } from '@/components/ui/progress';
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
-import { Loader2, Users, RefreshCw, Download, ExternalLink, Check, X, Target, Trash2 } from 'lucide-react';
+import { Loader2, Users, RefreshCw, Download, ExternalLink, Check, X, Target, Trash2, PhoneCall } from 'lucide-react';
 import { toast } from 'sonner';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { PaginationControls } from '@/components/search/PaginationControls';
 import { useDeleteList } from '@/hooks/useLists';
 import { formatDistanceToNow } from 'date-fns';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
+import { Button as UIButton } from '@/components/ui/button';
+import { CallHistoryDialog } from './CallHistoryDialog';
 
 const statusColors: Record<string, string> = {
   active: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200',
@@ -48,6 +50,8 @@ export function PeopleTab() {
   const [buildAudienceOpen, setBuildAudienceOpen] = useState(false);
   const [selectedListId, setSelectedListId] = useState<string | null>(null);
   const [deleteListId, setDeleteListId] = useState<string | null>(null);
+  const [callsOpen, setCallsOpen] = useState(false);
+  const [callsEmail, setCallsEmail] = useState<string | null>(null);
 
   const { data: savedLists } = useLists('person');
   const deleteListMutation = useDeleteList();
@@ -537,6 +541,7 @@ export function PeopleTab() {
                   <TableHead className="min-w-[80px] text-center">Opted Out</TableHead>
                   <TableHead className="min-w-[100px]">Added</TableHead>
                   <TableHead className="min-w-[60px]">LinkedIn</TableHead>
+              <TableHead className="min-w-[80px] text-center">Calls</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -610,6 +615,19 @@ export function PeopleTab() {
                           <span className="text-muted-foreground">—</span>
                         )}
                       </TableCell>
+                      <TableCell className="text-center">
+                        <UIButton
+                          size="sm"
+                          variant="outline"
+                          className="h-7"
+                          onClick={() => { setCallsEmail(contact.email); setCallsOpen(true); }}
+                          disabled={!contact.email}
+                          title={contact.email ? `View calls for ${contact.email}` : 'No email on record'}
+                        >
+                          <PhoneCall className="h-3.5 w-3.5 mr-1" />
+                          View
+                        </UIButton>
+                      </TableCell>
                     </TableRow>
                   );
                 })}
@@ -660,6 +678,7 @@ export function PeopleTab() {
           listName={savedLists?.find(l => l.id === selectedListId)?.name || 'Audience'}
         />
       )}
+      <CallHistoryDialog open={callsOpen} onOpenChange={(o) => { if (!o) { setCallsOpen(false); setCallsEmail(null); } else setCallsOpen(true); }} email={callsEmail} />
     </div>
   );
 }

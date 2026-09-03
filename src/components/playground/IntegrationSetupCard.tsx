@@ -24,6 +24,7 @@ const platformIcons: Record<string, string> = {
   'reply.io': '📧',
   'heyreach': '🤝',
   'smartlead': '🎯',
+  'phoneburner': '📞',
   'instantly': '⚡',
   'lemlist': '🍋',
 };
