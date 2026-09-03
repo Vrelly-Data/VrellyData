@@ -14,18 +14,21 @@ import { Badge } from '@/components/ui/badge';
 import { Plus, Loader2, Trash2, RefreshCw } from 'lucide-react';
 import { useOutboundIntegrations } from '@/hooks/useOutboundIntegrations';
 import { toast } from 'sonner';
+import { supabase } from '@/integrations/supabase/client';
 
-type ConnectPlatform = 'heyreach' | 'reply.io';
+type ConnectPlatform = 'heyreach' | 'reply.io' | 'phoneburner';
 
 const PLATFORM_LABEL: Record<string, string> = {
   heyreach: 'HeyReach',
   'reply.io': 'Reply.io',
   replyio: 'Reply.io',
   smartlead: 'Smartlead',
+  phoneburner: 'PhoneBurner / Dialer',
 };
 const platformLabel = (p: string) => PLATFORM_LABEL[p?.toLowerCase()] ?? p;
 const isHeyReach = (p: string) => p?.toLowerCase() === 'heyreach';
 const isReplyIo = (p: string) => ['reply.io', 'replyio'].includes(p?.toLowerCase());
+const isPhoneBurner = (p: string) => p?.toLowerCase() === 'phoneburner';
 
 export function ExternalProjectsSettings() {
   // Platform-driven connect dialog (null = closed). Replaces the old
@@ -47,6 +50,17 @@ export function ExternalProjectsSettings() {
     if (!connectPlatform || !apiKey.trim()) return;
     setConnecting(true);
     try {
+      // Validate PhoneBurner token before saving (Settings flow mirrors Playground)
+      if (isPhoneBurner(connectPlatform)) {
+        const { data, error } = await supabase.functions.invoke('validate-phoneburner-key', {
+          body: { apiKey: apiKey.trim() },
+        });
+        if (error || !data?.valid) {
+          toast.error((data as any)?.error || 'Invalid PhoneBurner API token');
+          return;
+        }
+      }
+
       await addIntegration.mutateAsync({
         platform: connectPlatform,
         name: name.trim() || platformLabel(connectPlatform),
@@ -97,6 +111,10 @@ export function ExternalProjectsSettings() {
             <Plus className="h-4 w-4 mr-2" />
             Connect Reply.io
           </Button>
+          <Button onClick={() => setConnectPlatform('phoneburner')}>
+            <Plus className="h-4 w-4 mr-2" />
+            Connect PhoneBurner
+          </Button>
         </div>
       </div>
 
@@ -114,6 +132,10 @@ export function ExternalProjectsSettings() {
               <Button onClick={() => setConnectPlatform('reply.io')}>
                 <Plus className="h-4 w-4 mr-2" />
                 Connect Reply.io
+              </Button>
+              <Button onClick={() => setConnectPlatform('phoneburner')}>
+                <Plus className="h-4 w-4 mr-2" />
+                Connect PhoneBurner
               </Button>
             </div>
           </CardContent>
@@ -197,6 +219,12 @@ export function ExternalProjectsSettings() {
                       </p>
                     )}
                   </div>
+                ) : isPhoneBurner(integration.platform) ? (
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground">
+                      Activity syncs via polling — no webhook setup required.
+                    </p>
+                  </div>
                 ) : null}
               </CardContent>
             </Card>
@@ -233,6 +261,11 @@ export function ExternalProjectsSettings() {
               {connectPlatform && isHeyReach(connectPlatform) && (
                 <p className="text-xs text-muted-foreground">
                   Find your API key in HeyReach under Settings &gt; API
+                </p>
+              )}
+              {connectPlatform && isPhoneBurner(connectPlatform) && (
+                <p className="text-xs text-muted-foreground">
+                  Use your PhoneBurner Personal Access Token (PAT).
                 </p>
               )}
             </div>
