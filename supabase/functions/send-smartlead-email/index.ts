@@ -73,27 +73,50 @@ Deno.serve(async (req) => {
 
   try {
     const authHeader = req.headers.get("Authorization");
-    if (!authHeader) {
-      throw new Error("Missing authorization header");
-    }
+    const agentKey = req.headers.get("x-agent-key");
+    const expectedKey = Deno.env.get("AGENT_API_KEY");
 
-    const supabase = createClient(
-      Deno.env.get("SUPABASE_URL") ?? "",
-      Deno.env.get("SUPABASE_ANON_KEY") ?? "",
-      { global: { headers: { Authorization: authHeader } } },
-    );
-
-    const { data: { user }, error: userError } = await supabase.auth.getUser();
-    if (userError || !user) {
+    const body = await req.json();
+    // Auth: UI JWT OR service-level x-agent-key (requires user_id)
+    let userId: string | null = null;
+    let dbClient: ReturnType<typeof createClient> | null = null;
+    if (authHeader && authHeader.startsWith("Bearer ")) {
+      const supabaseUser = createClient(
+        Deno.env.get("SUPABASE_URL") ?? "",
+        Deno.env.get("SUPABASE_ANON_KEY") ?? "",
+        { global: { headers: { Authorization: authHeader } } },
+      );
+      const { data: { user }, error: userError } = await supabaseUser.auth.getUser();
+      if (userError || !user) {
+        return new Response(
+          JSON.stringify({ error: "Unauthorized" }),
+          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+      userId = user.id;
+      dbClient = supabaseUser;
+    } else if (agentKey && expectedKey && agentKey === expectedKey) {
+      if (!body?.user_id) {
+        return new Response(
+          JSON.stringify({ error: "Missing user_id for service auth" }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+      userId = String(body.user_id);
+      dbClient = createClient(
+        Deno.env.get("SUPABASE_URL") ?? "",
+        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
+      );
+    } else {
       return new Response(
         JSON.stringify({ error: "Unauthorized" }),
         { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
 
-    const body = await req.json();
     const leadId: string | undefined = body.leadId ?? body.lead_id;
     const message: string = stripBraceWrapper(String(body.message ?? ""));
+    const isAuto = body?.auto === true;
     // Optional CC, mirroring send-agent-reply's Reply.io behaviour. Smartlead's
     // reply-email-thread accepts `cc` as a comma-separated STRING — verified
     // against the live API: an array returns `"cc" must be a string`, and
@@ -110,17 +133,30 @@ Deno.serve(async (req) => {
     // Fetch the agent_leads row for this user. RLS already scopes to user_id,
     // but we keep the explicit eq() to match send-heyreach-message and to
     // produce a clearer 'not found' error vs 'access denied'.
-    const { data: lead, error: leadError } = await supabase
+    const { data: lead, error: leadError } = await dbClient
       .from("agent_leads")
       .select(
-        "channel, smartlead_lead_id, smartlead_campaign_id, smartlead_email_stats_id, reply_message_id, reply_thread",
+        "channel, smartlead_lead_id, smartlead_campaign_id, smartlead_email_stats_id, reply_message_id, reply_thread, disposition_tag, full_name, company",
       )
       .eq("id", leadId)
-      .eq("user_id", user.id)
+      .eq("user_id", userId)
       .single();
 
     if (leadError || !lead) {
       throw new Error("Lead not found or access denied");
+    }
+
+    // Suppress opted-out contacts (compliance)
+    if (lead.disposition_tag === "opted_out") {
+      return new Response(
+        JSON.stringify({
+          success: false,
+          handled: true,
+          code: "contact_opted_out",
+          message: "This contact has opted out and can't be messaged — reply not sent",
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
     }
 
     if (lead.channel !== "email") {
@@ -152,12 +188,12 @@ Deno.serve(async (req) => {
     // Single-integration-per-user lookup, mirroring send-heyreach-message.
     // Multi-integration disambiguation (would need synced_campaigns join)
     // is intentionally out of scope here.
-    const { data: integration, error: integrationError } = await supabase
+    const { data: integration, error: integrationError } = await dbClient
       .from("outbound_integrations")
       .select("api_key_encrypted")
       .eq("platform", "smartlead")
       .eq("is_active", true)
-      .eq("created_by", user.id)
+      .eq("created_by", userId)
       .single();
 
     if (integrationError || !integration?.api_key_encrypted) {
@@ -230,15 +266,39 @@ Deno.serve(async (req) => {
     };
     const updatedThread = [...existingThread, newMessage];
 
-    const { error: updateError } = await supabase
+    const { error: updateError } = await dbClient
       .from("agent_leads")
       .update({
         draft_approved: true,
         inbox_status: "replied",
+        ...(isAuto ? { auto_handled: true } : {}),
         reply_thread: updatedThread,
       })
       .eq("id", leadId)
-      .eq("user_id", user.id);
+      .eq("user_id", userId);
+    // Add activity record when auto-sent (parity with Reply.io path)
+    if (isAuto) {
+      try {
+        const { data: cfg } = await dbClient
+          .from("agent_configs")
+          .select("id")
+          .eq("user_id", userId)
+          .eq("is_active", true)
+          .maybeSingle();
+        await dbClient.from("agent_activity").insert({
+          user_id: userId,
+          agent_config_id: cfg?.id ?? null,
+          lead_id: leadId,
+          lead_name: lead.full_name ?? null,
+          lead_company: lead.company ?? null,
+          activity_type: "message_sent",
+          description: `Reply sent to ${lead.full_name ?? ""} via Smartlead`,
+          metadata: { channel: "email", sent_by: "auto" },
+        });
+      } catch (e) {
+        console.warn("[send-smartlead-email v1] activity insert failed (non-fatal):", e);
+      }
+    }
 
     if (updateError) {
       // Smartlead already accepted the send; just log and continue.

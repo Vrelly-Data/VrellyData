@@ -1150,6 +1150,100 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
     } catch (e) {
       console.warn('[classify-reply] inference_events write failed (non-fatal):', e);
     }
+
+    // ====================== AUTO-SEND (narrow allowlist) ======================
+    // Smallest safe slice: when ALL are true —
+    //   - mode === 'auto' on agent_configs (active row)
+    //   - channel === 'email'
+    //   - should_auto_send === true (OOO/bounce only per prompt)
+    //   - lead_id present AND draft generated (call2 succeeded & non-empty)
+    // Then auto-send the draft via service path using existing send functions.
+    // Never block this handler: fire-and-forget; failures leave draft for AM.
+    try {
+      if (
+        lead_id &&
+        channel === 'email' &&
+        shouldAutoSend === true &&
+        !call2Failed &&
+        typeof suggestedResponse === 'string' &&
+        suggestedResponse.trim().length > 0
+      ) {
+        // Check active mode
+        const { data: modeRow } = await supabase
+          .from('agent_configs')
+          .select('mode')
+          .eq('user_id', user_id)
+          .eq('is_active', true)
+          .maybeSingle();
+        const isAutoMode = (modeRow?.mode === 'auto');
+        if (isAutoMode) {
+          // Fetch lead source + suppression flag for routing + hard gate
+          const { data: leadRow } = await supabase
+            .from('agent_leads')
+            .select('source, disposition_tag')
+            .eq('id', lead_id)
+            .eq('user_id', user_id)
+            .maybeSingle();
+          if (leadRow?.disposition_tag === 'opted_out') {
+            console.log(`[classify-reply] auto-send skipped: lead ${lead_id} opted_out`);
+          } else {
+            const svcKey = Deno.env.get('AGENT_API_KEY') ?? '';
+            const sendHeaders = {
+              'Content-Type': 'application/json',
+              'x-agent-key': svcKey,
+            };
+            const tasks: Array<Promise<Response>> = [];
+            if (leadRow?.source === 'reply_io') {
+              const url = `${supabaseUrl}/functions/v1/send-agent-reply`;
+              const body = {
+                user_id,
+                leadId: lead_id,
+                draftResponse: suggestedResponse,
+                intent,
+                auto: true,
+              };
+              const p = fetch(url, { method: 'POST', headers: sendHeaders, body: JSON.stringify(body) });
+              tasks.push(p);
+            } else if (leadRow?.source === 'smartlead') {
+              const url = `${supabaseUrl}/functions/v1/send-smartlead-email`;
+              const body = {
+                user_id,
+                leadId: lead_id,
+                message: suggestedResponse,
+                auto: true,
+              };
+              const p = fetch(url, { method: 'POST', headers: sendHeaders, body: JSON.stringify(body) });
+              tasks.push(p);
+            } else {
+              console.log(`[classify-reply] auto-send skipped: unsupported source "${leadRow?.source ?? 'unknown'}"`);
+            }
+            if (tasks.length) {
+              // Fire asynchronously — do not await. Use waitUntil when available.
+              // @ts-ignore EdgeRuntime provided by Supabase
+              if (typeof EdgeRuntime !== 'undefined' && typeof EdgeRuntime.waitUntil === 'function') {
+                // @ts-ignore
+                EdgeRuntime.waitUntil(Promise.allSettled(tasks).then((results) => {
+                  const first = results[0];
+                  if (first?.status === 'rejected') {
+                    console.warn('[classify-reply] auto-send failed (rejected promise):', first.reason);
+                  }
+                }));
+              } else {
+                Promise.allSettled(tasks).then((results) => {
+                  const first = results[0];
+                  if (first?.status === 'rejected') {
+                    console.warn('[classify-reply] auto-send failed (rejected promise):', first.reason);
+                  }
+                }).catch(() => {});
+              }
+            }
+          }
+        }
+      }
+    } catch (autoErr) {
+      console.warn('[classify-reply] auto-send orchestrator error (non-fatal):', autoErr);
+    }
+
     return new Response(JSON.stringify(classification), {
       status: 200,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
