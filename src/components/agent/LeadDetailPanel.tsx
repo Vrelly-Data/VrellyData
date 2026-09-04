@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { Send, UserPlus, Loader2, X, Linkedin, Mail, Check, Sparkles, Plus, Trash2 } from 'lucide-react';
+import { Send, UserPlus, Loader2, X, Linkedin, Mail, Check, Sparkles, Plus, Trash2, Phone } from 'lucide-react';
 import { LinkedInProfileLink } from '@/components/LinkedInProfileLink';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -49,6 +49,7 @@ import { edgeFunctionError } from '@/lib/edgeFunctionError';
 import { useToast } from '@/hooks/use-toast';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { LeadTagsSection } from './LeadTagsSection';
+import { useDialerEventsForEmail } from '@/hooks/useDialerEvents';
 
 export type { AgentLead };
 
@@ -673,6 +674,32 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
       ? [{ role: 'prospect', content: lead.last_reply_text, timestamp: lead.last_reply_at, channel: lead.channel }]
       : [];
 
+  // Dialer events (PhoneBurner) — joined in the UI without mutating reply_thread.
+  const { data: dialerEvents = [] } = useDialerEventsForEmail(lead.email);
+
+  type TimelineItem =
+    | { kind: 'msg'; role: string; content: string; timestamp?: string | null; channel?: string }
+    | { kind: 'call'; occurred_at: string; disposition: string | null; connected: boolean | null; voicemail: boolean | null; duration_seconds: number | null; note: string | null; recording_url: string | null; phone_e164: string | null };
+
+  const timeline: TimelineItem[] = [
+    ...thread.map((m) => ({ kind: 'msg', role: m.role, content: m.content, timestamp: m.timestamp, channel: m.channel }) as TimelineItem),
+    ...dialerEvents.map((e) => ({
+      kind: 'call' as const,
+      occurred_at: e.occurred_at,
+      disposition: e.disposition ?? null,
+      connected: e.connected ?? null,
+      voicemail: e.voicemail ?? null,
+      duration_seconds: e.duration_seconds ?? null,
+      note: e.note ?? null,
+      recording_url: e.recording_url ?? null,
+      phone_e164: e.phone_e164 ?? null,
+    })),
+  ].sort((a, b) => {
+    const at = a.kind === 'msg' ? (a.timestamp ? new Date(a.timestamp).getTime() : 0) : new Date(a.occurred_at).getTime();
+    const bt = b.kind === 'msg' ? (b.timestamp ? new Date(b.timestamp).getTime() : 0) : new Date(b.occurred_at).getTime();
+    return at - bt;
+  });
+
   // Auto-scroll the conversation container to the bottom whenever the
   // thread grows or a new lead is opened.
   const threadScrollRef = useRef<HTMLDivElement>(null);
@@ -769,38 +796,77 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
               ref={threadScrollRef}
               className="border rounded-lg p-3 bg-muted/20 space-y-3 min-h-[300px] max-h-[50vh] overflow-y-auto"
             >
-              {thread.map((msg, i) => {
-                if (msg.role === 'system') {
+              {timeline.map((it, i) => {
+                if (it.kind === 'msg') {
+                  if (it.role === 'system') {
+                    return (
+                      <div
+                        key={`msg-${i}`}
+                        className="text-xs text-muted-foreground italic text-center py-1"
+                      >
+                        {it.content}
+                        {it.timestamp && (
+                          <span className="ml-2 text-[10px]">
+                            · {formatRelativeTime(it.timestamp)}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  }
                   return (
                     <div
-                      key={i}
-                      className="text-xs text-muted-foreground italic text-center py-1"
+                      key={`msg-${i}`}
+                      className={cn(
+                        'max-w-[85%] rounded-lg px-3 py-2 text-sm',
+                        it.role === 'prospect'
+                          ? 'bg-muted mr-auto'
+                          : 'bg-blue-100 dark:bg-blue-900/30 ml-auto'
+                      )}
                     >
-                      {msg.content}
-                      {msg.timestamp && (
-                        <span className="ml-2 text-[10px]">
-                          · {formatRelativeTime(msg.timestamp)}
-                        </span>
+                      <p className="whitespace-pre-wrap">{it.content}</p>
+                      {it.timestamp && (
+                        <p className="text-[10px] text-muted-foreground mt-1">
+                          {formatRelativeTime(it.timestamp)}
+                        </p>
                       )}
                     </div>
                   );
                 }
+                // Call event
+                const status =
+                  it.connected ? 'Connected' : it.voicemail ? 'Voicemail' : 'Attempted';
                 return (
                   <div
-                    key={i}
-                    className={cn(
-                      'max-w-[85%] rounded-lg px-3 py-2 text-sm',
-                      msg.role === 'prospect'
-                        ? 'bg-muted mr-auto'
-                        : 'bg-blue-100 dark:bg-blue-900/30 ml-auto'
-                    )}
+                    key={`call-${i}`}
+                    className="max-w-[85%] rounded-lg px-3 py-2 text-sm bg-amber-50 dark:bg-amber-900/20 mr-auto border border-amber-200/70 dark:border-amber-800/40"
                   >
-                    <p className="whitespace-pre-wrap">{msg.content}</p>
-                    {msg.timestamp && (
-                      <p className="text-[10px] text-muted-foreground mt-1">
-                        {formatRelativeTime(msg.timestamp)}
-                      </p>
+                    <div className="flex items-center gap-2 font-medium">
+                      <Phone className="h-3.5 w-3.5 text-amber-700 dark:text-amber-300" />
+                      <span>Call · {status}</span>
+                    </div>
+                    <div className="mt-0.5 text-xs text-muted-foreground space-x-2">
+                      {it.disposition && <span>Disposition: <span className="capitalize text-foreground">{it.disposition}</span></span>}
+                      {typeof it.duration_seconds === 'number' && (
+                        <span>· {Math.round(it.duration_seconds)}s</span>
+                      )}
+                      {it.phone_e164 && <span>· {it.phone_e164}</span>}
+                    </div>
+                    {it.note && (
+                      <p className="mt-1 text-sm whitespace-pre-wrap">{it.note}</p>
                     )}
+                    <div className="text-[10px] text-muted-foreground mt-1 flex items-center gap-2">
+                      <span>{formatRelativeTime(it.occurred_at)}</span>
+                      {it.recording_url && (
+                        <a
+                          href={it.recording_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-blue-600 hover:underline"
+                        >
+                          Recording
+                        </a>
+                      )}
+                    </div>
                   </div>
                 );
               })}
