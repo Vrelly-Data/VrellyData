@@ -38,12 +38,53 @@ function toIsoUTC(d: Date): string {
   return d.toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
+// Extract contacts array from PhoneBurner response.
+// Official shape per docs:
+// {
+//   "http_status": 200,
+//   "contacts": {
+//     "contacts": [ ... ],
+//     "page_size": N, "total_results": "...", "page": 1, "total_pages": N
+//   }
+// }
+function extractContacts(data: any): { items: any[]; page?: number; totalPages?: number; pageSize?: number; totalResults?: number } {
+  try {
+    const wrapper = data?.contacts;
+    const nested = wrapper?.contacts;
+    let items: any[] = [];
+    if (Array.isArray(nested)) {
+      items = nested;
+    } else if (nested && typeof nested === "object") {
+      items = [nested];
+    } else if (Array.isArray(data)) {
+      items = data;
+    } else if (Array.isArray(data?.data)) {
+      items = data.data;
+    } else if (Array.isArray(data?.items)) {
+      items = data.items;
+    } else if (Array.isArray(data?.contacts)) {
+      // legacy heuristic fallback
+      items = data.contacts;
+    }
+    const page = typeof wrapper?.page === "number" ? wrapper.page : undefined;
+    const totalPages = typeof wrapper?.total_pages === "number" ? wrapper.total_pages : undefined;
+    const pageSize = typeof wrapper?.page_size === "number" ? wrapper.page_size : undefined;
+    const totalResultsRaw = wrapper?.total_results;
+    const totalResults = typeof totalResultsRaw === "number"
+      ? totalResultsRaw
+      : (typeof totalResultsRaw === "string" ? Number(totalResultsRaw) : undefined);
+    return { items, page, totalPages, pageSize, totalResults };
+  } catch {
+    return { items: [] };
+  }
+}
+
 // GET /contacts?updated_from&per_page&page (defensive to unknown param names)
 async function fetchContactsPage(
   token: string,
   updatedFrom: string | null,
   page: number,
-): Promise<{ items: any[]; hasMore: boolean }> {
+): Promise<{ items: any[]; hasMore: boolean; diag: Record<string, unknown> }> {
   const url = new URL(`${PB_API_BASE}/contacts`);
   // Try multiple conventional param names to maximize compatibility
   url.searchParams.set("page", String(page));
@@ -66,24 +107,31 @@ async function fetchContactsPage(
     throw new Error(`PhoneBurner /contacts error (${res.status}): ${body.slice(0, 300)}`);
   }
   const data = await res.json().catch(() => ({}));
-  // Heuristic extraction: array at top-level, or in data/contacts/items.
-  const items =
-    Array.isArray(data) ? data
-    : Array.isArray(data?.contacts) ? data.contacts
-    : Array.isArray(data?.data) ? data.data
-    : Array.isArray(data?.items) ? data.items
-    : [];
-  // hasMore: true while this page is page_size length; false when short
-  const hasMore = items.length === PAGE_SIZE;
-  return { items, hasMore };
+  const topKeys = Object.keys(data || {});
+  const { items, page: curPage, totalPages, pageSize, totalResults } = extractContacts(data);
+  const hasMore = typeof totalPages === "number" && typeof curPage === "number"
+    ? curPage < totalPages
+    : items.length === PAGE_SIZE; // fallback
+  const diag = {
+    topKeys,
+    wrapperKeys: Object.keys((data?.contacts as Record<string, unknown>) || {}),
+    page: curPage,
+    totalPages,
+    pageSize,
+    totalResults,
+    extracted: items.length,
+  };
+  return { items, hasMore, diag };
 }
 
 Deno.serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
+  let integrationId: string | undefined;
   try {
-    const { integrationId } = await req.json();
+    const body = await req.json();
+    integrationId = body?.integrationId;
     if (!integrationId) {
       return new Response(JSON.stringify({ error: "Missing integrationId" }), {
         status: 400,
@@ -137,26 +185,45 @@ Deno.serve(async (req) => {
     // Pull pages
     const upserts: any[] = [];
     let total = 0;
+    let sampleError: string | null = null;
     for (let page = 1; page <= 1000; page++) {
-      const { items, hasMore } = await fetchContactsPage(token, updatedFrom, page);
+      const { items, hasMore, diag } = await fetchContactsPage(token, updatedFrom, page);
+      // Safe diagnostics — never log tokens
+      try {
+        console.log(`[sync-phoneburner-contacts] page=${diag.page ?? page}/${diag.totalPages ?? "?"} extracted=${diag.extracted} topKeys=${(diag.topKeys as string[]).join(",")}`);
+        if (typeof diag.totalResults === "number") {
+          console.log(`[sync-phoneburner-contacts] contacts.total_results=${diag.totalResults} page_size=${diag.pageSize ?? "?"}`);
+        }
+      } catch { /* ignore logging issues */ }
+
       if (items.length === 0) break;
       total += items.length;
       // Map to row shape
       for (const c of items) {
-        // Shape heuristics from product brief
-        const pbId = String(c?.id ?? c?.contact_id ?? c?.pb_contact_id ?? "");
+        // Official ids + defensive fallbacks
+        const pbId = String(c?.contact_user_id ?? c?.id ?? c?.contact_id ?? c?.pb_contact_id ?? "");
         if (!pbId) continue;
-        const email = (c?.primary_email?.email_address ?? c?.email ?? c?.primaryEmail ?? "").toLowerCase() || null;
+        const emailVal =
+          c?.primary_email?.email_address ??
+          c?.email_address ??
+          c?.email ??
+          c?.primaryEmail ??
+          "";
+        const email = typeof emailVal === "string" && emailVal ? String(emailVal).toLowerCase() : null;
         const fullName =
           c?.full_name ||
           [c?.first_name, c?.last_name].filter((v: unknown) => typeof v === "string" && v.trim()).join(" ") ||
           c?.name ||
           null;
-        const rawPhone = c?.primary_phone?.raw_phone ?? c?.phone ?? c?.primaryPhone ?? null;
+        const rawPhone = c?.primary_phone?.raw_phone ?? c?.phone ?? c?.primary_phone ?? c?.primaryPhone ?? null;
         const phoneE164 = normalizePhoneE164(rawPhone);
-        const updatedAt =
-          c?.updated_at || c?.modified_at || c?.last_modified || c?.last_updated || c?.updated ||
-          new Date().toISOString();
+        let updatedAt =
+          c?.date_modified || c?.updated_at || c?.modified_at || c?.last_modified || c?.last_updated || c?.updated || c?.date_added || null;
+        if (!updatedAt) {
+          // capture one example for diagnostics
+          if (!sampleError) sampleError = "missing-updatedAt";
+          updatedAt = new Date().toISOString();
+        }
         const personKey = email ? email.toLowerCase() : null;
 
         upserts.push({
@@ -192,6 +259,21 @@ Deno.serve(async (req) => {
       updated = 0;
     }
 
+    // Status lifecycle: success OR empty still counts as 'synced'
+    try {
+      await serviceClient
+        .from("outbound_integrations")
+        .update({
+          sync_status: "synced",
+          sync_error: null,
+          last_synced_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", integrationId);
+    } catch (e) {
+      console.warn("[sync-phoneburner-contacts] failed to update integration status:", e);
+    }
+
     return new Response(
       JSON.stringify({
         success: true,
@@ -200,12 +282,32 @@ Deno.serve(async (req) => {
         inserted,
         updated,
         updatedFrom: updatedFrom ?? null,
+        ...(sampleError ? { sampleError } : {}),
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("[sync-phoneburner-contacts] error:", msg);
+    // Status lifecycle: hard failure → 'error'
+    try {
+      const serviceClient = createClient(
+        Deno.env.get("SUPABASE_URL") ?? "",
+        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
+      );
+      if (integrationId) {
+        await serviceClient
+          .from("outbound_integrations")
+          .update({
+            sync_status: "error",
+            sync_error: msg,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", integrationId);
+      }
+    } catch (e) {
+      console.warn("[sync-phoneburner-contacts] failed to record error status:", e);
+    }
     return new Response(JSON.stringify({ error: msg }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

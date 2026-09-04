@@ -218,7 +218,7 @@ export function useOutboundIntegrations() {
           }
           try {
             const { error: pErr } = await supabase.functions.invoke('poll-phoneburner-calls', {
-              body: { integrationId: data.id, lookbackDays: 2 },
+              body: { integrationId: data.id, lookbackDays: 30 },
             });
             if (pErr) {
               console.warn('PhoneBurner calls poll failed (non-fatal):', pErr);
