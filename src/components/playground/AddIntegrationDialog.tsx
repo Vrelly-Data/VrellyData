@@ -29,6 +29,7 @@ const PLATFORMS = [
   { value: 'smartlead', label: 'Smartlead', icon: '🎯', comingSoon: false },
   { value: 'phoneburner', label: 'PhoneBurner / Dialer', icon: '📞', comingSoon: false },
   { value: 'apollo', label: 'Apollo', icon: '🔭', comingSoon: false },
+  { value: 'calendly', label: 'Calendly', icon: '📅', comingSoon: true },
   { value: 'instantly', label: 'Instantly.ai', icon: '⚡', comingSoon: true },
   { value: 'lemlist', label: 'Lemlist', icon: '🍋', comingSoon: true },
 ];
