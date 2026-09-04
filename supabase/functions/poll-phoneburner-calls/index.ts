@@ -130,7 +130,14 @@ Deno.serve(async (req) => {
 
     // 1) List dial sessions
     const dsList = await fetchJson(token, "/dialsession", { date_start, date_end });
+    try {
+      console.log(`[poll-phoneburner-calls] list keys:`, Object.keys(dsList || {}));
+    } catch { /* ignore */ }
+    // Official selector observed: dialsessions (plural). Be defensive.
     const sessions: Array<{ id?: string | number }> =
+      Array.isArray(dsList?.dialsessions) ? dsList.dialsessions :
+      Array.isArray(dsList?.dial_sessions) ? dsList.dial_sessions :
+      Array.isArray(dsList?.dialsession?.dialsessions) ? dsList.dialsession.dialsessions :
       Array.isArray(dsList) ? dsList :
       Array.isArray(dsList?.items) ? dsList.items :
       Array.isArray(dsList?.data) ? dsList.data : [];
@@ -144,7 +151,10 @@ Deno.serve(async (req) => {
 
     for (const sid of sessionIds) {
       const detail = await fetchJson(token, `/dialsession/${encodeURIComponent(sid)}`);
+      // Detail can be a wrapper: { dialsession: { calls: [...] } }
       const calls: any[] =
+        Array.isArray(detail?.dialsession?.calls) ? detail.dialsession.calls :
+        Array.isArray(detail?.dial_session?.calls) ? detail.dial_session.calls :
         Array.isArray(detail) ? detail :
         Array.isArray(detail?.calls) ? detail.calls :
         Array.isArray(detail?.data) ? detail.data : [];
@@ -226,6 +236,29 @@ Deno.serve(async (req) => {
       await sleep(150);
     }
 
+    // Clear 'syncing' if this poll was invoked during connect and no other
+    // function has finalized status yet. Only transition syncing->synced here.
+    try {
+      const { data: row } = await serviceClient
+        .from("outbound_integrations")
+        .select("sync_status")
+        .eq("id", integrationId)
+        .single();
+      if ((row?.sync_status || "").toLowerCase() === "syncing") {
+        await serviceClient
+          .from("outbound_integrations")
+          .update({
+            sync_status: "synced",
+            sync_error: null,
+            last_synced_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", integrationId);
+      }
+    } catch (e) {
+      console.warn("[poll-phoneburner-calls] failed to finalize syncing status:", e);
+    }
+
     return new Response(JSON.stringify({
       success: true,
       sessions: sessionIds.length,
@@ -236,6 +269,30 @@ Deno.serve(async (req) => {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("[poll-phoneburner-calls] error:", msg);
+    // Only mark error if status is still 'syncing' (connect-time clear)
+    try {
+      const body = await req.json().catch(() => ({}));
+      const integrationId: string | undefined = body.integrationId;
+      if (integrationId) {
+        const serviceClient = createClient(
+          Deno.env.get("SUPABASE_URL") ?? "",
+          Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
+        );
+        const { data: row } = await serviceClient
+          .from("outbound_integrations")
+          .select("sync_status")
+          .eq("id", integrationId)
+          .single();
+        if ((row?.sync_status || "").toLowerCase() === "syncing") {
+          await serviceClient
+            .from("outbound_integrations")
+            .update({ sync_status: "error", sync_error: msg, updated_at: new Date().toISOString() })
+            .eq("id", integrationId);
+        }
+      }
+    } catch (e) {
+      console.warn("[poll-phoneburner-calls] failed to record error status:", e);
+    }
     return new Response(JSON.stringify({ error: msg }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
