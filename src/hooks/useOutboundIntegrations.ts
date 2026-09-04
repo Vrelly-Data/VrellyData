@@ -204,21 +204,11 @@ export function useOutboundIntegrations() {
             console.error('Smartlead auto-sync error:', err);
           }
         } else if (platform === 'phoneburner') {
-          // PhoneBurner: dialer integration. No campaign concept. On connect,
-          // seed a contacts pull and a recent calls poll (both additive).
-          try {
-            const { error: cErr } = await supabase.functions.invoke('sync-phoneburner-contacts', {
-              body: { integrationId: data.id },
-            });
-            if (cErr) {
-              console.warn('PhoneBurner contacts sync failed (non-fatal):', cErr);
-            }
-          } catch (e) {
-            console.warn('PhoneBurner contacts sync error (non-fatal):', e);
-          }
+          // PhoneBurner: dialer integration. No campaign concept.
+          // On connect, backfill recent calls (match-only) for the last 90 days.
           try {
             const { error: pErr } = await supabase.functions.invoke('poll-phoneburner-calls', {
-              body: { integrationId: data.id, lookbackDays: 30 },
+              body: { integrationId: data.id, lookbackDays: 90 },
             });
             if (pErr) {
               console.warn('PhoneBurner calls poll failed (non-fatal):', pErr);
@@ -378,19 +368,12 @@ export function useOutboundIntegrations() {
       }
 
       if (platform === 'phoneburner') {
-        // No campaigns — run contacts + recent calls. Both are additive and safe to call on demand.
-        const results: Record<string, unknown> = {};
-        const { data: cData, error: cErr } = await supabase.functions.invoke('sync-phoneburner-contacts', {
-          body: { integrationId },
-        });
-        if (cErr) throw cErr;
-        results.contacts = cData ?? null;
+        // No campaigns — trigger a calls-only sync (match-only). Backfill 90 days.
         const { data: pData, error: pErr } = await supabase.functions.invoke('poll-phoneburner-calls', {
-          body: { integrationId, lookbackDays: 2 },
+          body: { integrationId, lookbackDays: 90 },
         });
         if (pErr) throw pErr;
-        results.calls = pData ?? null;
-        return results;
+        return { calls: pData ?? null };
       }
 
       if (platform === 'reply.io' || platform === 'replyio') {
