@@ -1155,15 +1155,18 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
     // Smallest safe slice: when ALL are true —
     //   - mode === 'auto' on agent_configs (active row)
     //   - channel === 'email'
-    //   - should_auto_send === true (OOO/bounce only per prompt)
+    //   - should_auto_send === true (OOO/bounce only per prompt) AND intent allowlisted
     //   - lead_id present AND draft generated (call2 succeeded & non-empty)
     // Then auto-send the draft via service path using existing send functions.
     // Never block this handler: fire-and-forget; failures leave draft for AM.
     try {
+      const AUTO_SEND_INTENTS = new Set(['out_of_office', 'bounce']);
+      const intentLc = (intent ?? '').toLowerCase();
       if (
         lead_id &&
         channel === 'email' &&
         shouldAutoSend === true &&
+        AUTO_SEND_INTENTS.has(intentLc) &&
         !call2Failed &&
         typeof suggestedResponse === 'string' &&
         suggestedResponse.trim().length > 0
