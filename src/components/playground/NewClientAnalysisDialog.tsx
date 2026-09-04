@@ -24,6 +24,7 @@ import { Loader2, Linkedin, Mail, MessageSquare } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuthStore } from '@/stores/authStore';
 import { toast } from 'sonner';
+import { PLATFORM, SOURCE } from '@/lib/platforms';
 
 // Sentinel used by the Reply.io Select to represent "no Reply.io workspace
 // linked to this client". Radix Select requires non-empty string values, so
@@ -188,7 +189,7 @@ export function NewClientAnalysisDialog({
       const { data, error } = await supabase
         .from('outbound_integrations')
         .select('id, name')
-        .eq('platform', 'reply.io')
+        .eq('platform', PLATFORM.REPLY_IO)
         .eq('is_active', true)
         .order('name', { ascending: true });
       if (error) throw error;
@@ -209,7 +210,7 @@ export function NewClientAnalysisDialog({
       const { data, error } = await supabase
         .from('synced_campaigns')
         .select('id, name, external_campaign_id, status, channel')
-        .eq('source', 'reply_io')
+        .eq('source', SOURCE.REPLY_IO)
         .eq('is_linked', true)
         .eq('integration_id', replyIoIntegrationId!);
       if (error) throw error;

@@ -42,6 +42,27 @@ export const ENRICH_CHUNK_SIZE = 10;
  */
 export const ENRICH_MAX_PER_CALL = 10;
 
+/**
+ * How long an apollo_enrichment_cache row may be served before we pay again.
+ *
+ * The cache exists so Reveal-then-push does not buy the same person twice (see
+ * the migration header). This number is where that saving stops: past it, the
+ * row is re-fetched at full price.
+ *
+ * 30 days is chosen against the failure mode, not the saving. A cached email
+ * that has gone dead does not announce itself — it is spent as a real send into
+ * a real sequence, and the bounce lands on the client's sending domain. That is
+ * a reputational cost with no undo, and it dwarfs one Apollo credit. Apollo's
+ * own `last_refreshed_at` (surfaced in the preview table) shows records
+ * routinely months old, so a long TTL here would be compounding staleness on
+ * top of staleness.
+ *
+ * If refresh_count across the table climbs steeply, this is too short for how
+ * the account actually works and should be raised deliberately — not widened by
+ * accident.
+ */
+export const ENRICH_CACHE_TTL_DAYS = 30;
+
 export function apolloHeaders(apiKey: string): Record<string, string> {
   return {
     "Content-Type": "application/json",
@@ -109,6 +130,57 @@ const ARRAY_FILTERS = [
   "q_organization_keyword_tags",
   "person_department_or_subdepartments",
 ] as const;
+
+/**
+ * Ceiling on how many terms one Keywords box may fan out into.
+ *
+ * Each term is a separate api_search round trip, so this is a latency and
+ * rate-limit budget, not a taste judgement. Five covers every realistic
+ * "finance, loans, mortgages" case; beyond it the operator is describing a
+ * segment, not a keyword, and should use a different filter.
+ */
+export const KEYWORD_MAX_TERMS = 5;
+
+/**
+ * Split the Keywords box into the terms to OR together.
+ *
+ * WHY THIS EXISTS. Apollo's q_keywords is ONE AND-ed phrase and has no OR in
+ * any syntax — verified against live api_search on 2026-09-02 with
+ * person_titles ["CEO"], where the terms finance / loans / mortgages match
+ * 4,266 / 280 / 65 records alone:
+ *
+ *   "finance OR loans OR mortgages"        -> 0   (OR is just another token)
+ *   "\"finance\" OR \"loans\""              -> 0
+ *   "(finance OR loans OR mortgages)"      -> 0
+ *   "finance|loans|mortgages"              -> 4   (punctuation ignored -> AND)
+ *   "finance,loans,mortgages"              -> 4   (same)
+ *   ["finance","loans","mortgages"]        -> HTTP 500 (array is not accepted)
+ *
+ * So a comma-separated list cannot be expressed as one Apollo query at all.
+ * OR has to be built by asking Apollo once per term and merging, which is what
+ * the caller does with this list.
+ *
+ * Splitting on commas and semicolons ONLY — never on whitespace. A multi-word
+ * term is a real thing ("private equity"), and breaking it into "private" and
+ * "equity" would silently widen the search into nonsense.
+ */
+export function splitKeywordTerms(q: string | null | undefined): string[] {
+  if (!q) return [];
+  const seen = new Set<string>();
+  const terms: string[] = [];
+  for (const raw of q.split(/[,;]+/)) {
+    const t = raw.trim();
+    if (!t) continue;
+    // Case-insensitive dedup so "Finance, finance" is one round trip, but keep
+    // the operator's own casing for the query itself.
+    const k = t.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    terms.push(t);
+    if (terms.length >= KEYWORD_MAX_TERMS) break;
+  }
+  return terms;
+}
 
 /**
  * Build the api_search body, dropping empty values.
@@ -188,6 +260,51 @@ export interface ApolloSearchPerson {
   has_city: boolean;
   has_state: boolean;
   has_country: boolean;
+  /**
+   * ORGANISATION availability flags. Apollo applies the same has_* pattern to
+   * the nested organization object that it applies to the person, and returns
+   * NO organisation values at search beyond `name` — verified live on
+   * 2026-08-30 across three unrelated filter shapes (a 1-10 headcount query, a
+   * 10001-50000 one, and a free-text q_keywords one). The org key set was
+   * byte-identical every time:
+   *
+   *   name, has_industry, has_employee_count, has_revenue, has_phone,
+   *   has_city, has_state, has_country, has_zip_code
+   *
+   * So industry, headcount, revenue and location are all enrich-only, and
+   * linkedin_url / primary_domain / keywords are absent at search ENTIRELY —
+   * not even as a flag. Do not add a preview column for those three: there is
+   * nothing to populate it with, and a column of dashes reads as "this person
+   * has no LinkedIn" rather than "we have not paid to look".
+   *
+   * THE DOMAIN QUESTION, settled adversarially on 2026-08-30 — it comes up
+   * every time someone reads this table, because organization.primary_domain
+   * plainly exists on the ENRICH side (see mapEnrichedPerson). It is not
+   * merely missing from the searches we happened to run: a search filtered BY
+   * domain (q_organization_domains_list: ['stripe.com']) — where Apollo knows
+   * the exact domain it matched on — still returns
+   *   {"name":"Stripe", has_industry, has_phone, has_city, has_state,
+   *    has_country, has_zip_code, has_revenue, has_employee_count}
+   * and nothing more. The whole organization object was dumped verbatim and
+   * every key on both person and organization scanned against
+   * /domain|website|url|site|www|href|link/ — no hit, across 7 searches. It is
+   * a paywall, not an omission. Re-probing it will not change the answer.
+   *
+   * These flags are worth surfacing for the same reason has_email is: they say
+   * what enrichment will actually yield for THIS person before any credits are
+   * spent. A record with has_industry=false and has_employee_count=false is a
+   * materially worse buy than one with both true.
+   */
+  org_has_industry: boolean;
+  org_has_employee_count: boolean;
+  org_has_revenue: boolean;
+  org_has_phone: boolean;
+  /**
+   * When Apollo last refreshed this record. A REAL value, not a flag — the one
+   * genuinely new datum the free search carries. Stale records enrich into
+   * stale contact data, so this is a quality signal worth showing.
+   */
+  last_refreshed_at: string | null;
 }
 
 // deno-lint-ignore no-explicit-any
@@ -205,6 +322,15 @@ export function mapSearchPerson(raw: any): ApolloSearchPerson | null {
     has_city: truthyFlag(raw.has_city),
     has_state: truthyFlag(raw.has_state),
     has_country: truthyFlag(raw.has_country),
+    // Read through truthyFlag like the person-level flags: these were observed
+    // as real booleans, but has_direct_phone taught us Apollo will hand back
+    // the STRING "Yes" for a flag without warning, and a `=== true` test on
+    // that reports every record as missing the field.
+    org_has_industry: truthyFlag(raw.organization?.has_industry),
+    org_has_employee_count: truthyFlag(raw.organization?.has_employee_count),
+    org_has_revenue: truthyFlag(raw.organization?.has_revenue),
+    org_has_phone: truthyFlag(raw.organization?.has_phone),
+    last_refreshed_at: raw.last_refreshed_at ?? null,
   };
 }
 
@@ -238,6 +364,22 @@ export interface ApolloEnrichedPerson {
   linkedin_url: string | null;
   organization_name: string | null;
   organization_domain: string | null;
+  /**
+   * Firmographics. These are already inside the bulk_match payload we have
+   * paid for, so mapping them costs nothing extra — and once Reveal exists they
+   * stop being optional. The preview table advertises "Industry / Headcount /
+   * Revenue available after enrichment" from the org has_* flags; if the reveal
+   * that follows showed only an email, the promise on the row would be a lie.
+   *
+   * industry and estimated_num_employees were both observed live on the enrich
+   * response (see probe_apollo_reenrich_cost.mjs, which prints them). Revenue is
+   * read through a fallback chain because Apollo exposes it under more than one
+   * name depending on plan — a missing value renders as absent, never as a
+   * wrong number.
+   */
+  organization_industry: string | null;
+  organization_employee_count: number | null;
+  organization_revenue: string | null;
   city: string | null;
   state: string | null;
   country: string | null;
@@ -262,6 +404,34 @@ export function mapEnrichedPerson(raw: any): ApolloEnrichedPerson | null {
     linkedin_url: raw.linkedin_url ?? null,
     organization_name: raw.organization?.name ?? null,
     organization_domain: raw.organization?.primary_domain ?? raw.organization?.website_url ?? null,
+    organization_industry: raw.organization?.industry ?? null,
+    organization_employee_count: typeof raw.organization?.estimated_num_employees === "number"
+      ? raw.organization.estimated_num_employees
+      : null,
+    // BOTH KEYS VERIFIED LIVE 2026-08-30 by dumping the raw organization object
+    // from bulk_match for a record whose org_has_revenue flag was true:
+    //   organization_revenue_printed = "450M"   (string, display-ready)
+    //   organization_revenue         = 450000000 (number)
+    //
+    // Note the `organization_` prefix ON A FIELD THAT IS ALREADY INSIDE the
+    // organization object — organization.organization_revenue, not
+    // organization.revenue. An earlier version of this mapper guessed
+    // `annual_revenue` / `annual_revenue_printed`, which do not exist in the
+    // payload at all, and so returned null for every company on earth while the
+    // preview table cheerfully advertised "Revenue available after enrichment"
+    // from the org_has_revenue flag. That combination — a flag promising data
+    // and a mapper that cannot produce it — is worse than not offering the
+    // field, which is why the names here are copied from an observed response
+    // rather than from the docs or from memory.
+    //
+    // Prefer the preformatted string; fall back to the raw number. Never
+    // compute or round one ourselves — a revenue figure the operator cannot
+    // trace back to Apollo is worse than a blank.
+    organization_revenue: typeof raw.organization?.organization_revenue_printed === "string"
+      ? raw.organization.organization_revenue_printed
+      : typeof raw.organization?.organization_revenue === "number"
+      ? String(raw.organization.organization_revenue)
+      : null,
     city: raw.city ?? null,
     state: raw.state ?? null,
     country: raw.country ?? null,

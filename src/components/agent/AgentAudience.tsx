@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Plus, Loader2, Pencil, Trash2, AlertTriangle, Telescope } from 'lucide-react';
+import { Plus, Loader2, Pencil, Trash2, AlertTriangle, Telescope, Rocket } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
@@ -15,6 +15,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { TagInput } from '@/components/ui/tag-input';
 import { MultiSelectDropdown } from '@/components/search/MultiSelectDropdown';
 import { useToast } from '@/hooks/use-toast';
+import { AudiencePreviewDialog } from './AudiencePreviewDialog';
+import { AudienceSourceSelect } from './AudienceSourceSelect';
+import { getAudienceSource, DEFAULT_SOURCE } from '@/lib/audienceSources';
 import {
   useAgentAudiences, useAudienceCampaigns, useCreateAudience, useUpdateAudience,
   useToggleAudienceActive, useDeleteAudience,
@@ -48,6 +51,7 @@ const DEPARTMENTS = [
 const EMPTY: AudienceInput = {
   name: '', default_platform: null, default_synced_campaign_id: null,
   cadence: 'manual', max_per_run: 25, max_total: null, filters: {},
+  source: DEFAULT_SOURCE,
 };
 
 function statusBadge(a: Audience) {
@@ -73,6 +77,7 @@ export function AgentAudience() {
 
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Audience | null>(null);
+  const [previewing, setPreviewing] = useState<Audience | null>(null);
   const [form, setForm] = useState<AudienceInput>(EMPTY);
   const { data: campaigns = [] } = useAudienceCampaigns(form.default_platform ?? undefined);
 
@@ -89,6 +94,8 @@ export function AgentAudience() {
       default_synced_campaign_id: a.default_synced_campaign_id,
       cadence: a.cadence, max_per_run: a.max_per_run, max_total: a.max_total,
       filters: a.filters ?? {},
+      // Carried through unchanged, and the selector is locked while editing.
+      source: a.source ?? DEFAULT_SOURCE,
     });
     setOpen(true);
   };
@@ -142,7 +149,7 @@ export function AgentAudience() {
             <Telescope className="h-5 w-5" /> Agent Audience
           </h2>
           <p className="text-sm text-muted-foreground mt-1">
-            Saved Apollo searches that feed contacts into a campaign.
+            Saved searches that feed contacts into a campaign.
           </p>
         </div>
         <Button onClick={openCreate}><Plus className="h-4 w-4 mr-2" />New audience</Button>
@@ -162,18 +169,24 @@ export function AgentAudience() {
             <TableHeader>
               <TableRow>
                 <TableHead>Name</TableHead>
+                <TableHead>Source</TableHead>
                 <TableHead>Destination</TableHead>
                 <TableHead>Cadence</TableHead>
                 <TableHead className="text-right">Pushed</TableHead>
                 <TableHead>Last run</TableHead>
                 <TableHead className="text-center">Active</TableHead>
-                <TableHead className="w-20" />
+                <TableHead className="w-56" />
               </TableRow>
             </TableHeader>
             <TableBody>
               {audiences.map((a) => (
                 <TableRow key={a.id}>
                   <TableCell className="font-medium">{a.name}</TableCell>
+                  <TableCell>
+                    {/* Read through the registry, so a row written before the
+                        source column existed shows 'Apollo' rather than blank. */}
+                    <Badge variant="outline">{getAudienceSource(a.source).label}</Badge>
+                  </TableCell>
                   <TableCell className="text-sm">
                     {a.default_platform ? (
                       <>
@@ -201,7 +214,14 @@ export function AgentAudience() {
                     />
                   </TableCell>
                   <TableCell>
-                    <div className="flex gap-1">
+                    <div className="flex gap-1 justify-end">
+                      {/* The only way to produce a run. The activation guard
+                          refuses to arm an audience until one has succeeded, so
+                          this is also the path to arming — it must not be a bare
+                          icon the operator has to guess at. */}
+                      <Button variant="outline" size="sm" onClick={() => setPreviewing(a)}>
+                        <Rocket className="h-4 w-4 mr-2" />Preview &amp; run
+                      </Button>
                       <Button variant="ghost" size="icon" onClick={() => openEdit(a)}>
                         <Pencil className="h-4 w-4" />
                       </Button>
@@ -229,11 +249,23 @@ export function AgentAudience() {
           <DialogHeader>
             <DialogTitle>{editing ? 'Edit audience' : 'New audience'}</DialogTitle>
             <DialogDescription>
-              Filters are sent to Apollo as-is. Nothing is pushed until you preview and confirm.
+              Filters are sent to the source as-is. Nothing is pushed until you preview and confirm.
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4">
+            {/* Locked while editing. The filters below are stored in the
+                selected source's own vocabulary, so switching source under
+                saved filters would reinterpret them as a language they are not
+                written in — and Apollo's api_search drops unknown keys without
+                erroring, which makes that loss silent. Changing source means
+                making a new audience. */}
+            <AudienceSourceSelect
+              value={form.source ?? DEFAULT_SOURCE}
+              onChange={(v) => setForm({ ...form, source: v })}
+              locked={!!editing}
+            />
+
             <div>
               <Label>Name</Label>
               <Input
@@ -328,7 +360,9 @@ export function AgentAudience() {
             </div>
 
             <div className="border-t pt-4 space-y-4">
-              <p className="text-sm font-medium">Apollo filters</p>
+              <p className="text-sm font-medium">
+                {getAudienceSource(form.source).label} filters
+              </p>
 
               <div>
                 <Label>Job titles</Label>
@@ -385,6 +419,15 @@ export function AgentAudience() {
                   placeholder="healthcare"
                   onChange={(e) => setFilter('q_keywords', e.target.value)}
                 />
+                {/* Apollo itself has no OR here — apollo-search fans out one
+                    query per comma-separated term and merges. Words WITHIN a
+                    term are still AND-ed, which is the remaining trap and the
+                    only part worth spending a line on. */}
+                <p className="text-xs text-muted-foreground mt-1">
+                  Commas match any: &ldquo;finance, loans&rdquo; finds people matching
+                  either. Words inside one term must all appear, so
+                  &ldquo;private equity&rdquo; stays a single term. Up to 5 terms.
+                </p>
               </div>
 
               <div>
@@ -461,7 +504,8 @@ export function AgentAudience() {
               {!hasFilter && (
                 <p className="text-xs text-amber-600 flex items-center gap-1">
                   <AlertTriangle className="h-3 w-3" />
-                  At least one filter is required — Apollo refuses an unfiltered search.
+                  At least one filter is required — {getAudienceSource(form.source).label}
+                  {' '}refuses an unfiltered search.
                 </p>
               )}
             </div>
@@ -481,6 +525,12 @@ export function AgentAudience() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AudiencePreviewDialog
+        audience={previewing}
+        open={!!previewing}
+        onOpenChange={(v) => { if (!v) setPreviewing(null); }}
+      />
     </div>
   );
 }

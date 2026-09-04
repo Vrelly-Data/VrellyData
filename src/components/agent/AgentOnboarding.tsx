@@ -9,6 +9,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
+import { PLATFORM } from '@/lib/platforms';
 import { CheckCircle2, ArrowLeft, ArrowRight, Rocket, Eye, EyeOff, Loader2, Wifi, WifiOff, ExternalLink, AlertCircle } from 'lucide-react';
 
 const COMMUNICATION_STYLES = [
@@ -100,7 +101,7 @@ export function AgentOnboarding() {
     setConnectionStatus('idle');
     try {
       const { data, error } = await supabase.functions.invoke('validate-api-key', {
-        body: { apiKey: formData.reply_api_key, platform: 'reply_io' },
+        body: { apiKey: formData.reply_api_key, platform: PLATFORM.REPLY_IO },
       });
       if (error || !data?.valid) {
         setConnectionStatus('error');

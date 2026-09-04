@@ -273,6 +273,24 @@ export function useOutboundIntegrations() {
 
   const deleteIntegration = useMutation({
     mutationFn: async (id: string) => {
+      // client_analysis.reply_io_integration_id is ON DELETE SET NULL, so
+      // deleting an integration SILENTLY unlinks every client pointing at it —
+      // their weekly stats then read as zero with no error anywhere. That is
+      // exactly how QAlified broke. Refuse rather than blank the pointer; the
+      // operator must repoint or unlink the client first.
+      const { data: dependents, error: depErr } = await supabase
+        .from('client_analysis')
+        .select('id, display_name')
+        .eq('reply_io_integration_id', id);
+      if (depErr) throw depErr;
+      if (dependents && dependents.length > 0) {
+        const names = dependents.map((d) => d.display_name ?? d.id).join(', ');
+        throw new Error(
+          `${dependents.length} client analysis row(s) still point at this integration (${names}). ` +
+            `Repoint them at the replacement integration first — deleting now would silently zero their stats.`,
+        );
+      }
+
       const { error } = await supabase
         .from('outbound_integrations')
         .delete()

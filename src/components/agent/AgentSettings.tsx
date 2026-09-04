@@ -25,6 +25,7 @@ import {
   type SenderProfile,
 } from '@/hooks/useSenderProfiles';
 import { EmailMailboxMapping } from './EmailMailboxMapping';
+import { PLATFORM } from '@/lib/platforms';
 import {
   useAgentDocuments,
   useUploadAgentDocument,
@@ -490,7 +491,10 @@ export function AgentSettings() {
     setConnectionStatus('idle');
     try {
       const { data, error } = await supabase.functions.invoke('validate-api-key', {
-        body: { apiKey: formData.reply_api_key, platform: 'reply_io' },
+        // PLATFORM.REPLY_IO is 'reply.io' WITH A PERIOD — validate-api-key tests
+        // platform === "reply.io". This previously sent 'reply_io', fell through
+        // to the no-validator branch, and reported valid keys as invalid.
+        body: { apiKey: formData.reply_api_key, platform: PLATFORM.REPLY_IO },
       });
       if (error || !data?.valid) {
         setConnectionStatus('error');
