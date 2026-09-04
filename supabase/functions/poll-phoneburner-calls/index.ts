@@ -85,10 +85,12 @@ Deno.serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
+  let integrationId: string | undefined;
+  let lookbackDays: number = 2;
   try {
     const body = await req.json().catch(() => ({}));
-    const integrationId: string | undefined = body.integrationId;
-    const lookbackDays: number = Number(body.lookbackDays ?? 2);
+    integrationId = body.integrationId;
+    lookbackDays = Number(body.lookbackDays ?? 2);
     if (!integrationId) {
       return new Response(JSON.stringify({ error: "Missing integrationId" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -271,8 +273,6 @@ Deno.serve(async (req) => {
     console.error("[poll-phoneburner-calls] error:", msg);
     // Only mark error if status is still 'syncing' (connect-time clear)
     try {
-      const body = await req.json().catch(() => ({}));
-      const integrationId: string | undefined = body.integrationId;
       if (integrationId) {
         const serviceClient = createClient(
           Deno.env.get("SUPABASE_URL") ?? "",

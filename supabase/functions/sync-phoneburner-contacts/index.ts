@@ -128,8 +128,10 @@ Deno.serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
+  let integrationId: string | undefined;
   try {
-    const { integrationId } = await req.json();
+    const body = await req.json();
+    integrationId = body?.integrationId;
     if (!integrationId) {
       return new Response(JSON.stringify({ error: "Missing integrationId" }), {
         status: 400,
@@ -293,7 +295,6 @@ Deno.serve(async (req) => {
         Deno.env.get("SUPABASE_URL") ?? "",
         Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
       );
-      const { integrationId } = await req.json().catch(() => ({}));
       if (integrationId) {
         await serviceClient
           .from("outbound_integrations")
