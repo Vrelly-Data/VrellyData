@@ -171,6 +171,15 @@ Deno.serve(async (req) => {
         if (!callId) continue;
         const rawPhone = c?.phone ?? c?.to ?? c?.dialed ?? null;
         const phoneE164 = normalizePhoneE164(rawPhone);
+        // Optional email directly on the call payload (rare; defensive)
+        const emailRaw =
+          (typeof c?.email === "string" ? c.email : null) ??
+          (typeof c?.email_address === "string" ? c.email_address : null) ??
+          (typeof c?.contact?.email === "string" ? c.contact.email : null) ??
+          null;
+        const emailLower = typeof emailRaw === "string" && emailRaw.includes("@")
+          ? String(emailRaw).toLowerCase()
+          : null;
         const disposition = c?.disposition ?? c?.status ?? null;
         const connected = Boolean(c?.connected ?? (typeof c?.answered === "boolean" ? c.answered : undefined));
         const voicemail = Boolean(c?.voicemail ?? (typeof c?.left_voicemail === "boolean" ? c.left_voicemail : undefined));
@@ -181,33 +190,101 @@ Deno.serve(async (req) => {
         const occurredAt = c?.ended_at || c?.connected_at || c?.started_at || c?.time || new Date().toISOString();
         const recordingUrl = typeof c?.recording_url === "string" ? c.recording_url : null;
 
-        // Person match: MATCH-ONLY against existing people by email.
-        // Try several common fields from PhoneBurner responses for email.
-        const emailVal =
-          c?.email ??
-          c?.email_address ??
-          c?.contact_email ??
-          c?.primary_email?.email_address ??
-          c?.contact?.email ??
-          c?.lead?.email_address ??
-          c?.lead?.email ??
-          null;
-        const emailLower = (typeof emailVal === "string" && emailVal.includes("@"))
-          ? String(emailVal).trim().toLowerCase()
-          : null;
-
+        // Person match order (MATCH-ONLY):
+        // 1) Email-first against existing people (team-scoped)
+        // 2) Phone fallback (team-scoped): synced_contacts.phone → verify people by email
+        // 3) Legacy fallback: phoneburner_contacts.phone_e164 → verify people by person_key
         let personKey: string | null = null;
-        // Match only if this email already exists in people for the team.
-        if (emailLower) {
-          const { data: hit } = await serviceClient
+        // Capture PhoneBurner contact id if present on the call payload
+        let pbContactId: string | null =
+          (c?.contact_user_id != null ? String(c.contact_user_id) : null) ??
+          (c?.contact_id != null ? String(c.contact_id) : null) ??
+          (c?.pb_contact_id != null ? String(c.pb_contact_id) : null) ??
+          null;
+
+        // 1) Email path — prefer direct email on the call, else email from local PB contact by id
+        let matchedByEmail = false;
+        let candidateEmailLower = emailLower;
+        if (!candidateEmailLower && pbContactId) {
+          // Best-effort local lookup (no provider call): PB contact stored email
+          const { data: cRow } = await serviceClient
+            .from("phoneburner_contacts")
+            .select("email")
+            .eq("integration_id", integrationId)
+            .eq("pb_contact_id", pbContactId)
+            .limit(1)
+            .maybeSingle();
+          if (typeof cRow?.email === "string" && cRow.email.includes("@")) {
+            candidateEmailLower = cRow.email.toLowerCase();
+          }
+        }
+        if (candidateEmailLower) {
+          const { data: p } = await serviceClient
             .from("people")
             .select("person_key")
             .eq("team_id", teamId)
-            .eq("email", emailLower)
+            .eq("email", candidateEmailLower)
             .limit(1)
             .maybeSingle();
-          if (hit?.person_key) {
-            personKey = emailLower; // normalized email is our person_key convention
+          if (p?.person_key) {
+            personKey = p.person_key;
+            matchedByEmail = true;
+          }
+        }
+
+        // 2) Phone path — prefer team-scoped synced_contacts.phone (normalize + verify people by email)
+        if (!matchedByEmail && phoneE164) {
+          const digits = phoneE164.replace(/\D+/g, "");
+          if (digits) {
+            const { data: scList } = await serviceClient
+              .from("synced_contacts")
+              .select("email, phone")
+              .eq("team_id", teamId)
+              .ilike("phone", `%${digits}%`)
+              .limit(5);
+            if (Array.isArray(scList)) {
+              for (const sc of scList) {
+                const scPhone = typeof sc?.phone === "string" ? sc.phone : null;
+                const scNorm = scPhone ? normalizePhoneE164(scPhone) : null;
+                const scEmailLower = typeof sc?.email === "string" && sc.email.includes("@") ? sc.email.toLowerCase() : null;
+                if (scNorm === phoneE164 && scEmailLower) {
+                  const { data: p3 } = await serviceClient
+                    .from("people")
+                    .select("person_key")
+                    .eq("team_id", teamId)
+                    .eq("email", scEmailLower)
+                    .limit(1)
+                    .maybeSingle();
+                  if (p3?.person_key) {
+                    personKey = p3.person_key;
+                    break;
+                  }
+                }
+              }
+            }
+          }
+          // 3) Legacy/local PB roster as a fallback: phone_e164 → person_key, then verify people row exists
+          if (!personKey) {
+            const { data: m } = await serviceClient
+              .from("phoneburner_contacts")
+              .select("person_key, pb_contact_id")
+              .eq("integration_id", integrationId)
+              .eq("phone_e164", phoneE164)
+              .limit(1)
+              .maybeSingle();
+            if (m?.person_key) {
+              const { data: p2 } = await serviceClient
+                .from("people")
+                .select("person_key")
+                .eq("team_id", teamId)
+                .eq("person_key", m.person_key)
+                .limit(1)
+                .maybeSingle();
+              if (p2?.person_key) {
+                personKey = p2.person_key;
+                if (!pbContactId && m.pb_contact_id) pbContactId = m.pb_contact_id;
+              }
+            }
           }
         }
 
@@ -216,7 +293,7 @@ Deno.serve(async (req) => {
           integration_id: integrationId,
           team_id: teamId,
           person_key: personKey,
-          pb_contact_id: null as string | null, // no dependency on phoneburner_contacts
+          pb_contact_id: pbContactId,
           phone_e164: phoneE164,
           call_id: callId,
           dialsession_id: sid,
