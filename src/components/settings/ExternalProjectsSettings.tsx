@@ -100,6 +100,13 @@ export function ExternalProjectsSettings() {
             >
               📞 PhoneBurner / Dialer
             </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => {
+                toast.info('Calendly integration is coming soon');
+              }}
+            >
+              📅 Calendly (Coming soon)
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
@@ -149,6 +156,13 @@ export function ExternalProjectsSettings() {
                   }}
                 >
                   📞 PhoneBurner / Dialer
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => {
+                    toast.info('Calendly integration is coming soon');
+                  }}
+                >
+                  📅 Calendly (Coming soon)
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
