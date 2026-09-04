@@ -1,8 +1,14 @@
-// [poll-phoneburner-calls v1]
+// [poll-phoneburner-calls]
 //
-// Polls recent PhoneBurner dial sessions and upserts call events into
-// dialer_events. Best-effort writes to inference_events for teachable
+// Poll recent PhoneBurner dial sessions and upsert call events into
+// dialer_events. Best‑effort writes to inference_events for teachable
 // dispositions. Strictly additive — never touches agent_leads or inbox.
+//
+// Matching policy (product decision):
+// - MATCH-ONLY: attach calls to existing people/leads by email (preferred) or
+//   leave person_key null. Do NOT create new people/contacts/leads.
+// - No dependency on a full PhoneBurner contacts sync. We do not rely on
+//   phoneburner_contacts for matching.
 //
 // Window: last N days (default 2). Times on the API are US Central; the
 // poll uses UTC ISO strings and treats them as inclusive bounds.
@@ -175,20 +181,33 @@ Deno.serve(async (req) => {
         const occurredAt = c?.ended_at || c?.connected_at || c?.started_at || c?.time || new Date().toISOString();
         const recordingUrl = typeof c?.recording_url === "string" ? c.recording_url : null;
 
-        // Person match: by phoneburner_contacts.phone_e164 first (if we have a normalized phone)
+        // Person match: MATCH-ONLY against existing people by email.
+        // Try several common fields from PhoneBurner responses for email.
+        const emailVal =
+          c?.email ??
+          c?.email_address ??
+          c?.contact_email ??
+          c?.primary_email?.email_address ??
+          c?.contact?.email ??
+          c?.lead?.email_address ??
+          c?.lead?.email ??
+          null;
+        const emailLower = (typeof emailVal === "string" && emailVal.includes("@"))
+          ? String(emailVal).trim().toLowerCase()
+          : null;
+
         let personKey: string | null = null;
-        let pbContactId: string | null = null;
-        if (phoneE164) {
-          const { data: m } = await serviceClient
-            .from("phoneburner_contacts")
-            .select("person_key, pb_contact_id")
-            .eq("integration_id", integrationId)
-            .eq("phone_e164", phoneE164)
+        // Match only if this email already exists in people for the team.
+        if (emailLower) {
+          const { data: hit } = await serviceClient
+            .from("people")
+            .select("person_key")
+            .eq("team_id", teamId)
+            .eq("email", emailLower)
             .limit(1)
             .maybeSingle();
-          if (m) {
-            personKey = m.person_key ?? null;
-            pbContactId = m.pb_contact_id ?? null;
+          if (hit?.person_key) {
+            personKey = emailLower; // normalized email is our person_key convention
           }
         }
 
@@ -197,7 +216,7 @@ Deno.serve(async (req) => {
           integration_id: integrationId,
           team_id: teamId,
           person_key: personKey,
-          pb_contact_id: pbContactId,
+          pb_contact_id: null as string | null, // no dependency on phoneburner_contacts
           phone_e164: phoneE164,
           call_id: callId,
           dialsession_id: sid,

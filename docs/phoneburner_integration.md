@@ -5,14 +5,13 @@ This PR adds PhoneBurner as a first-class Dialer integration. It is fully additi
 What’s included:
 - Connect via Data Playground → Connect Platform → PhoneBurner / Dialer (Personal Access Token)
 - Key validation edge function: `validate-phoneburner-key` (Bearer PAT → `GET /rest/1/members`)
-- Contacts watermark sync: `sync-phoneburner-contacts` → `public.phoneburner_contacts`
-- Call polling: `poll-phoneburner-calls` → `public.dialer_events` (+ best‑effort `inference_events`)
+- Call polling as the primary path: `poll-phoneburner-calls` → `public.dialer_events` (+ best‑effort `inference_events`)
 - Minimal UI: a Calls panel on People → each contact row has a Calls button to view `dialer_events`
 - pg_cron schedule: poll PhoneBurner calls every 30 minutes (templated from the Reply.io job)
 
-New additive tables:
-- `public.phoneburner_contacts`: (integration_id, team_id, pb_contact_id, email, full_name, raw_phone, phone_e164, person_key, pb_updated_at, raw)
+Tables:
 - `public.dialer_events`: (integration_id, team_id, person_key, pb_contact_id, phone_e164, call_id, disposition, connected, voicemail, duration_seconds, note, dialsession_id, occurred_at, source, recording_url, raw)
+  - person_key is set only when the call matches an existing person/lead (match‑only)
 
 RLS:
 - Service role can write; team members can read their team’s rows (mirrors `inference_events`)
@@ -21,13 +20,13 @@ How to connect:
 1) Go to Data Playground → Connect Platform → PhoneBurner / Dialer
 2) Paste your PhoneBurner Personal Access Token (Bearer) and click Test Connection
 3) Click Connect
-4) On connect, the app performs a contacts sync and a recent calls poll (last 2 days)
+4) On connect, the app backfills recent calls for the last 90 days (match‑only)
 
 Sync & matching:
-- Contacts are fetched incrementally with `updated_from` and stored in `phoneburner_contacts`
-- `person_key` is `lower(email)` when available
-- Since PhoneBurner has no phone search, we sync contacts locally and match calls by normalized E.164 phone against `phoneburner_contacts.phone_e164`
-- The inbox is never pre-filled from PhoneBurner; no `agent_leads` writes
+- Calls are fetched by dial session window, then detailed to per‑call rows
+- person_key is `lower(email)` when that email already exists in `people` (or the lead roster feeding it). Otherwise null.
+- No creation of new people/leads from PhoneBurner. Unmatched dials are stored without a person link.
+- The inbox is never pre‑filled from PhoneBurner; no `agent_leads` writes
 
 Calls & dispositions:
 - Calls are fetched via `GET /rest/1/dialsession` (window) then `GET /rest/1/dialsession/{id}`
@@ -48,6 +47,7 @@ Limitations / notes:
 - No recordings/transcripts processing; `recording_url` is stored when present
 - Disposition labels are customizable in PhoneBurner; mapping uses case‑insensitive includes with a conservative default
 - Poll‑first delivery — webhooks are dashboard‑paste only; add the URL later
+- Full contact‑book sync is intentionally not part of the product path. The legacy `sync-phoneburner-contacts` function and draft PR #20 (batch contact upserts) are superseded by dial/session sync and should not be merged.
 
 Security:
 - API tokens are never logged; validators and pollers redact secrets
