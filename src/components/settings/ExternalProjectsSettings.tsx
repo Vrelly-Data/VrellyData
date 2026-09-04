@@ -1,22 +1,21 @@
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
-import { Plus, Loader2, Trash2, RefreshCw } from 'lucide-react';
+import { Plus, Trash2, RefreshCw } from 'lucide-react';
 import { useOutboundIntegrations } from '@/hooks/useOutboundIntegrations';
 import { toast } from 'sonner';
-import { supabase } from '@/integrations/supabase/client';
+import { AddIntegrationDialog } from '@/components/playground/AddIntegrationDialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 
-type ConnectPlatform = 'heyreach' | 'reply.io' | 'phoneburner';
+type ConnectPlatform = 'heyreach' | 'reply.io' | 'phoneburner' | 'smartlead';
 
 const PLATFORM_LABEL: Record<string, string> = {
   heyreach: 'HeyReach',
@@ -31,58 +30,17 @@ const isReplyIo = (p: string) => ['reply.io', 'replyio'].includes(p?.toLowerCase
 const isPhoneBurner = (p: string) => p?.toLowerCase() === 'phoneburner';
 
 export function ExternalProjectsSettings() {
-  // Platform-driven connect dialog (null = closed). Replaces the old
-  // HeyReach-only boolean so the same dialog can connect either platform.
-  const [connectPlatform, setConnectPlatform] = useState<ConnectPlatform | null>(null);
-  const [apiKey, setApiKey] = useState('');
-  const [name, setName] = useState('');
-  const [replyTeamId, setReplyTeamId] = useState('');
-  const [connecting, setConnecting] = useState(false);
+  // Unified "Add Integration" dialog — reuse the Playground dialog with
+  // preselected platform for a consistent, first-class experience.
+  const [addDialogOpen, setAddDialogOpen] = useState(false);
+  const [initialPlatform, setInitialPlatform] = useState<ConnectPlatform | ''>('');
 
-  const { integrations, addIntegration, deleteIntegration, syncIntegration } =
+  const { integrations, deleteIntegration, syncIntegration } =
     useOutboundIntegrations();
 
   // Render ALL of the team's integrations regardless of platform — RLS already
   // scopes the query to the user's team, so no client-side platform filter.
   // (The old `filter(i => i.platform === 'heyreach')` hid the Reply.io row.)
-
-  const handleConnect = async () => {
-    if (!connectPlatform || !apiKey.trim()) return;
-    setConnecting(true);
-    try {
-      // Validate PhoneBurner token before saving (Settings flow mirrors Playground)
-      if (isPhoneBurner(connectPlatform)) {
-        const { data, error } = await supabase.functions.invoke('validate-phoneburner-key', {
-          body: { apiKey: apiKey.trim() },
-        });
-        if (error || !data?.valid) {
-          toast.error((data as any)?.error || 'Invalid PhoneBurner API token');
-          return;
-        }
-      }
-
-      await addIntegration.mutateAsync({
-        platform: connectPlatform,
-        name: name.trim() || platformLabel(connectPlatform),
-        apiKey: apiKey.trim(),
-        ...(isReplyIo(connectPlatform) && replyTeamId.trim()
-          ? { replyTeamId: replyTeamId.trim() }
-          : {}),
-      });
-      // Post-add setup (campaign sync, contact sync, webhook registration) is
-      // handled per-platform by useOutboundIntegrations.addIntegration.onSuccess
-      // for ALL platforms — including the full Reply.io chain — so there's no
-      // manual function invoke here.
-      setApiKey('');
-      setName('');
-      setReplyTeamId('');
-      setConnectPlatform(null);
-    } catch {
-      // error toast handled by useOutboundIntegrations
-    } finally {
-      setConnecting(false);
-    }
-  };
 
   // Platform-aware sync (was hardcoded to sync-heyreach-campaigns). Routes to
   // the correct sync function per integration.platform via the hook.
@@ -102,20 +60,48 @@ export function ExternalProjectsSettings() {
             Connect outbound platforms to power the Agent inbox
           </p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={() => setConnectPlatform('heyreach')}>
-            <Plus className="h-4 w-4 mr-2" />
-            Connect HeyReach
-          </Button>
-          <Button onClick={() => setConnectPlatform('reply.io')}>
-            <Plus className="h-4 w-4 mr-2" />
-            Connect Reply.io
-          </Button>
-          <Button onClick={() => setConnectPlatform('phoneburner')}>
-            <Plus className="h-4 w-4 mr-2" />
-            Connect PhoneBurner
-          </Button>
-        </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button>
+              <Plus className="h-4 w-4 mr-2" />
+              Add Integration
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem
+              onClick={() => {
+                setInitialPlatform('smartlead');
+                setAddDialogOpen(true);
+              }}
+            >
+              🎯 Smartlead
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => {
+                setInitialPlatform('reply.io');
+                setAddDialogOpen(true);
+              }}
+            >
+              📧 Reply.io
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => {
+                setInitialPlatform('heyreach');
+                setAddDialogOpen(true);
+              }}
+            >
+              🤝 HeyReach
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => {
+                setInitialPlatform('phoneburner');
+                setAddDialogOpen(true);
+              }}
+            >
+              📞 PhoneBurner / Dialer
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       {integrations.length === 0 ? (
@@ -124,20 +110,48 @@ export function ExternalProjectsSettings() {
             <p className="text-muted-foreground mb-4">
               No integrations connected
             </p>
-            <div className="flex gap-2">
-              <Button variant="outline" onClick={() => setConnectPlatform('heyreach')}>
-                <Plus className="h-4 w-4 mr-2" />
-                Connect HeyReach
-              </Button>
-              <Button onClick={() => setConnectPlatform('reply.io')}>
-                <Plus className="h-4 w-4 mr-2" />
-                Connect Reply.io
-              </Button>
-              <Button onClick={() => setConnectPlatform('phoneburner')}>
-                <Plus className="h-4 w-4 mr-2" />
-                Connect PhoneBurner
-              </Button>
-            </div>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button>
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add Integration
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="center">
+                <DropdownMenuItem
+                  onClick={() => {
+                    setInitialPlatform('smartlead');
+                    setAddDialogOpen(true);
+                  }}
+                >
+                  🎯 Smartlead
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => {
+                    setInitialPlatform('reply.io');
+                    setAddDialogOpen(true);
+                  }}
+                >
+                  📧 Reply.io
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => {
+                    setInitialPlatform('heyreach');
+                    setAddDialogOpen(true);
+                  }}
+                >
+                  🤝 HeyReach
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => {
+                    setInitialPlatform('phoneburner');
+                    setAddDialogOpen(true);
+                  }}
+                >
+                  📞 PhoneBurner / Dialer
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </CardContent>
         </Card>
       ) : (
@@ -231,76 +245,16 @@ export function ExternalProjectsSettings() {
           );
         })
       )}
-
-      <Dialog open={connectPlatform !== null} onOpenChange={(open) => !open && setConnectPlatform(null)}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>
-              Connect {connectPlatform ? platformLabel(connectPlatform) : ''}
-            </DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 py-4">
-            <div className="space-y-2">
-              <Label htmlFor="int-name">Name (optional)</Label>
-              <Input
-                id="int-name"
-                placeholder={`My ${connectPlatform ? platformLabel(connectPlatform) : ''} Account`}
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="int-key">API Key</Label>
-              <Input
-                id="int-key"
-                type="password"
-                placeholder={`Enter your ${connectPlatform ? platformLabel(connectPlatform) : ''} API key`}
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-              />
-              {connectPlatform && isHeyReach(connectPlatform) && (
-                <p className="text-xs text-muted-foreground">
-                  Find your API key in HeyReach under Settings &gt; API
-                </p>
-              )}
-              {connectPlatform && isPhoneBurner(connectPlatform) && (
-                <p className="text-xs text-muted-foreground">
-                  Use your PhoneBurner Personal Access Token (PAT).
-                </p>
-              )}
-            </div>
-            {connectPlatform && isReplyIo(connectPlatform) && (
-              <div className="space-y-2">
-                <Label htmlFor="reply-team">Team ID (optional)</Label>
-                <Input
-                  id="reply-team"
-                  placeholder="e.g. 437198"
-                  value={replyTeamId}
-                  onChange={(e) => setReplyTeamId(e.target.value)}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Scopes sync to one Reply.io workspace. Leave empty to sync all.
-                </p>
-              </div>
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setConnectPlatform(null)}>
-              Cancel
-            </Button>
-            <Button onClick={handleConnect} disabled={!apiKey.trim() || connecting}>
-              {connecting ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Connecting...
-                </>
-              ) : (
-                'Connect'
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <AddIntegrationDialog
+        open={addDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            setInitialPlatform('');
+          }
+          setAddDialogOpen(open);
+        }}
+        initialPlatform={initialPlatform || undefined}
+      />
     </div>
   );
 }

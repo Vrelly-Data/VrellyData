@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -41,6 +41,9 @@ interface ReplyTeam {
 interface AddIntegrationDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  // When provided, preselect this platform on open. Optional and non-binding:
+  // users may still change the platform within the dialog.
+  initialPlatform?: string;
 }
 
 async function validateApiKey(platform: string, apiKey: string): Promise<{ valid: boolean; error?: string }> {
@@ -95,7 +98,7 @@ async function fetchReplyTeams(apiKey: string): Promise<{ teams: ReplyTeam[]; is
   }
 }
 
-export function AddIntegrationDialog({ open, onOpenChange }: AddIntegrationDialogProps) {
+export function AddIntegrationDialog({ open, onOpenChange, initialPlatform }: AddIntegrationDialogProps) {
   const [platform, setPlatform] = useState('');
   const [name, setName] = useState('');
   const [apiKey, setApiKey] = useState('');
@@ -111,6 +114,13 @@ export function AddIntegrationDialog({ open, onOpenChange }: AddIntegrationDialo
   const [isLoadingTeams, setIsLoadingTeams] = useState(false);
   
   const { addIntegration } = useOutboundIntegrations();
+
+  // Preselect platform when dialog opens with an initialPlatform.
+  useEffect(() => {
+    if (open && initialPlatform) {
+      setPlatform(initialPlatform);
+    }
+  }, [open, initialPlatform]);
 
   const handleValidate = async () => {
     if (!platform || !apiKey) return;
