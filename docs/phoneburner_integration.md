@@ -23,10 +23,13 @@ How to connect:
 4) On connect, the app backfills recent calls for the last 90 days (match‑only)
 
 Sync & matching:
-- Calls are fetched by dial session window, then detailed to per‑call rows
-- person_key is `lower(email)` when that email already exists in `people` (or the lead roster feeding it). Otherwise null.
-- No creation of new people/leads from PhoneBurner. Unmatched dials are stored without a person link.
-- The inbox is never pre‑filled from PhoneBurner; no `agent_leads` writes
+- Calls are fetched by dial session window, then detailed to per‑call rows.
+- MATCH‑ONLY (never creates people/leads). We attach `person_key` for existing people using the following identifiers (high → low confidence):
+  1) Email — team‑scoped exact match on `people.email`.
+  2) LinkedIn URL — normalized (lowercased, no query/fragment/trailing slash, protocol/www unified). Match `people.linkedin_url` for the same team. If no hit, try `synced_contacts.linkedin_url` or team‑scoped `agent_leads.linkedin_url`, then only attach when that row’s email exists in `people`.
+  3) Phone — match `synced_contacts.phone` (team) to get email, verify in `people`; otherwise match `phoneburner_contacts.phone_e164` (this integration) to get email, verify in `people`.
+  4) Company (WEAK) — only attach when (a) PB provides a company AND a person name and there’s an exact `people` match on both `company_name` + `full_name`, OR (b) the team has exactly one `people` row with that `company_name`. Ambiguous (0 or 2+) → leave `person_key` null.
+- The inbox is never pre‑filled from PhoneBurner; no `agent_leads` writes.
 
 Calls & dispositions:
 - Calls are fetched via `GET /rest/1/dialsession` (window) then `GET /rest/1/dialsession/{id}`
