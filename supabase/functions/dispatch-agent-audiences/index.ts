@@ -42,7 +42,13 @@ function getCorsHeaders(req: Request) {
   };
 }
 
-const CADENCE_HOURS: Record<string, number> = { daily: 24, weekly: 24 * 7 };
+// How long since the last successful run makes an audience due.
+// 'monthly' is treated as ~30 days (24 * 30 hours).
+const CADENCE_HOURS: Record<string, number> = {
+  daily: 24,
+  weekly: 24 * 7,
+  monthly: 24 * 30,
+};
 const MAX_CONSECUTIVE_FAILURES = 3;
 
 Deno.serve(async (req) => {
