@@ -24,8 +24,10 @@ How to connect:
 
 Sync & matching:
 - Calls are fetched by dial session window, then detailed to per‑call rows
-- person_key is `lower(email)` when that email already exists in `people` (or the lead roster feeding it). Otherwise null.
-- No creation of new people/leads from PhoneBurner. Unmatched dials are stored without a person link.
+- `person_key` is set only when a dial matches an existing person on the integration’s team:
+  - First by email (preferred): match `people.email` (team‑scoped) and set `person_key` to that row’s existing `person_key`
+  - Otherwise by normalized phone (match‑only): prefer a team‑scoped match against `synced_contacts.phone` (digits substring → E.164 normalization), then use the candidate’s email only if a `people` row already exists for the team; if still unmatched, fall back to `phoneburner_contacts.phone_e164` and set `person_key` only if that `person_key` already exists in `people` for the team
+- This is strictly match‑only: no `people`, `agent_leads`, or other records are created by the poller
 - The inbox is never pre‑filled from PhoneBurner; no `agent_leads` writes
 
 Calls & dispositions:
