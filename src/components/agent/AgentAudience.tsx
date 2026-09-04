@@ -331,13 +331,14 @@ export function AgentAudience() {
                 <Label>Cadence</Label>
                 <Select
                   value={form.cadence}
-                  onValueChange={(v: 'manual' | 'daily' | 'weekly') => setForm({ ...form, cadence: v })}
+                  onValueChange={(v: 'manual' | 'daily' | 'weekly' | 'monthly') => setForm({ ...form, cadence: v })}
                 >
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="manual">Manual only</SelectItem>
                     <SelectItem value="daily">Daily</SelectItem>
                     <SelectItem value="weekly">Weekly</SelectItem>
+                    <SelectItem value="monthly">Monthly</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

@@ -47,7 +47,7 @@ export interface AgentAudience {
   default_platform: 'smartlead' | 'reply.io' | null;
   default_synced_campaign_id: string | null;
   is_active: boolean;
-  cadence: 'manual' | 'daily' | 'weekly';
+  cadence: 'manual' | 'daily' | 'weekly' | 'monthly';
   max_per_run: number;
   max_total: number | null;
   total_pushed: number;
@@ -116,7 +116,7 @@ export interface AudienceInput {
   // it simply cannot be armed until they are set.
   default_platform: 'smartlead' | 'reply.io' | null;
   default_synced_campaign_id: string | null;
-  cadence: 'manual' | 'daily' | 'weekly';
+  cadence: 'manual' | 'daily' | 'weekly' | 'monthly';
   max_per_run: number;
   max_total: number | null;
   filters: ApolloAudienceFilters;
