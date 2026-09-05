@@ -39,7 +39,7 @@ export const FeaturesSection = () => {
             <div
               key={feature.title}
               className={`group relative bg-white rounded-2xl p-8 border border-slate-200 hover:border-[#2563eb]/40 hover:shadow-xl hover:shadow-[#2563eb]/5 transition-all duration-500 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`}
-              style={{ transitionDelay: `${index * 150 + 200}ms` }}
+              style={{ transitionDelay: `${index * 80 + 140}ms` }}
             >
               <div className="w-14 h-14 rounded-xl bg-[#2563eb]/10 flex items-center justify-center mb-6 group-hover:bg-[#2563eb]/20 transition-colors">
                 <feature.icon className="w-7 h-7 text-[#2563eb]" />
