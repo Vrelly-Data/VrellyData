@@ -97,11 +97,6 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => ({}));
     integrationId = body.integrationId;
     lookbackDays = Number(body.lookbackDays ?? 2);
-    if (!integrationId) {
-      return new Response(JSON.stringify({ error: "Missing integrationId" }), {
-        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
 
     // Auth mode
     const agentKey = req.headers.get("x-agent-key");
@@ -117,278 +112,350 @@ Deno.serve(async (req) => {
     const serviceClient = createClient(Deno.env.get("SUPABASE_URL") ?? "", Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "");
     const db = isInternal ? serviceClient : userClient;
 
-    // Load integration
-    const { data: integration, error: intErr } = await db
-      .from("outbound_integrations")
-      .select("id, team_id, platform, api_key_encrypted")
-      .eq("id", integrationId)
-      .single();
-    if (intErr || !integration) throw new Error("Integration not found or access denied");
-    if ((integration.platform || "").toLowerCase() !== "phoneburner") {
-      throw new Error("Integration is not a PhoneBurner connection");
-    }
-    const teamId: string = integration.team_id;
-    const token: string = integration.api_key_encrypted;
-
-    // Window
-    const end = new Date();
-    const start = new Date(end.getTime() - Math.max(1, lookbackDays) * 24 * 60 * 60 * 1000);
-    const date_start = toIso(start);
-    const date_end = toIso(end);
-
-    // 1) List dial sessions
-    const dsList = await fetchJson(token, "/dialsession", { date_start, date_end });
-    try {
-      console.log(`[poll-phoneburner-calls] list keys:`, Object.keys(dsList || {}));
-    } catch { /* ignore */ }
-    // Official selector observed: dialsessions (plural). Be defensive.
-    const sessions: Array<{ id?: string | number }> =
-      Array.isArray(dsList?.dialsessions) ? dsList.dialsessions :
-      Array.isArray(dsList?.dial_sessions) ? dsList.dial_sessions :
-      Array.isArray(dsList?.dialsession?.dialsessions) ? dsList.dialsession.dialsessions :
-      Array.isArray(dsList) ? dsList :
-      Array.isArray(dsList?.items) ? dsList.items :
-      Array.isArray(dsList?.data) ? dsList.data : [];
-    const sessionIds = sessions
-      .map((s) => (s?.id != null ? String(s.id) : null))
-      .filter((v): v is string => !!v);
-    console.log(`[poll-phoneburner-calls] integration=${integrationId} sessions=${sessionIds.length} window=${date_start}..${date_end}`);
-
-    let eventsUpserted = 0;
-    let inferenceWritten = 0;
-
-    for (const sid of sessionIds) {
-      const detail = await fetchJson(token, `/dialsession/${encodeURIComponent(sid)}`);
-      // Detail can be a wrapper: { dialsession: { calls: [...] } }
-      const calls: any[] =
-        Array.isArray(detail?.dialsession?.calls) ? detail.dialsession.calls :
-        Array.isArray(detail?.dial_session?.calls) ? detail.dial_session.calls :
-        Array.isArray(detail) ? detail :
-        Array.isArray(detail?.calls) ? detail.calls :
-        Array.isArray(detail?.data) ? detail.data : [];
-      for (const c of calls) {
-        const callId = String(c?.call_id ?? c?.id ?? "");
-        if (!callId) continue;
-        const rawPhone = c?.phone ?? c?.to ?? c?.dialed ?? null;
-        const phoneE164 = normalizePhoneE164(rawPhone);
-        // Optional email directly on the call payload (rare; defensive)
-        const emailRaw =
-          (typeof c?.email === "string" ? c.email : null) ??
-          (typeof c?.email_address === "string" ? c.email_address : null) ??
-          (typeof c?.contact?.email === "string" ? c.contact.email : null) ??
-          null;
-        const emailLower = typeof emailRaw === "string" && emailRaw.includes("@")
-          ? String(emailRaw).toLowerCase()
-          : null;
-        const disposition = c?.disposition ?? c?.status ?? null;
-        const connected = Boolean(c?.connected ?? (typeof c?.answered === "boolean" ? c.answered : undefined));
-        const voicemail = Boolean(c?.voicemail ?? (typeof c?.left_voicemail === "boolean" ? c.left_voicemail : undefined));
-        const duration = typeof c?.duration_seconds === "number" ? c.duration_seconds
-          : typeof c?.duration === "number" ? c.duration
-          : null;
-        const note = typeof c?.note === "string" ? c.note : null;
-        const occurredAt = c?.ended_at || c?.connected_at || c?.started_at || c?.time || new Date().toISOString();
-        const recordingUrl = typeof c?.recording_url === "string" ? c.recording_url : null;
-
-        // Person match order (MATCH-ONLY):
-        // 1) Email-first against existing people (team-scoped)
-        // 2) Phone fallback (team-scoped): synced_contacts.phone → verify people by email
-        // 3) Legacy fallback: phoneburner_contacts.phone_e164 → verify people by person_key
-        let personKey: string | null = null;
-        // Capture PhoneBurner contact id if present on the call payload
-        let pbContactId: string | null =
-          (c?.contact_user_id != null ? String(c.contact_user_id) : null) ??
-          (c?.contact_id != null ? String(c.contact_id) : null) ??
-          (c?.pb_contact_id != null ? String(c.pb_contact_id) : null) ??
-          null;
-
-        // 1) Email path — prefer direct email on the call, else email from local PB contact by id
-        let matchedByEmail = false;
-        let candidateEmailLower = emailLower;
-        if (!candidateEmailLower && pbContactId) {
-          // Best-effort local lookup (no provider call): PB contact stored email
-          const { data: cRow } = await serviceClient
-            .from("phoneburner_contacts")
-            .select("email")
-            .eq("integration_id", integrationId)
-            .eq("pb_contact_id", pbContactId)
-            .limit(1)
-            .maybeSingle();
-          if (typeof cRow?.email === "string" && cRow.email.includes("@")) {
-            candidateEmailLower = cRow.email.toLowerCase();
-          }
-        }
-        if (candidateEmailLower) {
-          const { data: p } = await serviceClient
-            .from("people")
-            .select("person_key")
-            .eq("team_id", teamId)
-            .eq("email", candidateEmailLower)
-            .limit(1)
-            .maybeSingle();
-          if (p?.person_key) {
-            personKey = p.person_key;
-            matchedByEmail = true;
-          }
-        }
-
-        // 2) Phone path — prefer team-scoped synced_contacts.phone (normalize + verify people by email)
-        if (!matchedByEmail && phoneE164) {
-          const digits = phoneE164.replace(/\D+/g, "");
-          if (digits) {
-            const { data: scList } = await serviceClient
-              .from("synced_contacts")
-              .select("email, phone")
-              .eq("team_id", teamId)
-              .ilike("phone", `%${digits}%`)
-              .limit(5);
-            if (Array.isArray(scList)) {
-              for (const sc of scList) {
-                const scPhone = typeof sc?.phone === "string" ? sc.phone : null;
-                const scNorm = scPhone ? normalizePhoneE164(scPhone) : null;
-                const scEmailLower = typeof sc?.email === "string" && sc.email.includes("@") ? sc.email.toLowerCase() : null;
-                if (scNorm === phoneE164 && scEmailLower) {
-                  const { data: p3 } = await serviceClient
-                    .from("people")
-                    .select("person_key")
-                    .eq("team_id", teamId)
-                    .eq("email", scEmailLower)
-                    .limit(1)
-                    .maybeSingle();
-                  if (p3?.person_key) {
-                    personKey = p3.person_key;
-                    break;
-                  }
-                }
-              }
-            }
-          }
-          // 3) Legacy/local PB roster as a fallback: phone_e164 → person_key, then verify people row exists
-          if (!personKey) {
-            const { data: m } = await serviceClient
-              .from("phoneburner_contacts")
-              .select("person_key, pb_contact_id")
-              .eq("integration_id", integrationId)
-              .eq("phone_e164", phoneE164)
-              .limit(1)
-              .maybeSingle();
-            if (m?.person_key) {
-              const { data: p2 } = await serviceClient
-                .from("people")
-                .select("person_key")
-                .eq("team_id", teamId)
-                .eq("person_key", m.person_key)
-                .limit(1)
-                .maybeSingle();
-              if (p2?.person_key) {
-                personKey = p2.person_key;
-                if (!pbContactId && m.pb_contact_id) pbContactId = m.pb_contact_id;
-              }
-            }
-          }
-        }
-
-        // Upsert dialer_events
-        const row = {
-          integration_id: integrationId,
-          team_id: teamId,
-          person_key: personKey,
-          pb_contact_id: pbContactId,
-          phone_e164: phoneE164,
-          call_id: callId,
-          dialsession_id: sid,
-          disposition: disposition,
-          connected,
-          voicemail,
-          duration_seconds: duration,
-          note,
-          recording_url: recordingUrl,
-          occurred_at: new Date(occurredAt).toISOString(),
-          source: "poll" as const,
-          raw: c,
-        };
-        const { error: upErr } = await serviceClient
-          .from("dialer_events")
-          .upsert(row, { onConflict: "integration_id,call_id" });
-        if (!upErr) eventsUpserted++;
-
-        // Best-effort inference write
-        const mapped = mapDispositionToInference(disposition);
-        if (mapped && personKey) {
-          const { error: ieErr } = await serviceClient.from("inference_events").insert({
-            team_id: teamId,
-            person_key: personKey,
-            email: personKey.includes("@") ? personKey : null,
-            channel: "other",                 // Optional CHECK-widen not shipped; use 'other' + call step
-            sequence_step_type: "call",
-            event_type: mapped.event_type,
-            intent: "intent" in mapped ? mapped.intent : null,
-            occurred_at: new Date(occurredAt).toISOString(),
-            source: "poll_phoneburner_calls",
-            source_row_id: callId,
-            metadata: { disposition, reason: mapped.reason, dialsession_id: sid, phone_e164: phoneE164 },
-          });
-          if (!ieErr) inferenceWritten++;
-        }
-      }
-      await sleep(150);
-    }
-
-    // Clear 'syncing' if this poll was invoked during connect and no other
-    // function has finalized status yet. Only transition syncing->synced here.
-    try {
-      const { data: row } = await serviceClient
-        .from("outbound_integrations")
-        .select("sync_status")
-        .eq("id", integrationId)
-        .single();
-      if ((row?.sync_status || "").toLowerCase() === "syncing") {
-        await serviceClient
-          .from("outbound_integrations")
-          .update({
-            sync_status: "synced",
-            sync_error: null,
-            last_synced_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", integrationId);
-      }
-    } catch (e) {
-      console.warn("[poll-phoneburner-calls] failed to finalize syncing status:", e);
-    }
-
-    return new Response(JSON.stringify({
-      success: true,
-      sessions: sessionIds.length,
-      eventsUpserted,
-      inferenceWritten,
-      window: { date_start, date_end },
-    }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error("[poll-phoneburner-calls] error:", msg);
-    // Only mark error if status is still 'syncing' (connect-time clear)
-    try {
-      if (integrationId) {
-        const serviceClient = createClient(
-          Deno.env.get("SUPABASE_URL") ?? "",
-          Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
-        );
+    // Helper: finalize syncing status (syncing -> synced) for a given integration
+    async function finalizeSyncingStatus(targetIntegrationId: string) {
+      try {
         const { data: row } = await serviceClient
           .from("outbound_integrations")
           .select("sync_status")
-          .eq("id", integrationId)
+          .eq("id", targetIntegrationId)
+          .single();
+        if ((row?.sync_status || "").toLowerCase() === "syncing") {
+          await serviceClient
+            .from("outbound_integrations")
+            .update({
+              sync_status: "synced",
+              sync_error: null,
+              last_synced_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", targetIntegrationId);
+        }
+      } catch (e) {
+        console.warn("[poll-phoneburner-calls] failed to finalize syncing status:", e);
+      }
+    }
+
+    // Helper: mark error when connect-time polling fails and status is still syncing
+    async function recordSyncErrorIfSyncing(targetIntegrationId: string, msg: string) {
+      try {
+        const { data: row } = await serviceClient
+          .from("outbound_integrations")
+          .select("sync_status")
+          .eq("id", targetIntegrationId)
           .single();
         if ((row?.sync_status || "").toLowerCase() === "syncing") {
           await serviceClient
             .from("outbound_integrations")
             .update({ sync_status: "error", sync_error: msg, updated_at: new Date().toISOString() })
-            .eq("id", integrationId);
+            .eq("id", targetIntegrationId);
         }
+      } catch (e) {
+        console.warn("[poll-phoneburner-calls] failed to record error status:", e);
       }
-    } catch (e) {
-      console.warn("[poll-phoneburner-calls] failed to record error status:", e);
     }
+
+    // Core poll for a single integration (re-usable for multi-run)
+    async function pollSingleIntegration(opts: { id: string; team_id: string; token: string; lookbackDays: number }) {
+      const { id: singleIntegrationId, team_id: teamId, token, lookbackDays } = opts;
+
+      // Window
+      const end = new Date();
+      const start = new Date(end.getTime() - Math.max(1, lookbackDays) * 24 * 60 * 60 * 1000);
+      const date_start = toIso(start);
+      const date_end = toIso(end);
+
+      // 1) List dial sessions
+      const dsList = await fetchJson(token, "/dialsession", { date_start, date_end });
+      try {
+        console.log(`[poll-phoneburner-calls] list keys:`, Object.keys(dsList || {}));
+      } catch { /* ignore */ }
+      // Official selector observed: dialsessions (plural). Be defensive.
+      const sessions: Array<{ id?: string | number }> =
+        Array.isArray(dsList?.dialsessions) ? dsList.dialsessions :
+        Array.isArray(dsList?.dial_sessions) ? dsList.dial_sessions :
+        Array.isArray(dsList?.dialsession?.dialsessions) ? dsList.dialsession.dialsessions :
+        Array.isArray(dsList) ? dsList :
+        Array.isArray(dsList?.items) ? dsList.items :
+        Array.isArray(dsList?.data) ? dsList.data : [];
+      const sessionIds = sessions
+        .map((s) => (s?.id != null ? String(s.id) : null))
+        .filter((v): v is string => !!v);
+      console.log(`[poll-phoneburner-calls] integration=${singleIntegrationId} sessions=${sessionIds.length} window=${date_start}..${date_end}`);
+
+      let eventsUpserted = 0;
+      let inferenceWritten = 0;
+
+      for (const sid of sessionIds) {
+        const detail = await fetchJson(token, `/dialsession/${encodeURIComponent(sid)}`);
+        // Detail can be a wrapper: { dialsession: { calls: [...] } }
+        const calls: any[] =
+          Array.isArray(detail?.dialsession?.calls) ? detail.dialsession.calls :
+          Array.isArray(detail?.dial_session?.calls) ? detail.dial_session.calls :
+          Array.isArray(detail) ? detail :
+          Array.isArray(detail?.calls) ? detail.calls :
+          Array.isArray(detail?.data) ? detail.data : [];
+        for (const c of calls) {
+          const callId = String(c?.call_id ?? c?.id ?? "");
+          if (!callId) continue;
+          const rawPhone = c?.phone ?? c?.to ?? c?.dialed ?? null;
+          const phoneE164 = normalizePhoneE164(rawPhone);
+          // Optional email directly on the call payload (rare; defensive)
+          const emailRaw =
+            (typeof c?.email === "string" ? c.email : null) ??
+            (typeof c?.email_address === "string" ? c.email_address : null) ??
+            (typeof c?.contact?.email === "string" ? c.contact.email : null) ??
+            null;
+          const emailLower = typeof emailRaw === "string" && emailRaw.includes("@")
+            ? String(emailRaw).toLowerCase()
+            : null;
+          const disposition = c?.disposition ?? c?.status ?? null;
+          const connected = Boolean(c?.connected ?? (typeof c?.answered === "boolean" ? c.answered : undefined));
+          const voicemail = Boolean(c?.voicemail ?? (typeof c?.left_voicemail === "boolean" ? c.left_voicemail : undefined));
+          const duration = typeof c?.duration_seconds === "number" ? c.duration_seconds
+            : typeof c?.duration === "number" ? c.duration
+            : null;
+          const note = typeof c?.note === "string" ? c.note : null;
+          const occurredAt = c?.ended_at || c?.connected_at || c?.started_at || c?.time || new Date().toISOString();
+          const recordingUrl = typeof c?.recording_url === "string" ? c.recording_url : null;
+
+          // Person match order (MATCH-ONLY):
+          // 1) Email-first against existing people (team-scoped)
+          // 2) Phone fallback (team-scoped): synced_contacts.phone → verify people by email
+          // 3) Legacy fallback: phoneburner_contacts.phone_e164 → verify people by person_key
+          let personKey: string | null = null;
+          // Capture PhoneBurner contact id if present on the call payload
+          let pbContactId: string | null =
+            (c?.contact_user_id != null ? String(c.contact_user_id) : null) ??
+            (c?.contact_id != null ? String(c.contact_id) : null) ??
+            (c?.pb_contact_id != null ? String(c.pb_contact_id) : null) ??
+            null;
+
+          // 1) Email path — prefer direct email on the call, else email from local PB contact by id
+          let matchedByEmail = false;
+          let candidateEmailLower = emailLower;
+          if (!candidateEmailLower && pbContactId) {
+            // Best-effort local lookup (no provider call): PB contact stored email
+            const { data: cRow } = await serviceClient
+              .from("phoneburner_contacts")
+              .select("email")
+              .eq("integration_id", singleIntegrationId)
+              .eq("pb_contact_id", pbContactId)
+              .limit(1)
+              .maybeSingle();
+            if (typeof cRow?.email === "string" && cRow.email.includes("@")) {
+              candidateEmailLower = cRow.email.toLowerCase();
+            }
+          }
+          if (candidateEmailLower) {
+            const { data: p } = await serviceClient
+              .from("people")
+              .select("person_key")
+              .eq("team_id", teamId)
+              .eq("email", candidateEmailLower)
+              .limit(1)
+              .maybeSingle();
+            if (p?.person_key) {
+              personKey = p.person_key;
+              matchedByEmail = true;
+            }
+          }
+
+          // 2) Phone path — prefer team-scoped synced_contacts.phone (normalize + verify people by email)
+          if (!matchedByEmail && phoneE164) {
+            const digits = phoneE164.replace(/\D+/g, "");
+            if (digits) {
+              const { data: scList } = await serviceClient
+                .from("synced_contacts")
+                .select("email, phone")
+                .eq("team_id", teamId)
+                .ilike("phone", `%${digits}%`)
+                .limit(5);
+              if (Array.isArray(scList)) {
+                for (const sc of scList) {
+                  const scPhone = typeof sc?.phone === "string" ? sc.phone : null;
+                  const scNorm = scPhone ? normalizePhoneE164(scPhone) : null;
+                  const scEmailLower = typeof sc?.email === "string" && sc.email.includes("@") ? sc.email.toLowerCase() : null;
+                  if (scNorm === phoneE164 && scEmailLower) {
+                    const { data: p3 } = await serviceClient
+                      .from("people")
+                      .select("person_key")
+                      .eq("team_id", teamId)
+                      .eq("email", scEmailLower)
+                      .limit(1)
+                      .maybeSingle();
+                    if (p3?.person_key) {
+                      personKey = p3.person_key;
+                      break;
+                    }
+                  }
+                }
+              }
+            }
+            // 3) Legacy/local PB roster as a fallback: phone_e164 → person_key, then verify people row exists
+            if (!personKey) {
+              const { data: m } = await serviceClient
+                .from("phoneburner_contacts")
+                .select("person_key, pb_contact_id")
+                .eq("integration_id", singleIntegrationId)
+                .eq("phone_e164", phoneE164)
+                .limit(1)
+                .maybeSingle();
+              if (m?.person_key) {
+                const { data: p2 } = await serviceClient
+                  .from("people")
+                  .select("person_key")
+                  .eq("team_id", teamId)
+                  .eq("person_key", m.person_key)
+                  .limit(1)
+                  .maybeSingle();
+                if (p2?.person_key) {
+                  personKey = p2.person_key;
+                  if (!pbContactId && m.pb_contact_id) pbContactId = m.pb_contact_id;
+                }
+              }
+            }
+          }
+
+          // Upsert dialer_events
+          const row = {
+            integration_id: singleIntegrationId,
+            team_id: teamId,
+            person_key: personKey,
+            pb_contact_id: pbContactId,
+            phone_e164: phoneE164,
+            call_id: callId,
+            dialsession_id: sid,
+            disposition: disposition,
+            connected,
+            voicemail,
+            duration_seconds: duration,
+            note,
+            recording_url: recordingUrl,
+            occurred_at: new Date(occurredAt).toISOString(),
+            source: "poll" as const,
+            raw: c,
+          };
+          const { error: upErr } = await serviceClient
+            .from("dialer_events")
+            .upsert(row, { onConflict: "integration_id,call_id" });
+          if (!upErr) eventsUpserted++;
+
+          // Best-effort inference write
+          const mapped = mapDispositionToInference(disposition);
+          if (mapped && personKey) {
+            const { error: ieErr } = await serviceClient.from("inference_events").insert({
+              team_id: teamId,
+              person_key: personKey,
+              email: personKey.includes("@") ? personKey : null,
+              channel: "other",
+              sequence_step_type: "call",
+              event_type: mapped.event_type,
+              intent: "intent" in mapped ? mapped.intent : null,
+              occurred_at: new Date(occurredAt).toISOString(),
+              source: "poll_phoneburner_calls",
+              source_row_id: callId,
+              metadata: { disposition, reason: mapped.reason, dialsession_id: sid, phone_e164: phoneE164 },
+            });
+            if (!ieErr) inferenceWritten++;
+          }
+        }
+        await sleep(150);
+      }
+
+      // finalize syncing status for this integration
+      await finalizeSyncingStatus(singleIntegrationId);
+
+      return {
+        sessions: sessionIds.length,
+        eventsUpserted,
+        inferenceWritten,
+        window: { date_start, date_end },
+      };
+    }
+
+    // Branching: integrationId provided vs. not provided
+    if (integrationId) {
+      // Load single integration using scoped client based on auth mode
+      const { data: integration, error: intErr } = await db
+        .from("outbound_integrations")
+        .select("id, team_id, platform, api_key_encrypted")
+        .eq("id", integrationId)
+        .single();
+      if (intErr || !integration) throw new Error("Integration not found or access denied");
+      if ((integration.platform || "").toLowerCase() !== "phoneburner") {
+        throw new Error("Integration is not a PhoneBurner connection");
+      }
+      const stats = await pollSingleIntegration({
+        id: integration.id,
+        team_id: integration.team_id,
+        token: integration.api_key_encrypted,
+        lookbackDays,
+      });
+      return new Response(JSON.stringify({ success: true, ...stats }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // No integrationId given
+    if (!isInternal) {
+      return new Response(JSON.stringify({ error: "Missing integrationId" }), {
+        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // Internal multi-integration path: iterate all PhoneBurner outbound_integrations
+    const { data: integrations, error: listErr } = await serviceClient
+      .from("outbound_integrations")
+      .select("id, team_id, platform, api_key_encrypted")
+      .ilike("platform", "phoneburner");
+    if (listErr) throw new Error(`Failed to list PhoneBurner integrations: ${listErr.message || String(listErr)}`);
+
+    const results: Array<{ id: string; team_id: string; ok: boolean; error?: string; sessions?: number; eventsUpserted?: number; inferenceWritten?: number }> = [];
+    let totalSessions = 0;
+    let totalEvents = 0;
+    let totalInferences = 0;
+    for (const integ of integrations || []) {
+      if (!integ?.id || !integ?.team_id || !integ?.api_key_encrypted) {
+        results.push({ id: String(integ?.id ?? ""), team_id: String(integ?.team_id ?? ""), ok: false, error: "Missing required fields" });
+        continue;
+      }
+      try {
+        const stats = await pollSingleIntegration({
+          id: String(integ.id),
+          team_id: String(integ.team_id),
+          token: String(integ.api_key_encrypted),
+          lookbackDays,
+        });
+        totalSessions += stats.sessions;
+        totalEvents += stats.eventsUpserted;
+        totalInferences += stats.inferenceWritten;
+        results.push({ id: String(integ.id), team_id: String(integ.team_id), ok: true, sessions: stats.sessions, eventsUpserted: stats.eventsUpserted, inferenceWritten: stats.inferenceWritten });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        // Connect-time error marking (if applicable)
+        if (integ?.id) await recordSyncErrorIfSyncing(String(integ.id), msg);
+        results.push({ id: String(integ?.id ?? ""), team_id: String(integ?.team_id ?? ""), ok: false, error: msg });
+      }
+      // Gentle pacing between integrations to avoid provider rate spikes
+      await sleep(250);
+    }
+
+    return new Response(JSON.stringify({
+      success: true,
+      mode: "multi",
+      integrationsProcessed: (integrations || []).length,
+      sessions: totalSessions,
+      eventsUpserted: totalEvents,
+      inferenceWritten: totalInferences,
+      results,
+    }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[poll-phoneburner-calls] error:", msg);
+    // Only mark error if status is still 'syncing' (connect-time clear) in single-id path
+    if (integrationId) await recordSyncErrorIfSyncing(integrationId, msg);
     return new Response(JSON.stringify({ error: msg }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
