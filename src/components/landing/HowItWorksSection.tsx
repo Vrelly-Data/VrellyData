@@ -40,25 +40,39 @@ export const HowItWorksSection = () => {
             <div
               key={step.number}
               className={`group text-center transition-all duration-700 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`}
-              style={{ transitionDelay: `${index * 80 + 120}ms` }}
+              style={{ transitionDelay: `${index * 180 + 100}ms` }}
             >
               <div
                 className={`hiw-number text-6xl font-black text-[#2563eb]/10 mb-4 ${isVisible ? 'hiw-number-visible' : ''}`}
-                style={{ transitionDelay: `${index * 80 + 120}ms` }}
+                style={{ transitionDelay: `${index * 180 + 80}ms` }}
               >
                 {step.number}
               </div>
               <div
                 className={`hiw-tile w-16 h-16 rounded-2xl bg-[#2563eb]/10 flex items-center justify-center mx-auto mb-5 ${isVisible ? 'hiw-tile-visible' : ''}`}
-                style={{ transitionDelay: `${index * 80 + 120}ms` }}
+                style={{
+                  transitionDelay: `${index * 180 + 140}ms`,
+                  // CSS variable to coordinate sequential delays for icon + ring/glow
+                  ['--hiw-delay' as any]: `${index * 180 + 160}ms`,
+                }}
               >
                 <step.icon
                   className={`hiw-icon w-8 h-8 text-[#2563eb] ${isVisible ? 'hiw-icon-animate' : ''}`}
-                  style={{ animationDelay: `${index * 80 + 180}ms` }}
+                  style={{ animationDelay: `${index * 180 + 200}ms`, ['--hiw-delay' as any]: `${index * 180 + 200}ms` }}
                 />
               </div>
-              <h3 className="text-xl font-bold text-slate-900 mb-3">{step.title}</h3>
-              <p className="text-slate-500 leading-relaxed max-w-sm mx-auto">{step.description}</p>
+              <h3
+                className={`hiw-text ${isVisible ? 'hiw-text-visible' : ''} text-xl font-bold text-slate-900 mb-2`}
+                style={{ transitionDelay: `${index * 180 + 220}ms` }}
+              >
+                {step.title}
+              </h3>
+              <p
+                className={`hiw-text ${isVisible ? 'hiw-text-visible' : ''} text-slate-500 leading-relaxed max-w-sm mx-auto`}
+                style={{ transitionDelay: `${index * 180 + 280}ms` }}
+              >
+                {step.description}
+              </p>
             </div>
           ))}
         </div>
@@ -69,11 +83,15 @@ export const HowItWorksSection = () => {
         >
           <div className="hiw-connector mx-auto" style={{ maxWidth: '56rem' }}>
             <span className="hiw-connector-progress" />
+            {/* Optional step dots that light up in sequence */}
+            <span className="hiw-step-dot" style={{ left: '12%', ['--i' as any]: 0 }} />
+            <span className="hiw-step-dot" style={{ left: '50%', ['--i' as any]: 1 }} />
+            <span className="hiw-step-dot" style={{ left: '88%', ['--i' as any]: 2 }} />
           </div>
         </div>
 
         {/* Mock UI card */}
-        <div className={`max-w-4xl mx-auto transition-all duration-700 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`} style={{ transitionDelay: '520ms' }}>
+        <div className={`max-w-4xl mx-auto transition-all duration-700 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`} style={{ transitionDelay: '720ms' }}>
           <div className="rounded-2xl bg-[#0f1729] p-6 shadow-2xl border border-white/10">
             <div className="flex items-center gap-2 mb-4">
               <div className="w-3 h-3 rounded-full bg-red-400" />
