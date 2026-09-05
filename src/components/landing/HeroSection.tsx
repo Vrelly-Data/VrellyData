@@ -62,8 +62,8 @@ export const HeroSection = () => {
       {/* Subtle grid */}
       <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.03)_1px,transparent_1px)] bg-[size:64px_64px]" />
       {/* Glowing orbs */}
-      <div className="absolute top-1/3 left-1/4 w-[500px] h-[500px] bg-[#2563eb]/10 rounded-full blur-3xl pointer-events-none" />
-      <div className="absolute bottom-1/4 right-1/4 w-[400px] h-[400px] bg-[#2563eb]/8 rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute top-1/3 left-1/4 w-[500px] h-[500px] bg-[#2563eb]/10 rounded-full blur-3xl pointer-events-none animate-float" style={{ animationDuration: '14s' }} />
+      <div className="absolute bottom-1/4 right-1/4 w-[400px] h-[400px] bg-[#2563eb]/8 rounded-full blur-3xl pointer-events-none animate-float" style={{ animationDuration: '18s', animationDelay: '1.5s' }} />
 
       {/* Main hero content — grows to fill, keeping the text block centered */}
       <div className="relative z-10 flex-1 flex items-center justify-center w-full">
@@ -75,36 +75,36 @@ export const HeroSection = () => {
             touching the md+ layout, which keeps its existing 252px. */}
         <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 text-center pt-24 pb-32 md:pb-0">
           {/* Badge */}
-          <div className="inline-flex items-center gap-2 px-5 py-2 rounded-full bg-[#2563eb]/15 border border-[#2563eb]/30 text-[#60a5fa] text-sm font-medium mb-10 opacity-0 animate-fade-up" style={{ animationDelay: '0.1s' }}>
+          <div className="inline-flex items-center gap-2 px-5 py-2 rounded-full bg-[#2563eb]/15 border border-[#2563eb]/30 text-[#60a5fa] text-sm font-medium mb-10 opacity-0 animate-fade-up" style={{ animationDelay: '0.1s', animationDuration: '0.9s' }}>
             <div className="w-2 h-2 rounded-full bg-[#60a5fa] animate-pulse" />
             AI Sales Agent Platform
           </div>
 
           {/* H1 */}
           <h1 className="text-5xl md:text-6xl lg:text-7xl font-extrabold tracking-tight text-white mb-8 leading-[1.1]">
-            <span className="opacity-0 animate-fade-up inline-block" style={{ animationDelay: '0.2s' }}>
+            <span className="opacity-0 animate-fade-up inline-block" style={{ animationDelay: '0.2s', animationDuration: '0.95s' }}>
               Your AI{' '}
               <TypewriterText texts={['Outbound', 'Inbound']} />{' '}
               Agent.
             </span>
             <br />
-            <span className="opacity-0 animate-fade-up inline-block" style={{ animationDelay: '0.4s' }}>
+            <span className="opacity-0 animate-fade-up inline-block" style={{ animationDelay: '0.4s', animationDuration: '1s' }}>
               Trained on Your Data.
             </span>
           </h1>
 
           {/* Subtitle */}
-          <p className="text-lg md:text-xl text-slate-300 max-w-3xl mx-auto mb-12 leading-relaxed opacity-0 animate-fade-up" style={{ animationDelay: '0.6s' }}>
+          <p className="text-lg md:text-xl text-slate-300 max-w-3xl mx-auto mb-12 leading-relaxed opacity-0 animate-fade-up" style={{ animationDelay: '0.6s', animationDuration: '1s' }}>
             Launch your outbound and inbound agent that operates like a human. Vrelly learns
             what's working, handles replies, and books more meetings — powered by your real campaign data.
           </p>
 
           {/* CTAs */}
-          <div className="flex flex-col sm:flex-row items-center justify-center gap-4 opacity-0 animate-fade-up" style={{ animationDelay: '0.8s' }}>
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-4 opacity-0 animate-fade-up" style={{ animationDelay: '0.8s', animationDuration: '1.05s' }}>
             <Button
               size="lg"
               onClick={() => navigate('/auth?tab=signup')}
-              className="text-base px-8 py-6 bg-[#2563eb] hover:bg-[#2563eb]/90 !text-white shadow-lg shadow-[#2563eb]/25"
+              className="text-base px-8 py-6 bg-[#2563eb] hover:bg-[#2563eb]/90 !text-white shadow-lg shadow-[#2563eb]/25 transform transition-transform hover:-translate-y-0.5 hover:shadow-xl"
             >
               Get Started
               <ArrowRight className="ml-2 w-5 h-5" />
@@ -113,7 +113,7 @@ export const HeroSection = () => {
               size="lg"
               variant="outline"
               onClick={() => navigate('/demo')}
-              className="text-base px-8 py-6 border-white/20 bg-transparent !text-white hover:bg-white/10 hover:border-white/30"
+              className="text-base px-8 py-6 border-white/20 bg-transparent !text-white hover:bg-white/10 hover:border-white/30 transform transition-transform hover:-translate-y-0.5 hover:shadow-lg"
             >
               Book a demo
             </Button>
@@ -125,7 +125,7 @@ export const HeroSection = () => {
           lower portion of the hero in normal flow (not absolute-positioned) */}
       <div
         className="relative z-10 hidden md:flex flex-col items-center w-full pb-16 opacity-0 animate-fade-up"
-        style={{ animationDelay: '1s' }}
+        style={{ animationDelay: '1s', animationDuration: '1.1s' }}
       >
         <p className="text-xs uppercase tracking-[0.2em] font-medium text-slate-500 mb-6">
           Trusted by B2B Sales Teams
@@ -139,7 +139,7 @@ export const HeroSection = () => {
         >
           {/* Track: logo set rendered TWICE so translateX(-50%) lands exactly
               on the start of copy #2 → seamless loop (single-copy was the jump bug) */}
-          <div className="flex w-max animate-scroll-left pointer-events-none">
+          <div className="flex w-max animate-scroll-left pointer-events-none" style={{ animationDuration: '42s' }}>
             {[...logos, ...logos].map((logo, i) => (
               <div
                 key={i}

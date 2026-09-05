@@ -107,3 +107,17 @@ All colors MUST be HSL.
     animation: gradient-shift 3s ease infinite;
   }
 }
+
+/* Respect users who prefer reduced motion: disable non-essential animations */
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-up,
+  .animate-fade-in,
+  .animate-scroll-left,
+  .animate-float,
+  .animate-slide-in-left,
+  .animate-slide-in-right,
+  .animate-gradient-shift,
+  .animate-pulse-glow {
+    animation: none !important;
+  }
+}

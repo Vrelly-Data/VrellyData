@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useResources, Resource } from '@/hooks/useResources';
+import { useScrollAnimation } from '@/hooks/useScrollAnimation';
 
 type ResourcesTeaserProps = {
   title?: string;
@@ -17,6 +18,7 @@ export function ResourcesTeaser({
   className = '',
 }: ResourcesTeaserProps) {
   const { data: resources = [], isLoading } = useResources();
+  const { ref, isVisible } = useScrollAnimation();
 
   const pickResources = (all: Resource[]): Resource[] => {
     if (!all || all.length === 0) return [];
@@ -38,8 +40,8 @@ export function ResourcesTeaser({
 
   return (
     <section className={`py-16 ${className}`}>
-      <div className="max-w-6xl mx-auto px-4">
-        <div className="flex items-center justify-between mb-6">
+      <div className="max-w-6xl mx-auto px-4" ref={ref}>
+        <div className={`flex items-center justify-between mb-6 transition-all duration-700 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'}`}>
           <h2 className="text-2xl font-bold tracking-tight">{title}</h2>
           <Link to="/resources" className="text-sm text-muted-foreground hover:text-foreground underline underline-offset-4">
             See all resources
@@ -59,11 +61,12 @@ export function ResourcesTeaser({
           </div>
         ) : items.length === 0 ? null : (
           <div className={`grid grid-cols-1 ${limit === 3 ? 'md:grid-cols-3' : 'md:grid-cols-2'} gap-6`}>
-            {items.map((resource) => (
+            {items.map((resource, index) => (
               <Link
                 key={resource.id}
                 to={`/resources/${resource.slug}`}
-                className="group rounded-xl border bg-card hover:border-primary/40 hover:shadow-md transition-all duration-200 overflow-hidden flex flex-col"
+                className={`group rounded-xl border bg-card hover:border-primary/40 hover:shadow-md transition-all duration-500 overflow-hidden flex flex-col ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'}`}
+                style={{ transitionDelay: `${index * 80 + 120}ms` }}
               >
                 {resource.cover_image_url && (
                   <div className="aspect-video overflow-hidden bg-muted">
