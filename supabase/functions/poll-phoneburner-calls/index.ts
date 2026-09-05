@@ -30,6 +30,7 @@ function getCorsHeaders(req: Request) {
 }
 
 const PB_API_BASE = "https://www.phoneburner.com/rest/1";
+const DS_PAGE_SIZE = 100; // defensive; provider may cap differently
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const toIso = (d: Date) => d.toISOString().replace(/\.\d{3}Z$/, "Z");
@@ -258,32 +259,92 @@ Deno.serve(async (req) => {
         .eq("team_id", teamId);
       const teamUserIds: string[] = (teamMembers ?? []).map((r: any) => r.user_id).filter(Boolean);
 
-      // 1) List dial sessions
-      const dsList = await fetchJson(token, "/dialsession", { date_start, date_end });
-      try {
-        console.log(`[poll-phoneburner-calls] list keys:`, Object.keys(dsList || {}));
-      } catch { /* ignore */ }
-      // Log list metadata (no secrets)
-      try {
-        const totalResults =
-          (dsList?.dialsessions?.total_results ?? dsList?.total_results ?? dsList?.total ?? null);
-        const typeOfDialSessions =
-          Array.isArray(dsList?.dialsessions) ? "array" : typeof dsList?.dialsessions;
-        console.log(
-          `[poll-phoneburner-calls] list meta: total_results=${String(totalResults)} type(dialsessions)=${String(typeOfDialSessions)}`
-        );
-      } catch { /* ignore */ }
-      // Official list shape:
-      // { dialsessions: { page, total_results, dialsessions: [ { dialsession_id, ... } ] } }
-      // Be defensive and accept historical/alternative shapes as well.
-      const sessions: Array<any> =
-        Array.isArray(dsList?.dialsessions?.dialsessions) ? dsList.dialsessions.dialsessions :
-        Array.isArray(dsList?.dialsessions) ? dsList.dialsessions :
-        Array.isArray(dsList?.dial_sessions) ? dsList.dial_sessions :
-        Array.isArray(dsList?.dialsession?.dialsessions) ? dsList.dialsession.dialsessions :
-        Array.isArray(dsList) ? dsList :
-        Array.isArray(dsList?.items) ? dsList.items :
-        Array.isArray(dsList?.data) ? dsList.data : [];
+      // 1) List dial sessions — paginated
+      function extractDialSessions(data: any): { items: any[]; page?: number; pageSize?: number; totalResults?: number } {
+        try {
+          const wrapper = data?.dialsessions ?? data?.dial_sessions ?? data?.dialsession ?? null;
+          const nested = wrapper?.dialsessions ?? wrapper?.dial_sessions ?? null;
+          let items: any[] = [];
+          if (Array.isArray(nested)) {
+            items = nested;
+          } else if (nested && typeof nested === "object" && Array.isArray((nested as any)?.dialsessions)) {
+            // Extremely defensive: nested object containing { dialsessions: [...] }
+            items = (nested as any).dialsessions;
+          } else if (Array.isArray(wrapper)) {
+            items = wrapper;
+          } else if (Array.isArray(data)) {
+            items = data;
+          } else if (Array.isArray(data?.items)) {
+            items = data.items;
+          } else if (Array.isArray(data?.data)) {
+            items = data.data;
+          }
+          const page = typeof wrapper?.page === "number" ? wrapper.page : undefined;
+          const pageSize = typeof wrapper?.page_size === "number" ? wrapper.page_size : undefined;
+          const trRaw = wrapper?.total_results ?? wrapper?.total;
+          const totalResults =
+            typeof trRaw === "number" ? trRaw :
+            (typeof trRaw === "string" ? Number(trRaw) : undefined);
+          return { items, page, pageSize, totalResults };
+        } catch {
+          return { items: [] };
+        }
+      }
+      async function fetchDialSessionsPage(token: string, qs: { date_start: string; date_end: string; page: number }) {
+        const urlQs: Record<string, string | number> = {
+          date_start: qs.date_start,
+          date_end: qs.date_end,
+          page: qs.page,
+          page_size: DS_PAGE_SIZE,
+          per_page: DS_PAGE_SIZE,
+        };
+        const data = await fetchJson(token, "/dialsession", urlQs);
+        const { items, page, pageSize, totalResults } = extractDialSessions(data);
+        const hasMore = ((): boolean => {
+          if (typeof totalResults === "number" && typeof page === "number" && (pageSize || DS_PAGE_SIZE)) {
+            const sz = (typeof pageSize === "number" && pageSize > 0) ? pageSize : DS_PAGE_SIZE;
+            return page * sz < totalResults;
+          }
+          if (typeof pageSize === "number" && pageSize > 0) {
+            return items.length === pageSize;
+          }
+          return items.length > 0 && items.length >= DS_PAGE_SIZE;
+        })();
+        const diag = {
+          topKeys: Object.keys(data || {}),
+          wrapperKeys: Object.keys((data?.dialsessions as Record<string, unknown>) || {}),
+          page: page ?? qs.page,
+          pageSize,
+          totalResults,
+          extracted: items.length,
+        };
+        return { items, hasMore, diag, page, pageSize, totalResults };
+      }
+      const MAX_PAGES = 100;
+      const collected: any[] = [];
+      let observedTotal: number | undefined = undefined;
+      for (let page = 1; page <= MAX_PAGES; page++) {
+        const { items, hasMore, diag, totalResults } = await fetchDialSessionsPage(token, { date_start, date_end, page });
+        try {
+          console.log(
+            `[poll-phoneburner-calls] list page=${String(diag.page)} extracted=${String(diag.extracted)} dialsessions_keys=${(diag.wrapperKeys as string[]).join(",")}`
+          );
+          if (typeof diag.totalResults === "number") {
+            console.log(`[poll-phoneburner-calls] list meta: total_results=${diag.totalResults} page_size=${String(diag.pageSize ?? "?")}`);
+          }
+        } catch { /* ignore log errors */ }
+        if (typeof totalResults === "number") observedTotal = totalResults;
+        if (!items || items.length === 0) break;
+        collected.push(...items);
+        if (!hasMore) break;
+        if (typeof observedTotal === "number" && collected.length >= observedTotal) break;
+        await sleep(120);
+      }
+      if (typeof observedTotal === "number" && collected.length < observedTotal) {
+        console.warn(`[poll-phoneburner-calls] WARNING: truncated sessions: collected=${collected.length} < total_results=${observedTotal}. Increase MAX_PAGES or verify provider caps.`);
+      }
+      // Be defensive and accept historical/alternative shapes as well (already handled in extract)
+      const sessions: Array<any> = collected;
       const sessionIds = sessions
         .map((s) => {
           const id = (s?.dialsession_id ?? s?.id ?? null);
@@ -299,6 +360,11 @@ Deno.serve(async (req) => {
         const detail = await fetchJson(token, `/dialsession/${encodeURIComponent(sid)}`);
         // Detail can be a wrapper or nested under dialsessions.dialsessions[].calls
         let calls: any[] = [];
+        // PR #33 compatibility: some detail responses return an object at dialsessions.dialsessions with a direct .calls array
+        const nestedDetail = (detail as any)?.dialsessions?.dialsessions;
+        if (nestedDetail && !Array.isArray(nestedDetail) && Array.isArray((nestedDetail as any)?.calls)) {
+          calls = (nestedDetail as any).calls;
+        } else
         if (Array.isArray(detail?.dialsessions?.dialsessions)) {
           try {
             calls = (detail.dialsessions.dialsessions as any[]).flatMap((ds: any) =>
