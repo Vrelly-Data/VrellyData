@@ -79,9 +79,6 @@ export const Navbar = () => {
             <a href="/resources" className="hover:text-white transition-colors">
               Resources
             </a>
-            <a href="/agents" className="hover:text-white transition-colors">
-              Agents
-            </a>
           </div>
 
           <div className="flex items-center gap-3">

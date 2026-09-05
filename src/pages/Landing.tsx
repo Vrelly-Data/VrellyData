@@ -38,9 +38,9 @@ const Landing = () => {
       <HowItWorksSection />
       <FeaturesSection />
       <AIAgentsSection />
-      <ResourcesTeaser />
       <PricingSection />
       <SignUpSection />
+      <ResourcesTeaser />
       <Footer />
     </div>
   );

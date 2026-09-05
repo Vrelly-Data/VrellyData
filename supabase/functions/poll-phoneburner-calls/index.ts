@@ -44,18 +44,17 @@ function normalizePhoneE164(input: unknown): string | null {
   return null;
 }
 
-function extractEmailFromCall(c: any): string | null {
-  const v =
-    c?.email ??
-    c?.email_address ??
-    c?.contact_email ??
-    c?.primary_email?.email_address ??
-    c?.contact?.email ??
-    c?.lead?.email_address ??
-    c?.lead?.email ??
-    null;
-  const e = typeof v === "string" ? v.trim().toLowerCase() : null;
-  return e && e.includes("@") ? e : null;
+// Build common absolute-url variants from a normalized linkedin.com key
+// (no scheme/www; see normalizeLiKey). Stored values are typically absolute.
+function buildLinkedInUrlVariants(key: string): string[] {
+  const k = key.replace(/^https?:\/\//, "").replace(/^www\./, "");
+  return [
+    `https://${k}`,
+    `https://www.${k}`,
+    `http://${k}`,
+    `http://www.${k}`,
+    k, // just in case a bare host/path was stored
+  ];
 }
 
 function extractLinkedInFromCall(c: any): string | null {
@@ -121,35 +120,6 @@ function extractFullNameFromCall(c: any): string | null {
     if (t) return t;
   }
   return null;
-}
-
-function extractPbContactIdFromCall(c: any): string | null {
-  const candidates: Array<unknown> = [
-    c?.contact_user_id,
-    c?.contact_id,
-    c?.pb_contact_id,
-    c?.contact?.id,
-    c?.contact?.contact_id,
-    c?.lead?.contact_id,
-  ];
-  for (const raw of candidates) {
-    const s = raw != null ? String(raw) : "";
-    if (s.trim()) return s.trim();
-  }
-  return null;
-}
-
-// Build common absolute-url variants from a normalized linkedin.com key
-// (no scheme/www; see normalizeLiKey). Stored values are typically absolute.
-function buildLinkedInUrlVariants(key: string): string[] {
-  const k = key.replace(/^https?:\/\//, "").replace(/^www\./, "");
-  return [
-    `https://${k}`,
-    `https://www.${k}`,
-    `http://${k}`,
-    `http://www.${k}`,
-    k, // just in case a bare host/path was stored
-  ];
 }
 
 type MappedInference =
@@ -287,6 +257,15 @@ Deno.serve(async (req) => {
         if (!callId) continue;
         const rawPhone = c?.phone ?? c?.to ?? c?.dialed ?? null;
         const phoneE164 = normalizePhoneE164(rawPhone);
+        // Optional email directly on the call payload (rare; defensive)
+        const emailRaw =
+          (typeof c?.email === "string" ? c.email : null) ??
+          (typeof c?.email_address === "string" ? c.email_address : null) ??
+          (typeof c?.contact?.email === "string" ? c.contact.email : null) ??
+          null;
+        const emailLower = typeof emailRaw === "string" && emailRaw.includes("@")
+          ? String(emailRaw).toLowerCase()
+          : null;
         const disposition = c?.disposition ?? c?.status ?? null;
         const connected = Boolean(c?.connected ?? (typeof c?.answered === "boolean" ? c.answered : undefined));
         const voicemail = Boolean(c?.voicemail ?? (typeof c?.left_voicemail === "boolean" ? c.left_voicemail : undefined));
@@ -296,35 +275,60 @@ Deno.serve(async (req) => {
         const note = typeof c?.note === "string" ? c.note : null;
         const occurredAt = c?.ended_at || c?.connected_at || c?.started_at || c?.time || new Date().toISOString();
         const recordingUrl = typeof c?.recording_url === "string" ? c.recording_url : null;
-        const pbContactId = extractPbContactIdFromCall(c);
 
-        // Extract identifiers
-        const emailLower = extractEmailFromCall(c);
-        const liKey = extractLinkedInFromCall(c); // normalized key (no scheme/www/trailing slash)
-        const companyRaw = extractCompanyFromCall(c);
-        const fullName = extractFullNameFromCall(c);
-
+        // Person match order (MATCH-ONLY):
+        // 1) Email-first against existing people (team-scoped)
+        // 2) Phone fallback (team-scoped): synced_contacts.phone → verify people by email
+        // 3) Legacy fallback: phoneburner_contacts.phone_e164 → verify people by person_key
         let personKey: string | null = null;
-        // 1) Email — exact team-scoped people.email hit.
-        if (emailLower) {
-          const { data: hit } = await serviceClient
+        // Capture PhoneBurner contact id if present on the call payload
+        let pbContactId: string | null =
+          (c?.contact_user_id != null ? String(c.contact_user_id) : null) ??
+          (c?.contact_id != null ? String(c.contact_id) : null) ??
+          (c?.pb_contact_id != null ? String(c.pb_contact_id) : null) ??
+          null;
+
+        // 1) Email path — prefer direct email on the call, else email from local PB contact by id
+        let matchedByEmail = false;
+        let candidateEmailLower = emailLower;
+        if (!candidateEmailLower && pbContactId) {
+          // Best-effort local lookup (no provider call): PB contact stored email
+          const { data: cRow } = await serviceClient
+            .from("phoneburner_contacts")
+            .select("email")
+            .eq("integration_id", integrationId)
+            .eq("pb_contact_id", pbContactId)
+            .limit(1)
+            .maybeSingle();
+          if (typeof cRow?.email === "string" && cRow.email.includes("@")) {
+            candidateEmailLower = cRow.email.toLowerCase();
+          }
+        }
+        if (candidateEmailLower) {
+          const { data: p } = await serviceClient
             .from("people")
             .select("person_key")
             .eq("team_id", teamId)
-            .eq("email", emailLower)
+            .eq("email", candidateEmailLower)
             .limit(1)
             .maybeSingle();
-          if (hit?.person_key) personKey = hit.person_key;
+          if (p?.person_key) {
+            personKey = p.person_key;
+            matchedByEmail = true;
+          }
         }
 
         // 2) LinkedIn URL — normalized match to people first; then via
         // synced_contacts/agent_leads → verify in people by email.
+        const liKey = extractLinkedInFromCall(c);
+        const companyRaw = extractCompanyFromCall(c);
+        const fullName = extractFullNameFromCall(c);
         if (!personKey && liKey) {
           const liForms = buildLinkedInUrlVariants(liKey);
           // a) direct hit in people.linkedin_url (team-scoped)
           const { data: liHit } = await serviceClient
             .from("people")
-            .select("person_key, linkedin_url")
+            .select("person_key")
             .eq("team_id", teamId)
             .in("linkedin_url", liForms as any)
             .limit(1)
@@ -335,7 +339,7 @@ Deno.serve(async (req) => {
             // b) synced_contacts.linkedin_url → email → verify people
             const { data: sc } = await serviceClient
               .from("synced_contacts")
-              .select("email, linkedin_url")
+              .select("email")
               .eq("team_id", teamId)
               .in("linkedin_url", liForms as any)
               .limit(1)
@@ -351,7 +355,7 @@ Deno.serve(async (req) => {
                 .maybeSingle();
               if (p2?.person_key) personKey = p2.person_key;
             }
-            // c) agent_leads.linkedin_url → email → verify people
+            // c) agent_leads.linkedin_url → email → verify people (team-scoped users)
             if (!personKey && teamUserIds.length > 0) {
               const { data: al } = await serviceClient
                 .from("agent_leads")
@@ -375,55 +379,63 @@ Deno.serve(async (req) => {
           }
         }
 
-        // 3) Phone — via synced_contacts then phoneburner_contacts, both verified into people.
-        if (!personKey && phoneE164) {
-          // a) synced_contacts (team-scoped)
-          const orClause = rawPhone ? `phone.eq.${phoneE164},phone.eq.${String(rawPhone)}` : `phone.eq.${phoneE164}`;
-          const { data: scByPhone } = await serviceClient
-            .from("synced_contacts")
-            .select("email, phone")
-            .eq("team_id", teamId)
-            .or(orClause);
-          if (Array.isArray(scByPhone) && scByPhone.length > 0) {
-            const scEmail = scByPhone.find((r: any) => r?.email)?.email;
-            const scEmailLower = scEmail ? String(scEmail).trim().toLowerCase() : null;
-            if (scEmailLower) {
-              const { data: p4 } = await serviceClient
+        // 3) Phone path — prefer team-scoped synced_contacts.phone (normalize + verify people by email)
+        if (!matchedByEmail && phoneE164) {
+          const digits = phoneE164.replace(/\D+/g, "");
+          if (digits) {
+            const { data: scList } = await serviceClient
+              .from("synced_contacts")
+              .select("email, phone")
+              .eq("team_id", teamId)
+              .ilike("phone", `%${digits}%`)
+              .limit(5);
+            if (Array.isArray(scList)) {
+              for (const sc of scList) {
+                const scPhone = typeof sc?.phone === "string" ? sc.phone : null;
+                const scNorm = scPhone ? normalizePhoneE164(scPhone) : null;
+                const scEmailLower = typeof sc?.email === "string" && sc.email.includes("@") ? sc.email.toLowerCase() : null;
+                if (scNorm === phoneE164 && scEmailLower) {
+                  const { data: p3 } = await serviceClient
+                    .from("people")
+                    .select("person_key")
+                    .eq("team_id", teamId)
+                    .eq("email", scEmailLower)
+                    .limit(1)
+                    .maybeSingle();
+                  if (p3?.person_key) {
+                    personKey = p3.person_key;
+                    break;
+                  }
+                }
+              }
+            }
+          }
+          // 4) Legacy/local PB roster as a fallback: phone_e164 → person_key, then verify people row exists
+          if (!personKey) {
+            const { data: m } = await serviceClient
+              .from("phoneburner_contacts")
+              .select("person_key, pb_contact_id")
+              .eq("integration_id", integrationId)
+              .eq("phone_e164", phoneE164)
+              .limit(1)
+              .maybeSingle();
+            if (m?.person_key) {
+              const { data: p2 } = await serviceClient
                 .from("people")
                 .select("person_key")
                 .eq("team_id", teamId)
-                .eq("email", scEmailLower)
+                .eq("person_key", m.person_key)
                 .limit(1)
                 .maybeSingle();
-              if (p4?.person_key) personKey = p4.person_key;
-            }
-          }
-          // b) phoneburner_contacts (integration-scoped), verify into people
-          if (!personKey) {
-            const orPb = rawPhone ? `phone_e164.eq.${phoneE164},raw_phone.eq.${String(rawPhone)}` : `phone_e164.eq.${phoneE164}`;
-            const { data: pb } = await serviceClient
-              .from("phoneburner_contacts")
-              .select("email, person_key")
-              .eq("integration_id", integrationId)
-              .or(orPb);
-            if (Array.isArray(pb) && pb.length > 0) {
-              const pbEmail = pb.find((r: any) => r?.email)?.email;
-              const pbEmailLower = pbEmail ? String(pbEmail).trim().toLowerCase() : null;
-              if (pbEmailLower) {
-                const { data: p5 } = await serviceClient
-                  .from("people")
-                  .select("person_key")
-                  .eq("team_id", teamId)
-                  .eq("email", pbEmailLower)
-                  .limit(1)
-                  .maybeSingle();
-                if (p5?.person_key) personKey = p5.person_key;
+              if (p2?.person_key) {
+                personKey = p2.person_key;
+                if (!pbContactId && m.pb_contact_id) pbContactId = m.pb_contact_id;
               }
             }
           }
         }
 
-        // 4) Company — WEAK alone. Only when:
+        // 5) Company — WEAK alone. Only when:
         //    (a) company + full name match a people row; OR
         //    (b) company is unique in people for this team (exactly one row).
         if (!personKey && companyRaw) {

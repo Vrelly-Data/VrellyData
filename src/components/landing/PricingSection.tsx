@@ -33,7 +33,7 @@ export const PricingSection = () => {
                   ? 'bg-white/10 border-2 border-[#2563eb]/50 shadow-lg shadow-[#2563eb]/10'
                   : 'bg-white/5 border border-white/10'
               } ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`}
-              style={{ transitionDelay: `${index * 150 + 200}ms` }}
+              style={{ transitionDelay: `${index * 80 + 160}ms` }}
             >
               {tier.popular && (
                 <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-4 py-1 rounded-full bg-[#2563eb] text-white text-xs font-semibold">
@@ -50,11 +50,11 @@ export const PricingSection = () => {
           ))}
         </div>
 
-        <div className={`text-center transition-all duration-700 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'}`} style={{ transitionDelay: '700ms' }}>
+        <div className={`text-center transition-all duration-700 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'}`} style={{ transitionDelay: '520ms' }}>
           <Button
             size="lg"
             onClick={() => navigate('/pricing')}
-            className="text-base px-8 py-6 bg-[#2563eb] hover:bg-[#2563eb]/90 text-white shadow-lg shadow-[#2563eb]/25"
+            className="text-base px-8 py-6 bg-[#2563eb] hover:bg-[#2563eb]/90 text-white shadow-lg shadow-[#2563eb]/25 transform transition-transform hover:-translate-y-0.5 hover:shadow-xl"
           >
             See Full Pricing
           </Button>

@@ -24,11 +24,12 @@ How to connect:
 
 Sync & matching:
 - Calls are fetched by dial session window, then detailed to per‑call rows.
-- MATCH‑ONLY (never creates people/leads). We attach `person_key` for existing people using the following identifiers (high → low confidence):
+- MATCH‑ONLY: we attach `person_key` only when the call matches an existing person on the team. Match order (high → low confidence):
   1) Email — team‑scoped exact match on `people.email`.
-  2) LinkedIn URL — normalized (lowercased, no query/fragment/trailing slash, protocol/www unified). Match `people.linkedin_url` for the same team. If no hit, try `synced_contacts.linkedin_url` or team‑scoped `agent_leads.linkedin_url`, then only attach when that row’s email exists in `people`.
-  3) Phone — match `synced_contacts.phone` (team) to get email, verify in `people`; otherwise match `phoneburner_contacts.phone_e164` (this integration) to get email, verify in `people`.
+  2) LinkedIn URL — normalized (lowercased, no query/fragment/trailing slash; protocol/www unified). First match `people.linkedin_url` (team‑scoped). If no hit, use `synced_contacts.linkedin_url` or team‑scoped `agent_leads.linkedin_url` to obtain an email, then only attach when that email exists in `people`.
+  3) Phone — normalized: prefer team‑scoped `synced_contacts.phone` (digits substring → E.164 normalization) to get an email and verify in `people`; if still unmatched, fall back to `phoneburner_contacts.phone_e164` and set `person_key` only if that `person_key` already exists in `people` for the team.
   4) Company (WEAK) — only attach when (a) PB provides a company AND a person name and there’s an exact `people` match on both `company_name` + `full_name`, OR (b) the team has exactly one `people` row with that `company_name`. Ambiguous (0 or 2+) → leave `person_key` null.
+- Strictly match‑only: no `people`, `agent_leads`, or other records are created by the poller.
 - The inbox is never pre‑filled from PhoneBurner; no `agent_leads` writes.
 
 Calls & dispositions:

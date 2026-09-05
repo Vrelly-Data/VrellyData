@@ -40,7 +40,7 @@ export const HowItWorksSection = () => {
             <div
               key={step.number}
               className={`text-center transition-all duration-700 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`}
-              style={{ transitionDelay: `${index * 200 + 200}ms` }}
+              style={{ transitionDelay: `${index * 80 + 120}ms` }}
             >
               <div className="text-6xl font-black text-[#2563eb]/10 mb-4">{step.number}</div>
               <div className="w-16 h-16 rounded-2xl bg-[#2563eb]/10 flex items-center justify-center mx-auto mb-5">
@@ -53,7 +53,7 @@ export const HowItWorksSection = () => {
         </div>
 
         {/* Mock UI card */}
-        <div className={`max-w-4xl mx-auto transition-all duration-700 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`} style={{ transitionDelay: '900ms' }}>
+        <div className={`max-w-4xl mx-auto transition-all duration-700 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`} style={{ transitionDelay: '520ms' }}>
           <div className="rounded-2xl bg-[#0f1729] p-6 shadow-2xl border border-white/10">
             <div className="flex items-center gap-2 mb-4">
               <div className="w-3 h-3 rounded-full bg-red-400" />

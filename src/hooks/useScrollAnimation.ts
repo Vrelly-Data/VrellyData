@@ -8,6 +8,17 @@ export const useScrollAnimation = (threshold = 0.15) => {
     const el = ref.current;
     if (!el) return;
 
+    // Respect reduced motion: reveal instantly and skip observers/animations
+    const prefersReduced =
+      typeof window !== 'undefined' &&
+      window.matchMedia &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    if (prefersReduced) {
+      setIsVisible(true);
+      return;
+    }
+
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
