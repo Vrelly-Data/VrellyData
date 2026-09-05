@@ -24,12 +24,14 @@ How to connect:
 4) On connect, the app backfills recent calls for the last 90 days (match‑only)
 
 Sync & matching:
-- Calls are fetched by dial session window, then detailed to per‑call rows
-- `person_key` is set only when a dial matches an existing person on the integration’s team:
-  - First by email (preferred): match `people.email` (team‑scoped) and set `person_key` to that row’s existing `person_key`
-  - Otherwise by normalized phone (match‑only): prefer a team‑scoped match against `synced_contacts.phone` (digits substring → E.164 normalization), then use the candidate’s email only if a `people` row already exists for the team; if still unmatched, fall back to `phoneburner_contacts.phone_e164` and set `person_key` only if that `person_key` already exists in `people` for the team
-- This is strictly match‑only: no `people`, `agent_leads`, or other records are created by the poller
-- The inbox is never pre‑filled from PhoneBurner; no `agent_leads` writes
+- Calls are fetched by dial session window, then detailed to per‑call rows.
+- MATCH‑ONLY: we attach `person_key` only when the call matches an existing person on the team. Match order (high → low confidence):
+  1) Email — team‑scoped exact match on `people.email`.
+  2) LinkedIn URL — normalized (lowercased, no query/fragment/trailing slash; protocol/www unified). First match `people.linkedin_url` (team‑scoped). If no hit, use `synced_contacts.linkedin_url` or team‑scoped `agent_leads.linkedin_url` to obtain an email, then only attach when that email exists in `people`.
+  3) Phone — normalized: prefer team‑scoped `synced_contacts.phone` (digits substring → E.164 normalization) to get an email and verify in `people`; if still unmatched, fall back to `phoneburner_contacts.phone_e164` and set `person_key` only if that `person_key` already exists in `people` for the team.
+  4) Company (WEAK) — only attach when (a) PB provides a company AND a person name and there’s an exact `people` match on both `company_name` + `full_name`, OR (b) the team has exactly one `people` row with that `company_name`. Ambiguous (0 or 2+) → leave `person_key` null.
+- Strictly match‑only: no `people`, `agent_leads`, or other records are created by the poller.
+- The inbox is never pre‑filled from PhoneBurner; no `agent_leads` writes.
 
 Calls & dispositions:
 - Calls are fetched via `GET /rest/1/dialsession` (window) then `GET /rest/1/dialsession/{id}`

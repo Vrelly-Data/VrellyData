@@ -14,6 +14,7 @@
 // poll uses UTC ISO strings and treats them as inclusive bounds.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { normalizeLinkedInUrl as normalizeLiKey } from "../_shared/lead-dedup.ts";
 
 const allowedOrigins = [
   Deno.env.get("ALLOWED_ORIGIN") || "https://vrelly.com",
@@ -40,6 +41,84 @@ function normalizePhoneE164(input: unknown): string | null {
   if (digits.length === 10) return `+1${digits}`;
   if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
   if (digits.length >= 11) return `+${digits}`;
+  return null;
+}
+
+// Build common absolute-url variants from a normalized linkedin.com key
+// (no scheme/www; see normalizeLiKey). Stored values are typically absolute.
+function buildLinkedInUrlVariants(key: string): string[] {
+  const k = key.replace(/^https?:\/\//, "").replace(/^www\./, "");
+  return [
+    `https://${k}`,
+    `https://www.${k}`,
+    `http://${k}`,
+    `http://www.${k}`,
+    k, // just in case a bare host/path was stored
+  ];
+}
+
+function extractLinkedInFromCall(c: any): string | null {
+  const candidates: Array<unknown> = [
+    c?.linkedin_url,
+    c?.linkedinUrl,
+    c?.linkedin,
+    c?.linked_in,
+    c?.linkedIn,
+    c?.linkedin_profile_url,
+    c?.linkedInProfileUrl,
+    c?.profile_url,
+    c?.profileUrl,
+    c?.contact?.linkedin_url,
+    c?.contact?.linkedinUrl,
+    c?.contact?.linkedInProfileUrl,
+    c?.lead?.linkedin_url,
+    c?.lead?.linkedinUrl,
+    c?.lead?.linkedInProfileUrl,
+  ];
+  for (const raw of candidates) {
+    const s = typeof raw === "string" ? raw : String(raw ?? "");
+    if (s && /linkedin\.com/i.test(s)) {
+      const key = normalizeLiKey(s);
+      if (key) return key;
+    }
+  }
+  return null;
+}
+
+function extractCompanyFromCall(c: any): string | null {
+  const candidates: Array<unknown> = [
+    c?.company_name,
+    c?.companyName,
+    c?.company,
+    c?.organization,
+    c?.org,
+    c?.contact?.company,
+    c?.lead?.company,
+  ];
+  for (const raw of candidates) {
+    const s = typeof raw === "string" ? raw.trim() : String(raw ?? "").trim();
+    if (s) return s;
+  }
+  return null;
+}
+
+function extractFullNameFromCall(c: any): string | null {
+  const candidates: Array<unknown> = [
+    c?.full_name,
+    c?.name,
+    [c?.first_name, c?.last_name].filter((v: unknown) => typeof v === "string" && String(v).trim()).join(" "),
+    c?.contact?.full_name,
+    c?.contact?.name,
+    [c?.contact?.first_name, c?.contact?.last_name].filter((v: unknown) => typeof v === "string" && String(v).trim()).join(" "),
+    c?.lead?.full_name,
+    c?.lead?.name,
+    [c?.lead?.first_name, c?.lead?.last_name].filter((v: unknown) => typeof v === "string" && String(v).trim()).join(" "),
+  ];
+  for (const raw of candidates) {
+    const s = typeof raw === "string" ? raw : String(raw ?? "");
+    const t = s.trim();
+    if (t) return t;
+  }
   return null;
 }
 
@@ -111,7 +190,6 @@ Deno.serve(async (req) => {
     );
     const serviceClient = createClient(Deno.env.get("SUPABASE_URL") ?? "", Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "");
     const db = isInternal ? serviceClient : userClient;
-
     // Helper: finalize syncing status (syncing -> synced) for a given integration
     async function finalizeSyncingStatus(targetIntegrationId: string) {
       try {
@@ -164,6 +242,12 @@ Deno.serve(async (req) => {
       const start = new Date(end.getTime() - Math.max(1, lookbackDays) * 24 * 60 * 60 * 1000);
       const date_start = toIso(start);
       const date_end = toIso(end);
+      // Resolve team user ids (for agent_leads scoping)
+      const { data: teamMembers } = await serviceClient
+        .from("team_memberships")
+        .select("user_id")
+        .eq("team_id", teamId);
+      const teamUserIds: string[] = (teamMembers ?? []).map((r: any) => r.user_id).filter(Boolean);
 
       // 1) List dial sessions
       const dsList = await fetchJson(token, "/dialsession", { date_start, date_end });
@@ -261,7 +345,68 @@ Deno.serve(async (req) => {
             }
           }
 
-          // 2) Phone path — prefer team-scoped synced_contacts.phone (normalize + verify people by email)
+        // 2) LinkedIn URL — normalized match to people first; then via
+        // synced_contacts/agent_leads → verify in people by email.
+        const liKey = extractLinkedInFromCall(c);
+        const companyRaw = extractCompanyFromCall(c);
+        const fullName = extractFullNameFromCall(c);
+        if (!personKey && liKey) {
+          const liForms = buildLinkedInUrlVariants(liKey);
+          // a) direct hit in people.linkedin_url (team-scoped)
+          const { data: liHit } = await serviceClient
+            .from("people")
+            .select("person_key")
+            .eq("team_id", teamId)
+            .in("linkedin_url", liForms as any)
+            .limit(1)
+            .maybeSingle();
+          if (liHit?.person_key) {
+            personKey = liHit.person_key;
+          } else {
+            // b) synced_contacts.linkedin_url → email → verify people
+            const { data: sc } = await serviceClient
+              .from("synced_contacts")
+              .select("email")
+              .eq("team_id", teamId)
+              .in("linkedin_url", liForms as any)
+              .limit(1)
+              .maybeSingle();
+            const scEmail = sc?.email ? String(sc.email).trim().toLowerCase() : null;
+            if (scEmail) {
+              const { data: p2 } = await serviceClient
+                .from("people")
+                .select("person_key")
+                .eq("team_id", teamId)
+                .eq("email", scEmail)
+                .limit(1)
+                .maybeSingle();
+              if (p2?.person_key) personKey = p2.person_key;
+            }
+            // c) agent_leads.linkedin_url → email → verify people (team-scoped users)
+            if (!personKey && teamUserIds.length > 0) {
+              const { data: al } = await serviceClient
+                .from("agent_leads")
+                .select("email, linkedin_url, user_id")
+                .in("user_id", teamUserIds as any)
+                .in("linkedin_url", liForms as any)
+                .limit(1)
+                .maybeSingle();
+              const alEmail = al?.email ? String(al.email).trim().toLowerCase() : null;
+              if (alEmail) {
+                const { data: p3 } = await serviceClient
+                  .from("people")
+                  .select("person_key")
+                  .eq("team_id", teamId)
+                  .eq("email", alEmail)
+                  .limit(1)
+                  .maybeSingle();
+                if (p3?.person_key) personKey = p3.person_key;
+              }
+            }
+          }
+        }
+
+          // 3) Phone path — prefer team-scoped synced_contacts.phone (normalize + verify people by email)
           if (!matchedByEmail && phoneE164) {
             const digits = phoneE164.replace(/\D+/g, "");
             if (digits) {
@@ -292,7 +437,7 @@ Deno.serve(async (req) => {
                 }
               }
             }
-            // 3) Legacy/local PB roster as a fallback: phone_e164 → person_key, then verify people row exists
+            // 4) Legacy/local PB roster as a fallback: phone_e164 → person_key, then verify people row exists
             if (!personKey) {
               const { data: m } = await serviceClient
                 .from("phoneburner_contacts")
@@ -312,6 +457,40 @@ Deno.serve(async (req) => {
                 if (p2?.person_key) {
                   personKey = p2.person_key;
                   if (!pbContactId && m.pb_contact_id) pbContactId = m.pb_contact_id;
+                }
+              }
+            }
+          }
+
+          // 5) Company — WEAK alone. Only when:
+          //    (a) company + full name match a people row; OR
+          //    (b) company is unique in people for this team (exactly one row).
+          if (!personKey && companyRaw) {
+            const company = companyRaw.trim();
+            if (company) {
+              if (fullName) {
+                const { data: byBoth } = await serviceClient
+                  .from("people")
+                  .select("person_key")
+                  .eq("team_id", teamId)
+                  .ilike("company_name", company)
+                  .ilike("full_name", fullName)
+                  .limit(2);
+                const rows = Array.isArray(byBoth) ? byBoth : [];
+                if (rows.length === 1 && rows[0]?.person_key) {
+                  personKey = rows[0].person_key;
+                }
+              }
+              if (!personKey) {
+                const { data: byCompany } = await serviceClient
+                  .from("people")
+                  .select("person_key")
+                  .eq("team_id", teamId)
+                  .ilike("company_name", company)
+                  .limit(2);
+                const rows2 = Array.isArray(byCompany) ? byCompany : [];
+                if (rows2.length === 1 && rows2[0]?.person_key) {
+                  personKey = rows2[0].person_key;
                 }
               }
             }
