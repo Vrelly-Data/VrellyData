@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { RefreshCw, BarChart3, Rocket, Inbox, MessageSquare, Users } from 'lucide-react';
 import { useScrollAnimation } from '@/hooks/useScrollAnimation';
 
@@ -22,13 +23,97 @@ const steps = [
   },
 ];
 
+type Step = {
+  number: string;
+  icon: any;
+  title: string;
+  description: string;
+};
+
+const StepCard = ({
+  step,
+  index,
+  onReveal,
+}: {
+  step: Step;
+  index: number;
+  onReveal?: () => void;
+}) => {
+  const { ref, isVisible } = useScrollAnimation(0.2);
+
+  useEffect(() => {
+    if (isVisible) onReveal?.();
+  }, [isVisible, onReveal]);
+
+  return (
+    <div
+      ref={ref}
+      className={`group text-center transition-all duration-700 ${
+        isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'
+      }`}
+    >
+      <div
+        className={`hiw-number text-6xl font-black text-[#2563eb]/10 mb-4 ${
+          isVisible ? 'hiw-number-visible' : ''
+        }`}
+        style={{ transitionDelay: `40ms` }}
+      >
+        {step.number}
+      </div>
+      <div
+        className={`hiw-tile w-16 h-16 rounded-2xl bg-[#2563eb]/10 flex items-center justify-center mx-auto mb-5 ${
+          isVisible ? 'hiw-tile-visible' : ''
+        }`}
+        style={{
+          transitionDelay: `100ms`,
+          ['--hiw-delay' as any]: `140ms`,
+        }}
+      >
+        <step.icon
+          className={`hiw-icon w-8 h-8 text-[#2563eb] ${
+            isVisible ? 'hiw-icon-animate' : ''
+          }`}
+          style={{
+            animationDelay: `180ms`,
+            ['--hiw-delay' as any]: `180ms`,
+          }}
+        />
+      </div>
+      <h3
+        className={`hiw-text ${isVisible ? 'hiw-text-visible' : ''} text-xl font-bold text-slate-900 mb-2`}
+        style={{ transitionDelay: `220ms` }}
+      >
+        {step.title}
+      </h3>
+      <p
+        className={`hiw-text ${isVisible ? 'hiw-text-visible' : ''} text-slate-500 leading-relaxed max-w-sm mx-auto`}
+        style={{ transitionDelay: `280ms` }}
+      >
+        {step.description}
+      </p>
+    </div>
+  );
+};
+
 export const HowItWorksSection = () => {
-  const { ref, isVisible } = useScrollAnimation();
+  // Separate observers for section header and the mock card at the bottom
+  const { ref: headerRef, isVisible: headerVisible } = useScrollAnimation();
+  const { ref: cardRef, isVisible: cardVisible } = useScrollAnimation();
+
+  // Track which steps have revealed to drive connector progress/dots
+  const [revealed, setRevealed] = useState<boolean[]>([false, false, false]);
+  const revealedCount = revealed.filter(Boolean).length;
+  const progress = steps.length > 0 ? revealedCount / steps.length : 0;
 
   return (
     <section id="how-it-works" className="py-28 bg-white relative overflow-hidden">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8" ref={ref}>
-        <div className={`text-center mb-20 transition-all duration-700 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'}`}>
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div
+          ref={headerRef}
+          className={`text-center mb-20 transition-all duration-700 ${
+            headerVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
+          }`}
+        >
           <h2 className="text-4xl md:text-5xl font-extrabold text-slate-900 mb-4">
             Three Steps to a Smarter Sales Machine
           </h2>
@@ -37,61 +122,50 @@ export const HowItWorksSection = () => {
         {/* Steps row */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-12 mb-10 md:mb-12 relative">
           {steps.map((step, index) => (
-            <div
+            <StepCard
               key={step.number}
-              className={`group text-center transition-all duration-700 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`}
-              style={{ transitionDelay: `${index * 180 + 100}ms` }}
-            >
-              <div
-                className={`hiw-number text-6xl font-black text-[#2563eb]/10 mb-4 ${isVisible ? 'hiw-number-visible' : ''}`}
-                style={{ transitionDelay: `${index * 180 + 80}ms` }}
-              >
-                {step.number}
-              </div>
-              <div
-                className={`hiw-tile w-16 h-16 rounded-2xl bg-[#2563eb]/10 flex items-center justify-center mx-auto mb-5 ${isVisible ? 'hiw-tile-visible' : ''}`}
-                style={{
-                  transitionDelay: `${index * 180 + 140}ms`,
-                  // CSS variable to coordinate sequential delays for icon + ring/glow
-                  ['--hiw-delay' as any]: `${index * 180 + 160}ms`,
-                }}
-              >
-                <step.icon
-                  className={`hiw-icon w-8 h-8 text-[#2563eb] ${isVisible ? 'hiw-icon-animate' : ''}`}
-                  style={{ animationDelay: `${index * 180 + 200}ms`, ['--hiw-delay' as any]: `${index * 180 + 200}ms` }}
-                />
-              </div>
-              <h3
-                className={`hiw-text ${isVisible ? 'hiw-text-visible' : ''} text-xl font-bold text-slate-900 mb-2`}
-                style={{ transitionDelay: `${index * 180 + 220}ms` }}
-              >
-                {step.title}
-              </h3>
-              <p
-                className={`hiw-text ${isVisible ? 'hiw-text-visible' : ''} text-slate-500 leading-relaxed max-w-sm mx-auto`}
-                style={{ transitionDelay: `${index * 180 + 280}ms` }}
-              >
-                {step.description}
-              </p>
-            </div>
+              step={step}
+              index={index}
+              onReveal={() =>
+                setRevealed((prev) => (prev[index] ? prev : prev.map((v, i) => (i === index ? true : v))))
+              }
+            />
           ))}
         </div>
-        {/* Thin progress/connector line under steps (fills left → right) */}
+        {/* Connector/progress line under steps (progress matches revealed steps) */}
         <div
           aria-hidden="true"
-          className={`hidden md:block w-full ${isVisible ? 'hiw-connector-visible' : ''}`}
+          className="hidden md:block w-full"
         >
           <div className="hiw-connector mx-auto" style={{ maxWidth: '56rem' }}>
-            <span className="hiw-connector-progress" />
-            {/* Optional step dots that light up in sequence */}
-            <span className="hiw-step-dot" style={{ left: '12%', ['--i' as any]: 0 }} />
-            <span className="hiw-step-dot" style={{ left: '50%', ['--i' as any]: 1 }} />
-            <span className="hiw-step-dot" style={{ left: '88%', ['--i' as any]: 2 }} />
+            <span
+              className="hiw-connector-progress"
+              style={{ transform: `scaleX(${progress})` }}
+            />
+            {/* Step dots that light up as each step reveals */}
+            <span
+              className={`hiw-step-dot ${revealed[0] ? 'hiw-step-dot-on' : ''}`}
+              style={{ left: '12%' }}
+            />
+            <span
+              className={`hiw-step-dot ${revealed[1] ? 'hiw-step-dot-on' : ''}`}
+              style={{ left: '50%' }}
+            />
+            <span
+              className={`hiw-step-dot ${revealed[2] ? 'hiw-step-dot-on' : ''}`}
+              style={{ left: '88%' }}
+            />
           </div>
         </div>
 
         {/* Mock UI card */}
-        <div className={`max-w-4xl mx-auto transition-all duration-700 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`} style={{ transitionDelay: '720ms' }}>
+        <div
+          ref={cardRef}
+          className={`max-w-4xl mx-auto transition-all duration-700 ${
+            cardVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'
+          }`}
+          style={{ transitionDelay: '240ms' }}
+        >
           <div className="rounded-2xl bg-[#0f1729] p-6 shadow-2xl border border-white/10">
             <div className="flex items-center gap-2 mb-4">
               <div className="w-3 h-3 rounded-full bg-red-400" />

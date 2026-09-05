@@ -234,9 +234,9 @@ All colors MUST be HSL.
     box-shadow: 0 0 0 0 hsl(var(--primary) / 0.0);
     opacity: 0.8;
   }
-  .hiw-connector-visible .hiw-step-dot {
+  /* Previously tied to section-visible; now light per-step with class */
+  .hiw-step-dot-on {
     animation: hiw-dot-on 700ms ease-out both;
-    animation-delay: calc(var(--i, 0) * 180ms + 600ms);
   }
   @keyframes hiw-dot-on {
     0% {
@@ -283,6 +283,7 @@ All colors MUST be HSL.
   .hiw-icon-animate,
   .hiw-connector-progress,
   .hiw-step-dot,
+  .hiw-step-dot-on,
   .hiw-text,
   .hiw-tile-visible::after {
     transition: none !important;
