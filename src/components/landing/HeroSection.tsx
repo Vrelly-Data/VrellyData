@@ -3,7 +3,42 @@ import { Button } from '@/components/ui/button';
 import { useNavigate } from 'react-router-dom';
 import { ArrowRight } from 'lucide-react';
 
-const rotatingWords = ['Outbound', 'Inbound'];
+function TypewriterText({ texts }: { texts: string[] }) {
+  const [currentText, setCurrentText] = useState('');
+  const [textIndex, setTextIndex] = useState(0);
+  const [charIndex, setCharIndex] = useState(0);
+  const [deleting, setDeleting] = useState(false);
+
+  useEffect(() => {
+    const target = texts[textIndex];
+    const timeout = setTimeout(() => {
+      if (!deleting) {
+        if (charIndex < target.length) {
+          setCurrentText(target.slice(0, charIndex + 1));
+          setCharIndex((c) => c + 1);
+        } else {
+          setTimeout(() => setDeleting(true), 2000);
+        }
+      } else {
+        if (charIndex > 0) {
+          setCurrentText(target.slice(0, charIndex - 1));
+          setCharIndex((c) => c - 1);
+        } else {
+          setDeleting(false);
+          setTextIndex((i) => (i + 1) % texts.length);
+        }
+      }
+    }, deleting ? 40 : 80);
+    return () => clearTimeout(timeout);
+  }, [charIndex, deleting, textIndex, texts]);
+
+  return (
+    <span className="text-[#60a5fa]">
+      {currentText}
+      <span className="animate-pulse">|</span>
+    </span>
+  );
+}
 
 // Trusted-by logos. Alt text now matches the filename brand.
 const logos = [
@@ -21,19 +56,6 @@ const logos = [
 
 export const HeroSection = () => {
   const navigate = useNavigate();
-  const [wordIndex, setWordIndex] = useState(0);
-  const [fading, setFading] = useState(false);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setFading(true);
-      setTimeout(() => {
-        setWordIndex((prev) => (prev + 1) % rotatingWords.length);
-        setFading(false);
-      }, 300);
-    }, 5000);
-    return () => clearInterval(interval);
-  }, []);
 
   return (
     <section className="relative min-h-screen flex flex-col overflow-hidden bg-gradient-to-b from-[#0f1729] via-[#132044] to-[#1a2d5a]">
@@ -62,12 +84,7 @@ export const HeroSection = () => {
           <h1 className="text-5xl md:text-6xl lg:text-7xl font-extrabold tracking-tight text-white mb-8 leading-[1.1]">
             <span className="opacity-0 animate-fade-up inline-block" style={{ animationDelay: '0.2s' }}>
               Your AI{' '}
-              <span
-                className="inline-block transition-opacity duration-300"
-                style={{ opacity: fading ? 0 : 1 }}
-              >
-                {rotatingWords[wordIndex]}
-              </span>{' '}
+              <TypewriterText texts={['Outbound', 'Inbound']} />{' '}
               Agent.
             </span>
             <br />
