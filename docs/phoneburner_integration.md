@@ -63,6 +63,7 @@ Limitations / notes:
 Security:
 - API tokens are never logged; validators and pollers redact secrets
 - RLS mirrors `inference_events` (service‑role writes; team read)
+- Cron auth header: `x-agent-key` is sourced from Vault `agent_api_key` (matches Edge `AGENT_API_KEY`)
 
 Inbox safety:
 - Connect‑time does NOT dump contacts into `agent_leads`
