@@ -33,6 +33,14 @@ const PB_API_BASE = "https://www.phoneburner.com/rest/1";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const toIso = (d: Date) => d.toISOString().replace(/\.\d{3}Z$/, "Z");
+// Format calendar date in US Central timezone (America/Chicago) as YYYY-MM-DD
+const formatCentralDate = (d: Date) =>
+  new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Chicago",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d);
 
 function normalizePhoneE164(input: unknown): string | null {
   const s = typeof input === "string" ? input : String(input ?? "");
@@ -240,8 +248,9 @@ Deno.serve(async (req) => {
       // Window
       const end = new Date();
       const start = new Date(end.getTime() - Math.max(1, lookbackDays) * 24 * 60 * 60 * 1000);
-      const date_start = toIso(start);
-      const date_end = toIso(end);
+      // PhoneBurner date typing is date-based in Central time. Use YYYY-MM-DD.
+      const date_start = formatCentralDate(start);
+      const date_end = formatCentralDate(end);
       // Resolve team user ids (for agent_leads scoping)
       const { data: teamMembers } = await serviceClient
         .from("team_memberships")
@@ -254,8 +263,21 @@ Deno.serve(async (req) => {
       try {
         console.log(`[poll-phoneburner-calls] list keys:`, Object.keys(dsList || {}));
       } catch { /* ignore */ }
-      // Official selector observed: dialsessions (plural). Be defensive.
-      const sessions: Array<{ id?: string | number }> =
+      // Log list metadata (no secrets)
+      try {
+        const totalResults =
+          (dsList?.dialsessions?.total_results ?? dsList?.total_results ?? dsList?.total ?? null);
+        const typeOfDialSessions =
+          Array.isArray(dsList?.dialsessions) ? "array" : typeof dsList?.dialsessions;
+        console.log(
+          `[poll-phoneburner-calls] list meta: total_results=${String(totalResults)} type(dialsessions)=${String(typeOfDialSessions)}`
+        );
+      } catch { /* ignore */ }
+      // Official list shape:
+      // { dialsessions: { page, total_results, dialsessions: [ { dialsession_id, ... } ] } }
+      // Be defensive and accept historical/alternative shapes as well.
+      const sessions: Array<any> =
+        Array.isArray(dsList?.dialsessions?.dialsessions) ? dsList.dialsessions.dialsessions :
         Array.isArray(dsList?.dialsessions) ? dsList.dialsessions :
         Array.isArray(dsList?.dial_sessions) ? dsList.dial_sessions :
         Array.isArray(dsList?.dialsession?.dialsessions) ? dsList.dialsession.dialsessions :
@@ -263,7 +285,10 @@ Deno.serve(async (req) => {
         Array.isArray(dsList?.items) ? dsList.items :
         Array.isArray(dsList?.data) ? dsList.data : [];
       const sessionIds = sessions
-        .map((s) => (s?.id != null ? String(s.id) : null))
+        .map((s) => {
+          const id = (s?.dialsession_id ?? s?.id ?? null);
+          return id != null ? String(id) : null;
+        })
         .filter((v): v is string => !!v);
       console.log(`[poll-phoneburner-calls] integration=${singleIntegrationId} sessions=${sessionIds.length} window=${date_start}..${date_end}`);
 
@@ -272,13 +297,35 @@ Deno.serve(async (req) => {
 
       for (const sid of sessionIds) {
         const detail = await fetchJson(token, `/dialsession/${encodeURIComponent(sid)}`);
-        // Detail can be a wrapper: { dialsession: { calls: [...] } }
-        const calls: any[] =
-          Array.isArray(detail?.dialsession?.calls) ? detail.dialsession.calls :
-          Array.isArray(detail?.dial_session?.calls) ? detail.dial_session.calls :
-          Array.isArray(detail) ? detail :
-          Array.isArray(detail?.calls) ? detail.calls :
-          Array.isArray(detail?.data) ? detail.data : [];
+        // Detail can be a wrapper or nested under dialsessions.dialsessions[].calls
+        let calls: any[] = [];
+        if (Array.isArray(detail?.dialsessions?.dialsessions)) {
+          try {
+            calls = (detail.dialsessions.dialsessions as any[]).flatMap((ds: any) =>
+              Array.isArray(ds?.calls) ? ds.calls : []
+            );
+          } catch {
+            // fallback to direct array if flatMap not applicable
+            calls = [];
+            for (const ds of (detail.dialsessions.dialsessions as any[])) {
+              if (Array.isArray((ds as any)?.calls)) calls.push(...(ds as any).calls);
+            }
+          }
+        } else if (Array.isArray(detail?.dialsessions?.calls)) {
+          calls = detail.dialsessions.calls;
+        } else if (Array.isArray(detail?.dialsession?.calls)) {
+          calls = detail.dialsession.calls;
+        } else if (Array.isArray(detail?.dial_session?.calls)) {
+          calls = detail.dial_session.calls;
+        } else if (Array.isArray(detail)) {
+          calls = detail;
+        } else if (Array.isArray(detail?.calls)) {
+          calls = detail.calls;
+        } else if (Array.isArray(detail?.data)) {
+          calls = detail.data;
+        } else {
+          calls = [];
+        }
         for (const c of calls) {
           const callId = String(c?.call_id ?? c?.id ?? "");
           if (!callId) continue;
@@ -300,7 +347,12 @@ Deno.serve(async (req) => {
             : typeof c?.duration === "number" ? c.duration
             : null;
           const note = typeof c?.note === "string" ? c.note : null;
-          const occurredAt = c?.ended_at || c?.connected_at || c?.started_at || c?.time || new Date().toISOString();
+          const occurredAt =
+            c?.ended_at || c?.end_when ||
+            c?.connected_at ||
+            c?.started_at || c?.start_when ||
+            c?.time ||
+            new Date().toISOString();
           const recordingUrl = typeof c?.recording_url === "string" ? c.recording_url : null;
 
           // Person match order (MATCH-ONLY):
