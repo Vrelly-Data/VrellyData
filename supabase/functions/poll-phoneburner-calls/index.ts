@@ -299,7 +299,11 @@ Deno.serve(async (req) => {
         const detail = await fetchJson(token, `/dialsession/${encodeURIComponent(sid)}`);
         // Detail can be a wrapper or nested under dialsessions.dialsessions[].calls
         let calls: any[] = [];
-        if (Array.isArray(detail?.dialsessions?.dialsessions)) {
+        // New official detail shape: dialsessions.dialsessions is an OBJECT with .calls
+        const nestedDetail = (detail as any)?.dialsessions?.dialsessions;
+        if (nestedDetail && !Array.isArray(nestedDetail) && Array.isArray((nestedDetail as any)?.calls)) {
+          calls = (nestedDetail as any).calls;
+        } else if (Array.isArray(detail?.dialsessions?.dialsessions)) {
           try {
             calls = (detail.dialsessions.dialsessions as any[]).flatMap((ds: any) =>
               Array.isArray(ds?.calls) ? ds.calls : []
@@ -326,6 +330,12 @@ Deno.serve(async (req) => {
         } else {
           calls = [];
         }
+        // Optional non-PII logging: structure + call count
+        try {
+          const nestedType = Array.isArray(nestedDetail) ? "array" : typeof nestedDetail;
+          const dsKeys = Object.keys((detail as any)?.dialsessions ?? {});
+          console.log(`[poll-phoneburner-calls] detail meta: nestedType=${nestedType} dialsessions_keys=${dsKeys.join(",")} calls=${calls.length}`);
+        } catch { /* ignore */ }
         for (const c of calls) {
           const callId = String(c?.call_id ?? c?.id ?? "");
           if (!callId) continue;
@@ -341,8 +351,17 @@ Deno.serve(async (req) => {
             ? String(emailRaw).toLowerCase()
             : null;
           const disposition = c?.disposition ?? c?.status ?? null;
-          const connected = Boolean(c?.connected ?? (typeof c?.answered === "boolean" ? c.answered : undefined));
-          const voicemail = Boolean(c?.voicemail ?? (typeof c?.left_voicemail === "boolean" ? c.left_voicemail : undefined));
+          // Coerce PB "0"/"1" string fields to booleans (Boolean(\"0\") === true is wrong)
+          const connected =
+            typeof c?.connected === "string" ? c.connected === "1" :
+            typeof c?.connected === "number" ? c.connected === 1 :
+            typeof c?.connected === "boolean" ? c.connected :
+            (typeof c?.answered === "boolean" ? c.answered : false);
+          const voicemail =
+            typeof c?.voicemail === "string" ? c.voicemail === "1" :
+            typeof c?.voicemail === "number" ? c.voicemail === 1 :
+            typeof c?.voicemail === "boolean" ? c.voicemail :
+            (typeof c?.left_voicemail === "boolean" ? c.left_voicemail : false);
           const duration = typeof c?.duration_seconds === "number" ? c.duration_seconds
             : typeof c?.duration === "number" ? c.duration
             : null;
@@ -570,7 +589,15 @@ Deno.serve(async (req) => {
           const { error: upErr } = await serviceClient
             .from("dialer_events")
             .upsert(row, { onConflict: "integration_id,call_id" });
-          if (!upErr) eventsUpserted++;
+          if (!upErr) {
+            eventsUpserted++;
+          } else {
+            try {
+              console.error("[poll-phoneburner-calls] upsert dialer_events error", {
+                integration_id: singleIntegrationId, dialsession_id: sid, call_id: callId, message: upErr?.message || String(upErr),
+              });
+            } catch { /* ignore */ }
+          }
 
           // Best-effort inference write
           const mapped = mapDispositionToInference(disposition);
@@ -588,7 +615,15 @@ Deno.serve(async (req) => {
               source_row_id: callId,
               metadata: { disposition, reason: mapped.reason, dialsession_id: sid, phone_e164: phoneE164 },
             });
-            if (!ieErr) inferenceWritten++;
+            if (!ieErr) {
+              inferenceWritten++;
+            } else {
+              try {
+                console.error("[poll-phoneburner-calls] insert inference_events error", {
+                  integration_id: singleIntegrationId, dialsession_id: sid, call_id: callId, message: ieErr?.message || String(ieErr),
+                });
+              } catch { /* ignore */ }
+            }
           }
         }
         await sleep(150);
