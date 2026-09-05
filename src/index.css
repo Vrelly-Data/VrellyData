@@ -109,33 +109,81 @@ All colors MUST be HSL.
 
   /* How it Works — subtle motion */
   .hiw-number {
-    transform: scale(0.96);
-    opacity: 0.7;
-    transition: transform 500ms ease, opacity 500ms ease;
+    transform: translateY(20px) scale(0.9);
+    opacity: 0;
+    transition: transform 700ms cubic-bezier(0.22, 1, 0.36, 1), opacity 700ms ease;
     will-change: transform, opacity;
   }
   .hiw-number-visible {
-    transform: scale(1);
+    transform: translateY(0) scale(1);
     opacity: 1;
   }
 
   .hiw-tile {
-    transform: translateY(2px);
-    transition: transform 500ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 500ms ease;
-    will-change: transform;
+    position: relative;
+    transform: translateY(8px) scale(0.85);
+    transition: transform 700ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 700ms ease;
+    will-change: transform, box-shadow;
   }
   .hiw-tile-visible {
-    transform: translateY(0);
+    transform: translateY(0) scale(1);
+    /* Soft blue glow pulse once on enter */
+    animation: hiw-tile-glow 900ms ease-out both;
+    animation-delay: var(--hiw-delay, 0ms);
   }
   /* Gentle hover lift on the icon tile */
   .group:hover .hiw-tile {
     transform: translateY(-4px);
   }
 
+  /* One-time soft blue glow on tile enter */
+  @keyframes hiw-tile-glow {
+    0% {
+      box-shadow: 0 0 0 0 hsl(var(--primary) / 0.35), 0 6px 20px -6px hsl(var(--primary) / 0.25);
+    }
+    70% {
+      box-shadow: 0 0 0 10px hsl(var(--primary) / 0), 0 10px 24px -6px hsl(var(--primary) / 0.30);
+    }
+    100% {
+      box-shadow: 0 0 0 0 hsl(var(--primary) / 0), 0 0 0 0 hsl(var(--primary) / 0);
+    }
+  }
+
+  /* Brief sequential “active” ring highlight */
+  .hiw-tile-visible::after {
+    content: "";
+    position: absolute;
+    inset: -4px;
+    border-radius: 1rem;
+    border: 2px solid hsl(var(--primary) / 0.35);
+    opacity: 0;
+    transform: scale(0.92);
+    pointer-events: none;
+    animation: hiw-tile-ring 900ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    animation-delay: calc(var(--hiw-delay, 0ms) + 120ms);
+  }
+  @keyframes hiw-tile-ring {
+    0% {
+      opacity: 0.8;
+      transform: scale(0.92);
+      filter: drop-shadow(0 0 0 hsl(var(--primary) / 0.0));
+    }
+    60% {
+      opacity: 0.7;
+      transform: scale(1.05);
+      filter: drop-shadow(0 0 8px hsl(var(--primary) / 0.35));
+    }
+    100% {
+      opacity: 0;
+      transform: scale(1.12);
+      filter: drop-shadow(0 0 0 hsl(var(--primary) / 0.0));
+    }
+  }
+
   @keyframes hiw-icon-pop {
     0% {
-      transform: scale(0.94);
-      opacity: 0.9;
+      transform: scale(0.85);
+      opacity: 0.85;
     }
     60% {
       transform: scale(1.05);
@@ -150,12 +198,14 @@ All colors MUST be HSL.
   }
   .hiw-icon-animate {
     animation: hiw-icon-pop 700ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    animation-delay: var(--hiw-delay, 0ms);
   }
 
   /* Thin connector/progress line under steps */
   .hiw-connector {
-    height: 2px;
-    background: hsl(var(--primary) / 0.12);
+    position: relative;
+    height: 3px;
+    background: hsl(var(--primary) / 0.18);
     border-radius: 9999px;
     overflow: hidden;
   }
@@ -163,13 +213,56 @@ All colors MUST be HSL.
     display: block;
     height: 100%;
     width: 100%;
-    background: linear-gradient(90deg, hsl(var(--primary) / 0.65), hsl(var(--primary) / 0.35));
+    background: linear-gradient(90deg, hsl(var(--primary) / 0.85), hsl(var(--primary) / 0.45));
     transform-origin: left center;
     transform: scaleX(0);
-    transition: transform 1100ms ease-out;
+    transition: transform 1200ms cubic-bezier(0.22, 1, 0.36, 1);
   }
   .hiw-connector-visible .hiw-connector-progress {
     transform: scaleX(1);
+  }
+
+  /* Step dots that light up in sequence */
+  .hiw-step-dot {
+    position: absolute;
+    top: 50%;
+    width: 10px;
+    height: 10px;
+    border-radius: 9999px;
+    transform: translate(-50%, -50%);
+    background: hsl(var(--primary) / 0.25);
+    box-shadow: 0 0 0 0 hsl(var(--primary) / 0.0);
+    opacity: 0.8;
+  }
+  .hiw-connector-visible .hiw-step-dot {
+    animation: hiw-dot-on 700ms ease-out both;
+    animation-delay: calc(var(--i, 0) * 180ms + 600ms);
+  }
+  @keyframes hiw-dot-on {
+    0% {
+      background: hsl(var(--primary) / 0.25);
+      box-shadow: 0 0 0 0 hsl(var(--primary) / 0.0);
+    }
+    50% {
+      background: hsl(var(--primary) / 0.9);
+      box-shadow: 0 0 10px 2px hsl(var(--primary) / 0.6);
+    }
+    100% {
+      background: hsl(var(--primary) / 0.45);
+      box-shadow: 0 0 0 0 hsl(var(--primary) / 0.0);
+    }
+  }
+
+  /* Titles/descriptions fade-up with stagger */
+  .hiw-text {
+    opacity: 0;
+    transform: translateY(16px);
+    transition: opacity 700ms ease, transform 700ms cubic-bezier(0.22, 1, 0.36, 1);
+    will-change: opacity, transform;
+  }
+  .hiw-text-visible {
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 
@@ -188,7 +281,10 @@ All colors MUST be HSL.
   .hiw-number,
   .hiw-tile,
   .hiw-icon-animate,
-  .hiw-connector-progress {
+  .hiw-connector-progress,
+  .hiw-step-dot,
+  .hiw-text,
+  .hiw-tile-visible::after {
     transition: none !important;
     animation: none !important;
     transform: none !important;
