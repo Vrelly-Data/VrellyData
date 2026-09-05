@@ -45,6 +45,7 @@ Calls & dispositions:
 
 Provider response shapes:
 - The official list endpoint returns an object: `{ dialsessions: { page, total_results, dialsessions: [ { dialsession_id, ... } ] } }`.
+- The list is paginated (`page=N`); the poller loops pages until all results in the window are collected (bounded to a sane max pages to avoid provider abuse). If truncated by the cap, a warning is logged.
 - The poller now reads `dialsessions.dialsessions` first, with defensive fallbacks for prior shapes.
 - Session identifiers are taken from `dialsession_id` when present (fallback `id`).
 - Session detail calls are read from any of: `dialsessions.dialsessions[].calls`, `dialsession.calls`, or top‑level `calls`.
