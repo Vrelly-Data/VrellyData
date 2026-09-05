@@ -35,21 +35,41 @@ export const HowItWorksSection = () => {
         </div>
 
         {/* Steps row */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-12 mb-20">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-12 mb-10 md:mb-12 relative">
           {steps.map((step, index) => (
             <div
               key={step.number}
-              className={`text-center transition-all duration-700 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`}
+              className={`group text-center transition-all duration-700 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`}
               style={{ transitionDelay: `${index * 80 + 120}ms` }}
             >
-              <div className="text-6xl font-black text-[#2563eb]/10 mb-4">{step.number}</div>
-              <div className="w-16 h-16 rounded-2xl bg-[#2563eb]/10 flex items-center justify-center mx-auto mb-5">
-                <step.icon className="w-8 h-8 text-[#2563eb]" />
+              <div
+                className={`hiw-number text-6xl font-black text-[#2563eb]/10 mb-4 ${isVisible ? 'hiw-number-visible' : ''}`}
+                style={{ transitionDelay: `${index * 80 + 120}ms` }}
+              >
+                {step.number}
+              </div>
+              <div
+                className={`hiw-tile w-16 h-16 rounded-2xl bg-[#2563eb]/10 flex items-center justify-center mx-auto mb-5 ${isVisible ? 'hiw-tile-visible' : ''}`}
+                style={{ transitionDelay: `${index * 80 + 120}ms` }}
+              >
+                <step.icon
+                  className={`hiw-icon w-8 h-8 text-[#2563eb] ${isVisible ? 'hiw-icon-animate' : ''}`}
+                  style={{ animationDelay: `${index * 80 + 180}ms` }}
+                />
               </div>
               <h3 className="text-xl font-bold text-slate-900 mb-3">{step.title}</h3>
               <p className="text-slate-500 leading-relaxed max-w-sm mx-auto">{step.description}</p>
             </div>
           ))}
+        </div>
+        {/* Thin progress/connector line under steps (fills left → right) */}
+        <div
+          aria-hidden="true"
+          className={`hidden md:block w-full ${isVisible ? 'hiw-connector-visible' : ''}`}
+        >
+          <div className="hiw-connector mx-auto" style={{ maxWidth: '56rem' }}>
+            <span className="hiw-connector-progress" />
+          </div>
         </div>
 
         {/* Mock UI card */}
