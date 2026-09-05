@@ -47,7 +47,7 @@ Provider response shapes:
 - The official list endpoint returns an object: `{ dialsessions: { page, total_results, dialsessions: [ { dialsession_id, ... } ] } }`.
 - The poller now reads `dialsessions.dialsessions` first, with defensive fallbacks for prior shapes.
 - Session identifiers are taken from `dialsession_id` when present (fallback `id`).
-- Session detail calls are read from any of: `dialsessions.dialsessions[].calls`, `dialsession.calls`, or top‑level `calls`.
+- Detail endpoint: nested `dialsessions` is an object; calls are under `dialsessions.dialsessions.calls`. The poller reads that first, with fallbacks for `dialsessions.dialsessions[].calls`, `dialsession.calls`, or top‑level `calls`.
 
 Timezones:
 - PhoneBurner times are US Central. The poller sends `date_start`/`date_end` as Central calendar dates (`YYYY-MM-DD`) to the list endpoint for safer provider matching. Individual call timestamps are still stored as precise UTC ISO strings.
