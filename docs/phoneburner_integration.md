@@ -8,6 +8,7 @@ What’s included:
 - Call polling as the primary path: `poll-phoneburner-calls` → `public.dialer_events` (+ best‑effort `inference_events`)
 - Minimal UI: a Calls panel on People → each contact row has a Calls button to view `dialer_events`
 - pg_cron schedule: poll PhoneBurner calls every 30 minutes (templated from the Reply.io job)
+- Cron invokes the poller without an `integrationId`; with a valid internal `x-agent-key`, it iterates all PhoneBurner integrations.
 
 Tables:
 - `public.dialer_events`: (integration_id, team_id, person_key, pb_contact_id, phone_e164, call_id, disposition, connected, voicemail, duration_seconds, note, dialsession_id, occurred_at, source, recording_url, raw)
