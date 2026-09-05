@@ -83,9 +83,7 @@ export const HeroSection = () => {
           {/* H1 */}
           <h1 className="text-5xl md:text-6xl lg:text-7xl font-extrabold tracking-tight text-white mb-8 leading-[1.1]">
             <span className="opacity-0 animate-fade-up inline-block" style={{ animationDelay: '0.2s' }}>
-              Your AI{' '}
-              <TypewriterText texts={['Outbound', 'Inbound']} />{' '}
-              Agent.
+              Your AI <TypewriterText texts={['Outbound', 'Inbound']} /> Agent.
             </span>
             <br />
             <span className="opacity-0 animate-fade-up inline-block" style={{ animationDelay: '0.4s' }}>
