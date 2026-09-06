@@ -154,9 +154,6 @@ export default function Auth() {
               aria-label="Vrelly"
             >
               <img src="/og-mark.png" alt="" className="h-10 md:h-12 w-auto" />
-              <span className="text-3xl md:text-4xl font-extrabold tracking-tight text-[#2563eb]">
-                relly
-              </span>
             </button>
           </div>
           <div className="space-y-2">

@@ -24,9 +24,6 @@ export const Footer = () => {
               aria-label="Vrelly"
             >
               <img src="/og-mark.png" alt="" className="h-8 w-auto" />
-              <span className="text-2xl font-extrabold tracking-tight text-[#2563eb]">
-                relly
-              </span>
             </button>
             <p className="text-sm text-slate-500">AI-powered B2B sales intelligence</p>
           </div>

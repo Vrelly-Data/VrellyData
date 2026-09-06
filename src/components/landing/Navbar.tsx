@@ -34,9 +34,6 @@ export const Navbar = () => {
             aria-label="Vrelly"
           >
             <img src="/og-mark.png" alt="" className="h-8 md:h-10 w-auto" />
-            <span className="text-2xl md:text-3xl font-extrabold tracking-tight text-[#2563eb]">
-              relly
-            </span>
           </button>
 
           <div className="hidden md:flex items-center gap-6 text-sm text-slate-300">
