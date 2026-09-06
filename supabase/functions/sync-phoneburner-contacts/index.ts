@@ -22,6 +22,8 @@ function getCorsHeaders(req: Request) {
 
 const PB_API_BASE = "https://www.phoneburner.com/rest/1";
 const PAGE_SIZE = 100;
+// Update progress every N pages during long runs so the UI isn't stuck
+const PROGRESS_UPDATE_EVERY_PAGES = 5;
 
 // Very small E.164 normalizer (US-heavy, but preserves other CCs).
 function normalizePhoneE164(input: unknown): string | null {
@@ -171,6 +173,16 @@ Deno.serve(async (req) => {
     const teamId: string = integration.team_id;
     const token: string = integration.api_key_encrypted;
 
+    // Mark syncing at start (best-effort)
+    try {
+      await serviceClient
+        .from("outbound_integrations")
+        .update({ sync_status: "syncing", sync_error: null, updated_at: new Date().toISOString() })
+        .eq("id", integrationId);
+    } catch (e) {
+      console.warn("[sync-phoneburner-contacts] failed to mark syncing:", e);
+    }
+
     // Determine watermark from last synced contact
     const { data: wmRow } = await serviceClient
       .from("phoneburner_contacts")
@@ -183,8 +195,10 @@ Deno.serve(async (req) => {
     console.log(`[sync-phoneburner-contacts] integration=${integrationId} team=${teamId} updated_from=${updatedFrom ?? "(full)"}`);
 
     // Pull pages
-    const upserts: any[] = [];
-    let total = 0;
+    let pulledTotal = 0;
+    let upsertedTotal = 0;
+    let insertedTotal = 0;
+    let pagesProcessed = 0;
     let sampleError: string | null = null;
     for (let page = 1; page <= 1000; page++) {
       const { items, hasMore, diag } = await fetchContactsPage(token, updatedFrom, page);
@@ -197,8 +211,10 @@ Deno.serve(async (req) => {
       } catch { /* ignore logging issues */ }
 
       if (items.length === 0) break;
-      total += items.length;
+      pulledTotal += items.length;
+      pagesProcessed++;
       // Map to row shape
+      const pageUpserts: any[] = [];
       for (const c of items) {
         // Official ids + defensive fallbacks
         const pbId = String(c?.contact_user_id ?? c?.id ?? c?.contact_id ?? c?.pb_contact_id ?? "");
@@ -226,7 +242,7 @@ Deno.serve(async (req) => {
         }
         const personKey = email ? email.toLowerCase() : null;
 
-        upserts.push({
+        pageUpserts.push({
           integration_id: integrationId,
           team_id: teamId,
           pb_contact_id: pbId,
@@ -240,23 +256,35 @@ Deno.serve(async (req) => {
           updated_at: new Date().toISOString(),
         });
       }
+
+      // Upsert this page immediately to avoid large memory usage/timeouts
+      if (pageUpserts.length > 0) {
+        const { data: res, error: upErr, status } = await serviceClient
+          .from("phoneburner_contacts")
+          .upsert(pageUpserts, { onConflict: "integration_id,pb_contact_id" })
+          .select("id");
+        if (upErr) {
+          throw new Error(`Upsert failed (${status ?? "?"}): ${upErr.message}`);
+        }
+        const touched = res?.length ?? 0;
+        upsertedTotal += touched;
+        insertedTotal += touched; // PostgREST doesn't differentiate; report touched as inserted
+      }
+
+      // Periodic progress ping so UI doesn't appear stuck during long runs
+      try {
+        if (pagesProcessed % PROGRESS_UPDATE_EVERY_PAGES === 0) {
+          await serviceClient
+            .from("outbound_integrations")
+            .update({ last_synced_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+            .eq("id", integrationId);
+        }
+      } catch (e) {
+        console.warn("[sync-phoneburner-contacts] progress update failed:", e);
+      }
+
       if (!hasMore) break;
       await new Promise((r) => setTimeout(r, 150));
-    }
-
-    let inserted = 0;
-    let updated = 0;
-    if (upserts.length > 0) {
-      const { data: res, error: upErr, status } = await serviceClient
-        .from("phoneburner_contacts")
-        .upsert(upserts, { onConflict: "integration_id,pb_contact_id" })
-        .select("id");
-      if (upErr) {
-        throw new Error(`Upsert failed (${status ?? "?"}): ${upErr.message}`);
-      }
-      // PostgREST returns rows; HTTP 201 marks created rows, but we don't have per-row status.
-      inserted = res?.length ?? 0; // conservative: count total touched
-      updated = 0;
     }
 
     // Status lifecycle: success OR empty still counts as 'synced'
@@ -277,10 +305,11 @@ Deno.serve(async (req) => {
     return new Response(
       JSON.stringify({
         success: true,
-        pulled: total,
-        upserted: upserts.length,
-        inserted,
-        updated,
+        pulled: pulledTotal,
+        upserted: upsertedTotal,
+        inserted: insertedTotal,
+        updated: 0,
+        pages: pagesProcessed,
         updatedFrom: updatedFrom ?? null,
         ...(sampleError ? { sampleError } : {}),
       }),
