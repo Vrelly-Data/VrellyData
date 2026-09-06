@@ -10,9 +10,9 @@ import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
 import { format, subDays } from 'date-fns';
-import { CalendarIcon, Loader2 } from 'lucide-react';
+import { CalendarIcon, Loader2, ArrowLeft } from 'lucide-react';
 import vrellyLogo from '@/assets/vrelly-logo.png';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useAuthStore } from '@/stores/authStore';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
@@ -313,6 +313,14 @@ export default function AdminInference() {
           </header>
           <main className="flex-1 p-6 overflow-auto">
             <div className="max-w-7xl mx-auto space-y-6">
+              {/* Back link */}
+              <Link
+                to="/admin"
+                className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                Back to Admin
+              </Link>
               {/* Filters */}
               <Card>
                 <CardHeader>
