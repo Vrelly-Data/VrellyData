@@ -11,7 +11,7 @@ function getCorsHeaders(req: Request) {
   return {
     "Access-Control-Allow-Origin": allowedOrigins.includes(origin) ? origin : allowedOrigins[0],
     "Access-Control-Allow-Headers":
-      "authorization, x-client-info, apikey, content-type",
+      "authorization, x-client-info, apikey, content-type, x-agent-key",
   };
 }
 
@@ -30,46 +30,79 @@ Deno.serve(async (req) => {
 
   try {
     const authHeader = req.headers.get("Authorization");
-    if (!authHeader) {
-      throw new Error("Missing authorization header");
-    }
+    const agentKey = req.headers.get("x-agent-key");
+    const expectedKey = Deno.env.get("AGENT_API_KEY");
 
     const serviceSupabase = createClient(
       Deno.env.get("SUPABASE_URL") ?? "",
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
     );
-    const supabase = createClient(
-      Deno.env.get("SUPABASE_URL") ?? "",
-      Deno.env.get("SUPABASE_ANON_KEY") ?? "",
-      { global: { headers: { Authorization: authHeader } } }
-    );
 
-    const { data: { user }, error: userError } = await supabase.auth.getUser();
-    if (userError || !user) {
+    const body = await req.json();
+    // Auth: UI JWT OR service-level x-agent-key (requires user_id)
+    let userId: string | null = null;
+    let dbClient: ReturnType<typeof createClient> | null = null;
+    if (authHeader && authHeader.startsWith("Bearer ")) {
+      const supabaseUser = createClient(
+        Deno.env.get("SUPABASE_URL") ?? "",
+        Deno.env.get("SUPABASE_ANON_KEY") ?? "",
+        { global: { headers: { Authorization: authHeader } } }
+      );
+      const { data: { user }, error: userError } = await supabaseUser.auth.getUser();
+      if (userError || !user) {
+        return new Response(
+          JSON.stringify({ error: "Unauthorized" }),
+          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      userId = user.id;
+      dbClient = supabaseUser;
+    } else if (agentKey && expectedKey && agentKey === expectedKey) {
+      if (!body?.user_id) {
+        return new Response(
+          JSON.stringify({ error: "Missing user_id for service auth" }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      userId = String(body.user_id);
+      dbClient = serviceSupabase;
+    } else {
       return new Response(
         JSON.stringify({ error: "Unauthorized" }),
         { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
-
-    const body = await req.json();
     const { lead_id } = body;
     const message = stripBraceWrapper(String(body.message ?? ""));
+    const isAuto = body?.auto === true;
 
     if (!lead_id || !message) {
       throw new Error("Missing required fields: lead_id, message");
     }
 
     // Fetch the agent_leads row for this user
-    const { data: lead, error: leadError } = await supabase
+    const { data: lead, error: leadError } = await dbClient
       .from("agent_leads")
-      .select("heyreach_conversation_id, heyreach_account_id, reply_thread")
+      .select("heyreach_conversation_id, heyreach_account_id, reply_thread, disposition_tag, full_name, company")
       .eq("id", lead_id)
-      .eq("user_id", user.id)
+      .eq("user_id", userId)
       .single();
 
     if (leadError || !lead) {
       throw new Error("Lead not found or access denied");
+    }
+
+    // Suppress opted-out contacts (compliance)
+    if (lead.disposition_tag === "opted_out") {
+      return new Response(
+        JSON.stringify({
+          success: false,
+          handled: true,
+          code: "contact_opted_out",
+          message: "This contact has opted out and can't be messaged — reply not sent",
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
     }
 
     if (!lead.heyreach_conversation_id || !lead.heyreach_account_id) {
@@ -77,11 +110,11 @@ Deno.serve(async (req) => {
     }
 
     // Get HeyReach API key from outbound_integrations
-    const { data: integration, error: integrationError } = await supabase
+    const { data: integration, error: integrationError } = await dbClient
       .from("outbound_integrations")
       .select("api_key_encrypted")
       .eq("platform", "heyreach")
-      .eq("created_by", user.id)
+      .eq("created_by", userId)
       .single();
 
     if (integrationError || !integration) {
@@ -129,28 +162,53 @@ Deno.serve(async (req) => {
     const updatedThread = [...existingThread, newMessage];
 
     // Update agent_leads on success
-    const { error: updateError } = await supabase
+    const { error: updateError } = await dbClient
       .from("agent_leads")
       .update({
         draft_approved: true,
         inbox_status: "replied",
+        ...(isAuto ? { auto_handled: true } : {}),
         reply_thread: updatedThread,
       })
       .eq("id", lead_id)
-      .eq("user_id", user.id);
+      .eq("user_id", userId);
 
     if (updateError) {
       console.error("Failed to update lead status:", updateError);
     }
 
+    // Add activity record when auto-sent
+    if (isAuto) {
+      try {
+        const { data: cfg } = await dbClient
+          .from("agent_configs")
+          .select("id")
+          .eq("user_id", userId)
+          .eq("is_active", true)
+          .maybeSingle();
+        await dbClient.from("agent_activity").insert({
+          user_id: userId,
+          agent_config_id: cfg?.id ?? null,
+          lead_id,
+          lead_name: lead.full_name ?? null,
+          lead_company: lead.company ?? null,
+          activity_type: "message_sent",
+          description: `Reply sent to ${lead.full_name ?? ""} via HeyReach`,
+          metadata: { channel: "linkedin", sent_by: "auto" },
+        });
+      } catch (e) {
+        console.warn("[send-heyreach-message] activity insert failed (non-fatal):", e);
+      }
+    }
+
     // Best-effort: record 'sent' inference event (non-blocking)
     try {
       // Re-fetch minimal fields needed for attribution and person key
-      const { data: leadRow } = await supabase
+      const { data: leadRow } = await dbClient
         .from("agent_leads")
         .select("id, full_name, email, job_title, company, linkedin_url, reply_thread")
         .eq("id", lead_id)
-        .eq("user_id", user.id)
+        .eq("user_id", userId)
         .maybeSingle();
       const personKey =
         (leadRow?.email && String(leadRow.email).trim() ? String(leadRow.email).trim().toLowerCase() : "") ||
@@ -160,7 +218,7 @@ Deno.serve(async (req) => {
         const fp = await computeCopyFingerprint(message, null);
         const occurredAt = sentAtIso;
         // Look up last campaign name if any was set earlier (optional)
-        const { data: namedCampaign } = await supabase
+        const { data: namedCampaign } = await dbClient
           .from("agent_leads")
           .select("last_campaign_name")
           .eq("id", lead_id)
@@ -173,7 +231,7 @@ Deno.serve(async (req) => {
           .from("outbound_integrations")
           .select("team_id")
           .eq("platform", "heyreach")
-          .eq("created_by", user.id)
+          .eq("created_by", userId)
           .eq("is_active", true)
           .limit(1)
           .maybeSingle();
