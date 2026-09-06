@@ -1,6 +1,5 @@
 import { Button } from '@/components/ui/button';
 import { useNavigate, useLocation } from 'react-router-dom';
-import vrellyLogo from '@/assets/vrelly-logo.png';
 
 export const Navbar = () => {
   const navigate = useNavigate();
@@ -28,12 +27,17 @@ export const Navbar = () => {
               21px BELOW the nav's bottom border, reading as a stray outline over
               the hero. h-16 exactly fills the bar on mobile; desktop keeps h-[6.75rem]
               exactly as it was. */}
-          <img
-            src={vrellyLogo}
-            alt="Vrelly"
-            className="h-16 md:h-[6.75rem] w-auto shrink-0 cursor-pointer"
+          <button
+            type="button"
             onClick={() => navigate('/')}
-          />
+            className="flex items-end gap-2 cursor-pointer select-none"
+            aria-label="Vrelly"
+          >
+            <img src="/og-mark.png" alt="" className="h-8 md:h-10 w-auto" />
+            <span className="text-2xl md:text-3xl font-extrabold tracking-tight text-[#2563eb]">
+              relly
+            </span>
+          </button>
 
           <div className="hidden md:flex items-center gap-6 text-sm text-slate-300">
             {/* Use real hrefs for crawlability; enhance with smooth scroll on home */}

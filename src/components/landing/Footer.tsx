@@ -1,4 +1,3 @@
-import vrellyLogo from '@/assets/vrelly-logo.png';
 import { useNavigate } from 'react-router-dom';
 
 export const Footer = () => {
@@ -18,7 +17,17 @@ export const Footer = () => {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex flex-col md:flex-row items-start md:items-end justify-between gap-8">
           <div>
-            <img src={vrellyLogo} alt="Vrelly" className="h-[4.5rem] mb-2" />
+            <button
+              type="button"
+              onClick={() => navigate('/')}
+              className="flex items-end gap-2 cursor-pointer select-none mb-2"
+              aria-label="Vrelly"
+            >
+              <img src="/og-mark.png" alt="" className="h-8 w-auto" />
+              <span className="text-2xl font-extrabold tracking-tight text-[#2563eb]">
+                relly
+              </span>
+            </button>
             <p className="text-sm text-slate-500">AI-powered B2B sales intelligence</p>
           </div>
 

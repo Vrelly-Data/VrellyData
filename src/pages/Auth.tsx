@@ -9,7 +9,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/hooks/use-toast';
 import { Loader2, CheckCircle } from 'lucide-react';
-import vrellyLogo from '@/assets/vrelly-logo.png';
 
 export default function Auth() {
   const navigate = useNavigate();
@@ -148,12 +147,17 @@ export default function Auth() {
       <Card className="w-full max-w-md">
         <CardHeader className="space-y-4">
           <div className="flex justify-center">
-            <img 
-              src={vrellyLogo} 
-              alt="Vrelly" 
-              className="h-36 cursor-pointer" 
+            <button
+              type="button"
               onClick={() => navigate('/')}
-            />
+              className="flex items-end gap-2 cursor-pointer select-none"
+              aria-label="Vrelly"
+            >
+              <img src="/og-mark.png" alt="" className="h-10 md:h-12 w-auto" />
+              <span className="text-3xl md:text-4xl font-extrabold tracking-tight text-[#2563eb]">
+                relly
+              </span>
+            </button>
           </div>
           <div className="space-y-2">
             <CardTitle className="text-2xl text-center">Welcome to Vrelly</CardTitle>
