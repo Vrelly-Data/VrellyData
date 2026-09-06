@@ -842,7 +842,32 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
                     </div>
                   );
                 }
-                // Call event
+                if (it.kind === 'booking') {
+                const label =
+                  it.status === 'scheduled' ? 'Scheduled'
+                  : it.status === 'completed' ? 'Completed'
+                  : 'Canceled';
+                return (
+                  <div
+                    key={`booking-${i}`}
+                    className="max-w-[85%] rounded-lg px-3 py-2 text-sm bg-emerald-50 dark:bg-emerald-900/20 mr-auto border border-emerald-200/70 dark:border-emerald-800/40"
+                  >
+                    <div className="flex items-center gap-2 font-medium">
+                      <CalendarDays className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-300" />
+                      <span>Booking · {label}</span>
+                    </div>
+                    {it.event_name && (
+                      <div className="mt-0.5 text-xs text-foreground">
+                        {it.event_name}
+                      </div>
+                    )}
+                    <div className="text-[10px] text-muted-foreground mt-1">
+                      {formatRelativeTime(it.occurred_at)}
+                    </div>
+                  </div>
+                );
+                }
+                // Call event (default)
                 const status =
                   it.connected ? 'Connected' : it.voicemail ? 'Voicemail' : 'Attempted';
                 return (
@@ -876,30 +901,6 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
                           Recording
                         </a>
                       )}
-                    </div>
-                  </div>
-                );
-              } else if (it.kind === 'booking') {
-                const label =
-                  it.status === 'scheduled' ? 'Scheduled'
-                  : it.status === 'completed' ? 'Completed'
-                  : 'Canceled';
-                return (
-                  <div
-                    key={`booking-${i}`}
-                    className="max-w-[85%] rounded-lg px-3 py-2 text-sm bg-emerald-50 dark:bg-emerald-900/20 mr-auto border border-emerald-200/70 dark:border-emerald-800/40"
-                  >
-                    <div className="flex items-center gap-2 font-medium">
-                      <CalendarDays className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-300" />
-                      <span>Booking · {label}</span>
-                    </div>
-                    {it.event_name && (
-                      <div className="mt-0.5 text-xs text-foreground">
-                        {it.event_name}
-                      </div>
-                    )}
-                    <div className="text-[10px] text-muted-foreground mt-1">
-                      {formatRelativeTime(it.occurred_at)}
                     </div>
                   </div>
                 );
