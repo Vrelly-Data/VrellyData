@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { Send, UserPlus, Loader2, X, Linkedin, Mail, Check, Sparkles, Plus, Trash2, Phone } from 'lucide-react';
+import { Send, UserPlus, Loader2, X, Linkedin, Mail, Check, Sparkles, Plus, Trash2, Phone, CalendarDays } from 'lucide-react';
 import { LinkedInProfileLink } from '@/components/LinkedInProfileLink';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -50,6 +50,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { LeadTagsSection } from './LeadTagsSection';
 import { useDialerEventsForEmail } from '@/hooks/useDialerEvents';
+import { useBookingEventsForEmail } from '@/hooks/useBookingEvents';
 
 export type { AgentLead };
 
@@ -679,7 +680,10 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
 
   type TimelineItem =
     | { kind: 'msg'; role: string; content: string; timestamp?: string | null; channel?: string }
-    | { kind: 'call'; occurred_at: string; disposition: string | null; connected: boolean | null; voicemail: boolean | null; duration_seconds: number | null; note: string | null; recording_url: string | null; phone_e164: string | null };
+    | { kind: 'call'; occurred_at: string; disposition: string | null; connected: boolean | null; voicemail: boolean | null; duration_seconds: number | null; note: string | null; recording_url: string | null; phone_e164: string | null }
+    | { kind: 'booking'; occurred_at: string; status: 'scheduled' | 'canceled' | 'completed'; event_name: string | null };
+
+  const { data: bookingEvents = [] } = useBookingEventsForEmail(lead.email);
 
   const timeline: TimelineItem[] = [
     ...thread.map((m) => ({ kind: 'msg', role: m.role, content: m.content, timestamp: m.timestamp, channel: m.channel }) as TimelineItem),
@@ -693,6 +697,12 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
       note: e.note ?? null,
       recording_url: e.recording_url ?? null,
       phone_e164: e.phone_e164 ?? null,
+    })),
+    ...bookingEvents.map((b) => ({
+      kind: 'booking' as const,
+      occurred_at: b.start_time ?? new Date().toISOString(),
+      status: b.status,
+      event_name: b.event_name ?? null,
     })),
   ].sort((a, b) => {
     const at = a.kind === 'msg' ? (a.timestamp ? new Date(a.timestamp).getTime() : 0) : new Date(a.occurred_at).getTime();
@@ -832,7 +842,32 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
                     </div>
                   );
                 }
-                // Call event
+                if (it.kind === 'booking') {
+                const label =
+                  it.status === 'scheduled' ? 'Scheduled'
+                  : it.status === 'completed' ? 'Completed'
+                  : 'Canceled';
+                return (
+                  <div
+                    key={`booking-${i}`}
+                    className="max-w-[85%] rounded-lg px-3 py-2 text-sm bg-emerald-50 dark:bg-emerald-900/20 mr-auto border border-emerald-200/70 dark:border-emerald-800/40"
+                  >
+                    <div className="flex items-center gap-2 font-medium">
+                      <CalendarDays className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-300" />
+                      <span>Booking · {label}</span>
+                    </div>
+                    {it.event_name && (
+                      <div className="mt-0.5 text-xs text-foreground">
+                        {it.event_name}
+                      </div>
+                    )}
+                    <div className="text-[10px] text-muted-foreground mt-1">
+                      {formatRelativeTime(it.occurred_at)}
+                    </div>
+                  </div>
+                );
+                }
+                // Call event (default)
                 const status =
                   it.connected ? 'Connected' : it.voicemail ? 'Voicemail' : 'Attempted';
                 return (

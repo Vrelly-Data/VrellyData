@@ -216,6 +216,19 @@ export function useOutboundIntegrations() {
           } catch (e) {
             console.warn('PhoneBurner calls poll error (non-fatal):', e);
           }
+        } else if (platform === 'calendly') {
+          // Calendly: booking integration. No campaigns.
+          // On connect, backfill recent bookings (match-only) for the last 90 days.
+          try {
+            const { error: cErr } = await supabase.functions.invoke('sync-calendly-events', {
+              body: { integrationId: data.id, lookbackDays: 90 },
+            });
+            if (cErr) {
+              console.warn('Calendly events sync failed (non-fatal):', cErr);
+            }
+          } catch (e) {
+            console.warn('Calendly events sync error (non-fatal):', e);
+          }
         } else if (platform === 'reply.io' || platform === 'replyio') {
           // Reply.io sync chain
           try {
@@ -374,6 +387,15 @@ export function useOutboundIntegrations() {
         });
         if (pErr) throw pErr;
         return { calls: pData ?? null };
+      }
+
+      if (platform === 'calendly') {
+        // Booking sync — poll recent events (match-only). Backfill 90 days.
+        const { data: cData, error: cErr } = await supabase.functions.invoke('sync-calendly-events', {
+          body: { integrationId, lookbackDays: 90 },
+        });
+        if (cErr) throw cErr;
+        return { bookings: cData ?? null };
       }
 
       if (platform === 'reply.io' || platform === 'replyio') {
