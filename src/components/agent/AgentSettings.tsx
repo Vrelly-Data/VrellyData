@@ -593,7 +593,7 @@ export function AgentSettings() {
               >
                 <div className="font-medium text-sm">Auto</div>
                 <div className="text-xs text-muted-foreground mt-1">
-                  Your agent handles email replies automatically. LinkedIn always requires your approval.
+                  Sends clear email and LinkedIn replies for you. Skips OOO and bounces; holds unclear ones for approval.
                 </div>
               </button>
             </div>
