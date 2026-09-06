@@ -1,0 +1,40 @@
+{
+  "description": "Soft-HD Vrelly brand source PNGs stored as base64 chunks (MCP/tool size limits). Concatenate parts in order, then base64 -d.",
+  "files": {
+    "bird-mark-soft.png": {
+      "b64_output": "bird-mark-soft.png.b64",
+      "parts": [
+        "bird-mark-soft.png.b64.part00",
+        "bird-mark-soft.png.b64.part01",
+        "bird-mark-soft.png.b64.part02",
+        "bird-mark-soft.png.b64.part03",
+        "bird-mark-soft.png.b64.part04",
+        "bird-mark-soft.png.b64.part05",
+        "bird-mark-soft.png.b64.part06",
+        "bird-mark-soft.png.b64.part07",
+        "bird-mark-soft.png.b64.part08"
+      ],
+      "total_b64_chars": 752956,
+      "source_png_bytes": 564717
+    },
+    "wordmark-soft.png": {
+      "b64_output": "wordmark-soft.png.b64",
+      "parts": [
+        "wordmark-soft.png.b64.part00",
+        "wordmark-soft.png.b64.part01",
+        "wordmark-soft.png.b64.part02",
+        "wordmark-soft.png.b64.part03",
+        "wordmark-soft.png.b64.part04",
+        "wordmark-soft.png.b64.part05",
+        "wordmark-soft.png.b64.part06",
+        "wordmark-soft.png.b64.part07",
+        "wordmark-soft.png.b64.part08",
+        "wordmark-soft.png.b64.part09",
+        "wordmark-soft.png.b64.part10",
+        "wordmark-soft.png.b64.part11"
+      ],
+      "total_b64_chars": 1037196,
+      "source_png_bytes": 777897
+    }
+  }
+}
