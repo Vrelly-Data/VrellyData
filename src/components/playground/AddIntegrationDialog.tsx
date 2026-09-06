@@ -29,7 +29,7 @@ const PLATFORMS = [
   { value: 'smartlead', label: 'Smartlead', icon: '🎯', comingSoon: false },
   { value: 'phoneburner', label: 'PhoneBurner / Dialer', icon: '📞', comingSoon: false },
   { value: 'apollo', label: 'Apollo', icon: '🔭', comingSoon: false },
-  { value: 'calendly', label: 'Calendly', icon: '📅', comingSoon: true },
+  { value: 'calendly', label: 'Calendly', icon: '📅', comingSoon: false },
   { value: 'instantly', label: 'Instantly.ai', icon: '⚡', comingSoon: true },
   { value: 'lemlist', label: 'Lemlist', icon: '🍋', comingSoon: true },
 ];
@@ -57,6 +57,7 @@ async function validateApiKey(platform: string, apiKey: string): Promise<{ valid
       heyreach: 'validate-heyreach-key',
       phoneburner: 'validate-phoneburner-key',
       apollo: 'validate-apollo-key',
+      calendly: 'validate-calendly-key',
     };
     const functionName = PLATFORM_VALIDATORS[platform] ?? 'validate-api-key';
     // Platform-specific validators take just the key; the generic one needs to

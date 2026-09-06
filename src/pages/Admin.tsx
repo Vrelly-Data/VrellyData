@@ -7,7 +7,7 @@ import { FreeDataTab } from '@/components/admin/FreeDataTab';
 import { UsersTab } from '@/components/admin/UsersTab';
 import { OrganizationsTab } from '@/components/admin/OrganizationsTab';
 import { Button } from '@/components/ui/button';
-import { Database, Upload, Plus, Users, BookOpen, Building2, LineChart } from 'lucide-react';
+import { Database, Upload, Plus, Users, BookOpen, Building2, Activity, LineChart } from 'lucide-react';
 import { SalesKnowledgeTab } from '@/components/admin/SalesKnowledgeTab';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '@/stores/authStore';
@@ -17,7 +17,7 @@ import { InferenceTab } from '@/components/admin/InferenceTab';
 
 export default function Admin({ defaultTab = 'templates' }: { defaultTab?: string }) {
   const navigate = useNavigate();
-  const { isSuperAdmin } = useAuthStore();
+  const { isSuperAdmin, isPlatformAdmin } = useAuthStore();
   const [showCreateTemplateDialog, setShowCreateTemplateDialog] = useState(false);
   const [showUploadDialog, setShowUploadDialog] = useState(false);
 
@@ -56,6 +56,12 @@ export default function Admin({ defaultTab = 'templates' }: { defaultTab?: strin
                   <Upload className="h-4 w-4 mr-2" />
                   Upload CSV
                 </Button>
+                {isPlatformAdmin && (
+                  <Button variant="outline" onClick={() => navigate('/admin/inference')}>
+                    <Activity className="h-4 w-4 mr-2" />
+                    Inference Events
+                  </Button>
+                )}
               </div>
 
               <Tabs defaultValue={defaultTab} className="space-y-6">
