@@ -31,6 +31,7 @@ const outDirSrcAssets = path.join(projectRoot, 'src', 'assets');
 async function ensureDirs() {
   await fs.promises.mkdir(outDirPublic, { recursive: true });
   await fs.promises.mkdir(outDirSrcAssets, { recursive: true });
+  await fs.promises.mkdir(path.join(outDirPublic, 'brand', 'sources'), { recursive: true });
 }
 
 async function loadBirdMark() {
@@ -132,10 +133,16 @@ async function buildWordmark(birdPng, targetHeight = 120) {
 async function main() {
   await ensureDirs();
   const birdPng = await loadBirdMark();
+  let providedBirdExists = false;
+  try { await fs.promises.access(providedBirdPath); providedBirdExists = true; } catch {}
 
   // 1) Favicons and touch icons from the bird mark
-  const birdMonocyan = await recolorToCyan(birdPng);
-  await writeFavicons(birdMonocyan);
+  const birdForIcons = providedBirdExists ? birdPng : await recolorToCyan(birdPng);
+  await writeFavicons(birdForIcons);
+  // Save sources into repo for reproducibility when provided
+  if (providedBirdExists) {
+    await sharp(birdPng).toFile(path.join(outDirPublic, 'brand', 'sources', 'bird-source.png'));
+  }
 
   // 2) Wordmark: prefer provided single-cyan file; otherwise synthesize to match bird cyan
   try {
@@ -143,9 +150,10 @@ async function main() {
     const provided = await sharp(providedWordmarkPath).png().toBuffer();
     await sharp(provided).toFile(path.join(outDirSrcAssets, 'vrelly-logo.png'));
     await sharp(provided).resize({ height: 120, fit: 'inside' }).toFile(path.join(outDirPublic, 'og-mark.png'));
-    console.log('Used provided two-tone wordmark from', providedWordmarkPath);
+    await sharp(provided).toFile(path.join(outDirPublic, 'brand', 'sources', 'wordmark-source.png'));
+    console.log('Used provided wordmark from', providedWordmarkPath);
   } catch {
-    const wordmarkLarge = await buildWordmark(birdMonocyan, 180);
+    const wordmarkLarge = await buildWordmark(birdForIcons, 180);
     await sharp(wordmarkLarge).png().toFile(path.join(outDirSrcAssets, 'vrelly-logo.png'));
     const wordmarkForOg = await sharp(wordmarkLarge).resize({ height: 120, fit: 'inside' }).png().toBuffer();
     await sharp(wordmarkForOg).toFile(path.join(outDirPublic, 'og-mark.png'));
