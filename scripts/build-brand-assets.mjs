@@ -19,10 +19,12 @@ import sharp from 'sharp';
 
 const projectRoot = path.resolve(new URL('..', import.meta.url).pathname);
 // Preferred sources:
-// - Provided single-cyan wordmark (if present via agent attachments)
+// - Provided two-tone wordmark (if present via agent attachments)
 const providedWordmarkPath = '/workspace/vrelly-brand/vrelly-wordmark-relly.png';
-// - Bird-only cyan mark already in repo (used for favicons and to tint text)
-const srcBirdPath = path.join(projectRoot, 'public', 'vrelly-favicon.png');
+// - Provided two-tone bird mark (HD square), the canonical favicon source
+const providedBirdPath = '/workspace/vrelly-brand/vrelly-avatar-hd.png';
+// - Fallback: existing public favicon if provided asset is missing
+const fallbackBirdPath = path.join(projectRoot, 'public', 'vrelly-favicon.png');
 const outDirPublic = path.join(projectRoot, 'public');
 const outDirSrcAssets = path.join(projectRoot, 'src', 'assets');
 
@@ -33,7 +35,13 @@ async function ensureDirs() {
 
 async function loadBirdMark() {
   try {
-    const buf = await sharp(srcBirdPath).trim().png().toBuffer();
+    let sourcePath = providedBirdPath;
+    try {
+      await fs.promises.access(providedBirdPath);
+    } catch {
+      sourcePath = fallbackBirdPath;
+    }
+    const buf = await sharp(sourcePath).trim().png().toBuffer();
     const meta = await sharp(buf).metadata();
     if (!meta.hasAlpha) {
       // Keep going — favicons don't require transparency, but log for awareness.
@@ -41,7 +49,7 @@ async function loadBirdMark() {
     }
     return buf;
   } catch (err) {
-    throw new Error(`Failed to read ${srcBirdPath}: ${err.message}`);
+    throw new Error(`Failed to read bird mark: ${err.message}`);
   }
 }
 
@@ -58,30 +66,21 @@ async function writeFavicons(birdPng) {
   await write(180, 'apple-touch-icon.png'); // iOS
   await write(192, 'icon-192.png'); // PWA common
   await write(256, 'icon-256.png');
-  // Keep legacy path; if it already exists, leave it untouched to preserve cache
-  try {
-    await fs.promises.access(path.join(outDirPublic, 'vrelly-favicon.png'));
-  } catch {
-    await write(512, 'vrelly-favicon.png');
-  }
+  // Also write a 512x512 PNG at legacy path (overwrite to ensure latest brand)
+  await write(512, 'vrelly-favicon.png');
   // Note: sharp does not generate .ico; modern browsers accept the PNG links above.
 }
 
-async function getBirdMeanHex(birdPng) {
-  const stats = await sharp(birdPng).stats();
-  const r = Math.round(stats.channels[0].mean);
-  const g = Math.round(stats.channels[1].mean);
-  const b = Math.round(stats.channels[2].mean);
-  const toHex = (n) => n.toString(16).padStart(2, '0');
-  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
-}
+// Final brand colors
+const CYAN = '#18C0F8';   // wing + favicon
+const BLUE = '#0070E8';   // "relly" text
 
 function buildRellyTextSvg(heightPx, hexColor) {
   // Render the "relly" glyph as SVG; we intentionally oversize the canvas width
   // then trim it to a tight glyph box.
   const fontSize = Math.round(heightPx * 0.8);
   const baselineY = Math.round(heightPx * 0.85);
-  const color = hexColor || '#16a3ff';
+  const color = hexColor || BLUE;
   const svg = `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="2000" height="${heightPx}">
   <rect width="2000" height="${heightPx}" fill="transparent"/>
@@ -92,14 +91,20 @@ function buildRellyTextSvg(heightPx, hexColor) {
   return Buffer.from(svg);
 }
 
+async function recolorToCyan(pngBuffer) {
+  // Force solid cyan while preserving the alpha mask
+  // Approach: grayscale + tint to cyan. Works for two-tone inputs.
+  return await sharp(pngBuffer).grayscale().tint(CYAN).png().toBuffer();
+}
+
 async function buildWordmark(birdPng, targetHeight = 120) {
   // Prepare the bird glyph at target height
-  const birdTight = await sharp(birdPng).trim().resize({ height: targetHeight, fit: 'inside', withoutEnlargement: true }).png().toBuffer();
+  const birdTightBase = await sharp(birdPng).trim().resize({ height: targetHeight, fit: 'inside', withoutEnlargement: true }).png().toBuffer();
+  const birdTight = await recolorToCyan(birdTightBase);
   const birdMeta = await sharp(birdTight).metadata();
 
   // Prepare the "relly" text as PNG trimmed to content
-  const colorHex = await getBirdMeanHex(birdTight);
-  const textPng = await sharp(buildRellyTextSvg(targetHeight, colorHex)).png().trim().toBuffer();
+  const textPng = await sharp(buildRellyTextSvg(targetHeight, BLUE)).png().trim().toBuffer();
   const textMeta = await sharp(textPng).metadata();
 
   const gap = Math.max(8, Math.round(targetHeight * 0.16)); // breathing room between wing and text
@@ -129,7 +134,8 @@ async function main() {
   const birdPng = await loadBirdMark();
 
   // 1) Favicons and touch icons from the bird mark
-  await writeFavicons(birdPng);
+  const birdMonocyan = await recolorToCyan(birdPng);
+  await writeFavicons(birdMonocyan);
 
   // 2) Wordmark: prefer provided single-cyan file; otherwise synthesize to match bird cyan
   try {
@@ -137,13 +143,13 @@ async function main() {
     const provided = await sharp(providedWordmarkPath).png().toBuffer();
     await sharp(provided).toFile(path.join(outDirSrcAssets, 'vrelly-logo.png'));
     await sharp(provided).resize({ height: 120, fit: 'inside' }).toFile(path.join(outDirPublic, 'og-mark.png'));
-    console.log('Used provided single-cyan wordmark from', providedWordmarkPath);
+    console.log('Used provided two-tone wordmark from', providedWordmarkPath);
   } catch {
-    const wordmarkLarge = await buildWordmark(birdPng, 180);
+    const wordmarkLarge = await buildWordmark(birdMonocyan, 180);
     await sharp(wordmarkLarge).png().toFile(path.join(outDirSrcAssets, 'vrelly-logo.png'));
     const wordmarkForOg = await sharp(wordmarkLarge).resize({ height: 120, fit: 'inside' }).png().toBuffer();
     await sharp(wordmarkForOg).toFile(path.join(outDirPublic, 'og-mark.png'));
-    console.log('Synthesized single-cyan wordmark to match bird mark');
+    console.log('Synthesized two-tone wordmark (cyan wing + blue text)');
   }
 
   console.log('Brand assets written:\n' +
