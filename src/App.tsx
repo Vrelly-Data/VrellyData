@@ -71,6 +71,7 @@ const App = () => (
                 <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
                 <Route path="/billing" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
                 <Route path="/admin" element={<AdminRoute><Admin /></AdminRoute>} />
+                <Route path="/admin/inference" element={<AdminRoute><Admin defaultTab="inference" /></AdminRoute>} />
                 {/* Public client report — NO ProtectedRoute, NO
                     SubscriptionGuard, no admin shell. Pulls everything from
                     the token via the public get-client-report function. */}
