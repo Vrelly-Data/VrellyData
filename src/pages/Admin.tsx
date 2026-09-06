@@ -7,7 +7,7 @@ import { FreeDataTab } from '@/components/admin/FreeDataTab';
 import { UsersTab } from '@/components/admin/UsersTab';
 import { OrganizationsTab } from '@/components/admin/OrganizationsTab';
 import { Button } from '@/components/ui/button';
-import { Database, Upload, Plus, Users, BookOpen, Building2 } from 'lucide-react';
+import { Database, Upload, Plus, Users, BookOpen, Building2, Activity } from 'lucide-react';
 import { SalesKnowledgeTab } from '@/components/admin/SalesKnowledgeTab';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '@/stores/authStore';
@@ -16,7 +16,7 @@ import { UserMenu } from '@/components/UserMenu';
 
 export default function Admin() {
   const navigate = useNavigate();
-  const { isSuperAdmin } = useAuthStore();
+  const { isSuperAdmin, isPlatformAdmin } = useAuthStore();
   const [showCreateTemplateDialog, setShowCreateTemplateDialog] = useState(false);
   const [showUploadDialog, setShowUploadDialog] = useState(false);
 
@@ -55,6 +55,12 @@ export default function Admin() {
                   <Upload className="h-4 w-4 mr-2" />
                   Upload CSV
                 </Button>
+                {isPlatformAdmin && (
+                  <Button variant="outline" onClick={() => navigate('/admin/inference')}>
+                    <Activity className="h-4 w-4 mr-2" />
+                    Inference Events
+                  </Button>
+                )}
               </div>
 
               <Tabs defaultValue="templates" className="space-y-6">
