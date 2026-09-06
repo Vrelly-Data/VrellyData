@@ -276,7 +276,16 @@ All colors MUST be HSL.
   .animate-slide-in-right,
   .animate-gradient-shift,
   .animate-pulse-glow {
+    /* Disable animations */
     animation: none !important;
+  }
+  /* When animations are disabled, any elements that relied on them to
+     transition from opacity-0 must still be visible. Ensure visibility. */
+  .animate-fade-up,
+  .animate-fade-in,
+  .opacity-0.animate-fade-up,
+  .opacity-0.animate-fade-in {
+    opacity: 1 !important;
   }
   .hiw-number,
   .hiw-tile,
