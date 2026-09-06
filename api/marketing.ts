@@ -92,7 +92,7 @@ function updateHtmlWithSeo(
   const escTitle = escapeHtml(title);
   const escDesc = escapeHtml(description);
   const escCanonical = escapeHtml(canonical);
-  const image = ogImage || "https://www.vrelly.com/og-image.png?v=5";
+  const image = ogImage || "https://www.vrelly.com/og-image.png?v=6";
 
   html = replaceOrInsert(html, /<title>.*?<\/title>/is, `<title>${escTitle}</title>`, `<title>${escTitle}</title>`);
   html = replaceOrInsert(
