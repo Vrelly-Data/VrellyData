@@ -54,6 +54,10 @@ const SAFE_FALLBACK = {
   next_pipeline_stage: 'replied',
 };
 
+// Hard gates — do NOT trust the LLM alone
+const AUTO_SEND_INTENTS = new Set(['interested', 'needs_more_info', 'not_interested', 'referral']);
+const SUPPRESS_INTENTS = new Set(['out_of_office', 'bounce']);
+
 // SHA-256 hex of a string (prompt-drift fingerprint for draft_audit).
 async function sha256Hex(input: string): Promise<string> {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
@@ -326,13 +330,15 @@ Deno.serve(async (req) => {
     // different callers) so this is the single source. Best-effort + null-safe:
     // a missing column or empty doc injects nothing → drafts exactly as today.
     let agentKnowledge = '';
+    let agentMode: string = 'copilot';
     try {
       const { data: cfgRow } = await supabase
         .from('agent_configs')
-        .select('agent_knowledge')
+        .select('agent_knowledge, mode')
         .eq('user_id', user_id)
         .maybeSingle();
       agentKnowledge = (cfgRow?.agent_knowledge ?? '').trim();
+      agentMode = (cfgRow?.mode as string | null) ?? 'copilot';
     } catch (e) {
       console.warn('[classify-reply] agent_knowledge fetch failed (continuing):', e);
     }
@@ -496,7 +502,7 @@ Use this campaign data to:
       try {
         const { data: leadRow } = await supabase
           .from('agent_leads')
-          .select('full_name, job_title, company, linkedin_url, email, last_campaign_name, campaign_external_id, disposition_tag, reply_thread')
+          .select('full_name, job_title, company, linkedin_url, email, last_campaign_name, campaign_external_id, disposition_tag, reply_thread, source')
           .eq('id', lead_id)
           .eq('user_id', user_id)
           .maybeSingle();
@@ -897,7 +903,7 @@ ${campaignIntelligence}
 The prospect's intent has been classified as: ${intent}${isObjection ? ' (objection-flavored)' : ''}. Generate the reply accordingly. Return ONLY this JSON object:
 - suggested_response: the ideal next message (2-4 sentences, matches ${effSenderName}'s voice, grounded in the resources above. Reference the prospect by name where natural. Use the calendar link if booking a meeting. Reference case studies if it strengthens credibility.)
 - reasoning: one sentence explaining your response
-- should_auto_send: boolean (true ONLY if channel is email AND intent is out_of_office or bounce)
+- should_auto_send: boolean (true ONLY if the intent is one of 'interested', 'needs_more_info', 'not_interested', or 'referral'. For these intents, auto-send is allowed on BOTH email and LinkedIn. For 'out_of_office', 'bounce', or 'unknown', this must be false.)
 - next_pipeline_stage: one of 'replied', 'in_progress', 'call_scheduled'
   Rules: explicit agreement to a call/meeting → call_scheduled; interested/needs_more_info/not_interested → in_progress; out_of_office or bounce → replied.
   NEVER auto-close a lead: closes (Closed Won / Closed Lost), No Show, and Sent Proposal are set by the operator, not you. Leave a not-interested reply active (in_progress) — the intent field already flags the sentiment.
@@ -1150,6 +1156,97 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
     } catch (e) {
       console.warn('[classify-reply] inference_events write failed (non-fatal):', e);
     }
+
+    // ===================== Fully Auto handling (mode === 'auto') =====================
+    // DO NOT trust the model to enforce safety — hard-gate with allow/suppress sets.
+    // - SUPPRESS: out_of_office | bounce → mark handled; no outbound
+    // - AUTO-SEND: interested | needs_more_info | not_interested | referral and non-empty draft
+    //              → fire-and-forget via service-auth to the correct sender
+    // - HOLD: unknown → draft_ready as above; no auto-send
+    if (agentMode === 'auto' && lead_id) {
+      const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+      const svcKey = Deno.env.get('AGENT_API_KEY') || '';
+      // Guard: opted_out must NEVER send
+      const isOptedOut = (leadDispositionTag ?? '') === 'opted_out';
+      const hasDraft = typeof suggestedResponse === 'string' && suggestedResponse.trim().length > 0;
+      const isSuppress = SUPPRESS_INTENTS.has(intent);
+      const isAllowed = AUTO_SEND_INTENTS.has(intent) && (channel === 'email' || channel === 'linkedin');
+
+      try {
+        if (isSuppress) {
+          // Mark as handled without a send — smallest consistent pattern:
+          // inbox_status='replied', clear draft, set auto_handled
+          await (async () => {
+            const s = createClient(supabaseUrl, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
+            await s
+              .from('agent_leads')
+              .update({ inbox_status: 'replied', draft_response: null, auto_handled: true })
+              .eq('id', lead_id)
+              .eq('user_id', user_id);
+          })();
+        } else if (isAllowed && hasDraft && !isOptedOut) {
+          // Fire-and-forget correct sender by channel/source
+          const fire = async () => {
+            const headers = { 'Content-Type': 'application/json', 'x-agent-key': svcKey };
+            if (channel === 'linkedin') {
+              await fetch(`${supabaseUrl}/functions/v1/send-heyreach-message`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({ user_id, lead_id, message: suggestedResponse, auto: true }),
+              });
+              return;
+            }
+            // email — choose function by source
+            // Use the DB again to fetch source (reliable even if earlier context fetch failed)
+            let sourceVal: string | null = null;
+            try {
+              const s = createClient(supabaseUrl, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
+              const { data: srcRow } = await s.from('agent_leads').select('source').eq('id', lead_id).eq('user_id', user_id).maybeSingle();
+              sourceVal = (srcRow?.source as string | null) ?? null;
+            } catch {
+              sourceVal = null;
+            }
+            if (sourceVal === 'reply_io') {
+              await fetch(`${supabaseUrl}/functions/v1/send-agent-reply`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                  user_id,
+                  leadId: lead_id,
+                  draftResponse: suggestedResponse,
+                  intent,
+                  auto: true,
+                }),
+              });
+            } else if (sourceVal === 'smartlead') {
+              await fetch(`${supabaseUrl}/functions/v1/send-smartlead-email`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                  user_id,
+                  leadId: lead_id,
+                  message: suggestedResponse,
+                  auto: true,
+                }),
+              });
+            } else {
+              // Unknown source — hold for AM
+              return;
+            }
+          };
+          // @ts-ignore EdgeRuntime provided by Supabase
+          if (typeof EdgeRuntime !== 'undefined' && typeof EdgeRuntime.waitUntil === 'function') {
+            // @ts-ignore
+            EdgeRuntime.waitUntil(fire().catch((e) => console.warn('[classify-reply] auto-send fire-and-forget failed (non-fatal):', e)));
+          } else {
+            fire().catch((e) => console.warn('[classify-reply] auto-send fire-and-forget failed (non-fatal):', e));
+          }
+        }
+      } catch (e) {
+        console.warn('[classify-reply] auto-mode handler failed (non-fatal):', e);
+      }
+    }
+
     return new Response(JSON.stringify(classification), {
       status: 200,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },

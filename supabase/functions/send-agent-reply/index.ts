@@ -356,36 +356,52 @@ Deno.serve(async (req) => {
 
   try {
     const authHeader = req.headers.get('Authorization');
-    if (!authHeader) {
+    const agentKey = req.headers.get('x-agent-key');
+    const expectedKey = Deno.env.get('AGENT_API_KEY');
+    const body = await req.json();
+
+    // AuthN: EITHER user JWT (UI flow) OR service-level x-agent-key (auto-send).
+    // Service-level requires user_id in the body.
+    let userId: string | null = null;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      // Verify JWT
+      const authClient = createClient(
+        Deno.env.get('SUPABASE_URL')!,
+        Deno.env.get('SUPABASE_ANON_KEY')!,
+        { global: { headers: { Authorization: authHeader } } }
+      );
+      const { data: { user }, error: authError } = await authClient.auth.getUser();
+      if (authError || !user) {
+        return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+          status: 401,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      userId = user.id;
+    } else if (agentKey && expectedKey && agentKey === expectedKey) {
+      // Service auth — caller must provide user_id
+      if (!body?.user_id) {
+        return new Response(JSON.stringify({ error: 'Missing user_id for service auth' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      userId = String(body.user_id);
+    } else {
       return new Response(JSON.stringify({ error: 'Not authenticated' }), {
         status: 401,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
-    // Verify JWT
-    const authClient = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_ANON_KEY')!,
-      { global: { headers: { Authorization: authHeader } } }
-    );
-    const { data: { user }, error: authError } = await authClient.auth.getUser();
-    if (authError || !user) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-        status: 401,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
-    const userId = user.id;
-
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL')!,
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     );
 
-    const { leadId, draftResponse: rawDraft, intent, campaignId: bodyCampaignId, cc: bodyCc } = await req.json();
+    const { leadId, draftResponse: rawDraft, intent, campaignId: bodyCampaignId, cc: bodyCc, auto } = body ?? {};
     const draftResponse = stripBraceWrapper(String(rawDraft ?? ''));
+    const isAuto = auto === true;
 
     // intent is NOT hard-required: the direct-send "Send Reply" path only needs
     // leadId + draftResponse (it replies into the existing thread). intent is
@@ -668,6 +684,7 @@ Deno.serve(async (req) => {
           inbox_status: 'sent',
           pipeline_stage: pipelineStage,
           draft_approved: true,
+          ...(isAuto ? { auto_handled: true } : {}),
           reply_thread: [...existingThread, sentMessage],
         })
         .eq('id', leadId);
@@ -680,7 +697,7 @@ Deno.serve(async (req) => {
         lead_company: lead.company,
         activity_type: 'message_sent',
         description: `Reply sent to ${lead.full_name} via Reply.io`,
-        metadata: { intent, channel: lead.channel, direct: true },
+        metadata: { intent, channel: lead.channel, direct: true, ...(isAuto ? { sent_by: 'auto' } : {}) },
       });
 
       // Best-effort: record 'sent' inference event (non-blocking)
@@ -952,6 +969,7 @@ Deno.serve(async (req) => {
       inbox_status: 'sent',
       pipeline_stage: pipelineStage,
       draft_approved: true,
+      ...(isAuto ? { auto_handled: true } : {}),
     };
 
     if (operatorCampaignId) {
@@ -994,7 +1012,7 @@ Deno.serve(async (req) => {
       lead_company: lead.company,
       activity_type: 'message_sent',
       description: `Reply sent to ${lead.full_name} via Reply.io campaign`,
-      metadata: { intent, campaignId, channel: lead.channel },
+      metadata: { intent, campaignId, channel: lead.channel, ...(isAuto ? { sent_by: 'auto' } : {}) },
     });
 
     // Best-effort: record 'sent' inference event (non-blocking)
