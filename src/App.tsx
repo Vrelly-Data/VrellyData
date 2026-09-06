@@ -27,7 +27,6 @@ import NotFound from "./pages/NotFound";
 import People from "./pages/People";
 import Companies from "./pages/Companies";
 import Admin from "./pages/Admin";
-import AdminInference from "./pages/AdminInference";
 import DataPlayground from "./pages/DataPlayground";
 import ResetPassword from "./pages/ResetPassword";
 import ChoosePlan from "./pages/ChoosePlan";
@@ -72,7 +71,7 @@ const App = () => (
                 <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
                 <Route path="/billing" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
                 <Route path="/admin" element={<AdminRoute><Admin /></AdminRoute>} />
-                <Route path="/admin/inference" element={<AdminRoute><AdminInference /></AdminRoute>} />
+                <Route path="/admin/inference" element={<AdminRoute><Admin defaultTab="inference" /></AdminRoute>} />
                 {/* Public client report — NO ProtectedRoute, NO
                     SubscriptionGuard, no admin shell. Pulls everything from
                     the token via the public get-client-report function. */}

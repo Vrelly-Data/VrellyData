@@ -7,14 +7,15 @@ import { FreeDataTab } from '@/components/admin/FreeDataTab';
 import { UsersTab } from '@/components/admin/UsersTab';
 import { OrganizationsTab } from '@/components/admin/OrganizationsTab';
 import { Button } from '@/components/ui/button';
-import { Database, Upload, Plus, Users, BookOpen, Building2, Activity } from 'lucide-react';
+import { Database, Upload, Plus, Users, BookOpen, Building2, Activity, LineChart } from 'lucide-react';
 import { SalesKnowledgeTab } from '@/components/admin/SalesKnowledgeTab';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '@/stores/authStore';
 import vrellyLogo from '@/assets/vrelly-logo.png';
 import { UserMenu } from '@/components/UserMenu';
+import { InferenceTab } from '@/components/admin/InferenceTab';
 
-export default function Admin() {
+export default function Admin({ defaultTab = 'templates' }: { defaultTab?: string }) {
   const navigate = useNavigate();
   const { isSuperAdmin, isPlatformAdmin } = useAuthStore();
   const [showCreateTemplateDialog, setShowCreateTemplateDialog] = useState(false);
@@ -63,7 +64,7 @@ export default function Admin() {
                 )}
               </div>
 
-              <Tabs defaultValue="templates" className="space-y-6">
+              <Tabs defaultValue={defaultTab} className="space-y-6">
                 <TabsList>
                   <TabsTrigger value="templates" className="flex items-center gap-2">
                     <Database className="h-4 w-4" />
@@ -80,6 +81,10 @@ export default function Admin() {
                   <TabsTrigger value="knowledge" className="flex items-center gap-2">
                     <BookOpen className="h-4 w-4" />
                     Sales Knowledge
+                  </TabsTrigger>
+                  <TabsTrigger value="inference" className="flex items-center gap-2">
+                    <LineChart className="h-4 w-4" />
+                    Inference Insights
                   </TabsTrigger>
                   {/* Financial/CRM layer — superadmin ONLY (not platform admin). */}
                   {isSuperAdmin && (
@@ -110,6 +115,9 @@ export default function Admin() {
 
                 <TabsContent value="knowledge">
                   <SalesKnowledgeTab />
+                </TabsContent>
+                <TabsContent value="inference">
+                  <InferenceTab />
                 </TabsContent>
 
                 {isSuperAdmin && (
