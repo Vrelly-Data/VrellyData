@@ -102,10 +102,11 @@ export function ExternalProjectsSettings() {
             </DropdownMenuItem>
             <DropdownMenuItem
               onClick={() => {
-                toast.info('Calendly integration is coming soon');
+                setInitialPlatform('calendly' as ConnectPlatform);
+                setAddDialogOpen(true);
               }}
             >
-              📅 Calendly (Coming soon)
+              📅 Calendly
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -159,10 +160,11 @@ export function ExternalProjectsSettings() {
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   onClick={() => {
-                    toast.info('Calendly integration is coming soon');
+                    setInitialPlatform('calendly' as ConnectPlatform);
+                    setAddDialogOpen(true);
                   }}
                 >
-                  📅 Calendly (Coming soon)
+                  📅 Calendly
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
