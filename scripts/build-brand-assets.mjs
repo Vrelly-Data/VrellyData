@@ -18,12 +18,13 @@ import path from 'path';
 import sharp from 'sharp';
 
 const projectRoot = path.resolve(new URL('..', import.meta.url).pathname);
-// Preferred sources:
-// - Provided two-tone wordmark (if present via agent attachments)
-const providedWordmarkPath = '/workspace/vrelly-brand/vrelly-wordmark-relly.png';
-// - Provided two-tone bird mark (HD square), the canonical favicon source
-const providedBirdPath = '/workspace/vrelly-brand/vrelly-avatar-hd.png';
-// - Fallback: existing public favicon if provided asset is missing
+// Preferred sources live inside the repository (NEVER use /workspace/vrelly-brand paths)
+const sourcesDir = path.join(projectRoot, 'public', 'brand', 'sources');
+const softBirdPath = path.join(sourcesDir, 'bird-mark-soft.png');
+const softBirdB64Path = softBirdPath + '.b64';
+const softWordmarkPath = path.join(sourcesDir, 'wordmark-soft.png');
+const softWordmarkB64Path = softWordmarkPath + '.b64';
+// Fallback: existing public favicon if provided asset is missing
 const fallbackBirdPath = path.join(projectRoot, 'public', 'vrelly-favicon.png');
 const outDirPublic = path.join(projectRoot, 'public');
 const outDirSrcAssets = path.join(projectRoot, 'src', 'assets');
@@ -31,17 +32,31 @@ const outDirSrcAssets = path.join(projectRoot, 'src', 'assets');
 async function ensureDirs() {
   await fs.promises.mkdir(outDirPublic, { recursive: true });
   await fs.promises.mkdir(outDirSrcAssets, { recursive: true });
-  await fs.promises.mkdir(path.join(outDirPublic, 'brand', 'sources'), { recursive: true });
+  await fs.promises.mkdir(sourcesDir, { recursive: true });
+}
+
+async function maybeDecodeBase64(srcPathB64, outPathPng) {
+  try {
+    await fs.promises.access(srcPathB64);
+  } catch {
+    return false;
+  }
+  const b64 = await fs.promises.readFile(srcPathB64, 'utf8');
+  const buf = Buffer.from(b64.trim(), 'base64');
+  await fs.promises.writeFile(outPathPng, buf);
+  return true;
 }
 
 async function loadBirdMark() {
   try {
-    let sourcePath = providedBirdPath;
-    try {
-      await fs.promises.access(providedBirdPath);
-    } catch {
-      sourcePath = fallbackBirdPath;
-    }
+    // Resolve the preferred bird source:
+    // 1) public/brand/sources/bird-mark-soft.png (or .png.b64 decoded)
+    // 2) fallback to existing public/vrelly-favicon.png
+    await maybeDecodeBase64(softBirdB64Path, softBirdPath);
+    const sourcePath = (await fs.promises
+      .access(softBirdPath)
+      .then(() => softBirdPath)
+      .catch(() => fallbackBirdPath));
     const buf = await sharp(sourcePath).trim().png().toBuffer();
     const meta = await sharp(buf).metadata();
     if (!meta.hasAlpha) {
@@ -133,26 +148,34 @@ async function buildWordmark(birdPng, targetHeight = 120) {
 async function main() {
   await ensureDirs();
   const birdPng = await loadBirdMark();
-  let providedBirdExists = false;
-  try { await fs.promises.access(providedBirdPath); providedBirdExists = true; } catch {}
+  let softBirdExists = false;
+  try {
+    await fs.promises.access(softBirdPath);
+    softBirdExists = true;
+  } catch {}
 
   // 1) Favicons and touch icons from the bird mark
-  const birdForIcons = providedBirdExists ? birdPng : await recolorToCyan(birdPng);
+  const birdForIcons = softBirdExists ? birdPng : await recolorToCyan(birdPng);
   await writeFavicons(birdForIcons);
   // Save sources into repo for reproducibility when provided
-  if (providedBirdExists) {
+  if (softBirdExists) {
     await sharp(birdPng).toFile(path.join(outDirPublic, 'brand', 'sources', 'bird-source.png'));
   }
 
   // 2) Wordmark: prefer provided single-cyan file; otherwise synthesize to match bird cyan
-  try {
-    await fs.promises.access(providedWordmarkPath);
-    const provided = await sharp(providedWordmarkPath).png().toBuffer();
+  await maybeDecodeBase64(softWordmarkB64Path, softWordmarkPath);
+  const hasSoftWordmark = await fs.promises
+    .access(softWordmarkPath)
+    .then(() => true)
+    .catch(() => false);
+
+  if (hasSoftWordmark) {
+    const provided = await sharp(softWordmarkPath).png().toBuffer();
     await sharp(provided).toFile(path.join(outDirSrcAssets, 'vrelly-logo.png'));
     await sharp(provided).resize({ height: 120, fit: 'inside' }).toFile(path.join(outDirPublic, 'og-mark.png'));
     await sharp(provided).toFile(path.join(outDirPublic, 'brand', 'sources', 'wordmark-source.png'));
-    console.log('Used provided wordmark from', providedWordmarkPath);
-  } catch {
+    console.log('Used provided soft wordmark from', softWordmarkPath);
+  } else {
     const wordmarkLarge = await buildWordmark(birdForIcons, 180);
     await sharp(wordmarkLarge).png().toFile(path.join(outDirSrcAssets, 'vrelly-logo.png'));
     const wordmarkForOg = await sharp(wordmarkLarge).resize({ height: 120, fit: 'inside' }).png().toBuffer();
