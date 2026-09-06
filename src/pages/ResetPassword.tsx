@@ -101,7 +101,7 @@ export default function ResetPassword() {
             <div className="flex justify-center">
               <img
                 src={vrellyLogo}
-                alt="Vrelly Data"
+                alt="Vrelly"
                 className="h-36 cursor-pointer"
                 onClick={() => navigate('/')}
               />
@@ -130,7 +130,7 @@ export default function ResetPassword() {
           <div className="flex justify-center">
             <img
               src={vrellyLogo}
-              alt="Vrelly Data"
+              alt="Vrelly"
               className="h-36 cursor-pointer"
               onClick={() => navigate('/')}
             />

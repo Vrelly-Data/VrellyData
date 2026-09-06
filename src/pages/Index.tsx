@@ -30,7 +30,7 @@ const Index = () => {
             <SidebarTrigger />
             <img 
               src={vrellyLogo} 
-              alt="Vrelly Data" 
+              alt="Vrelly" 
               className="h-[4.5rem] cursor-pointer" 
               onClick={() => navigate('/dashboard')}
             />

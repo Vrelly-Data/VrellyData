@@ -48,7 +48,7 @@ export function AppSidebar() {
           <div className={isCollapsed ? 'flex justify-center py-4' : 'px-3 py-4'}>
             <img
               src={vrellyLogo}
-              alt="Vrelly Data"
+              alt="Vrelly"
               className={`${isCollapsed ? 'h-24 w-24 object-contain' : 'h-36'} cursor-pointer`}
               onClick={() => navigate('/dashboard')}
             />

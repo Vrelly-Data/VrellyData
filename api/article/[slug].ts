@@ -59,7 +59,7 @@ function replaceOrInsert(html: string, pattern: RegExp, replacement: string, fal
 }
 
 function buildArticleJsonLd(resource: Resource, canonical: string): string {
-  const image = resource.cover_image_url || "https://www.vrelly.com/og-image.png?v=2";
+  const image = resource.cover_image_url || "https://www.vrelly.com/og-image.png?v=5";
   const payload: any = {
     "@context": "https://schema.org",
     "@type": "Article",
@@ -103,7 +103,7 @@ function updateHtmlWithSeo(
   const escTitle = escapeHtml(title);
   const escDesc = escapeHtml(description);
   const escCanonical = escapeHtml(canonical);
-  const image = ogImage || "https://www.vrelly.com/og-image.png?v=2";
+  const image = ogImage || "https://www.vrelly.com/og-image.png?v=5";
 
   html = replaceOrInsert(html, /<title>.*?<\/title>/is, `<title>${escTitle}</title>`, `<title>${escTitle}</title>`);
   html = replaceOrInsert(html, /<meta[^>]*name=["']description["'][^>]*>/i, `<meta name="description" content="${escDesc}" />`, `<meta name="description" content="${escDesc}" />`);
@@ -154,7 +154,7 @@ export default async function handler(req: any, res: any) {
   const description = toDescription(resource);
   const canonical = buildCanonical(resource.slug);
   const baseHtml = await baseResp.text();
-  const ogImage = resource.cover_image_url || "https://www.vrelly.com/og-image.png?v=2";
+  const ogImage = resource.cover_image_url || "https://www.vrelly.com/og-image.png?v=5";
   const jsonLd = buildArticleJsonLd(resource, canonical);
   const updatedHtml = updateHtmlWithSeo(baseHtml, {
     title,
