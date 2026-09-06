@@ -15,7 +15,7 @@ const NotFound = () => {
       <div className="text-center space-y-6">
         <img 
           src={vrellyLogo} 
-          alt="Vrelly Data" 
+          alt="Vrelly" 
           className="h-32 mx-auto cursor-pointer" 
           onClick={() => navigate('/')}
         />
