@@ -331,15 +331,20 @@ export function AgentAudience() {
                 <Label>Cadence</Label>
                 <Select
                   value={form.cadence}
-                  onValueChange={(v: 'manual' | 'daily' | 'weekly') => setForm({ ...form, cadence: v })}
+                  onValueChange={(v: 'manual' | 'daily' | 'weekly' | 'monthly') => setForm({ ...form, cadence: v })}
                 >
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="manual">Manual only</SelectItem>
+                    {/* Weekly is the recommended scheduled cadence; show it first among scheduled options. */}
+                    <SelectItem value="weekly">Weekly (recommended)</SelectItem>
                     <SelectItem value="daily">Daily</SelectItem>
-                    <SelectItem value="weekly">Weekly</SelectItem>
+                    <SelectItem value="monthly">Monthly</SelectItem>
                   </SelectContent>
                 </Select>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Audiences add people to campaigns weekly by default. Monthly remains optional.
+                </p>
               </div>
               <div>
                 <Label>Max per run</Label>
