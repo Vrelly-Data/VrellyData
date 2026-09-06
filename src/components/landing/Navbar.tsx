@@ -31,7 +31,7 @@ export const Navbar = () => {
           <img
             src={vrellyLogo}
             alt="Vrelly"
-            className="h-16 md:h-[6.75rem] w-auto shrink-0 cursor-pointer"
+            className="h-8 md:h-10 max-h-10 w-auto shrink-0 cursor-pointer"
             onClick={() => navigate('/')}
           />
 

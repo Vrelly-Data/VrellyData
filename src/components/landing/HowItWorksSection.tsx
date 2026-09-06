@@ -85,7 +85,9 @@ export const HowItWorksSection = () => {
 
   // Initialize visibleCount based on whether pinned behavior is active
   useEffect(() => {
-    setVisibleCount(pinnedEnabled ? 0 : steps.length);
+    // When pinned is enabled (md+), show the first step immediately so the
+    // section is never blank right below the heading.
+    setVisibleCount(pinnedEnabled ? 1 : steps.length);
   }, [pinnedEnabled]);
 
   // Scroll progress → visible step count (md+ only)
@@ -103,11 +105,11 @@ export const HowItWorksSection = () => {
         const totalScrollable = Math.max(rect.height - vh, 1);
         // progress 0..1 while the sticky is pinned
         const progressed = Math.min(Math.max(-rect.top, 0), totalScrollable) / totalScrollable;
-        // Reveal cumulatively: in first third show step 1, then 2, then 3
-        const count =
-          progressed <= 0
-            ? 0
-            : Math.min(steps.length, Math.max(1, Math.floor(progressed * steps.length) + 0));
+        // Reveal cumulatively: ensure step 1 is visible even at the very start.
+        const count = Math.min(
+          steps.length,
+          Math.max(1, Math.ceil(progressed * steps.length))
+        );
         setVisibleCount(count);
       });
     };
