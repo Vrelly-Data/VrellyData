@@ -356,6 +356,61 @@ Deno.serve(async (req) => {
       let eventsUpserted = 0;
       let inferenceWritten = 0;
 
+      // In-memory cache for GET /contacts/{id} within a single poll run
+      const contactCache = new Map<string, { emailLower: string | null; phoneE164: string | null; raw: any }>();
+      function extractContactFromPayload(payload: any): any | null {
+        // Accept multiple possible shapes:
+        // - { contacts: { contacts: [ { ... } ] } }
+        // - { contacts: { ...single contact... } }
+        // - { contact: { ... } }
+        // - { ...direct fields... }
+        try {
+          if (payload?.contact && typeof payload.contact === "object") return payload.contact;
+          const wrapper = payload?.contacts ?? null;
+          if (Array.isArray(wrapper?.contacts) && wrapper.contacts.length > 0) return wrapper.contacts[0];
+          if (wrapper && typeof wrapper === "object" && Object.keys(wrapper).length > 0) return wrapper;
+          if (payload && typeof payload === "object") return payload;
+        } catch { /* ignore */ }
+        return null;
+      }
+      function extractEmailFromContact(contact: any): string | null {
+        const val =
+          contact?.primary_email?.email_address ??
+          contact?.email_address ??
+          contact?.email ??
+          contact?.primaryEmail ??
+          null;
+        const s = typeof val === "string" ? val : String(val ?? "");
+        const t = s.trim().toLowerCase();
+        return t && t.includes("@") ? t : null;
+      }
+      function extractPhoneFromContact(contact: any): string | null {
+        const raw = contact?.primary_phone?.raw_phone ?? contact?.phone ?? contact?.primary_phone ?? contact?.primaryPhone ?? null;
+        return normalizePhoneE164(raw);
+      }
+      async function getContactEmailAndPhone(pbId: string): Promise<{ emailLower: string | null; phoneE164: string | null; raw: any }> {
+        const cached = contactCache.get(pbId);
+        if (cached) return cached;
+        let emailLower: string | null = null;
+        let phoneE164: string | null = null;
+        let raw: any = null;
+        try {
+          const data = await fetchJson(token, `/contacts/${encodeURIComponent(pbId)}`);
+          const contact = extractContactFromPayload(data);
+          if (contact) {
+            raw = contact;
+            emailLower = extractEmailFromContact(contact);
+            phoneE164 = extractPhoneFromContact(contact);
+          }
+        } catch (e) {
+          // Non-fatal — leave nulls; match-only behavior
+          console.warn(`[poll-phoneburner-calls] GET /contacts/${pbId} failed:`, e instanceof Error ? e.message : String(e));
+        }
+        const result = { emailLower, phoneE164, raw };
+        contactCache.set(pbId, result);
+        return result;
+      }
+
       for (const sid of sessionIds) {
         const detail = await fetchJson(token, `/dialsession/${encodeURIComponent(sid)}`);
         // Detail can be a wrapper or nested under dialsessions.dialsessions[].calls
@@ -428,6 +483,7 @@ Deno.serve(async (req) => {
           let personKey: string | null = null;
           // Capture PhoneBurner contact id if present on the call payload
           let pbContactId: string | null =
+            (c?.user_id != null ? String(c.user_id) : null) ?? // Treat user_id as PhoneBurner contact id (verified)
             (c?.contact_user_id != null ? String(c.contact_user_id) : null) ??
             (c?.contact_id != null ? String(c.contact_id) : null) ??
             (c?.pb_contact_id != null ? String(c.pb_contact_id) : null) ??
@@ -447,6 +503,36 @@ Deno.serve(async (req) => {
               .maybeSingle();
             if (typeof cRow?.email === "string" && cRow.email.includes("@")) {
               candidateEmailLower = cRow.email.toLowerCase();
+            }
+          }
+          // If still missing, fetch a single contact by id (match-only; no full crawl)
+          if (!candidateEmailLower && pbContactId) {
+            const { emailLower: fetchedEmailLower, phoneE164: fetchedPhoneE164, raw: fetchedRaw } =
+              await getContactEmailAndPhone(pbContactId);
+            if (fetchedEmailLower) {
+              candidateEmailLower = fetchedEmailLower;
+            }
+            // Optional: keep a lightweight local cache row if table is present in this project
+            try {
+              if (fetchedEmailLower || fetchedPhoneE164) {
+                await serviceClient
+                  .from("phoneburner_contacts")
+                  .upsert({
+                    integration_id: singleIntegrationId,
+                    team_id: teamId,
+                    pb_contact_id: pbContactId,
+                    email: fetchedEmailLower,
+                    raw_phone: null,
+                    phone_e164: fetchedPhoneE164,
+                    person_key: fetchedEmailLower ?? null,
+                    pb_updated_at: null,
+                    raw: fetchedRaw ?? {},
+                    updated_at: new Date().toISOString(),
+                  }, { onConflict: "integration_id,pb_contact_id" });
+              }
+            } catch (e) {
+              // Safe to ignore; optional cache only
+              console.warn("[poll-phoneburner-calls] optional phoneburner_contacts upsert failed:", e instanceof Error ? e.message : String(e));
             }
           }
           if (candidateEmailLower) {
