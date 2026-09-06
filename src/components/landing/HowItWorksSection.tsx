@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect } from 'react';
 import { RefreshCw, BarChart3, Rocket, Inbox, MessageSquare, Users } from 'lucide-react';
 import { useScrollAnimation } from '@/hooks/useScrollAnimation';
 import { usePrefersReducedMotion } from '@/hooks/usePrefersReducedMotion';
@@ -60,68 +60,12 @@ export const HowItWorksSection = () => {
   const headerVisible = reducedMotion ? true : headerVisibleRaw;
   const cardVisible = reducedMotion ? true : cardVisibleRaw;
 
-  // Pinned scroll track (md+): reveal steps 01 → 02 → 03 driven by scroll progress
-  const trackRef = useRef<HTMLDivElement | null>(null);
-  const [isMdUp, setIsMdUp] = useState(false);
-  const [visibleCount, setVisibleCount] = useState<number>(steps.length);
-
+  // Intentionally remove pinned/scroll-reveal behavior on md+ for reliability.
+  // Show all steps by default; individual cards still fade in when scrolled
+  // into view via their own observers (StepCard).
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const mq = window.matchMedia('(min-width: 768px)');
-    const onChange = () => setIsMdUp(mq.matches);
-    onChange();
-    if (mq.addEventListener) {
-      mq.addEventListener('change', onChange);
-      return () => mq.removeEventListener('change', onChange);
-    } else {
-      // @ts-ignore legacy
-      mq.addListener(onChange);
-      // @ts-ignore legacy
-      return () => mq.removeListener(onChange);
-    }
+    // no-op; preserves previous hook signature usage
   }, []);
-
-  const pinnedEnabled = isMdUp && !reducedMotion;
-
-  // Initialize visibleCount based on whether pinned behavior is active
-  useEffect(() => {
-    // When pinned is enabled (md+), show the first step immediately so the
-    // section is never blank right below the heading.
-    setVisibleCount(pinnedEnabled ? 1 : steps.length);
-  }, [pinnedEnabled]);
-
-  // Scroll progress → visible step count (md+ only)
-  useEffect(() => {
-    if (!pinnedEnabled) return;
-    const el = trackRef.current;
-    if (!el) return;
-    let rAf = 0;
-    const updateFromScroll = () => {
-      if (rAf) return;
-      rAf = window.requestAnimationFrame(() => {
-        rAf = 0;
-        const rect = el.getBoundingClientRect();
-        const vh = window.innerHeight || 1;
-        const totalScrollable = Math.max(rect.height - vh, 1);
-        // progress 0..1 while the sticky is pinned
-        const progressed = Math.min(Math.max(-rect.top, 0), totalScrollable) / totalScrollable;
-        // Reveal cumulatively: ensure step 1 is visible even at the very start.
-        const count = Math.min(
-          steps.length,
-          Math.max(1, Math.ceil(progressed * steps.length))
-        );
-        setVisibleCount(count);
-      });
-    };
-    updateFromScroll();
-    window.addEventListener('scroll', updateFromScroll, { passive: true });
-    window.addEventListener('resize', updateFromScroll);
-    return () => {
-      window.removeEventListener('scroll', updateFromScroll);
-      window.removeEventListener('resize', updateFromScroll);
-      if (rAf) cancelAnimationFrame(rAf);
-    };
-  }, [pinnedEnabled]);
 
   return (
     <section id="how-it-works" className="py-28 bg-white relative overflow-hidden">
@@ -137,37 +81,11 @@ export const HowItWorksSection = () => {
           </h2>
         </div>
 
-        {/* Mobile: stacked with per-step observers */}
-        <div className="grid grid-cols-1 gap-12 mb-20 md:hidden">
+        {/* Unified reliable layout: always show all three steps */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-12 mb-20">
           {steps.map((step) => (
             <StepCard key={step.number} step={step} />
           ))}
-        </div>
-
-        {/* md+: pinned track — scroll progress reveals 01 → 02 → 03 */}
-        <div ref={trackRef} className="hidden md:block relative mb-20" style={{ height: '240vh' }}>
-          <div className="sticky top-24">
-            <div className="grid grid-cols-3 gap-12">
-              {steps.map((step, index) => {
-                const isShown = index < visibleCount;
-                return (
-                  <div
-                    key={step.number}
-                    className={`text-center transition-all duration-500 ${
-                      isShown ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'
-                    }`}
-                  >
-                    <div className="text-6xl font-black text-[#2563eb]/10 mb-4">{step.number}</div>
-                    <div className="w-16 h-16 rounded-2xl bg-[#2563eb]/10 flex items-center justify-center mx-auto mb-5">
-                      <step.icon className="w-8 h-8 text-[#2563eb]" />
-                    </div>
-                    <h3 className="text-xl font-bold text-slate-900 mb-3">{step.title}</h3>
-                    <p className="text-slate-500 leading-relaxed max-w-sm mx-auto">{step.description}</p>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
         </div>
 
         {/* Mock UI card */}
