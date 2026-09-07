@@ -153,7 +153,7 @@ export default function Auth() {
               className="flex items-end gap-2 cursor-pointer select-none"
               aria-label="Vrelly"
             >
-              <img src="/og-mark.png" alt="" className="h-10 md:h-12 w-auto" />
+              <img src="/og-mark.png" alt="" className="h-8 md:h-10 w-auto" />
             </button>
           </div>
           <div className="space-y-2">

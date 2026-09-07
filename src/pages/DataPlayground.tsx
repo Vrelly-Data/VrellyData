@@ -22,7 +22,7 @@ export default function DataPlayground() {
             <img 
               src={vrellyLogo} 
               alt="Vrelly" 
-              className="h-[4.5rem] cursor-pointer" 
+              className="h-8 max-h-8 cursor-pointer" 
               onClick={() => navigate('/dashboard')}
             />
             <h1 className="text-lg font-semibold ml-4">Data Playground</h1>
