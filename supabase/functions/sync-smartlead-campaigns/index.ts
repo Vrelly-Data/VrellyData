@@ -298,6 +298,9 @@ Deno.serve(async (req) => {
     let failed = 0;
     let skippedAnalytics = 0;
     let analyticsKeysLogged = false;
+    // Track whether we enabled capture by default for any newly discovered
+    // LIVE campaigns during this run.
+    let anyNewLiveEnabled = false;
 
     // Existing rows, so a terminal campaign that already has stats can skip its
     // ~600ms /analytics call, and so is_linked survives the upsert below. One
@@ -346,6 +349,7 @@ Deno.serve(async (req) => {
       const name = (c.name as string | undefined) ?? "Unnamed Campaign";
       const rawStatus = (c.status as string | undefined) ?? null;
       const normalizedStatus = normalizeSmartleadStatus(rawStatus);
+      const existed = existingByExternalId.has(externalId);
 
       // Per-campaign analytics. Failures here do NOT abort the whole sync —
       // we still upsert the campaign with zeroed stats so the row appears in
@@ -499,20 +503,14 @@ Deno.serve(async (req) => {
             // is false, so the key must be sent explicitly rather than
             // omitted. Same contract as sync-reply-campaigns.
             is_linked: existingByExternalId.get(externalId)?.isLinked ?? true,
-            // Capture Scope enforcement point 1 of 4: a newly discovered
-            // campaign must NOT start capturing on its own. Existing rows keep
-            // whatever the operator chose; only genuinely new campaigns are
-            // affected, and they arrive OFF.
-            //
-            // This is the SourceCo failure in one line: 45 out-of-scope
-            // campaigns — four of them a different business's — were captured
-            // automatically because discovery implied consent. It no longer
-            // does. The campaign is still synced and still listed in Manage
-            // Campaigns; only capture is withheld until someone enables it.
-            //
-            // Note the default differs from is_linked directly above: is_linked
-            // is reporting scope and harmless when on, capture is not.
-            capture_enabled: existingByExternalId.get(externalId)?.captureEnabled ?? false,
+            // Capture default: new LIVE (ACTIVE) campaigns capture by default.
+            // Preserve existing rows exactly as-is. Non-live campaigns (paused,
+            // completed, draft, stopped, archived) remain OFF by default.
+            // This aligns the product expectation that live campaigns start
+            // feeding replies immediately without operator intervention.
+            capture_enabled:
+              existingByExternalId.get(externalId)?.captureEnabled ??
+              (normalizedStatus === "in_progress"),
             // last_synced_at column doesn't exist on synced_campaigns;
             // updated_at is bumped by the existing trigger on UPDATE.
           },
@@ -528,6 +526,11 @@ Deno.serve(async (req) => {
         continue;
       }
 
+      // If this was a NEW live campaign, we just default-enabled capture.
+      // Mark for webhook reconcile below so replies arrive.
+      if (!existed && normalizedStatus === "in_progress") {
+        anyNewLiveEnabled = true;
+      }
       synced++;
     }
 
@@ -552,6 +555,35 @@ Deno.serve(async (req) => {
       `[sync-smartlead-campaigns] Done. Integration ${integration.id}: synced=${synced}, failed=${failed}, ` +
         `skippedAnalytics=${skippedAnalytics}, total=${campaigns.length}`,
     );
+
+    // If this sync discovered any new live campaigns that we default-enabled,
+    // reconcile Smartlead webhooks so replies are delivered.
+    if (anyNewLiveEnabled) {
+      try {
+        const key = Deno.env.get("AGENT_API_KEY");
+        if (!key) {
+          console.warn("[sync-smartlead-campaigns] AGENT_API_KEY not set — skipping webhook reconcile");
+        } else {
+          const res = await fetch(
+            `${supabaseUrl}/functions/v1/setup-smartlead-webhook`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "x-agent-key": key },
+              body: JSON.stringify({
+                integrationId: integration.id,
+                statuses: ["in_progress"], // live only
+              }),
+            },
+          );
+          const text = await res.text();
+          console.log(
+            `[sync-smartlead-campaigns] webhook reconcile: ${res.status} ${text.slice(0, 160)}`,
+          );
+        }
+      } catch (e) {
+        console.warn("[sync-smartlead-campaigns] webhook reconcile error (non-fatal):", e);
+      }
+    }
 
     return new Response(
       JSON.stringify({
