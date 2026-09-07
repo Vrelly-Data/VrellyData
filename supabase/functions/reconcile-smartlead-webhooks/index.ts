@@ -57,6 +57,9 @@ Deno.serve(async (req) => {
     const statuses: string[] = Array.isArray((body as { statuses?: string[] }).statuses)
       ? (body as { statuses: string[] }).statuses
       : ["in_progress"];
+    const campaignIds: string[] = Array.isArray((body as { campaignIds?: string[] }).campaignIds)
+      ? (body as { campaignIds: string[] }).campaignIds.map(String)
+      : [];
     if (!integrationId) {
       return new Response(JSON.stringify({ error: "Missing integrationId" }), {
         status: 400,
@@ -100,7 +103,11 @@ Deno.serve(async (req) => {
         "Content-Type": "application/json",
         "x-agent-key": agentKey,
       },
-      body: JSON.stringify({ integrationId, statuses }),
+      body: JSON.stringify(
+        campaignIds.length > 0
+          ? { integrationId, campaignIds }
+          : { integrationId, statuses }
+      ),
     });
     const text = await res.text();
     const payload = (() => {

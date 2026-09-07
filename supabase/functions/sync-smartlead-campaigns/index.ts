@@ -180,6 +180,8 @@ Deno.serve(async (req) => {
     // === Body ===============================================================
     const body = await req.json().catch(() => ({}));
     integrationId = (body as { integrationId?: string }).integrationId;
+    // Optional: cron path can skip all /analytics calls to avoid wall-clock limits.
+    const skipAllAnalytics = (body as { skipAnalytics?: boolean }).skipAnalytics === true;
     if (!integrationId) {
       return new Response(
         JSON.stringify({ error: "Missing integrationId" }),
@@ -299,8 +301,9 @@ Deno.serve(async (req) => {
     let skippedAnalytics = 0;
     let analyticsKeysLogged = false;
     // Track whether we enabled capture by default for any newly discovered
-    // LIVE campaigns during this run.
+    // LIVE campaigns during this run; collect their ids for precise webhook reconcile.
     let anyNewLiveEnabled = false;
+    const newLiveEnabledIds: string[] = [];
 
     // Existing rows, so a terminal campaign that already has stats can skip its
     // ~600ms /analytics call, and so is_linked survives the upsert below. One
@@ -378,7 +381,7 @@ Deno.serve(async (req) => {
 
       let analytics: Record<string, unknown> = {};
       try {
-        if (skipAnalytics) throw { __skip: true };
+        if (skipAllAnalytics || skipAnalytics) throw { __skip: true };
         const aRes = await smartleadGet(
           `/campaigns/${encodeURIComponent(externalId)}/analytics`,
           apiKey,
@@ -530,6 +533,7 @@ Deno.serve(async (req) => {
       // Mark for webhook reconcile below so replies arrive.
       if (!existed && normalizedStatus === "in_progress") {
         anyNewLiveEnabled = true;
+        newLiveEnabledIds.push(externalId);
       }
       synced++;
     }
@@ -571,7 +575,7 @@ Deno.serve(async (req) => {
               headers: { "Content-Type": "application/json", "x-agent-key": key },
               body: JSON.stringify({
                 integrationId: integration.id,
-                statuses: ["in_progress"], // live only
+                campaignIds: newLiveEnabledIds, // precise allow-list
               }),
             },
           );

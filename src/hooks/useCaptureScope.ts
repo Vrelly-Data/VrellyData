@@ -133,7 +133,7 @@ export function useCaptureScope(integrationId: string | null, enabled = true) {
       if ((query.data?.platform ?? '').toLowerCase() === 'smartlead' && on.length > 0) {
         try {
           await supabase.functions.invoke('reconcile-smartlead-webhooks', {
-            body: { integrationId, statuses: ['in_progress'] },
+            body: { integrationId, campaignIds: on },
           });
         } catch (e) {
           // Non-fatal to the save; surface as a toast via onError/onSuccess below.
