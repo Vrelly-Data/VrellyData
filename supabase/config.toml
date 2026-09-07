@@ -171,3 +171,8 @@ verify_jwt = false
 # platform gateway will 401 before our code runs, hiding failures in cron logs.
 [functions.sync-calendly-events]
 verify_jwt = false
+
+# Public Calendly webhook receiver (no JWT). URL gated by optional ?secret and/or
+# per-integration routing token (?t=). Signature verification can be added later.
+[functions.calendly-webhook]
+verify_jwt = false
