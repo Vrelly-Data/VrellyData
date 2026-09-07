@@ -128,9 +128,7 @@ export function CaptureScopeDialog({
                 together and the shared label cannot be ambiguous. */}
             <DialogTitle>Manage Campaigns{platformLabel ? ` — ${platformLabel}` : ''}</DialogTitle>
             <DialogDescription>
-              Choose which campaigns Vrelly listens to. Replies from campaigns that are switched
-              off are not captured at all — no lead is created and no draft is written. This is
-              separate from Data Analysis reporting scope.
+              Choose which campaigns Vrelly listens to. Live campaigns capture by default; use these toggles to turn capture off. Replies from campaigns that are switched off are not captured at all — no lead is created and no draft is written. This is separate from Data Analysis reporting scope.
             </DialogDescription>
           </DialogHeader>
 
