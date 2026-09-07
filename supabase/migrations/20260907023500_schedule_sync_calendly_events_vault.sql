@@ -42,7 +42,7 @@ begin
      end
      limit 1
   )
-  select substring(command from $$url\\s*:=\\s*'(https?://[^']+)/functions/v1/$$)
+  select substring(command from $re$url\\s*:=\\s*'(https?://[^']+)/functions/v1/$re$)
     into base_url
     from src;
 
