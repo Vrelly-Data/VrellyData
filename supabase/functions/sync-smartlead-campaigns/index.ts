@@ -300,10 +300,8 @@ Deno.serve(async (req) => {
     let failed = 0;
     let skippedAnalytics = 0;
     let analyticsKeysLogged = false;
-    // Track whether we enabled capture by default for any newly discovered
-    // LIVE campaigns during this run; collect their ids for precise webhook reconcile.
-    let anyNewLiveEnabled = false;
-    const newLiveEnabledIds: string[] = [];
+    // Note: webhook reconcile is triggered separately when capture is explicitly
+    // enabled via Manage Campaigns save. Sync itself does not auto-enable.
 
     // Existing rows, so a terminal campaign that already has stats can skip its
     // ~600ms /analytics call, and so is_linked survives the upsert below. One
@@ -352,7 +350,6 @@ Deno.serve(async (req) => {
       const name = (c.name as string | undefined) ?? "Unnamed Campaign";
       const rawStatus = (c.status as string | undefined) ?? null;
       const normalizedStatus = normalizeSmartleadStatus(rawStatus);
-      const existed = existingByExternalId.has(externalId);
 
       // Per-campaign analytics. Failures here do NOT abort the whole sync —
       // we still upsert the campaign with zeroed stats so the row appears in
@@ -506,14 +503,11 @@ Deno.serve(async (req) => {
             // is false, so the key must be sent explicitly rather than
             // omitted. Same contract as sync-reply-campaigns.
             is_linked: existingByExternalId.get(externalId)?.isLinked ?? true,
-            // Capture default: new LIVE (ACTIVE) campaigns capture by default.
-            // Preserve existing rows exactly as-is. Non-live campaigns (paused,
-            // completed, draft, stopped, archived) remain OFF by default.
-            // This aligns the product expectation that live campaigns start
-            // feeding replies immediately without operator intervention.
+            // Discovery ≠ consent: new campaigns do NOT start capturing on their
+            // own. Preserve any existing row's operator toggle; only genuinely
+            // new rows default to OFF.
             capture_enabled:
-              existingByExternalId.get(externalId)?.captureEnabled ??
-              (normalizedStatus === "in_progress"),
+              existingByExternalId.get(externalId)?.captureEnabled ?? false,
             // last_synced_at column doesn't exist on synced_campaigns;
             // updated_at is bumped by the existing trigger on UPDATE.
           },
@@ -529,12 +523,6 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      // If this was a NEW live campaign, we just default-enabled capture.
-      // Mark for webhook reconcile below so replies arrive.
-      if (!existed && normalizedStatus === "in_progress") {
-        anyNewLiveEnabled = true;
-        newLiveEnabledIds.push(externalId);
-      }
       synced++;
     }
 
@@ -560,34 +548,8 @@ Deno.serve(async (req) => {
         `skippedAnalytics=${skippedAnalytics}, total=${campaigns.length}`,
     );
 
-    // If this sync discovered any new live campaigns that we default-enabled,
-    // reconcile Smartlead webhooks so replies are delivered.
-    if (anyNewLiveEnabled) {
-      try {
-        const key = Deno.env.get("AGENT_API_KEY");
-        if (!key) {
-          console.warn("[sync-smartlead-campaigns] AGENT_API_KEY not set — skipping webhook reconcile");
-        } else {
-          const res = await fetch(
-            `${supabaseUrl}/functions/v1/setup-smartlead-webhook`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json", "x-agent-key": key },
-              body: JSON.stringify({
-                integrationId: integration.id,
-                campaignIds: newLiveEnabledIds, // precise allow-list
-              }),
-            },
-          );
-          const text = await res.text();
-          console.log(
-            `[sync-smartlead-campaigns] webhook reconcile: ${res.status} ${text.slice(0, 160)}`,
-          );
-        }
-      } catch (e) {
-        console.warn("[sync-smartlead-campaigns] webhook reconcile error (non-fatal):", e);
-      }
-    }
+    // Note: webhook reconcile is handled when capture is explicitly enabled
+    // via Manage Campaigns Save (or separate admin flow), not implicitly here.
 
     return new Response(
       JSON.stringify({
