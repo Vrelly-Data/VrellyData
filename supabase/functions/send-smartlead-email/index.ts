@@ -256,7 +256,6 @@ Deno.serve(async (req) => {
     // with the same small race window as send-heyreach-message — acceptable
     // for a single-user send flow.
     const existingThread = Array.isArray(lead.reply_thread) ? lead.reply_thread : [];
-    const sentAt = new Date().toISOString();
     const newMessage = {
       role: "sender",
       content: String(message),
