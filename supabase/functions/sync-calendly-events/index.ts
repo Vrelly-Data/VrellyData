@@ -285,8 +285,9 @@ Deno.serve(async (req) => {
     // Internal multi-integration: iterate all Calendly outbound_integrations
     const { data: integrations, error: listErr } = await serviceClient
       .from("outbound_integrations")
-      .select("id, team_id, platform, api_key_encrypted")
-      .ilike("platform", "calendly");
+    .select("id, team_id, platform, api_key_encrypted")
+    .ilike("platform", "calendly")
+    .eq("is_active", true);
     if (listErr) throw new Error(`Failed to list Calendly integrations: ${listErr.message || String(listErr)}`);
 
     const results: Array<{ id: string; team_id: string; ok: boolean; error?: string; eventsUpserted?: number; inferenceWritten?: number }> = [];
