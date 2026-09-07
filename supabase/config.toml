@@ -166,3 +166,8 @@ verify_jwt = false
 
 [functions.add-to-smartlead-campaign]
 verify_jwt = false
+
+# Calendly sync — cron-invoked via x-agent-key (no JWT). Must be false or the
+# platform gateway will 401 before our code runs, hiding failures in cron logs.
+[functions.sync-calendly-events]
+verify_jwt = false
