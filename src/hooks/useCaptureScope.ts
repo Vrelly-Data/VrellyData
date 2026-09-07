@@ -129,6 +129,17 @@ export function useCaptureScope(integrationId: string | null, enabled = true) {
           .in('external_campaign_id', ids);
         if (error) throw error;
       }
+      // Smartlead: when enabling capture, reconcile webhooks so replies flow.
+      if ((query.data?.platform ?? '').toLowerCase() === 'smartlead' && on.length > 0) {
+        try {
+          await supabase.functions.invoke('reconcile-smartlead-webhooks', {
+            body: { integrationId, campaignIds: on },
+          });
+        } catch (e) {
+          // Non-fatal to the save; surface as a toast via onError/onSuccess below.
+          console.warn('Smartlead webhook reconcile error (non-fatal):', e);
+        }
+      }
       return { updated: changes.length };
     },
     onSuccess: ({ updated }) => {

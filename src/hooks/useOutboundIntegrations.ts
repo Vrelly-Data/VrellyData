@@ -183,9 +183,9 @@ export function useOutboundIntegrations() {
           }
         } else if (platform === 'smartlead') {
           // Smartlead post-add: campaign sync only. Webhook registration is
-          // configured manually by the user in the Smartlead dashboard
-          // (current model — no auto-register endpoint), so no equivalent of
-          // Reply.io's setup-reply-webhook step here.
+          // handled by setup-smartlead-webhook (x-agent-key path); we do not
+          // auto-register on connect. Operators can reconcile from Manage
+          // Campaigns Save or re-run setup-smartlead-webhook as needed.
           try {
             const { error } = await supabase.functions.invoke('sync-smartlead-campaigns', {
               body: { integrationId: data.id },

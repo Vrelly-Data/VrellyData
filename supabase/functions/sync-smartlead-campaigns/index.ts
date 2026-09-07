@@ -180,6 +180,8 @@ Deno.serve(async (req) => {
     // === Body ===============================================================
     const body = await req.json().catch(() => ({}));
     integrationId = (body as { integrationId?: string }).integrationId;
+    // Optional: cron path can skip all /analytics calls to avoid wall-clock limits.
+    const skipAllAnalytics = (body as { skipAnalytics?: boolean }).skipAnalytics === true;
     if (!integrationId) {
       return new Response(
         JSON.stringify({ error: "Missing integrationId" }),
@@ -298,6 +300,8 @@ Deno.serve(async (req) => {
     let failed = 0;
     let skippedAnalytics = 0;
     let analyticsKeysLogged = false;
+    // Note: webhook reconcile is triggered separately when capture is explicitly
+    // enabled via Manage Campaigns save. Sync itself does not auto-enable.
 
     // Existing rows, so a terminal campaign that already has stats can skip its
     // ~600ms /analytics call, and so is_linked survives the upsert below. One
@@ -374,7 +378,7 @@ Deno.serve(async (req) => {
 
       let analytics: Record<string, unknown> = {};
       try {
-        if (skipAnalytics) throw { __skip: true };
+        if (skipAllAnalytics || skipAnalytics) throw { __skip: true };
         const aRes = await smartleadGet(
           `/campaigns/${encodeURIComponent(externalId)}/analytics`,
           apiKey,
@@ -499,20 +503,11 @@ Deno.serve(async (req) => {
             // is false, so the key must be sent explicitly rather than
             // omitted. Same contract as sync-reply-campaigns.
             is_linked: existingByExternalId.get(externalId)?.isLinked ?? true,
-            // Capture Scope enforcement point 1 of 4: a newly discovered
-            // campaign must NOT start capturing on its own. Existing rows keep
-            // whatever the operator chose; only genuinely new campaigns are
-            // affected, and they arrive OFF.
-            //
-            // This is the SourceCo failure in one line: 45 out-of-scope
-            // campaigns — four of them a different business's — were captured
-            // automatically because discovery implied consent. It no longer
-            // does. The campaign is still synced and still listed in Manage
-            // Campaigns; only capture is withheld until someone enables it.
-            //
-            // Note the default differs from is_linked directly above: is_linked
-            // is reporting scope and harmless when on, capture is not.
-            capture_enabled: existingByExternalId.get(externalId)?.captureEnabled ?? false,
+            // Discovery ≠ consent: new campaigns do NOT start capturing on their
+            // own. Preserve any existing row's operator toggle; only genuinely
+            // new rows default to OFF.
+            capture_enabled:
+              existingByExternalId.get(externalId)?.captureEnabled ?? false,
             // last_synced_at column doesn't exist on synced_campaigns;
             // updated_at is bumped by the existing trigger on UPDATE.
           },
@@ -552,6 +547,9 @@ Deno.serve(async (req) => {
       `[sync-smartlead-campaigns] Done. Integration ${integration.id}: synced=${synced}, failed=${failed}, ` +
         `skippedAnalytics=${skippedAnalytics}, total=${campaigns.length}`,
     );
+
+    // Note: webhook reconcile is handled when capture is explicitly enabled
+    // via Manage Campaigns Save (or separate admin flow), not implicitly here.
 
     return new Response(
       JSON.stringify({

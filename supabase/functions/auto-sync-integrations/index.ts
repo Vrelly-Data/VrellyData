@@ -50,22 +50,20 @@ Deno.serve(async (req) => {
       throw new Error(`Failed to fetch integrations: ${intError.message}`);
     }
 
-    if (!integrations || integrations.length === 0) {
+    const haveReply = Array.isArray(integrations) && integrations.length > 0;
+    if (!haveReply) {
       console.log("No active Reply.io integrations found");
-      return new Response(JSON.stringify({ ...results, message: "No active integrations" }), {
-        headers: { "Content-Type": "application/json" },
-      });
+    } else {
+      console.log(`Found ${integrations.length} active Reply.io integrations`);
     }
-
-    console.log(`Found ${integrations.length} active integrations`);
 
     // Use service role key as Authorization header for sub-function calls
     // x-agent-key tells the sub-functions to use service role client (bypass RLS)
     const authHeader = `Bearer ${serviceRoleKey}`;
     const agentApiKey = Deno.env.get("AGENT_API_KEY") ?? "";
 
-    // 2. Process each integration
-    for (const integration of integrations) {
+    // 2. Process each Reply.io integration
+    for (const integration of integrations ?? []) {
       try {
         console.log(`Processing integration ${integration.id} (team: ${integration.team_id})`);
 
@@ -153,6 +151,49 @@ Deno.serve(async (req) => {
         results.errors.push(`Integration ${integration.id} failed: ${msg}`);
         console.error(`Integration ${integration.id} failed:`, integrationErr);
         // Continue to next integration
+      }
+    }
+
+    // 3. Also process Smartlead (campaigns only)
+    const { data: slIntegrations, error: slErr } = await supabase
+      .from("outbound_integrations")
+      .select("id, platform, team_id")
+      .eq("is_active", true)
+      .eq("platform", "smartlead");
+    if (slErr) {
+      results.errors.push(`Failed to fetch Smartlead integrations: ${slErr.message}`);
+      console.error("Failed to fetch Smartlead integrations:", slErr);
+    } else if (!slIntegrations || slIntegrations.length === 0) {
+      console.log("No active Smartlead integrations found");
+    } else {
+      console.log(`Found ${slIntegrations.length} active Smartlead integrations`);
+      for (const integ of slIntegrations) {
+        try {
+          console.log(`Processing Smartlead integration ${integ.id} (team: ${integ.team_id})`);
+          const res = await fetch(`${supabaseUrl}/functions/v1/sync-smartlead-campaigns`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": authHeader,
+              "x-agent-key": agentApiKey,
+            },
+            body: JSON.stringify({ integrationId: integ.id, skipAnalytics: true }),
+          });
+          if (!res.ok) {
+            const txt = await res.text();
+            results.errors.push(`Smartlead campaign sync failed for ${integ.id}: ${txt}`);
+            console.error(`Smartlead campaign sync failed for ${integ.id}: ${txt}`);
+            continue;
+          }
+          const data = await res.json();
+          const count = data?.synced ?? 0;
+          results.campaigns_synced += count;
+          console.log(`Smartlead campaigns synced for ${integ.id}: ${count}`);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          results.errors.push(`Smartlead integration ${integ.id} failed: ${msg}`);
+          console.error(`Smartlead integration ${integ.id} failed:`, e);
+        }
       }
     }
 
