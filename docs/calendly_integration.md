@@ -32,6 +32,25 @@ Edge Functions
 - `validate-calendly-key`: PAT validation (users/me).
 - `sync-calendly-events`: Polls `scheduled_events` + per-event `invitees`, normalizes status, matches to people by email, upserts into `calendly_events`, and best‑effort writes `inference_events (meeting_booked)` when matched.
 
+Webhook (instant)
+
+- Edge Function: `calendly-webhook` (public; JWT disabled).
+- Purpose: receive `invitee.created` (booked) and `invitee.canceled` events in real time. Writes into `public.calendly_events` with `source='webhook'` and best‑effort `inference_events(meeting_booked)` when matched to an existing person (email).
+- Registration (per Calendly connection / integration):
+  1) Choose the callback URL shape (either is accepted):
+     - Easiest: `https://<SUPABASE_URL>/functions/v1/calendly-webhook?integration_id=<OUTBOUND_INTEGRATIONS_ID>`
+     - Preferred when available: `https://<SUPABASE_URL>/functions/v1/calendly-webhook?t=<OUTBOUND_INTEGRATIONS.WEBHOOK_SECRET>`
+       - Use the per‑integration `webhook_secret` token as a routing key. If it’s empty, generate one and store it on the integration.
+  2) (Optional) Add a shared gate secret: append `&secret=<CALENDLY_WEBHOOK_SECRET>`, and set `CALENDLY_WEBHOOK_SECRET` in the Edge Function environment. Requests without the correct secret will be 401.
+  3) Subscribe to events: `invitee.created` and `invitee.canceled` (Calendly sometimes uses `invitee_canceled` — both are accepted).
+- Deploy notes:
+  - Ensure `supabase/config.toml` contains:
+    - `[functions.calendly-webhook]\nverify_jwt = false`
+  - Deploy functions, then register webhooks in Calendly’s Webhooks UI or API with your chosen URL (prod and dev projects should point to their respective Supabase `.../functions/v1/calendly-webhook` endpoints).
+- Security:
+  - Endpoint requires no JWT. Use the optional `?secret=` gate and/or the per‑integration token `?t=` to prevent cross‑tenant routing.
+  - Calendly’s signature header can be added later; today we rely on the URL gate + routing token.
+
 Testing steps
 
 1) Settings → Integrations → Add Integration → Calendly → paste a valid PAT → Test Connection → Connect.
