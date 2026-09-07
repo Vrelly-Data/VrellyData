@@ -303,7 +303,7 @@ export default function AdminInference() {
             <img
               src={vrellyLogo}
               alt="Vrelly"
-              className="h-[4.5rem] cursor-pointer"
+              className="h-8 max-h-8 cursor-pointer"
               onClick={() => navigate('/')}
             />
             <h1 className="text-lg font-semibold ml-4">Inference Events (Admin)</h1>
