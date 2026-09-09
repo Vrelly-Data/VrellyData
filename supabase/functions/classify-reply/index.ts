@@ -66,6 +66,28 @@ async function sha256Hex(input: string): Promise<string> {
     .join('');
 }
 
+// Lightweight extraction of "concrete paths" a prospect may provide in their
+// latest message. These are explicit next-steps we should prefer and confirm
+// (e.g. "email HR@company.com", phone numbers, or links).
+function extractProspectPaths(text: string): {
+  emails: string[];
+  urls: string[];
+  phones: string[];
+} {
+  const safe = String(text ?? '');
+  const emailRe = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
+  const urlRe = /https?:\/\/[^\s)]+/gi;
+  // Very loose phone detector: sequences of 7+ digits optionally separated by
+  // spaces, dashes, dots, or parentheses, with optional leading '+'.
+  const phoneRe = /(?:\+?\d[\s().-]?){7,}\d/gi;
+  const uniq = (arr: string[]) => Array.from(new Set(arr.map((s) => s.trim()))).filter(Boolean);
+  return {
+    emails: uniq((safe.match(emailRe) ?? []) as string[]),
+    urls: uniq((safe.match(urlRe) ?? []) as string[]),
+    phones: uniq((safe.match(phoneRe) ?? []) as string[]),
+  };
+}
+
 // One Anthropic call returning parsed JSON. Does fetch + parse, and on a parse
 // failure makes ONE retry (re-prompting with the bad output + a corrective
 // user turn). Returns { json, retried, usage, ms } or THROWS on HTTP error /
@@ -697,7 +719,7 @@ Analyze the prospect's latest reply together with the conversation so far, then 
     "seniority": one of "exec", "mid", "ic", "unknown",
     "buying_role": one of "decision_maker", "influencer", "end_user", "unknown",
     "matched_persona": the EXACT title of the best-fit persona above, or null,
-    "suggested_angle": "one sentence — the specific angle to take with this person"
+    "suggested_angle": "one sentence — the specific angle to take with this person, grounded in what they actually wrote. If they provided a concrete next step (like an email/phone/link to use), the angle must be to acknowledge and follow that path first — never contradict it."
   }
 }
 
@@ -705,7 +727,7 @@ Classification rules:
 - 'interested' = any genuine buying signal (wants to talk, asks about booking, positive engagement).
 - 'needs_more_info' = engaged but asking a question before committing.
 - 'not_interested' = a real no. If it's a soft no with a reason, set is_objection true.
-- 'referral' = pointing you to someone else.
+- 'referral' = pointing you to someone else OR providing a specific handoff path (e.g., "email HR@...", "talk to Sarah in IT", "use this calendar link").
 - 'out_of_office' / 'bounce' = auto-replies / delivery failures.
 - 'unknown' = genuinely unclear.
 
@@ -865,6 +887,13 @@ ${line('Communication style: ', effCommStyle)}
 ${avoid_phrases && avoid_phrases.length > 0 ? 'Never say or reference: ' + avoid_phrases.join(', ') : ''}
 ${sample_message ? 'Writing style example (match this tone exactly):\n' + sample_message : ''}
 
+## Grounding Rules (MUST FOLLOW — highest priority)
+1) Start by explicitly acknowledging the exact substance of the prospect's latest message. Reference the specific thing they said (e.g., "Thanks — I'll email HR@Company.com now.").
+2) If they provided a concrete path (emails, phone numbers, a calendar link, or "contact X/department Y"), follow that path and CONFIRM you're doing it. Do not ask for a different referral or new department when they already gave one.
+3) Never use cold-intro phrasing in a reply ("thanks for connecting", "nice to meet you", self-introductions). Continue the existing conversation naturally.
+4) Persona, Suggested angle, templates, and campaign intelligence are guidance only. They MUST NOT override or contradict the latest message.
+5) Keep it concise (2–4 sentences), warm, and human.
+
 ## Resources to Reference
 ${line('Calendar booking link: ', calendar_link)}
 ${case_studies || ''}
@@ -887,6 +916,16 @@ ${line('First contacted in: ', leadLastCampaignName)}
 ${priorOutreachSection}
 ${prospectRead?.suggested_angle ? 'Suggested angle: ' + prospectRead.suggested_angle : ''}
 ${personaSection ? '\n' + personaSection : ''}
+
+## Concrete next step(s) the prospect provided
+${(() => {
+  const paths = extractProspectPaths(processed_reply_text);
+  const bullets: string[] = [];
+  if (paths.emails.length) bullets.push(`- Email address(es): ${paths.emails.join(', ')}`);
+  if (paths.phones.length) bullets.push(`- Phone number(s): ${paths.phones.join(', ')}`);
+  if (paths.urls.length) bullets.push(`- Link(s): ${paths.urls.join(', ')}`);
+  return bullets.length ? bullets.join('\n') + '\n\nFollow these EXACTLY — confirm you're taking the path they offered before any sales tactics.' : 'None detected.';
+})()}
 
 ${stageSection}
 ${intentSection ? '\n' + intentSection : ''}
