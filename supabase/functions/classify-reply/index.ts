@@ -719,7 +719,7 @@ Analyze the prospect's latest reply together with the conversation so far, then 
     "seniority": one of "exec", "mid", "ic", "unknown",
     "buying_role": one of "decision_maker", "influencer", "end_user", "unknown",
     "matched_persona": the EXACT title of the best-fit persona above, or null,
-    "suggested_angle": "one sentence — the specific angle to take with this person, grounded in what they actually wrote. If they provided a concrete next step (like an email/phone/link to use), the angle must be to acknowledge and follow that path first — never contradict it."
+    "suggested_angle": "one sentence — the specific angle to take with this person. This is THIRD-PRIORITY guidance: it must be grounded in what they actually wrote (1) and in the conversation so far (2). If they provided a concrete next step (email/phone/link), the angle is to acknowledge and follow that path — never contradict (1) or (2)."
   }
 }
 
@@ -887,12 +887,11 @@ ${line('Communication style: ', effCommStyle)}
 ${avoid_phrases && avoid_phrases.length > 0 ? 'Never say or reference: ' + avoid_phrases.join(', ') : ''}
 ${sample_message ? 'Writing style example (match this tone exactly):\n' + sample_message : ''}
 
-## Grounding Rules (MUST FOLLOW — highest priority)
-1) Start by explicitly acknowledging the exact substance of the prospect's latest message. Reference the specific thing they said (e.g., "Thanks — I'll email HR@Company.com now.").
-2) If they provided a concrete path (emails, phone numbers, a calendar link, or "contact X/department Y"), follow that path and CONFIRM you're doing it. Do not ask for a different referral or new department when they already gave one.
-3) Never use cold-intro phrasing in a reply ("thanks for connecting", "nice to meet you", self-introductions). Continue the existing conversation naturally.
-4) Persona, Suggested angle, templates, and campaign intelligence are guidance only. They MUST NOT override or contradict the latest message.
-5) Keep it concise (2–4 sentences), warm, and human.
+## Grounding Rules (RANKED — follow IN THIS ORDER)
+1) Respond to the latest prospect message FIRST AND FOREMOST. Acknowledge/answer exactly what they said. If they gave a concrete path (email/phone/link or \"talk to X/department Y\"), confirm you will follow that path and prefer it over inventing a different referral.
+2) Then continue the conversation coherently using the FULL thread context (prior outbound and any prior replies). Avoid contradiction or repetition; do not re-introduce yourself or open like a cold outreach.
+3) Then apply persona, suggested_angle, sales guidelines, templates, and campaign intelligence — only as a THIRD BEAT. They are guidance and must never override (1) or (2).
+Keep it concise (2–4 sentences), warm, and human.
 
 ## Resources to Reference
 ${line('Calendar booking link: ', calendar_link)}
