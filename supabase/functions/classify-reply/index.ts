@@ -923,7 +923,7 @@ ${(() => {
   if (paths.emails.length) bullets.push(`- Email address(es): ${paths.emails.join(', ')}`);
   if (paths.phones.length) bullets.push(`- Phone number(s): ${paths.phones.join(', ')}`);
   if (paths.urls.length) bullets.push(`- Link(s): ${paths.urls.join(', ')}`);
-  return bullets.length ? bullets.join('\n') + '\n\nFollow these EXACTLY — confirm you're taking the path they offered before any sales tactics.' : 'None detected.';
+  return bullets.length ? bullets.join('\n') + "\n\nFollow these EXACTLY — confirm you're taking the path they offered before any sales tactics." : 'None detected.';
 })()}
 
 ${stageSection}
