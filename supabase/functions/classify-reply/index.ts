@@ -2,6 +2,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { htmlToText } from '../_shared/html-to-text.ts';
 import { preprocessEmailReply } from '../_shared/reply-text.ts';
 import { computeCopyFingerprint } from '../_shared/copy-fingerprint.ts';
+import { isPlaceholderReplyText, pickLastProspectContentFromThread } from './utils.ts';
 
 console.log('classify-reply starting');
 
@@ -233,22 +234,65 @@ Deno.serve(async (req) => {
     // JWT auth overrides any user_id in body; service-level uses body user_id
     const user_id = authUserId || bodyUserId;
 
-    if (!reply_text || !agent_context || !channel || !user_id) {
-      // Per-field diagnostic so future debugging doesn't require source diving.
-      // Falsy includes null, undefined, AND empty string for the same reason
-      // empty replies (e.g. Smartlead test fixtures whose body is purely a
-      // Zendesk marker) trip this branch.
+    // Validate core scaffolding — agent context, channel, and user identity are required.
+    if (!agent_context || !channel || !user_id) {
       const missing = {
-        reply_text: !reply_text
-          ? (reply_text === '' ? 'empty_string' : 'missing')
-          : 'ok',
+        reply_text: reply_text == null ? 'missing' : 'present_or_empty',
         agent_context: !agent_context ? 'missing' : 'ok',
         channel: !channel ? 'missing' : 'ok',
         user_id: !user_id ? 'missing' : 'ok',
       };
-      console.warn('[classify-reply] 400: missing/empty required fields', missing);
+      console.warn('[classify-reply] 400: missing required scaffolding', missing);
       return new Response(JSON.stringify({ error: 'Missing required fields', missing }), {
         status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // Create Supabase client with service role key (needed for fallbacks below)
+    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+
+    // Resolve the most reliable inbound reply text:
+    // 1) Prefer the provided reply_text when it's not a known placeholder
+    // 2) Else, take the last prospect message from thread_history
+    // 3) Else, look up the DB row (reply_thread → last prospect message → last_reply_text)
+    // 4) If still nothing usable, fail closed (SAFE_FALLBACK)
+    const providedText = typeof reply_text === 'string' ? reply_text : '';
+    const providedLooksEmpty = !providedText.trim() || isPlaceholderReplyText(providedText, channel);
+    let effectiveReplyText: string | null = providedLooksEmpty ? null : providedText;
+    if (!effectiveReplyText) {
+      const fromThread = pickLastProspectContentFromThread(thread_history, { channel });
+      if (fromThread && fromThread.trim() && !isPlaceholderReplyText(fromThread, channel)) {
+        effectiveReplyText = fromThread;
+      }
+    }
+    if (!effectiveReplyText && lead_id) {
+      try {
+        const { data: row } = await supabase
+          .from('agent_leads')
+          .select('reply_thread, last_reply_text')
+          .eq('id', lead_id)
+          .eq('user_id', user_id)
+          .maybeSingle();
+        const fromDbThread = pickLastProspectContentFromThread(row?.reply_thread, { channel });
+        if (fromDbThread && fromDbThread.trim() && !isPlaceholderReplyText(fromDbThread, channel)) {
+          effectiveReplyText = fromDbThread;
+        } else if (
+          typeof row?.last_reply_text === 'string' &&
+          row.last_reply_text.trim() &&
+          !isPlaceholderReplyText(row.last_reply_text, channel)
+        ) {
+          effectiveReplyText = row.last_reply_text;
+        }
+      } catch (e) {
+        console.warn('[classify-reply] DB fallback fetch failed (continuing):', e);
+      }
+    }
+
+    if (!effectiveReplyText || !effectiveReplyText.trim()) {
+      console.warn('[classify-reply] No usable reply text after fallbacks — skipping classification');
+      return new Response(JSON.stringify(SAFE_FALLBACK), {
+        status: 200,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
@@ -259,10 +303,10 @@ Deno.serve(async (req) => {
     // and skip this entirely. If preprocessing collapses the message to
     // <20 chars (bug-class: misidentified marker eating the whole reply),
     // fall back to the original so we always classify *something*.
-    let processed_reply_text: string = reply_text;
+    let processed_reply_text: string = effectiveReplyText;
     if (channel === 'email') {
-      const before = reply_text.length;
-      const cleaned = preprocessEmailReply(reply_text);
+      const before = effectiveReplyText.length;
+      const cleaned = preprocessEmailReply(effectiveReplyText);
       console.log(
         `[classify-reply v2] email preprocessing: ${before} chars → ${cleaned.length} chars`,
       );
@@ -274,9 +318,6 @@ Deno.serve(async (req) => {
         processed_reply_text = cleaned;
       }
     }
-
-    // Create Supabase client with service role key
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
     // Suppression: a lead tagged 'opted_out' must never be drafted for again.
     // Early-return BEFORE any LLM work so we don't engage an opted-out contact.
