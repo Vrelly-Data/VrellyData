@@ -175,3 +175,6 @@ verify_jwt = false
 # platform gateway will 401 before our code runs, hiding failures in cron logs.
 [functions.sync-calendly-events]
 verify_jwt = false
+
+[functions.calendly-webhook]
+verify_jwt = false
