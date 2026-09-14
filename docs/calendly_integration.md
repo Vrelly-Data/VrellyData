@@ -10,6 +10,20 @@ Secrets / configuration
 - No platform secrets required for the MVP PAT flow.
 - Operator provides their Calendly PAT in-app. Validation is via `validate-calendly-key` (GET `https://api.calendly.com/users/me`).
 
+Webhook (primary) — v1
+
+- Edge Function: `calendly-webhook` (JWT disabled; optional HMAC verify)
+- Register URL per integration (Settings → Integrations → Calendly card shows a copyable URL):
+  - `https://<project>.supabase.co/functions/v1/calendly-webhook?integrationId=<INTEGRATION_ID>`
+- Events: `invitee.created`, `invitee.canceled`
+- Signature: optional HMAC-SHA256 of raw body using `CALENDLY_WEBHOOK_SECRET` (set in Edge env)
+- Behavior:
+  - Upserts into `public.calendly_events` (additive; onConflict: integration_id,invitee_uuid)
+  - MATCH-ONLY: sets person_key by existing `people` email (team-scoped)
+  - Sends notification email on booking creation when `outbound_integrations.calendly_notify_emails` is non-empty
+  - Idempotent notifications via `calendly_events.notified_at`
+  - Never writes `agent_leads` or `reply_thread` — UI merges bookings into the thread like `dialer_events`
+
 Optional OAuth (not required for MVP)
 
 - If you prefer OAuth over PAT, provision the following on the `sync-calendly-events` and future callback function:
@@ -26,11 +40,15 @@ Tables / migrations
 - `public.calendly_events` (new): additive booking outcomes, RLS mirrors `dialer_events`/`inference_events`.
   - Columns: integration_id, team_id, person_key (nullable), email, scheduled_event_uuid, invitee_uuid, event_name, status ('scheduled'|'canceled'|'completed'), start_time, end_time, source ('poll'|'webhook'|'callback'), raw.
   - Unique: (integration_id, invitee_uuid). Indexed on (team_id, start_time), person_key, email, integration_id.
+  - Added: `notified_at timestamptz` — idempotency for booking-created emails
+- `public.outbound_integrations`
+  - Added: `calendly_notify_emails text[] not null default '{}'`
 
 Edge Functions
 
 - `validate-calendly-key`: PAT validation (users/me).
 - `sync-calendly-events`: Polls `scheduled_events` + per-event `invitees`, normalizes status, matches to people by email, upserts into `calendly_events`, and best‑effort writes `inference_events (meeting_booked)` when matched.
+- `calendly-webhook`: Real-time booking persistence + notify (created). Poll remains backup.
 
 Testing steps
 
@@ -38,9 +56,11 @@ Testing steps
 2) After connect, an initial backfill runs (90 days). You can also click the Sync button on the Calendly row to re-run.
 3) Open a person/lead with the same email as a recent booking. The Booking event appears in the conversation timeline.
 4) Verify `public.calendly_events` rows exist for your team; `status` transitions to `completed` after `end_time` passes.
+5) Configure Notify emails on the Calendly card; trigger a booking — a single notification is sent (webhook-first), and `notified_at` is set on the row. If the webhook is missed, the next poll sends the notification once.
 
 Notes
 
 - Additive only: no writes to `agent_leads` or user inbox; `people` is never created or mutated by this path.
 - Inference moat: only `meeting_booked` is written today; mapping for cancellations/no‑shows can be added later if useful.
+- Unmatched bookings: always persisted. Visible under Settings → Integrations → Calendly → “View unmatched bookings”. Attach by email to an existing `people` row; no fake conversations are created.
 
