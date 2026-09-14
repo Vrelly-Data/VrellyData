@@ -14,6 +14,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { CalendlyUnmatchedDialog } from './CalendlyUnmatchedDialog';
 
 type ConnectPlatform = 'heyreach' | 'reply.io' | 'phoneburner' | 'smartlead';
 
@@ -28,6 +29,7 @@ const platformLabel = (p: string) => PLATFORM_LABEL[p?.toLowerCase()] ?? p;
 const isHeyReach = (p: string) => p?.toLowerCase() === 'heyreach';
 const isReplyIo = (p: string) => ['reply.io', 'replyio'].includes(p?.toLowerCase());
 const isPhoneBurner = (p: string) => p?.toLowerCase() === 'phoneburner';
+const isCalendly = (p: string) => p?.toLowerCase() === 'calendly';
 
 export function ExternalProjectsSettings() {
   // Unified "Add Integration" dialog — reuse the Playground dialog with
@@ -35,7 +37,7 @@ export function ExternalProjectsSettings() {
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [initialPlatform, setInitialPlatform] = useState<ConnectPlatform | ''>('');
 
-  const { integrations, deleteIntegration, syncIntegration } =
+  const { integrations, deleteIntegration, syncIntegration, updateCalendlyNotifyEmails } =
     useOutboundIntegrations();
 
   // Render ALL of the team's integrations regardless of platform — RLS already
@@ -50,6 +52,8 @@ export function ExternalProjectsSettings() {
 
   const webhookUrl = (integrationId: string) =>
     `https://lgnvolndyftsbcjprmic.supabase.co/functions/v1/heyreach-webhook/${integrationId}`;
+  const calendlyWebhookUrl = (integrationId: string) =>
+    `https://lgnvolndyftsbcjprmic.supabase.co/functions/v1/calendly-webhook?integrationId=${integrationId}`;
 
   return (
     <div className="space-y-6">
@@ -254,6 +258,67 @@ export function ExternalProjectsSettings() {
                     <p className="text-xs text-muted-foreground">
                       Activity syncs via polling — no webhook setup required.
                     </p>
+                  </div>
+                ) : isCalendly(integration.platform) ? (
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <Label className="text-xs text-muted-foreground">Webhook URL (paste into Calendly)</Label>
+                      <div className="flex gap-2">
+                        <Input
+                          readOnly
+                          value={calendlyWebhookUrl(integration.id)}
+                          className="text-xs font-mono bg-muted"
+                          onClick={(e) => (e.target as HTMLInputElement).select()}
+                        />
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            navigator.clipboard.writeText(calendlyWebhookUrl(integration.id));
+                            toast.success('Copied webhook URL');
+                          }}
+                        >
+                          Copy
+                        </Button>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Register this URL in Calendly for <code className="font-mono">invitee.created</code> and <code className="font-mono">invitee.canceled</code> events.
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-xs text-muted-foreground">Notify emails (comma-separated)</Label>
+                      <div className="flex gap-2">
+                        <Input
+                          defaultValue={(integration.calendly_notify_emails || []).join(', ')}
+                          placeholder="ops@example.com, sales@example.com"
+                          className="text-xs"
+                          onBlur={(e) => {
+                            const raw = e.target.value || '';
+                            const emails = raw.split(',').map(s => s.trim()).filter(Boolean);
+                            updateCalendlyNotifyEmails.mutate({ id: integration.id, emails });
+                          }}
+                        />
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={(e) => {
+                            const input = (e.currentTarget.parentElement?.querySelector('input') as HTMLInputElement | null);
+                            const raw = input?.value || '';
+                            const emails = raw.split(',').map(s => s.trim()).filter(Boolean);
+                            updateCalendlyNotifyEmails.mutate({ id: integration.id, emails });
+                          }}
+                          disabled={updateCalendlyNotifyEmails.isPending}
+                        >
+                          Save
+                        </Button>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        When a booking is created via webhook, we&apos;ll email these addresses. Leave blank to disable.
+                      </p>
+                    </div>
+                    <div>
+                      <CalendlyUnmatchedDialog integrationId={integration.id} />
+                    </div>
                   </div>
                 ) : null}
               </CardContent>
