@@ -11,6 +11,7 @@
 // Window: last N days (default 30). All times are ISO UTC.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { sendTransactionalEmail } from "../_shared/email.ts";
 
 const allowedOrigins = [
   Deno.env.get("ALLOWED_ORIGIN") || "https://vrelly.com",
@@ -122,6 +123,16 @@ Deno.serve(async (req) => {
     async function syncSingleIntegration(opts: { id: string; team_id: string; token: string; lookbackDays: number }) {
       const { id: integId, team_id: teamId, token, lookbackDays } = opts;
 
+      // Fetch notify emails for this integration (webhook/poll idempotency uses calendly_events.notified_at)
+      const { data: intRow } = await serviceClient
+        .from("outbound_integrations")
+        .select("calendly_notify_emails")
+        .eq("id", integId)
+        .maybeSingle();
+      const notifyTo: string[] = Array.isArray((intRow as any)?.calendly_notify_emails)
+        ? ((intRow as any).calendly_notify_emails as string[]).filter((s) => typeof s === "string" && s.includes("@"))
+        : [];
+
       // Resolve user URI for scoping; fallback to org-only when present
       let userUri: string | null = null;
       try {
@@ -220,10 +231,50 @@ Deno.serve(async (req) => {
               raw: { event: ev, invitee: inv },
               updated_at: new Date().toISOString(),
             };
-            const { error: upErr } = await serviceClient
+            const { data: upRows, error: upErr } = await serviceClient
               .from("calendly_events")
-              .upsert(row, { onConflict: "integration_id,invitee_uuid" });
+              .upsert(row, { onConflict: "integration_id,invitee_uuid" })
+              .select("id, notified_at, email, person_key, event_name, start_time, status")
+              .limit(1);
             if (!upErr) eventsUpserted++;
+
+            // Send notification on CREATED only and only once (idempotent by notified_at)
+            const justUpserted = Array.isArray(upRows) && upRows.length > 0 ? upRows[0] as any : null;
+            if (justUpserted && justUpserted.status === "scheduled" && !justUpserted.notified_at && notifyTo.length > 0) {
+              const startIso = justUpserted.start_time ? new Date(justUpserted.start_time).toISOString() : null;
+              const startLocal = justUpserted.start_time
+                ? new Date(justUpserted.start_time).toLocaleString()
+                : "TBD";
+              const subject = `New Calendly booking: ${justUpserted.event_name || "Meeting"}${emailLower ? ` · ${emailLower}` : ""}`;
+              const matchedNote = justUpserted.person_key ? `Matched to person_key: ${justUpserted.person_key}` : "Unmatched (no person found)";
+              const html =
+                `<p><strong>New Calendly booking</strong></p>
+                 <ul>
+                   <li>Invitee: ${String(inv?.name ?? "-")} &lt;${emailLower || "-"}&gt;</li>
+                   <li>Event: ${justUpserted.event_name || "-"}</li>
+                   <li>When: ${startLocal}${startIso ? ` <span style="color:#999">(${startIso})</span>` : ""}</li>
+                   <li>${matchedNote}</li>
+                 </ul>`;
+              const text =
+                `New Calendly booking\n` +
+                `Invitee: ${String(inv?.name ?? "-")} <${emailLower || "-"}>\n` +
+                `Event: ${justUpserted.event_name || "-"}\n` +
+                `When: ${startLocal}${startIso ? ` (${startIso})` : ""}\n` +
+                `${matchedNote}\n`;
+              const sent = await sendTransactionalEmail({
+                to: notifyTo,
+                subject,
+                html,
+                text,
+                tags: [{ name: "integration", value: "calendly" }],
+              });
+              if (sent) {
+                await serviceClient
+                  .from("calendly_events")
+                  .update({ notified_at: new Date().toISOString() })
+                  .eq("id", justUpserted.id);
+              }
+            }
 
             // Best-effort inference write for scheduled bookings
             if (status === "scheduled" && personKey) {
