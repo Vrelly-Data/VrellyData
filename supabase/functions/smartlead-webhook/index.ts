@@ -51,6 +51,8 @@ import {
 import { htmlToText } from "../_shared/html-to-text.ts";
 import { cleanReplyPreview } from "../_shared/reply-text.ts";
 import { detectLanguageCode } from "../_shared/language.ts";
+import { sanitizeLinkedinUrlForStorage } from "../_shared/normalize.ts";
+import { upsertAgentLeadWithLinkedinRecovery } from "../_shared/agent-leads.ts";
 
 const allowedOrigins = [
   Deno.env.get("ALLOWED_ORIGIN") || "https://vrelly.com",
@@ -566,22 +568,27 @@ Deno.serve(async (req) => {
     if (gotEnrichment) {
       leadRow.job_title = enrichedJobTitle ?? existingLead?.job_title ?? null;
       leadRow.company = enrichedCompany ?? existingLead?.company ?? null;
-      leadRow.linkedin_url = enrichedLinkedin ?? existingLead?.linkedin_url ?? null;
+      // Normalize linkedin_url so placeholders like '' / '0' never collide
+      // on the (user_id, linkedin_url) unique index.
+      const liForStorage =
+        sanitizeLinkedinUrlForStorage(enrichedLinkedin ?? existingLead?.linkedin_url ?? null);
+      leadRow.linkedin_url = liForStorage;
     }
 
-    const { data: upsertedLead, error: upsertError } = await supabase
-      .from("agent_leads")
-      .upsert(leadRow, { onConflict: "user_id,email_address" })
-      .select("id")
-      .single();
+    const { data: upsertedLead, error: upsertError } =
+      await upsertAgentLeadWithLinkedinRecovery<{ id: string }>(
+        supabase as any,
+        leadRow,
+        "user_id,email_address",
+      );
 
     if (upsertError) {
       console.error("[smartlead-webhook v2] agent_leads upsert error:", upsertError);
-      // 200 so Smartlead doesn't retry; we've logged for investigation.
-      return new Response(
-        JSON.stringify({ success: false, error: "upsert_failed", eventType }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-      );
+      // Non-2xx so Smartlead retries when persistence fails.
+      return new Response(JSON.stringify({ success: false, error: "upsert_failed", eventType }), {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     console.log(
@@ -744,7 +751,7 @@ Deno.serve(async (req) => {
                     agent_config_id: agentConfig.id,
                     person_key: personKey,
                     email: emailForKey ? emailForKey.trim().toLowerCase() : null,
-                    linkedin_url: enrichedLinkedin ?? null,
+                    linkedin_url: sanitizeLinkedinUrlForStorage(enrichedLinkedin ?? null),
                     full_name: fullName || null,
                     job_title: (enrichedJobTitle ?? existingLead?.job_title) || null,
                     company_name: (enrichedCompany ?? existingLead?.company) || null,
@@ -790,7 +797,7 @@ Deno.serve(async (req) => {
                     team_id: integration.team_id,
                     person_key: personKey,
                     email: emailForKey ? emailForKey.trim().toLowerCase() : null,
-                    linkedin_url: enrichedLinkedin ?? null,
+                    linkedin_url: sanitizeLinkedinUrlForStorage(enrichedLinkedin ?? null),
                     full_name: fullName || null,
                     job_title: (enrichedJobTitle ?? existingLead?.job_title) || null,
                     company_name: (enrichedCompany ?? existingLead?.company) || null,
