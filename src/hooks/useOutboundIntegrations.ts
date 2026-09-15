@@ -17,6 +17,7 @@ export interface OutboundIntegration {
   webhook_status?: string | null;
   webhook_subscription_id?: string | null;
   links_initialized?: boolean;
+  calendly_notify_emails?: string[] | null;
 }
 
 export function useOutboundIntegrations() {
@@ -93,7 +94,7 @@ export function useOutboundIntegrations() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('outbound_integrations')
-        .select('id, team_id, platform, name, is_active, sync_status, sync_error, last_synced_at, created_at, updated_at, reply_team_id, webhook_status, webhook_subscription_id, links_initialized')
+        .select('id, team_id, platform, name, is_active, sync_status, sync_error, last_synced_at, created_at, updated_at, reply_team_id, webhook_status, webhook_subscription_id, links_initialized, calendly_notify_emails')
         .order('created_at', { ascending: false });
 
       if (error) throw error;
@@ -350,6 +351,27 @@ export function useOutboundIntegrations() {
     },
   });
 
+  const updateCalendlyNotifyEmails = useMutation({
+    mutationFn: async ({ id, emails }: { id: string; emails: string[] }) => {
+      const clean = emails
+        .map((s) => (s || '').trim().toLowerCase())
+        .filter((s) => s.includes('@'));
+      const { error } = await supabase
+        .from('outbound_integrations')
+        .update({ calendly_notify_emails: clean, updated_at: new Date().toISOString() })
+        .eq('id', id);
+      if (error) throw error;
+      return { id, calendly_notify_emails: clean };
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['outbound-integrations'] });
+      toast.success('Calendly notification emails saved');
+    },
+    onError: (error) => {
+      toast.error(`Failed to save emails: ${error.message}`);
+    },
+  });
+
   const syncIntegration = useMutation({
     mutationFn: async (integrationId: string) => {
       // Optimistically update status
@@ -568,5 +590,6 @@ export function useOutboundIntegrations() {
     resetSyncStatus,
     linkAllCampaigns,
     startContactsSync,
+    updateCalendlyNotifyEmails,
   };
 }
