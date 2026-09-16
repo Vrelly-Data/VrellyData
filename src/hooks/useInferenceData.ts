@@ -101,7 +101,8 @@ export function useInferenceEvents(filters: InferenceFilters) {
     queryFn: async (): Promise<InferenceEvent[]> => {
       // fetch minimal columns needed for aggregations and timeline
       let query = supabase
-        .from('inference_events' as any)
+        // Prefer enriched view which coalesces industry from people when available
+        .from('inference_events_enriched' as any)
         .select(
           [
             'id',

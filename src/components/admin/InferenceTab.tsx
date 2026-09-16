@@ -289,12 +289,19 @@ function InsightRatesPanel({
   rows: ReturnType<typeof computeRatesByDimension>;
   kind: 'reply' | 'interested';
 }) {
-  const top10 = rows.slice(0, 10);
+  const DENOM_THRESHOLD = 10; // hide/gray small samples
+  const denomFor = (r: typeof rows[number]) => (kind === 'reply' ? r.sent : r.classified);
+  // Never include buckets with zero denominator (avoid divide-by-zero semantics)
+  const nonZero = rows.filter((r) => denomFor(r) > 0);
+  const top10 = nonZero.slice(0, 10);
   const data: Record<string, number> = {};
+  const weak: string[] = [];
   for (const r of top10) {
-    data[`${r.key}${r.channel !== 'all' ? ` (${r.channel})` : ''}`] = (kind === 'reply' ? r.replyRate : r.interestedRate) * 100;
+    const name = `${r.key}${r.channel !== 'all' ? ` (${r.channel})` : ''}`;
+    data[name] = (kind === 'reply' ? r.replyRate : r.interestedRate) * 100;
+    if (denomFor(r) < DENOM_THRESHOLD) weak.push(name);
   }
-  return <BarChartComponent title={title} data={data} yAxisLabel="% rate" />;
+  return <BarChartComponent title={title} data={data} yAxisLabel="% rate" weakNames={weak} />;
 }
 
 function CopyPerformanceTable({

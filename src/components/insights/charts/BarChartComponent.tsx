@@ -8,6 +8,8 @@ interface BarChartComponentProps {
   xAxisLabel?: string;
   yAxisLabel?: string;
   othersBreakdown?: Array<{ name: string; count: number; percentage: number }>;
+  /** Names that should appear visually de-emphasized due to low sample size */
+  weakNames?: string[];
 }
 
 const COLORS = [
@@ -19,11 +21,12 @@ const COLORS = [
   'hsl(var(--chart-6))',
 ];
 
-export function BarChartComponent({ title, data, xAxisLabel, yAxisLabel, othersBreakdown }: BarChartComponentProps) {
+export function BarChartComponent({ title, data, xAxisLabel, yAxisLabel, othersBreakdown, weakNames }: BarChartComponentProps) {
+  const weak = new Set(weakNames ?? []);
   const chartData = Object.entries(data).map(([name, value], index) => ({ 
     name, 
     value,
-    fill: COLORS[index % COLORS.length]
+    fill: weak.has(name) ? 'hsl(var(--muted-foreground))' : COLORS[index % COLORS.length]
   }));
 
   const CustomTooltip = ({ active, payload }: TooltipProps<number, string>) => {
@@ -58,17 +61,32 @@ export function BarChartComponent({ title, data, xAxisLabel, yAxisLabel, othersB
     );
   };
 
+  // Custom rotated tick to avoid first-letter clipping in some browsers
+  const CustomizedTick = (props: any) => {
+    const { x, y, payload } = props;
+    return (
+      <g transform={`translate(${x},${y})`}>
+        <text x={0} y={0} dy={12} dx={-4} textAnchor="end" fill="currentColor" fontSize={11}>
+          {String(payload?.value ?? '')}
+        </text>
+      </g>
+    );
+  };
+
   const content = (
     <ResponsiveContainer width="100%" height={400}>
-      <BarChart data={chartData}>
+      <BarChart
+        data={chartData}
+        margin={{ left: 16, right: 16, bottom: 24, top: 8 }}
+      >
         <CartesianGrid strokeDasharray="3 3" />
         <XAxis 
           dataKey="name" 
-          angle={-45}
-          textAnchor="end"
-          height={80}
+          angle={-40}
+          height={84}
           interval={0}
-          tick={{ fontSize: 11 }}
+          tick={<CustomizedTick />}
+          tickMargin={12}
         />
         <YAxis label={{ value: yAxisLabel, angle: -90, position: 'insideLeft' }} />
         <Tooltip content={<CustomTooltip />} />
