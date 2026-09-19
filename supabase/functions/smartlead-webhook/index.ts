@@ -79,6 +79,68 @@ const SKIPPABLE_EVENTS = new Set([
   "LEAD_CATEGORY_UPDATED",
 ]);
 
+// ── Smartlead custom_fields firmographic extractor ───────────────────────────
+// Accepts the raw `custom_fields` object from Smartlead's lead object. Keys are
+// user-defined and vary in casing/spaces; match case-insensitively across common
+// aliases. Returns only non-empty strings; blank/whitespace/"0" collapse to undefined.
+function extractSmartleadFirmographics(customFields: unknown): {
+  job_title?: string;
+  city?: string;
+  state?: string;
+  country?: string;
+  industry?: string;
+  company_size?: string;
+  phone?: string;
+  company_phone?: string;
+} {
+  const result: Record<string, string | undefined> = {};
+  const norm = (v: unknown): string | undefined => {
+    const s = typeof v === "string" ? v : String(v ?? "");
+    const t = s.trim();
+    if (!t || t === "0") return undefined;
+    return t;
+  };
+  const nkey = (k: string) =>
+    k.trim().toLowerCase().replace(/\s+/g, " ").replace(/[_-]+/g, " ").trim();
+  const setFirst = (field: string, v: unknown) => {
+    if (result[field] === undefined) result[field] = norm(v);
+  };
+  if (customFields && typeof customFields === "object") {
+    for (const [rawK, rawV] of Object.entries(customFields as Record<string, unknown>)) {
+      const k = nkey(rawK);
+      // Job title
+      if (["title", "job title", "job_title"].includes(k)) setFirst("job_title", rawV);
+      // Location (prefer company-level labels if supplied in custom fields)
+      if (["city", "location", "company city", "hq city"].includes(k)) setFirst("city", rawV);
+      if (["state", "region", "province", "company state", "hq state"].includes(k)) setFirst("state", rawV);
+      if (["country", "company country", "hq country"].includes(k)) setFirst("country", rawV);
+      // Industry and size
+      if (["industry", "vertical", "sector", "company industry"].includes(k)) setFirst("industry", rawV);
+      if (
+        ["company size", "company_size", "employees", "employee count", "headcount", "employee range", "company headcount"].includes(
+          k,
+        )
+      )
+        setFirst("company_size", rawV);
+      // Person phone (direct)
+      if (["phone", "mobile", "phone number", "cell", "cell phone"].includes(k)) setFirst("phone", rawV);
+      // Company phone
+      if (["company phone", "company_phone", "hq phone", "company phone number", "switchboard"].includes(k))
+        setFirst("company_phone", rawV);
+    }
+  }
+  return result as {
+    job_title?: string;
+    city?: string;
+    state?: string;
+    country?: string;
+    industry?: string;
+    company_size?: string;
+    phone?: string;
+    company_phone?: string;
+  };
+}
+
 Deno.serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
 
@@ -471,6 +533,13 @@ Deno.serve(async (req) => {
     let enrichedCompany: string | null = null;
     let enrichedLinkedin: string | null = null;
     let enrichedJobTitle: string | null = null;
+    let enrichedIndustry: string | null = null;
+    let enrichedCompanySize: string | null = null;
+    let enrichedCity: string | null = null;
+    let enrichedState: string | null = null;
+    let enrichedCountry: string | null = null;
+    let enrichedPersonPhone: string | null = null;
+    let enrichedCompanyPhone: string | null = null;
 
     const { data: existingLead } = await supabase
       .from("agent_leads")
@@ -514,16 +583,31 @@ Deno.serve(async (req) => {
             | {
                 company_name?: string | null;
                 linkedin_profile?: string | null;
-                custom_fields?: { job_title?: string | null } | null;
+                phone_number?: string | null;
+                custom_fields?: Record<string, unknown> | null;
               }
             | null
             | undefined;
           enrichedCompany = lead?.company_name ?? null;
           enrichedLinkedin = lead?.linkedin_profile ?? null;
-          enrichedJobTitle = lead?.custom_fields?.job_title ?? null;
+          // Extract firmographics from custom_fields when present
+          const fx = extractSmartleadFirmographics(lead?.custom_fields ?? {});
+          enrichedJobTitle = fx.job_title ?? null;
+          enrichedIndustry = fx.industry ?? null;
+          enrichedCompanySize = fx.company_size ?? null;
+          enrichedCity = fx.city ?? null;
+          enrichedState = fx.state ?? null;
+          enrichedCountry = fx.country ?? null;
+          // Phone precedence: explicit lead.phone_number first, else custom field value
+          enrichedPersonPhone = (lead?.phone_number && lead.phone_number.trim()) ? lead.phone_number.trim() : fx.phone ?? null;
+          enrichedCompanyPhone = fx.company_phone ?? null;
           gotEnrichment = true;
           console.log(
-            `[smartlead-webhook v2] Enriched email=${email} (company=${enrichedCompany ? "y" : "n"}, title=${enrichedJobTitle ? "y" : "n"}, linkedin=${enrichedLinkedin ? "y" : "n"})`,
+            `[smartlead-webhook v2] Enriched email=${email} ` +
+            `(company=${enrichedCompany ? "y" : "n"}, title=${enrichedJobTitle ? "y" : "n"}, ` +
+            `linkedin=${enrichedLinkedin ? "y" : "n"}, industry=${enrichedIndustry ? "y" : "n"}, ` +
+            `size=${enrichedCompanySize ? "y" : "n"}, city=${enrichedCity ? "y" : "n"}, ` +
+            `phone=${enrichedPersonPhone ? "y" : "n"}, company_phone=${enrichedCompanyPhone ? "y" : "n"})`,
           );
         }
       } catch (enrichErr) {
@@ -755,6 +839,12 @@ Deno.serve(async (req) => {
                     full_name: fullName || null,
                     job_title: (enrichedJobTitle ?? existingLead?.job_title) || null,
                     company_name: (enrichedCompany ?? existingLead?.company) || null,
+                    industry: enrichedIndustry ?? null,
+                    city: enrichedCity ?? null,
+                    state: enrichedState ?? null,
+                    country: enrichedCountry ?? null,
+                    company_size: enrichedCompanySize ?? null,
+                    company_phone: enrichedCompanyPhone ?? null,
                     channel: "email",
                     campaign_external_id: smartleadCampaignId || null,
                     campaign_name: lastCampaignName || null,
@@ -799,13 +889,16 @@ Deno.serve(async (req) => {
                     email: emailForKey ? emailForKey.trim().toLowerCase() : null,
                     linkedin_url: sanitizeLinkedinUrlForStorage(enrichedLinkedin ?? null),
                     full_name: fullName || null,
-                    job_title: (enrichedJobTitle ?? existingLead?.job_title) || null,
-                    company_name: (enrichedCompany ?? existingLead?.company) || null,
-                    industry: null,
-                    city: null,
-                    state: null,
-                    country: null,
-                    company_size: null,
+                    // Coalesce/write-only: include ONLY non-empty values to avoid overwriting good stored data with null/blank.
+                    ...(enrichedJobTitle ? { job_title: enrichedJobTitle } : {}),
+                    ...(enrichedCompany ? { company_name: enrichedCompany } : {}),
+                    ...(enrichedIndustry ? { industry: enrichedIndustry } : {}),
+                    ...(enrichedCity ? { city: enrichedCity } : {}),
+                    ...(enrichedState ? { state: enrichedState } : {}),
+                    ...(enrichedCountry ? { country: enrichedCountry } : {}),
+                    ...(enrichedCompanySize ? { company_size: enrichedCompanySize } : {}),
+                    ...(enrichedCompanyPhone ? { company_phone: enrichedCompanyPhone } : {}),
+                    ...(enrichedPersonPhone ? { phone: enrichedPersonPhone } : {}),
                   } as any,
                   { onConflict: "team_id,person_key" }
                 )

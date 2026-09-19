@@ -30,6 +30,7 @@
 //   ]
 // }
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { sanitizeLinkedinUrlForStorage } from "../_shared/normalize.ts";
 
 const allowedOrigins = [
   Deno.env.get("ALLOWED_ORIGIN") || "https://vrelly.com",
@@ -69,7 +70,7 @@ type SmartleadLeadEnvelope = {
       first_name?: string | null;
       last_name?: string | null;
       company_name?: string | null;
-      custom_fields?: unknown;
+      custom_fields?: Record<string, unknown> | null;
       [k: string]: unknown;
     } | null;
     [k: string]: unknown;
@@ -227,6 +228,30 @@ Deno.serve(async (req) => {
           const records: Array<Record<string, unknown>> = [];
           for (const row of data) {
             const lead = row?.lead ?? null;
+            // Extract firmographics from custom_fields (keys vary per account; match common aliases case-insensitively)
+            const cf = (lead?.custom_fields && typeof lead.custom_fields === "object") ? (lead.custom_fields as Record<string, unknown>) : {};
+            const norm = (v: unknown): string | null => {
+              const s = typeof v === "string" ? v : String(v ?? "");
+              const t = s.trim();
+              return t && t !== "0" ? t : null;
+            };
+            const nkey = (k: string) => k.trim().toLowerCase().replace(/\s+/g, " ").replace(/[_-]+/g, " ").trim();
+            const getFirst = (keys: string[]): string | null => {
+              const aliases = keys.map(nkey);
+              for (const [rk, rv] of Object.entries(cf)) {
+                if (aliases.includes(nkey(rk))) {
+                  const v = norm(rv);
+                  if (v) return v;
+                }
+              }
+              return null;
+            };
+            const jobTitle = getFirst(["job title", "job_title", "title"]);
+            const industry = getFirst(["industry", "company industry", "vertical", "sector"]);
+            const companySize = getFirst(["company size", "company_size", "employees", "employee count", "headcount", "employee range"]);
+            const city = getFirst(["company city", "hq city", "city", "location"]);
+            const state = getFirst(["company state", "hq state", "state", "region", "province"]);
+            const country = getFirst(["company country", "hq country", "country"]);
             const email = (typeof lead?.email === "string" ? lead!.email.trim().toLowerCase() : "") || "";
             if (!email) {
               skippedNoEmail++;
@@ -242,7 +267,16 @@ Deno.serve(async (req) => {
               last_name: typeof lead?.last_name === "string" && lead.last_name.trim() ? lead.last_name.trim() : null,
               company: typeof lead?.company_name === "string" && lead.company_name.trim() ? lead.company_name.trim() : null,
               phone: typeof lead?.phone_number === "string" && lead.phone_number.trim() ? lead.phone_number.trim() : null,
-              linkedin_url: typeof lead?.linkedin_profile === "string" && lead.linkedin_profile.trim() ? lead.linkedin_profile.trim() : null,
+              linkedin_url: sanitizeLinkedinUrlForStorage(
+                typeof lead?.linkedin_profile === "string" ? lead.linkedin_profile : null,
+              ),
+              job_title: jobTitle,
+              industry,
+              company_size: companySize,
+              city,
+              state,
+              country,
+              custom_fields: cf || {},
             });
           }
 
