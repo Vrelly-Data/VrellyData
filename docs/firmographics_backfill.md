@@ -30,3 +30,4 @@ Notes
 - People upserts are strictly additive: fields are written only when a non-empty source value exists; no field is ever nulled by this function.
 - Messaging/classification flows (`reply-webhook`, `classify-reply`, `send-agent-reply`) are untouched per spec.
 
+<!-- prod-deploy-trigger: firmographics edge functions 2026-09-19 PT -->
