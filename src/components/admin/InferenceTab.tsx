@@ -13,7 +13,7 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { format } from 'date-fns';
-import { CalendarIcon, Sparkles, Filter, Users, BarChart as BarChartIcon } from 'lucide-react';
+import { CalendarIcon, Sparkles, Filter, Users, BarChart as BarChartIcon, Loader2 } from 'lucide-react';
 import {
   InferenceEvent,
   InferenceFilters,
@@ -28,6 +28,7 @@ import {
 import { BarChartComponent } from '@/components/insights/charts/BarChartComponentEnhanced';
 import { SummaryCard } from '@/components/insights/charts/SummaryCard';
 import { Progress } from '@/components/ui/progress';
+import { ChartWithToggle } from '@/components/insights/charts/ChartWithToggle';
 
 export function InferenceTab() {
   // Filters
@@ -51,12 +52,11 @@ export function InferenceTab() {
       teamIds: teamId !== 'all' ? [teamId] : undefined,
       organizationIds: orgId !== 'all' ? [orgId] : undefined,
       channels,
-      intents: intent !== 'all' ? [intent] : undefined,
       eventTypes,
       dateFrom: dateFrom ? dateFrom.toISOString() : undefined,
       dateTo: dateTo ? dateTo.toISOString() : undefined,
     }),
-    [teamId, orgId, channels, intent, eventTypes, dateFrom, dateTo]
+    [teamId, orgId, channels, eventTypes, dateFrom, dateTo]
   );
 
   const { data: eventsResp, isLoading, error } = useInferenceEvents(filters);
@@ -84,6 +84,145 @@ export function InferenceTab() {
       ? `Replies can exceed sends when replies occur to sends outside the selected date range. Capped at 100%.`
       : undefined;
 
+  // New hierarchy metrics (mirror AdminInference)
+  function groupBy<T, K extends string | number>(rows: T[], getKey: (r: T) => K | null | undefined): Record<string, T[]> {
+    return rows.reduce<Record<string, T[]>>((acc, r) => {
+      const k = getKey(r);
+      if (!k && k !== 0) return acc;
+      const key = String(k);
+      (acc[key] ||= []).push(r);
+      return acc;
+    }, {});
+  }
+  function topN(map: Record<string, number>, n: number): Record<string, number> {
+    const entries = Object.entries(map).filter(([k]) => {
+      const key = String(k || '').trim();
+      const lower = key.toLowerCase();
+      return !!key && lower !== 'unknown' && key !== '(unknown)' && key !== 'null' && key !== 'undefined';
+    });
+    entries.sort((a, b) => b[1] - a[1]);
+    return Object.fromEntries(entries.slice(0, n));
+  }
+  const uniqueContacts = useMemo(() => new Set(events.map((r) => r.person_key).filter(Boolean)).size, [events]);
+  const replyRows = useMemo(() => events.filter((r) => r.event_type === 'replied'), [events]);
+  const classifiedRows = useMemo(() => events.filter((r) => r.event_type === 'classified'), [events]);
+  const replyPeopleAll = useMemo(() => {
+    const s = new Set<string>();
+    for (const r of replyRows) if (r.person_key) s.add(r.person_key);
+    return s;
+  }, [replyRows]);
+  const replyPeopleEmail = useMemo(() => {
+    const s = new Set<string>();
+    for (const r of replyRows) if (r.person_key && r.channel === 'email') s.add(r.person_key);
+    return s;
+  }, [replyRows]);
+  const replyPeopleLinkedIn = useMemo(() => {
+    const s = new Set<string>();
+    for (const r of replyRows) if (r.person_key && r.channel === 'linkedin') s.add(r.person_key);
+    return s;
+  }, [replyRows]);
+  const intentOrder: NonNullable<InferenceEvent['intent']>[] = [
+    'interested',
+    'not_interested',
+    'referral',
+    'out_of_office',
+    'needs_more_info',
+    'bounce',
+    'unknown',
+  ];
+  const intentComposition = useMemo(() => {
+    const byPersonBestIntent = new Map<string, string>();
+    const classByPerson = groupBy(
+      classifiedRows.slice().sort((a, b) => (a.occurred_at && b.occurred_at ? (a.occurred_at < b.occurred_at ? 1 : -1) : 0)),
+      (r) => r.person_key || '',
+    );
+    for (const r of replyRows) {
+      const pk = r.person_key || '';
+      if (!pk) continue;
+      const classList = classByPerson[pk] || [];
+      const chosen =
+        classList.find((c) => c.intent && c.intent !== 'unknown')?.intent ||
+        (r.intent && r.intent !== 'unknown' ? r.intent : 'unknown');
+      byPersonBestIntent.set(pk, chosen || 'unknown');
+    }
+    const counts: Record<string, number> = Object.fromEntries(intentOrder.map((k) => [k, 0]));
+    for (const i of byPersonBestIntent.values()) counts[i] = (counts[i] || 0) + 1;
+    return counts;
+  }, [replyRows, classifiedRows]);
+  const withinIntentPeople = useMemo(() => {
+    const result = new Set<string>();
+    if (intent === 'all') {
+      for (const r of replyRows) if (r.person_key) result.add(r.person_key);
+      return result;
+    }
+    const classByPerson = groupBy(
+      classifiedRows.slice().sort((a, b) => (a.occurred_at && b.occurred_at ? (a.occurred_at < b.occurred_at ? 1 : -1) : 0)),
+      (r) => r.person_key || '',
+    );
+    for (const r of replyRows) {
+      const pk = r.person_key || '';
+      if (!pk) continue;
+      const classList = classByPerson[pk] || [];
+      const chosen =
+        classList.find((c) => c.intent && c.intent !== 'unknown')?.intent ||
+        (r.intent && r.intent !== 'unknown' ? r.intent : 'unknown');
+      if (chosen === intent) result.add(pk);
+    }
+    return result;
+  }, [replyRows, classifiedRows, intent]);
+  function rankBreakdownForPeople(
+    peopleSet: Set<string>,
+    dim: 'job_title' | 'industry' | 'company_size' | 'city_state',
+    topK = 10,
+  ): Record<string, number> {
+    const personToBucket = new Map<string, string>();
+    for (const r of events) {
+      const pk = (r.person_key || '').trim();
+      if (!pk || !peopleSet.has(pk) || personToBucket.has(pk)) continue;
+      let key = '';
+      if (dim === 'city_state') {
+        const city = (r.city || '').trim();
+        const state = (r.state || '').trim();
+        key = [city, state].filter(Boolean).join(', ');
+      } else {
+        key = String((r as any)[dim] || '').trim();
+      }
+      if (!key) continue;
+      personToBucket.set(pk, key);
+    }
+    const counts: Record<string, number> = {};
+    for (const key of personToBucket.values()) counts[key] = (counts[key] || 0) + 1;
+    return topN(counts, topK);
+  }
+  function fillRateForPeople(peopleSet: Set<string>, field: 'job_title' | 'industry' | 'company_size' | 'city_state'): number {
+    const seen = new Set<string>();
+    let withValue = 0;
+    for (const r of events) {
+      const pk = r.person_key || '';
+      if (!peopleSet.has(pk) || seen.has(pk)) continue;
+      seen.add(pk);
+      let has = false;
+      if (field === 'city_state') {
+        has = !!((r.city || '').trim() || (r.state || '').trim());
+      } else {
+        has = !!String((r as any)[field] || '').trim();
+      }
+      if (has) withValue += 1;
+    }
+    const denom = peopleSet.size || 1;
+    return (withValue / denom) * 100;
+  }
+  const breakdownJobTitle = useMemo(() => rankBreakdownForPeople(withinIntentPeople, 'job_title', 12), [withinIntentPeople, events]);
+  const breakdownIndustry = useMemo(() => rankBreakdownForPeople(withinIntentPeople, 'industry', 12), [withinIntentPeople, events]);
+  const breakdownCompanySize = useMemo(
+    () => rankBreakdownForPeople(withinIntentPeople, 'company_size', 12),
+    [withinIntentPeople, events],
+  );
+  const breakdownGeo = useMemo(() => rankBreakdownForPeople(withinIntentPeople, 'city_state', 12), [withinIntentPeople, events]);
+  const fillJobTitle = useMemo(() => fillRateForPeople(withinIntentPeople, 'job_title'), [withinIntentPeople, events]);
+  const fillIndustry = useMemo(() => fillRateForPeople(withinIntentPeople, 'industry'), [withinIntentPeople, events]);
+  const fillCompanySize = useMemo(() => fillRateForPeople(withinIntentPeople, 'company_size'), [withinIntentPeople, events]);
+  const fillGeo = useMemo(() => fillRateForPeople(withinIntentPeople, 'city_state'), [withinIntentPeople, events]);
   // Person timeline
   const [personKeyQuery, setPersonKeyQuery] = useState('');
   const [timelinePersonKey, setTimelinePersonKey] = useState<string | null>(null);
@@ -146,7 +285,7 @@ export function InferenceTab() {
             </ToggleGroup>
           </div>
           <div>
-            <Label>Intent</Label>
+            <Label>Within intent</Label>
             <Select value={intent} onValueChange={(v) => setIntent(v as any)}>
               <SelectTrigger className="w-full"><SelectValue placeholder="All intents" /></SelectTrigger>
               <SelectContent>
@@ -210,288 +349,126 @@ export function InferenceTab() {
         </CardContent>
       </Card>
 
-      {/* Summary */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <SummaryCard
-          title="Interested rate"
-          value={`${(interestedRateOverall * 100).toFixed(1)}%`}
-          description={`${interestedTotal} interested of ${classifiedTotal} classified`}
-          icon={Sparkles}
-        />
-        <SummaryCard
-          title="Reply rate"
-          value={`${(replyRateOverall * 100).toFixed(1)}%`}
-          description={`${repliedTotal} replies of ${sentTotal} sends${replyRateNote ? ' — ' + replyRateNote : ''}`}
-          icon={BarChartIcon}
-        />
-        <SummaryCard
-          title="Events loaded"
-          value={events.length}
-          description={
-            isCapped
-              ? `Showing ${events.length.toLocaleString()} of ${totalEventsCount.toLocaleString()} (capped at ${limit.toLocaleString()})`
-              : `${totalEventsCount.toLocaleString()} total`
-          }
-          icon={Users}
-        />
+      {/* TOP KPIs — people-level */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm text-muted-foreground">Total Contacts</CardTitle>
+          </CardHeader>
+          <CardContent className="text-2xl font-semibold">
+            {isLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : uniqueContacts.toLocaleString()}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm text-muted-foreground">Total Replies (people)</CardTitle>
+          </CardHeader>
+          <CardContent className="text-2xl font-semibold">
+            {isLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : replyPeopleAll.size.toLocaleString()}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm text-muted-foreground">Email Replies (people)</CardTitle>
+          </CardHeader>
+          <CardContent className="text-2xl font-semibold">
+            {isLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : replyPeopleEmail.size.toLocaleString()}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm text-muted-foreground">LinkedIn Replies (people)</CardTitle>
+          </CardHeader>
+          <CardContent className="text-2xl font-semibold">
+            {isLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : replyPeopleLinkedIn.size.toLocaleString()}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm text-muted-foreground">LI Connection accepts</CardTitle>
+          </CardHeader>
+          <CardContent className="text-sm">
+            —
+            <div className="text-xs text-muted-foreground mt-1">
+              Not captured in events; no safe detection in HeyReach payloads.
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
-      {/* Insights */}
-      <Tabs defaultValue="industry" className="space-y-4">
-        <div className="border-b">
-          <TabsList>
-            <TabsTrigger value="industry">By Industry</TabsTrigger>
-            <TabsTrigger value="title">By Job Title</TabsTrigger>
-            <TabsTrigger value="city">By City</TabsTrigger>
-            <TabsTrigger value="quality">Data Quality</TabsTrigger>
-            <TabsTrigger value="copy">By Copy</TabsTrigger>
-            <TabsTrigger value="person">Person Timeline</TabsTrigger>
-          </TabsList>
-        </div>
-        <TabsContent value="industry" className="space-y-6">
-          <InsightRatesPanel title="Reply rate by industry" rows={ratesByIndustry} kind="reply" />
-          <InsightRatesPanel title="Interested rate by industry" rows={ratesByIndustry} kind="interested" />
-        </TabsContent>
-        <TabsContent value="title" className="space-y-6">
-          <InsightRatesPanel title="Reply rate by job title" rows={ratesByTitle} kind="reply" />
-          <InsightRatesPanel title="Interested rate by job title" rows={ratesByTitle} kind="interested" />
-        </TabsContent>
-        <TabsContent value="city" className="space-y-6">
-          <InsightRatesPanel title="Reply rate by city" rows={ratesByCity} kind="reply" />
-          <InsightRatesPanel title="Interested rate by city" rows={ratesByCity} kind="interested" />
-        </TabsContent>
-        <TabsContent value="quality" className="space-y-6">
-          <FirmographicQualityPanel events={events} />
-        </TabsContent>
-        <TabsContent value="copy" className="space-y-4">
-          <CopyPerformanceTable rows={copyPerf} onOpenTimeline={(personKey) => setTimelinePersonKey(personKey)} />
-        </TabsContent>
-        <TabsContent value="person" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Person timeline</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="flex gap-2">
-                <Input
-                  placeholder="Enter person_key (email or LinkedIn URL)"
-                  value={personKeyQuery}
-                  onChange={(e) => setPersonKeyQuery(e.target.value)}
-                />
-                <Button disabled={!personKeyQuery.trim()} onClick={() => setTimelinePersonKey(personKeyQuery.trim())}>
-                  Load
-                </Button>
-              </div>
-              {timelinePersonKey && <PersonTimeline personKey={timelinePersonKey} events={personEvents} />}
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
+      {/* OF REPLIES — intent mix (counts + % of replies; classified preferred) */}
+      <div className="grid grid-cols-1 md:grid-cols-1 gap-4">
+        <Card>
+          <CardHeader>
+            <CardTitle>Intent mix (of replies)</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-xs text-muted-foreground mb-2">
+              Uses classified rows when available; unclassified replies counted as unknown.
+            </div>
+            <ChartWithToggle title="" data={intentComposition} defaultType="pie" />
+          </CardContent>
+        </Card>
+      </div>
 
-      {/* Dialog timeline when opened from a row click */}
-      <Dialog open={!!timelinePersonKey && personKeyQuery === ''} onOpenChange={(o) => !o && setTimelinePersonKey(null)}>
-        <DialogContent className="max-w-3xl">
-          <DialogHeader>
-            <DialogTitle>Timeline — {timelinePersonKey}</DialogTitle>
-          </DialogHeader>
-          <div className="max-h-[70vh] overflow-auto">
-            {timelinePersonKey && <PersonTimeline personKey={timelinePersonKey} events={personEvents} />}
-          </div>
-        </DialogContent>
-      </Dialog>
+      {/* WITHIN AN INTENT — breakdowns */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <Card>
+          <CardHeader>
+            <CardTitle>Job titles</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ChartWithToggle title="" data={breakdownJobTitle} defaultType="bar" />
+            <div className="text-xs text-muted-foreground mt-2">
+              Data quality: {fillJobTitle.toFixed(0)}% of replies have a job title.
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Geography (City, State)</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ChartWithToggle title="" data={breakdownGeo} defaultType="bar" />
+            <div className="text-xs text-muted-foreground mt-2">
+              Data quality: {fillGeo.toFixed(0)}% of replies have city/state.
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Industry</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ChartWithToggle title="" data={breakdownIndustry} defaultType="bar" />
+            <div className="text-xs text-muted-foreground mt-2">
+              Data quality: {fillIndustry.toFixed(0)}% of replies have industry.
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Company size</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ChartWithToggle title="" data={breakdownCompanySize} defaultType="bar" />
+            <div className="text-xs text-muted-foreground mt-2">
+              Data quality: {fillCompanySize.toFixed(0)}% of replies have company size.
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* (Legacy insights removed — rebuilt to match AdminInference hierarchy) */}
     </div>
   );
 }
 
-function InsightRatesPanel({
-  title,
-  rows,
-  kind,
-}: {
-  title: string;
-  rows: ReturnType<typeof computeRatesByDimension>;
-  kind: 'reply' | 'interested';
-}) {
-  // Enforce higher denominator threshold to avoid misleading 100% spikes with tiny n
-  const DENOM_THRESHOLD = 20;
-  const denomFor = (r: typeof rows[number]) => (kind === 'reply' ? r.sent : r.classified);
-  const interestedFor = (r: typeof rows[number]) => (kind === 'reply' ? r.replied : r.interested);
+// (Legacy rate panels removed)
 
-  // Exclude zero-denominator buckets entirely
-  const withDenom = rows.filter((r) => denomFor(r) > 0);
+// (Legacy copy performance table removed)
 
-  // Keep only buckets meeting the threshold; sort by denominator desc
-  const passing = withDenom.filter((r) => denomFor(r) >= DENOM_THRESHOLD);
-  passing.sort((a, b) => denomFor(b) - denomFor(a));
-  const top = passing.slice(0, 10); // cap to 10 categories for readability
+// (Legacy firmographic quality panel removed)
 
-  const data: Record<string, number> = {};
-  const metrics: Record<string, { denom: number; interested: number; rate: number }> = {};
-
-  for (const r of top) {
-    const name = `${r.key}${r.channel !== 'all' ? ` (${r.channel})` : ''}`;
-    const denom = denomFor(r);
-    const interested = interestedFor(r);
-    const ratePct = (kind === 'reply' ? r.replyRate : r.interestedRate) * 100;
-    data[name] = ratePct;
-    metrics[name] = { denom, interested, rate: ratePct };
-  }
-
-  return (
-    <BarChartComponent
-      title={title}
-      data={data}
-      yAxisLabel="% rate"
-      metricsByName={metrics}
-      layout="vertical" // horizontal bars for long labels
-    />
-  );
-}
-
-function CopyPerformanceTable({
-  rows,
-  onOpenTimeline,
-}: {
-  rows: ReturnType<typeof computeCopyPerformance>;
-  onOpenTimeline: (personKey: string) => void;
-}) {
-  const top = rows.slice(0, 25);
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Performance by copy fingerprint</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <div className="rounded-md border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Copy</TableHead>
-                <TableHead>Subject</TableHead>
-                <TableHead>Snippet</TableHead>
-                <TableHead className="text-right">Interested rate</TableHead>
-                <TableHead className="text-right">Reply rate</TableHead>
-                <TableHead className="text-right">Classified</TableHead>
-                <TableHead className="text-right">Replies</TableHead>
-                <TableHead className="text-right">Sends</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {top.map((r) => (
-                <TableRow key={r.copy_fingerprint}>
-                  <TableCell className="max-w-[220px]">
-                    <div className="font-mono text-xs break-all">{r.copy_fingerprint}</div>
-                  </TableCell>
-                  <TableCell className="max-w-[280px]">
-                    <div className="truncate">{r.subject ?? '—'}</div>
-                  </TableCell>
-                  <TableCell className="max-w-[360px]">
-                    <div className="truncate text-muted-foreground">{r.outbound_snippet ?? '—'}</div>
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <Badge variant="secondary">{(r.interestedRate * 100).toFixed(1)}%</Badge>
-                  </TableCell>
-                  <TableCell className="text-right">{(r.replyRate * 100).toFixed(1)}%</TableCell>
-                  <TableCell className="text-right">{r.classified}</TableCell>
-                  <TableCell className="text-right">{r.replied}</TableCell>
-                  <TableCell className="text-right">{r.sent}</TableCell>
-                </TableRow>
-              ))}
-              {top.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={8} className="text-center text-muted-foreground">
-                    No data for the selected filters.
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function FirmographicQualityPanel({ events }: { events: InferenceEvent[] }) {
-  const nonEmpty = (s: string | null | undefined) => !!(s && String(s).trim() !== '');
-  const denom = events.length || 1;
-  const jobFilled = events.filter((e) => nonEmpty(e.job_title)).length;
-  const indFilled = events.filter((e) => nonEmpty(e.industry)).length;
-  const cityFilled = events.filter((e) => nonEmpty(e.city)).length;
-  const rows: Array<{ label: string; value: number }> = [
-    { label: 'Job title filled', value: Math.round((jobFilled / denom) * 1000) / 10 },
-    { label: 'Industry filled', value: Math.round((indFilled / denom) * 1000) / 10 },
-    { label: 'City filled', value: Math.round((cityFilled / denom) * 1000) / 10 },
-  ];
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Firmographics coverage (after people join)</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {rows.map((r) => (
-          <div key={r.label} className="space-y-1">
-            <div className="flex items-center justify-between text-sm">
-              <div className="text-muted-foreground">{r.label}</div>
-              <div className="font-medium">{r.value.toFixed(1)}%</div>
-            </div>
-            <Progress value={r.value} className="h-2" />
-          </div>
-        ))}
-        <div className="text-xs text-muted-foreground">
-          Based on enriched events (coalesced from people when event fields are blank). Unknown/empty are excluded from charts.
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function PersonTimeline({ personKey, events }: { personKey: string; events: InferenceEvent[] }) {
-  return (
-    <div>
-      <div className="text-sm text-muted-foreground mb-2">{events.length} events</div>
-      <div className="space-y-3">
-        {events.map((e) => (
-          <div key={e.id} className="rounded-md border p-3">
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <Badge variant="outline">{e.channel}</Badge>
-                <Badge variant="secondary">{e.event_type}</Badge>
-                {e.intent && <Badge className="bg-primary/10 text-primary hover:bg-primary/20">{e.intent}</Badge>}
-              </div>
-              <div className="text-xs text-muted-foreground">{format(new Date(e.occurred_at), 'MMM d, yyyy HH:mm')}</div>
-            </div>
-            <Separator className="my-2" />
-            <div className="space-y-1">
-              {e.subject && <div className="text-sm"><span className="font-medium">Subject:</span> {e.subject}</div>}
-              {/* Outbound message for sent */}
-              {e.event_type === 'sent' && typeof e.metadata?.['outbound_message'] === 'string' && (
-                <div className="text-sm">
-                  <span className="font-medium">Sent:</span>{' '}
-                  <span className="text-muted-foreground">{String(e.metadata?.['outbound_message']).slice(0, 400)}</span>
-                </div>
-              )}
-              {/* Reply text for replied */}
-              {e.event_type === 'replied' && typeof e.metadata?.['reply_text'] === 'string' && (
-                <div className="text-sm">
-                  <span className="font-medium">Reply:</span>{' '}
-                  <span className="text-muted-foreground">{String(e.metadata?.['reply_text']).slice(0, 400)}</span>
-                </div>
-              )}
-              {/* Copy fingerprint */}
-              {e.copy_fingerprint && (
-                <div className="text-xs text-muted-foreground">copy_fingerprint: <span className="font-mono">{e.copy_fingerprint}</span></div>
-              )}
-              {/* Provenance */}
-              <div className="text-xs text-muted-foreground">source: {e.source}</div>
-            </div>
-          </div>
-        ))}
-        {events.length === 0 && (
-          <div className="text-sm text-muted-foreground">No events found for {personKey}.</div>
-        )}
-      </div>
-    </div>
-  );
-}
+// (Legacy person timeline removed)
 
