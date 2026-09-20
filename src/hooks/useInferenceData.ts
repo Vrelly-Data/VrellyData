@@ -271,6 +271,7 @@ export type BaseInferenceKpis = {
   linkedinMessagesSent: number;
   linkedinConnectionsSent: number;
   linkedinConnectionsAccepted: number;
+  contactsPeople: number; // distinct person_key of ANY event (events-based contacts)
   repliedPeople: number; // distinct people who replied (all channels)
   repliedPeopleEmail: number; // distinct people who replied on email channel
   repliedPeopleLinkedin: number; // distinct people who replied on linkedin channel
@@ -284,6 +285,7 @@ export type BaseInferenceKpis = {
     linkedinMessagesSent: string;
     linkedinConnectionsSent: string;
     linkedinConnectionsAccepted: string;
+    contactsPeople: string;
     repliedPeople: string;
     repliedPeopleEmail: string;
     repliedPeopleLinkedin: string;
@@ -441,6 +443,7 @@ export function useBaseInferenceKpis(filters: InferenceFilters) {
         contactsCount,
         campaignSums,
         liMsgsSent,
+        contactsPeople,
         repliedPeople,
         repliedPeopleEmail,
         repliedPeopleLinkedin,
@@ -449,6 +452,7 @@ export function useBaseInferenceKpis(filters: InferenceFilters) {
         countDedupedContacts(filters.teamIds),
         sumCampaignStats(filters.teamIds),
         countEventsQuick(filters, 'linkedin', 'sent'),
+        countDistinctPeopleForEvents(filters, (_r) => true), // any event
         countDistinctPeopleForEvents(filters, (r) => r.event_type === 'replied'),
         countDistinctPeopleForEvents(filters, (r) => r.event_type === 'replied' && r.channel === 'email'),
         countDistinctPeopleForEvents(filters, (r) => r.event_type === 'replied' && r.channel === 'linkedin'),
@@ -469,6 +473,7 @@ export function useBaseInferenceKpis(filters: InferenceFilters) {
         linkedinMessagesSent: liMsgsSent,
         linkedinConnectionsSent: campaignSums.linkedinConnectionsSent,
         linkedinConnectionsAccepted: campaignSums.linkedinConnectionsAccepted,
+        contactsPeople,
         repliedPeople,
         repliedPeopleEmail,
         repliedPeopleLinkedin,
@@ -482,6 +487,7 @@ export function useBaseInferenceKpis(filters: InferenceFilters) {
           linkedinMessagesSent: 'inference_events_enriched (channel=linkedin, event_type=sent, count exact)',
           linkedinConnectionsSent: 'synced_campaigns.stats.linkedinConnectionsSent / connectionsSent',
           linkedinConnectionsAccepted: 'synced_campaigns.stats.linkedinConnectionsAccepted / connectionsAccepted',
+          contactsPeople: 'inference_events_enriched distinct person_key across ANY event',
           repliedPeople: 'inference_events_enriched distinct person_key where event_type=replied',
           repliedPeopleEmail: "inference_events_enriched distinct person_key where event_type='replied' and channel='email'",
           repliedPeopleLinkedin: "inference_events_enriched distinct person_key where event_type='replied' and channel='linkedin'",

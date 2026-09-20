@@ -591,6 +591,7 @@ export default function AdminInference() {
                   <CardContent>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                       {[
+                        { title: 'Contacts (events people)', value: baseKpis?.contactsPeople, source: baseKpis?.sources.contactsPeople },
                         { title: 'Total Contacts', value: baseKpis?.totalContactsDeduped, source: baseKpis?.sources.totalContactsDeduped },
                         { title: 'Email Sends', value: baseKpis?.emailSends, source: baseKpis?.sources.emailSends },
                         { title: 'Email Replies (campaign)', value: baseKpis?.emailRepliesCampaignTotal, source: baseKpis?.sources.emailRepliesCampaignTotal },
