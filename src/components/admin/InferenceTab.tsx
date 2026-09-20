@@ -193,27 +193,12 @@ export function InferenceTab() {
         <CardContent>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             {[
-              { title: 'Contacts (events people)', value: baseKpis?.contactsPeople, source: baseKpis?.sources.contactsPeople },
               { title: 'Total Contacts', value: baseKpis?.totalContactsDeduped, source: baseKpis?.sources.totalContactsDeduped },
-              { title: 'Contacts (Reply.io rows)', value: baseKpis?.contactsRowsReply, source: baseKpis?.sources.contactsRowsReply },
-              { title: 'Contacts (Smartlead rows)', value: baseKpis?.contactsRowsSmartlead, source: baseKpis?.sources.contactsRowsSmartlead },
               { title: 'Email Sends', value: baseKpis?.emailSends, source: baseKpis?.sources.emailSends },
-<<<<<<< HEAD
               { title: 'Email Replies (campaign)', value: baseKpis?.emailRepliesCampaignTotal, source: baseKpis?.sources.emailRepliesCampaignTotal },
-              { title: 'LI Connections Sent', value: baseKpis?.linkedinConnectionsSent, source: baseKpis?.sources.linkedinConnectionsSent },
+              { title: 'Smartlead Email Replies', value: baseKpis?.emailRepliesSmartleadCampaign, source: baseKpis?.sources.emailRepliesSmartleadCampaign },
+              { title: 'Reply Email Replies', value: baseKpis?.emailRepliesReplyCampaign, source: baseKpis?.sources.emailRepliesReplyCampaign },
               { title: 'LI Connections Accepted', value: baseKpis?.linkedinConnectionsAccepted, source: baseKpis?.sources.linkedinConnectionsAccepted },
-              { title: 'LI Messages Sent', value: baseKpis?.linkedinMessagesSent, source: baseKpis?.sources.linkedinMessagesSent },
-=======
-              { title: 'Email Sends (Smartlead)', value: baseKpis?.emailSendsSmartlead, source: baseKpis?.sources.emailSendsSmartlead },
-              { title: 'Email Sends (Reply.io)', value: baseKpis?.emailSendsReply, source: baseKpis?.sources.emailSendsReply },
-              { title: 'LI Connections Sent', value: baseKpis?.linkedinConnectionsSent, source: baseKpis?.sources.linkedinConnectionsSent },
-              { title: 'LI Connections Accepted', value: baseKpis?.linkedinConnectionsAccepted, source: baseKpis?.sources.linkedinConnectionsAccepted },
-              { title: 'LI Messages Sent (events)', value: baseKpis?.linkedinMessagesSent, source: baseKpis?.sources.linkedinMessagesSent },
-              { title: 'LI Messages Sent (campaign)', value: baseKpis?.linkedinMessagesSentCampaign, source: baseKpis?.sources.linkedinMessagesSentCampaign },
-              { title: 'Replies (people)', value: baseKpis?.repliedPeople, source: baseKpis?.sources.repliedPeople },
-              { title: 'Email Replies (people)', value: baseKpis?.repliedPeopleEmail, source: baseKpis?.sources.repliedPeopleEmail },
-              { title: 'LI Replies (people)', value: baseKpis?.repliedPeopleLinkedin, source: baseKpis?.sources.repliedPeopleLinkedin },
->>>>>>> 6fc42cb (inference: extend Base KPIs with per-source contact rows, email sends by source, and LI messages (campaign); UI surfaces as primary strip (All Time))
               { title: 'Interested (people)', value: baseKpis?.interestedPeople, source: baseKpis?.sources.interestedPeople },
             ].map((kpi) => (
               <Card key={kpi.title}>
