@@ -18,7 +18,7 @@ import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { Badge } from '@/components/ui/badge';
 import { ChartWithToggle } from '@/components/insights/charts/ChartWithToggle';
-import { InferenceFilters, useExactInferencePeopleKpis } from '@/hooks/useInferenceData';
+import { useBaseInferenceKpis, InferenceFilters, useExactInferencePeopleKpis } from '@/hooks/useInferenceData';
 
 type InferenceEvent = {
   id: string;
@@ -194,8 +194,8 @@ export default function AdminInference() {
   const navigate = useNavigate();
   const { isPlatformAdmin } = useAuthStore();
   const [dateRange, setDateRange] = useState<DateRange>({
-    from: subDays(new Date(), 90),
-    to: new Date(),
+    from: undefined,
+    to: undefined,
   });
   const [teamId, setTeamId] = useState<string>('all');
   const [organizationId, setOrganizationId] = useState<string>('all');
@@ -206,6 +206,14 @@ export default function AdminInference() {
   const [channel, setChannel] = useState<string>('all');
   const [page, setPage] = useState<number>(1);
   const [perPage, setPerPage] = useState<number>(25);
+
+  // Base KPIs (All Time)
+  const baseFilters: InferenceFilters = useMemo(() => ({
+    teamIds: teamId !== 'all' ? [teamId] : undefined,
+    dateFrom: undefined,
+    dateTo: undefined,
+  }), [teamId]);
+  const { data: baseKpis, isLoading: loadingBase } = useBaseInferenceKpis(baseFilters);
 
   // Aggregation sample — minimal columns
   const { data: sampleRows = [], isLoading: loadingAgg, refetch } = useInferenceSample({
@@ -441,7 +449,7 @@ export default function AdminInference() {
                               format(dateRange.from, 'LLL dd, y')
                             )
                           ) : (
-                            <span>Pick a date range</span>
+                            <span>All Time</span>
                           )}
                         </Button>
                       </PopoverTrigger>
@@ -466,9 +474,14 @@ export default function AdminInference() {
                               Last 90d
                             </Button>
                           </div>
-                          <Button size="sm" onClick={() => { refetch(); refetchTable(); }}>
-                            Apply
-                          </Button>
+                          <div className="flex items-center gap-2">
+                            <Button variant="ghost" size="sm" onClick={() => setDateRange({ from: undefined, to: undefined })}>
+                              Clear (All Time)
+                            </Button>
+                            <Button size="sm" onClick={() => { refetch(); refetchTable(); }}>
+                              Apply
+                            </Button>
+                          </div>
                         </div>
                       </PopoverContent>
                     </Popover>
@@ -568,8 +581,64 @@ export default function AdminInference() {
                 </CardContent>
               </Card>
 
-              {/* TOP KPIs — counts are people-level */}
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+              {/* KPI cards */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                {/* Base KPIs (All Time) */}
+                <Card className="md:col-span-2 lg:col-span-4">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm">Base KPIs (All Time)</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                      {[
+                        { title: 'Total LI Contacts', value: baseKpis?.totalContactsLinkedinDeduped, source: baseKpis?.sources.totalContactsLinkedinDeduped },
+                        { title: 'Total Email Contacts', value: baseKpis?.totalContactsEmailDeduped, source: baseKpis?.sources.totalContactsEmailDeduped },
+                        { title: 'Total LI Replies', value: baseKpis?.repliedPeopleLinkedin, source: baseKpis?.sources.repliedPeopleLinkedin },
+                        { title: 'Total LI Acceptance', value: baseKpis?.linkedinConnectionsAccepted, source: baseKpis?.sources.linkedinConnectionsAccepted },
+                        { title: 'Total Email Replies', value: baseKpis?.repliedPeopleEmail, source: baseKpis?.sources.repliedPeopleEmail },
+                        { title: 'Interested Email Replies', value: baseKpis?.interestedPeopleEmail, source: baseKpis?.sources.interestedPeopleEmail },
+                        { title: 'Interested LI Replies', value: baseKpis?.interestedPeopleLinkedin, source: baseKpis?.sources.interestedPeopleLinkedin },
+                      ].map((kpi) => (
+                        <Card key={kpi.title}>
+                          <CardContent className="pt-6">
+                            <div>
+                              <p className="text-sm text-muted-foreground">{kpi.title}</p>
+                              <p className="text-2xl font-semibold mt-1">{loadingBase ? '…' : (kpi.value ?? 0).toLocaleString()}</p>
+                              <p className="text-[10px] text-muted-foreground mt-1">{kpi.source}</p>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Smartlead campaign volumes (seats and replies) */}
+                <Card className="md:col-span-2 lg:col-span-4">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm">Smartlead — campaign volumes</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {[
+                        { title: 'Smartlead Email Replies (campaign)', value: baseKpis?.emailRepliesSmartleadCampaign, source: baseKpis?.sources.emailRepliesSmartleadCampaign },
+                        { title: 'Smartlead Email Contacts / seats', value: baseKpis?.smartleadSeats, source: baseKpis?.sources.smartleadSeats },
+                      ].map((kpi) => (
+                        <Card key={kpi.title}>
+                          <CardContent className="pt-6">
+                            <div>
+                              <p className="text-sm text-muted-foreground">{kpi.title}</p>
+                              <p className="text-2xl font-semibold mt-1">{loadingBase ? '…' : (kpi.value ?? 0).toLocaleString()}</p>
+                              <p className="text-[10px] text-muted-foreground mt-1">{kpi.source}</p>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Legacy sample-driven KPIs */}
                 <Card>
                   <CardHeader className="pb-2">
                     <CardTitle className="text-sm text-muted-foreground">Total Contacts</CardTitle>

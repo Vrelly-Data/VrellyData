@@ -21,6 +21,7 @@ import {
   useExactInferencePeopleKpis,
   useOrganizationsLite,
   useTeams,
+  useBaseInferenceKpis,
 } from '@/hooks/useInferenceData';
 import { BarChartComponent } from '@/components/insights/charts/BarChartComponentEnhanced';
 import { SummaryCard } from '@/components/insights/charts/SummaryCard';
@@ -34,12 +35,8 @@ export function InferenceTab() {
   const [channels, setChannels] = useState<Array<'email' | 'linkedin' | 'other'>>(['email', 'linkedin']);
   const [intent, setIntent] = useState<'all' | NonNullable<InferenceEvent['intent']>>('all');
   const [eventTypes, setEventTypes] = useState<InferenceEvent['event_type'][]>(['sent', 'replied', 'classified']);
-  const [dateFrom, setDateFrom] = useState<Date | undefined>(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 90);
-    return d;
-  });
-  const [dateTo, setDateTo] = useState<Date | undefined>(new Date());
+  const [dateFrom, setDateFrom] = useState<Date | undefined>(undefined);
+  const [dateTo, setDateTo] = useState<Date | undefined>(undefined);
 
   const { data: teams } = useTeams();
   const { data: orgs } = useOrganizationsLite();
@@ -61,6 +58,14 @@ export function InferenceTab() {
   const totalEventsCount = eventsResp?.total ?? events.length;
   const isCapped = eventsResp?.isCapped ?? false;
   const limit = eventsResp?.limit ?? events.length;
+  // Base KPIs (All Time, team/org filters where available)
+  const baseFilters: InferenceFilters = {
+    teamIds: filters.teamIds,
+    // organizationIds intentionally omitted — base sources don't universally support it
+    dateFrom: undefined,
+    dateTo: undefined,
+  };
+  const { data: baseKpis, isLoading: loadingBase } = useBaseInferenceKpis(baseFilters);
 
   // Exact KPI totals and people-level intent mix — fetched via paged DB aggregates (not client samples)
   const { data: exactKpis, isLoading: loadingKpis } = useExactInferencePeopleKpis(filters);
@@ -178,6 +183,67 @@ export function InferenceTab() {
 
   return (
     <div className="space-y-6">
+      {/* Base KPIs — All Time */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base flex items-center gap-2">
+            <BarChartIcon className="h-4 w-4" /> Base KPIs (All Time)
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            {[
+              { title: 'Total LI Contacts', value: baseKpis?.totalContactsLinkedinDeduped, source: baseKpis?.sources.totalContactsLinkedinDeduped },
+              { title: 'Total Email Contacts', value: baseKpis?.totalContactsEmailDeduped, source: baseKpis?.sources.totalContactsEmailDeduped },
+              { title: 'Total LI Replies', value: baseKpis?.repliedPeopleLinkedin, source: baseKpis?.sources.repliedPeopleLinkedin },
+              { title: 'Total LI Acceptance', value: baseKpis?.linkedinConnectionsAccepted, source: baseKpis?.sources.linkedinConnectionsAccepted },
+              { title: 'Total Email Replies', value: baseKpis?.repliedPeopleEmail, source: baseKpis?.sources.repliedPeopleEmail },
+              { title: 'Interested Email Replies', value: baseKpis?.interestedPeopleEmail, source: baseKpis?.sources.interestedPeopleEmail },
+              { title: 'Interested LI Replies', value: baseKpis?.interestedPeopleLinkedin, source: baseKpis?.sources.interestedPeopleLinkedin },
+            ].map((kpi) => (
+              <Card key={kpi.title}>
+                <CardContent className="pt-6">
+                  <div className="flex items-baseline justify-between">
+                    <div>
+                      <p className="text-sm text-muted-foreground">{kpi.title}</p>
+                      <p className="text-2xl font-semibold mt-1">
+                        {loadingBase ? '…' : (kpi.value ?? 0).toLocaleString()}
+                      </p>
+                      <p className="text-[10px] text-muted-foreground mt-1">{kpi.source}</p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Smartlead campaign volumes (seats and replies) */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">Smartlead — campaign volumes</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {[
+              { title: 'Smartlead Email Replies (campaign)', value: baseKpis?.emailRepliesSmartleadCampaign, source: baseKpis?.sources.emailRepliesSmartleadCampaign },
+              { title: 'Smartlead Email Contacts / seats', value: baseKpis?.smartleadSeats, source: baseKpis?.sources.smartleadSeats },
+            ].map((kpi) => (
+              <Card key={kpi.title}>
+                <CardContent className="pt-6">
+                  <div>
+                    <p className="text-sm text-muted-foreground">{kpi.title}</p>
+                    <p className="text-2xl font-semibold mt-1">{loadingBase ? '…' : (kpi.value ?? 0).toLocaleString()}</p>
+                    <p className="text-[10px] text-muted-foreground mt-1">{kpi.source}</p>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Filters */}
       <Card>
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -185,7 +251,7 @@ export function InferenceTab() {
             <Filter className="h-4 w-4" /> Filters
           </CardTitle>
           <div className="text-xs text-muted-foreground">
-            {dateFrom ? format(dateFrom, 'MMM d, yyyy') : '—'} – {dateTo ? format(dateTo, 'MMM d, yyyy') : '—'}
+            {dateFrom && dateTo ? `${format(dateFrom, 'MMM d, yyyy')} – ${format(dateTo, 'MMM d, yyyy')}` : 'All Time'}
           </div>
         </CardHeader>
         <CardContent className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
@@ -267,7 +333,7 @@ export function InferenceTab() {
                       {format(dateFrom, 'MMM d, yyyy')} – {format(dateTo, 'MMM d, yyyy')}
                     </>
                   ) : (
-                    <span>Pick a range</span>
+                    <span>All Time</span>
                   )}
                 </Button>
               </PopoverTrigger>
@@ -279,6 +345,11 @@ export function InferenceTab() {
                   <div className="border rounded-md p-2">
                     <Calendar mode="single" selected={dateTo} onSelect={setDateTo} />
                   </div>
+                </div>
+                <div className="flex items-center justify-end gap-2 px-2 pb-2">
+                  <Button variant="ghost" size="sm" onClick={() => { setDateFrom(undefined); setDateTo(undefined); }}>
+                    Clear (All Time)
+                  </Button>
                 </div>
               </PopoverContent>
             </Popover>
