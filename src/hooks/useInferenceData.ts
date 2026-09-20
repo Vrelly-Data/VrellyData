@@ -261,14 +261,16 @@ export function useOrganizationsLite() {
 // -------- Base KPIs (All-Time) --------
 export type BaseInferenceKpis = {
   totalContactsDeduped: number;
-  // Sends
+  contactsRowsReply: number;
+  contactsRowsSmartlead: number;
   emailSends: number;
-  // New: campaign-level replies (Smartlead + Reply email)
+  emailSendsSmartlead: number;
+  emailSendsReply: number;
   emailRepliesCampaignTotal: number;
   emailRepliesSmartleadCampaign: number;
   emailRepliesReplyCampaign: number;
-  // LinkedIn
   linkedinMessagesSent: number;
+  linkedinMessagesSentCampaign: number;
   linkedinConnectionsSent: number;
   linkedinConnectionsAccepted: number;
   contactsPeople: number; // distinct person_key of ANY event (events-based contacts)
@@ -278,11 +280,16 @@ export type BaseInferenceKpis = {
   interestedPeople: number; // distinct people classified as interested (all channels)
   sources: {
     totalContactsDeduped: string;
+    contactsRowsReply: string;
+    contactsRowsSmartlead: string;
     emailSends: string;
+    emailSendsSmartlead: string;
+    emailSendsReply: string;
     emailRepliesCampaignTotal: string;
     emailRepliesSmartleadCampaign: string;
     emailRepliesReplyCampaign: string;
     linkedinMessagesSent: string;
+    linkedinMessagesSentCampaign: string;
     linkedinConnectionsSent: string;
     linkedinConnectionsAccepted: string;
     contactsPeople: string;
@@ -315,7 +322,7 @@ async function countDedupedContacts(teamIds?: string[]): Promise<number> {
   while (keepGoing) {
     let query = supabase
       .from('synced_contacts' as any)
-      .select('email,linkedin_url,team_id')
+      .select('id,email,linkedin_url,team_id')
       .order('created_at', { ascending: false })
       .range(offset, offset + PAGE - 1);
     if (teamIds && teamIds.length > 0) {
@@ -323,17 +330,61 @@ async function countDedupedContacts(teamIds?: string[]): Promise<number> {
     }
     const { data, error } = await (query as any);
     if (error) throw new Error(error.message);
-    const rows = (data ?? []) as Array<{ email: string | null; linkedin_url: string | null }>;
+    const rows = (data ?? []) as Array<{ id: string; email: string | null; linkedin_url: string | null }>;
     for (const r of rows) {
       const e = normalizeEmail(r.email);
       const l = normalizeLinkedin(r.linkedin_url);
-      const key = e ? `e:${e}` : l ? `l:${l}` : null;
+      const key = e ? `e:${e}` : l ? `l:${l}` : r.id ? `i:${r.id}` : null;
       if (key) seenKeys.add(key);
     }
     keepGoing = rows.length === PAGE;
     offset += PAGE;
   }
   return seenKeys.size;
+}
+
+async function fetchCampaignSourceMap(teamIds?: string[]) {
+  let q = supabase.from('synced_campaigns' as any).select('id, source, team_id');
+  if (teamIds && teamIds.length > 0) {
+    q = (q as any).in('team_id', teamIds);
+  }
+  const { data, error } = await (q as any);
+  if (error) throw new Error(error.message);
+  const map = new Map<string, string>();
+  for (const row of (data ?? []) as Array<{ id: string; source: string | null }>) {
+    if (row.id) map.set(row.id, (row.source || '').toLowerCase());
+  }
+  return map;
+}
+
+async function countContactRowsBySource(teamIds?: string[]) {
+  const campaignSource = await fetchCampaignSourceMap(teamIds);
+  const PAGE = 1000;
+  let offset = 0;
+  let keepGoing = true;
+  let replyRows = 0;
+  let smartleadRows = 0;
+  while (keepGoing) {
+    let q = supabase
+      .from('synced_contacts' as any)
+      .select('campaign_id,team_id')
+      .order('created_at', { ascending: false })
+      .range(offset, offset + PAGE - 1);
+    if (teamIds && teamIds.length > 0) {
+      q = (q as any).in('team_id', teamIds);
+    }
+    const { data, error } = await (q as any);
+    if (error) throw new Error(error.message);
+    const rows = (data ?? []) as Array<{ campaign_id: string | null }>;
+    for (const r of rows) {
+      const src = r.campaign_id ? campaignSource.get(r.campaign_id) : undefined;
+      if (src === 'reply_io') replyRows += 1;
+      else if (src === 'smartlead') smartleadRows += 1;
+    }
+    keepGoing = rows.length === PAGE;
+    offset += PAGE;
+  }
+  return { replyRows, smartleadRows };
 }
 
 async function sumCampaignStats(teamIds?: string[]) {
@@ -350,6 +401,9 @@ async function sumCampaignStats(teamIds?: string[]) {
   let emailSendsReplyNullChannel = 0; // track for footnote
   let emailRepliesSmartleadCampaign = 0;
   let emailRepliesReplyCampaign = 0;
+  let emailSendsSmartlead = 0;
+  let emailSendsReply = 0;
+  let linkedinMessagesSentReply = 0;
   let linkedinConnectionsSent = 0;
   let linkedinConnectionsAccepted = 0;
 
@@ -359,7 +413,11 @@ async function sumCampaignStats(teamIds?: string[]) {
     const channel = (r.channel || '').toLowerCase();
     if (channel === 'email') {
       const sent = Number(s['sent'] ?? 0);
-      if (!Number.isNaN(sent)) emailSends += sent;
+      if (!Number.isNaN(sent)) {
+        emailSends += sent;
+        if (source === 'smartlead') emailSendsSmartlead += sent;
+        if (source === 'reply_io') emailSendsReply += sent;
+      }
       // Campaign replies (email)
       const replies = Number(s['replies'] ?? 0);
       if (source === 'smartlead' && !Number.isNaN(replies)) emailRepliesSmartleadCampaign += replies;
@@ -367,9 +425,14 @@ async function sumCampaignStats(teamIds?: string[]) {
     } else {
       // Reply null/other channel sent — excluded from Email Sends, but footnote the amount
       if (source === 'reply_io') {
-        const sent = Number(s['sent'] ?? 0);
-        if (!Number.isNaN(sent)) emailSendsReplyNullChannel += sent;
+        const sentOther = Number(s['sent'] ?? 0);
+        if (!Number.isNaN(sentOther)) emailSendsReplyNullChannel += sentOther;
       }
+    }
+    // Reply.io LinkedIn messages sent (campaign stats)
+    if (source === 'reply_io') {
+      const liMsgs = Number((s as any)['linkedinMessagesSent'] ?? 0);
+      if (!Number.isNaN(liMsgs)) linkedinMessagesSentReply += liMsgs;
     }
     const connSent = Number(
       (s as any)['linkedinConnectionsSent'] ??
@@ -384,7 +447,17 @@ async function sumCampaignStats(teamIds?: string[]) {
     if (!Number.isNaN(connSent)) linkedinConnectionsSent += connSent;
     if (!Number.isNaN(connAccepted)) linkedinConnectionsAccepted += connAccepted;
   }
-  return { emailSends, emailSendsReplyNullChannel, emailRepliesSmartleadCampaign, emailRepliesReplyCampaign, linkedinConnectionsSent, linkedinConnectionsAccepted };
+  return {
+    emailSends,
+    emailSendsSmartlead,
+    emailSendsReply,
+    emailSendsReplyNullChannel,
+    emailRepliesSmartleadCampaign,
+    emailRepliesReplyCampaign,
+    linkedinMessagesSentReply,
+    linkedinConnectionsSent,
+    linkedinConnectionsAccepted,
+  };
 }
 
 async function countEventsQuick(filters: InferenceFilters, channel: 'linkedin' | 'email', eventType: InferenceEvent['event_type']) {
@@ -442,6 +515,7 @@ export function useBaseInferenceKpis(filters: InferenceFilters) {
       const [
         contactsCount,
         campaignSums,
+        rowsBySource,
         liMsgsSent,
         contactsPeople,
         repliedPeople,
@@ -451,6 +525,7 @@ export function useBaseInferenceKpis(filters: InferenceFilters) {
       ] = await Promise.all([
         countDedupedContacts(filters.teamIds),
         sumCampaignStats(filters.teamIds),
+        countContactRowsBySource(filters.teamIds),
         countEventsQuick(filters, 'linkedin', 'sent'),
         countDistinctPeopleForEvents(filters, (_r) => true), // any event
         countDistinctPeopleForEvents(filters, (r) => r.event_type === 'replied'),
@@ -466,11 +541,17 @@ export function useBaseInferenceKpis(filters: InferenceFilters) {
 
       return {
         totalContactsDeduped: contactsCount,
+        contactsRowsReply: rowsBySource.replyRows,
+        contactsRowsSmartlead: rowsBySource.smartleadRows,
         emailSends: campaignSums.emailSends,
-        emailRepliesCampaignTotal: (campaignSums.emailRepliesSmartleadCampaign || 0) + (campaignSums.emailRepliesReplyCampaign || 0),
+        emailSendsSmartlead: campaignSums.emailSendsSmartlead,
+        emailSendsReply: campaignSums.emailSendsReply,
+        emailRepliesCampaignTotal:
+          (campaignSums.emailRepliesSmartleadCampaign || 0) + (campaignSums.emailRepliesReplyCampaign || 0),
         emailRepliesSmartleadCampaign: campaignSums.emailRepliesSmartleadCampaign || 0,
         emailRepliesReplyCampaign: campaignSums.emailRepliesReplyCampaign || 0,
         linkedinMessagesSent: liMsgsSent,
+        linkedinMessagesSentCampaign: campaignSums.linkedinMessagesSentReply,
         linkedinConnectionsSent: campaignSums.linkedinConnectionsSent,
         linkedinConnectionsAccepted: campaignSums.linkedinConnectionsAccepted,
         contactsPeople,
@@ -479,12 +560,19 @@ export function useBaseInferenceKpis(filters: InferenceFilters) {
         repliedPeopleLinkedin,
         interestedPeople,
         sources: {
-          totalContactsDeduped: 'synced_contacts (dedup by email or linkedin_url) — Smartlead roster incomplete',
-          emailSends: `synced_campaigns.stats.sent (channel=email). Reply null-channel excluded: ${campaignSums.emailSendsReplyNullChannel}`,
+          totalContactsDeduped:
+            'synced_contacts (dedup by email/linkedin_url/fallback id) — Smartlead roster incomplete',
+          contactsRowsReply: 'synced_contacts rows via joined synced_campaigns.source=reply_io',
+          contactsRowsSmartlead:
+            'synced_contacts rows via joined synced_campaigns.source=smartlead — roster sync incomplete',
+          emailSends: `synced_campaigns.stats.sent (channel=email, all sources). Reply null-channel excluded: ${campaignSums.emailSendsReplyNullChannel}`,
+          emailSendsSmartlead: 'synced_campaigns.stats.sent where source=smartlead AND channel=email',
+          emailSendsReply: 'synced_campaigns.stats.sent where source=reply_io AND channel=email',
           emailRepliesCampaignTotal: `synced_campaigns.stats.replies (Smartlead + Reply email). IE email replied people: ${repliedPeopleEmail}`,
           emailRepliesSmartleadCampaign: 'synced_campaigns.stats.replies where source=smartlead',
           emailRepliesReplyCampaign: 'synced_campaigns.stats.replies where source=reply_io AND channel=email',
           linkedinMessagesSent: 'inference_events_enriched (channel=linkedin, event_type=sent, count exact)',
+          linkedinMessagesSentCampaign: 'synced_campaigns.stats.linkedinMessagesSent where source=reply_io',
           linkedinConnectionsSent: 'synced_campaigns.stats.linkedinConnectionsSent / connectionsSent',
           linkedinConnectionsAccepted: 'synced_campaigns.stats.linkedinConnectionsAccepted / connectionsAccepted',
           contactsPeople: 'inference_events_enriched distinct person_key across ANY event',
