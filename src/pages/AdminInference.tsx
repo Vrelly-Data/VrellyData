@@ -16,17 +16,6 @@ import { useNavigate, Link } from 'react-router-dom';
 import { useAuthStore } from '@/stores/authStore';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
-import {
-  ResponsiveContainer,
-  LineChart,
-  Line,
-  CartesianGrid,
-  XAxis,
-  YAxis,
-  Tooltip as RechartsTooltip,
-  BarChart,
-  Bar,
-} from 'recharts';
 import { Badge } from '@/components/ui/badge';
 import { ChartWithToggle } from '@/components/insights/charts/ChartWithToggle';
 
