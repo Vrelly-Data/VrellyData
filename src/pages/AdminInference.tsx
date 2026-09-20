@@ -613,6 +613,31 @@ export default function AdminInference() {
                   </CardContent>
                 </Card>
 
+                {/* Smartlead campaign volumes (seats and replies) */}
+                <Card className="md:col-span-2 lg:col-span-4">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm">Smartlead — campaign volumes</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {[
+                        { title: 'Smartlead Email Replies (campaign)', value: baseKpis?.emailRepliesSmartleadCampaign, source: baseKpis?.sources.emailRepliesSmartleadCampaign },
+                        { title: 'Smartlead Email Contacts / seats', value: baseKpis?.smartleadSeats, source: baseKpis?.sources.smartleadSeats },
+                      ].map((kpi) => (
+                        <Card key={kpi.title}>
+                          <CardContent className="pt-6">
+                            <div>
+                              <p className="text-sm text-muted-foreground">{kpi.title}</p>
+                              <p className="text-2xl font-semibold mt-1">{loadingBase ? '…' : (kpi.value ?? 0).toLocaleString()}</p>
+                              <p className="text-[10px] text-muted-foreground mt-1">{kpi.source}</p>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+
                 {/* Legacy sample-driven KPIs */}
                 <Card>
                   <CardHeader className="pb-2">

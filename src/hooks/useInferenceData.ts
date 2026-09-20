@@ -272,6 +272,7 @@ export type BaseInferenceKpis = {
   // New primary strip metrics
   totalContactsLinkedinDeduped: number;
   totalContactsEmailDeduped: number;
+  smartleadSeats: number;
   linkedinMessagesSent: number;
   linkedinMessagesSentCampaign: number;
   linkedinConnectionsSent: number;
@@ -295,6 +296,7 @@ export type BaseInferenceKpis = {
     emailRepliesReplyCampaign: string;
     totalContactsLinkedinDeduped: string;
     totalContactsEmailDeduped: string;
+    smartleadSeats: string;
     linkedinMessagesSent: string;
     linkedinMessagesSentCampaign: string;
     linkedinConnectionsSent: string;
@@ -461,6 +463,7 @@ async function sumCampaignStats(teamIds?: string[]) {
   let emailRepliesReplyCampaign = 0;
   let emailSendsSmartlead = 0;
   let emailSendsReply = 0;
+  let smartleadSeats = 0;
   let linkedinMessagesSentReply = 0;
   let linkedinConnectionsSent = 0;
   let linkedinConnectionsAccepted = 0;
@@ -492,6 +495,11 @@ async function sumCampaignStats(teamIds?: string[]) {
       const liMsgs = Number((s as any)['linkedinMessagesSent'] ?? 0);
       if (!Number.isNaN(liMsgs)) linkedinMessagesSentReply += liMsgs;
     }
+    // Smartlead campaign seats (peopleCount)
+    if (source === 'smartlead') {
+      const ppl = Number((s as any)['peopleCount'] ?? 0);
+      if (!Number.isNaN(ppl)) smartleadSeats += ppl;
+    }
     const connSent = Number(
       (s as any)['linkedinConnectionsSent'] ??
       (s as any)['connectionsSent'] ??
@@ -512,6 +520,7 @@ async function sumCampaignStats(teamIds?: string[]) {
     emailSendsReplyNullChannel,
     emailRepliesSmartleadCampaign,
     emailRepliesReplyCampaign,
+    smartleadSeats,
     linkedinMessagesSentReply,
     linkedinConnectionsSent,
     linkedinConnectionsAccepted,
@@ -618,6 +627,7 @@ export function useBaseInferenceKpis(filters: InferenceFilters) {
           (campaignSums.emailRepliesSmartleadCampaign || 0) + (campaignSums.emailRepliesReplyCampaign || 0),
         emailRepliesSmartleadCampaign: campaignSums.emailRepliesSmartleadCampaign || 0,
         emailRepliesReplyCampaign: campaignSums.emailRepliesReplyCampaign || 0,
+        smartleadSeats: campaignSums.smartleadSeats || 0,
         linkedinMessagesSent: liMsgsSent,
         linkedinMessagesSentCampaign: campaignSums.linkedinMessagesSentReply,
         linkedinConnectionsSent: campaignSums.linkedinConnectionsSent,
@@ -637,6 +647,8 @@ export function useBaseInferenceKpis(filters: InferenceFilters) {
           contactsRowsReply: 'synced_contacts rows via joined synced_campaigns.source=reply_io',
           contactsRowsSmartlead:
             'synced_contacts rows via joined synced_campaigns.source=smartlead — roster sync incomplete',
+          smartleadSeats:
+            `synced_campaigns.stats.peopleCount (campaign seats; duplicates across campaigns). Roster sync incomplete: ${rowsBySource.smartleadRows.toLocaleString()} synced_contacts rows`,
           emailSends: `synced_campaigns.stats.sent (channel=email, all sources). Reply null-channel excluded: ${campaignSums.emailSendsReplyNullChannel}`,
           emailSendsSmartlead: 'synced_campaigns.stats.sent where source=smartlead AND channel=email',
           emailSendsReply: 'synced_campaigns.stats.sent where source=reply_io AND channel=email',
