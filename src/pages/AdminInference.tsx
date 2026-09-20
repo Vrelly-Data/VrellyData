@@ -592,10 +592,10 @@ export default function AdminInference() {
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                       {[
                         { title: 'Total Contacts', value: baseKpis?.totalContactsDeduped, source: baseKpis?.sources.totalContactsDeduped },
-                        { title: 'Email Sends', value: baseKpis?.emailSends, source: baseKpis?.sources.emailSends },
-                        { title: 'Email Replies (campaign)', value: baseKpis?.emailRepliesCampaignTotal, source: baseKpis?.sources.emailRepliesCampaignTotal },
+                        { title: 'Email Sends (Reply)', value: baseKpis?.emailSendsReply, source: baseKpis?.sources.emailSendsReply },
                         { title: 'Smartlead Email Replies', value: baseKpis?.emailRepliesSmartleadCampaign, source: baseKpis?.sources.emailRepliesSmartleadCampaign },
                         { title: 'Reply Email Replies', value: baseKpis?.emailRepliesReplyCampaign, source: baseKpis?.sources.emailRepliesReplyCampaign },
+                        { title: 'Replies (people)', value: baseKpis?.repliedPeople, source: baseKpis?.sources.repliedPeople },
                         { title: 'LI Connections Accepted', value: baseKpis?.linkedinConnectionsAccepted, source: baseKpis?.sources.linkedinConnectionsAccepted },
                         { title: 'Interested (people)', value: baseKpis?.interestedPeople, source: baseKpis?.sources.interestedPeople },
                       ].map((kpi) => (
