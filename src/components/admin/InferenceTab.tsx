@@ -25,7 +25,7 @@ import {
   useReplyLatency,
   useTeams,
 } from '@/hooks/useInferenceData';
-import { BarChartComponent } from '@/components/insights/charts/BarChartComponent';
+import { BarChartComponent } from '@/components/insights/charts/BarChartComponentEnhanced';
 import { SummaryCard } from '@/components/insights/charts/SummaryCard';
 
 export function InferenceTab() {
@@ -289,19 +289,40 @@ function InsightRatesPanel({
   rows: ReturnType<typeof computeRatesByDimension>;
   kind: 'reply' | 'interested';
 }) {
-  const DENOM_THRESHOLD = 10; // hide/gray small samples
+  // Enforce higher denominator threshold to avoid misleading 100% spikes with tiny n
+  const DENOM_THRESHOLD = 20;
   const denomFor = (r: typeof rows[number]) => (kind === 'reply' ? r.sent : r.classified);
-  // Never include buckets with zero denominator (avoid divide-by-zero semantics)
-  const nonZero = rows.filter((r) => denomFor(r) > 0);
-  const top10 = nonZero.slice(0, 10);
+  const interestedFor = (r: typeof rows[number]) => (kind === 'reply' ? r.replied : r.interested);
+
+  // Exclude zero-denominator buckets entirely
+  const withDenom = rows.filter((r) => denomFor(r) > 0);
+
+  // Keep only buckets meeting the threshold; sort by denominator desc
+  const passing = withDenom.filter((r) => denomFor(r) >= DENOM_THRESHOLD);
+  passing.sort((a, b) => denomFor(b) - denomFor(a));
+  const top = passing.slice(0, 10); // cap to 10 categories for readability
+
   const data: Record<string, number> = {};
-  const weak: string[] = [];
-  for (const r of top10) {
+  const metrics: Record<string, { denom: number; interested: number; rate: number }> = {};
+
+  for (const r of top) {
     const name = `${r.key}${r.channel !== 'all' ? ` (${r.channel})` : ''}`;
-    data[name] = (kind === 'reply' ? r.replyRate : r.interestedRate) * 100;
-    if (denomFor(r) < DENOM_THRESHOLD) weak.push(name);
+    const denom = denomFor(r);
+    const interested = interestedFor(r);
+    const ratePct = (kind === 'reply' ? r.replyRate : r.interestedRate) * 100;
+    data[name] = ratePct;
+    metrics[name] = { denom, interested, rate: ratePct };
   }
-  return <BarChartComponent title={title} data={data} yAxisLabel="% rate" weakNames={weak} />;
+
+  return (
+    <BarChartComponent
+      title={title}
+      data={data}
+      yAxisLabel="% rate"
+      metricsByName={metrics}
+      layout="vertical" // horizontal bars for long labels
+    />
+  );
 }
 
 function CopyPerformanceTable({
