@@ -18,6 +18,7 @@ import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { Badge } from '@/components/ui/badge';
 import { ChartWithToggle } from '@/components/insights/charts/ChartWithToggle';
+import { InferenceFilters, useExactInferencePeopleKpis } from '@/hooks/useInferenceData';
 
 type InferenceEvent = {
   id: string;
@@ -123,7 +124,7 @@ function useInferenceSample(filters: {
       const { data, error } = await buildInferenceQuery({
         ...filters,
         select:
-          'id, occurred_at, person_key, team_id, organization_id, event_type, intent, channel, industry, job_title, city',
+          'id, occurred_at, person_key, team_id, organization_id, event_type, intent, channel, industry, job_title, city, state, company_size',
         orderByOccurredAt: false,
       });
       if (error) throw error;
@@ -251,32 +252,22 @@ export default function AdminInference() {
     [sampleRows],
   );
 
-  // KPIs (people-level, replies-focused)
-  const uniqueContacts = useMemo(() => new Set(sampleRows.map((r) => r.person_key).filter(Boolean)).size, [sampleRows]);
-  const replyPeopleAll = useMemo(() => {
-    const s = new Set<string>();
-    for (const r of sampleRows) {
-      if (r.event_type === 'replied' && r.person_key) {
-        // Respect channel filter later when displaying channel-specific KPIs
-        if (channel === 'all' || r.channel === channel) s.add(r.person_key);
-      }
-    }
-    return s;
-  }, [sampleRows, channel]);
-  const replyPeopleEmail = useMemo(() => {
-    const s = new Set<string>();
-    for (const r of sampleRows) {
-      if (r.event_type === 'replied' && r.person_key && r.channel === 'email') s.add(r.person_key);
-    }
-    return s;
-  }, [sampleRows]);
-  const replyPeopleLinkedIn = useMemo(() => {
-    const s = new Set<string>();
-    for (const r of sampleRows) {
-      if (r.event_type === 'replied' && r.person_key && r.channel === 'linkedin') s.add(r.person_key);
-    }
-    return s;
-  }, [sampleRows]);
+  // Exact KPIs via shared hook
+  const kpiFilters: InferenceFilters = useMemo(
+    () => ({
+      teamIds: teamId !== 'all' ? [teamId] : undefined,
+      organizationIds: organizationId !== 'all' ? [organizationId] : undefined,
+      channels: channel === 'all' ? undefined : [channel as 'email' | 'linkedin' | 'other'],
+      dateFrom: dateRange.from ? dateRange.from.toISOString() : undefined,
+      dateTo: dateRange.to ? dateRange.to.toISOString() : undefined,
+    }),
+    [teamId, organizationId, channel, dateRange.from, dateRange.to]
+  );
+  const { data: exactKpis, isLoading: loadingKpis } = useExactInferencePeopleKpis(kpiFilters);
+  const uniqueContacts = exactKpis?.totalContacts ?? 0;
+  const replyPeopleAll = useMemo(() => new Set(exactKpis?.replyPeople ?? []), [exactKpis]);
+  const replyPeopleEmail = useMemo(() => exactKpis?.emailRepliesPeople ?? 0, [exactKpis]);
+  const replyPeopleLinkedIn = useMemo(() => exactKpis?.liRepliesPeople ?? 0, [exactKpis]);
   const dateSpan = useMemo(() => {
     const dates = sampleRows.map((r) => (r.occurred_at ? new Date(r.occurred_at) : null)).filter(Boolean) as Date[];
     if (dates.length === 0) return null;
@@ -298,26 +289,10 @@ export default function AdminInference() {
   // Intent mix (counts + % of replies). Prefer classified rows when intent populated.
   const intentOrder = ['interested', 'not_interested', 'referral', 'out_of_office', 'needs_more_info', 'bounce', 'unknown'];
   const intentComposition = useMemo(() => {
-    // Build per-person intent: prefer most recent classified with non-unknown; else unknown if replied
-    const byPersonBestIntent = new Map<string, string>();
-    // Index classified rows by person, most recent first
-    const classByPerson = groupBy(
-      classifiedRows.slice().sort((a, b) => (a.occurred_at && b.occurred_at ? (a.occurred_at < b.occurred_at ? 1 : -1) : 0)),
-      (r) => r.person_key || '',
+    return (
+      exactKpis?.intentComposition ?? Object.fromEntries(intentOrder.map((k) => [k, 0]))
     );
-    for (const r of replyRows) {
-      const pk = r.person_key || '';
-      if (!pk) continue;
-      const classList = classByPerson[pk] || [];
-      const chosen =
-        classList.find((c) => c.intent && c.intent !== 'unknown')?.intent ||
-        (r.intent && r.intent !== 'unknown' ? r.intent : 'unknown');
-      byPersonBestIntent.set(pk, chosen || 'unknown');
-    }
-    const counts: Record<string, number> = Object.fromEntries(intentOrder.map((k) => [k, 0]));
-    for (const i of byPersonBestIntent.values()) counts[i] = (counts[i] || 0) + 1;
-    return counts;
-  }, [replyRows, classifiedRows]);
+  }, [exactKpis]);
 
   // "Within an intent" filter (default all replies)
   const withinIntentPeople = useMemo(() => {
@@ -408,7 +383,7 @@ export default function AdminInference() {
     setPage(1);
   }, [teamId, organizationId, eventType, intent, channel, dateRange.from?.toISOString(), dateRange.to?.toISOString()]);
 
-  const loading = loadingAgg || loadingTable;
+  const loading = loadingAgg || loadingTable || loadingKpis;
 
   return (
     <SidebarProvider>
@@ -616,7 +591,7 @@ export default function AdminInference() {
                     <CardTitle className="text-sm text-muted-foreground">Email Replies (people)</CardTitle>
                   </CardHeader>
                   <CardContent className="text-2xl font-semibold">
-                    {loading ? <Loader2 className="h-5 w-5 animate-spin" /> : replyPeopleEmail.size.toLocaleString()}
+                    {loading ? <Loader2 className="h-5 w-5 animate-spin" /> : Number(replyPeopleEmail).toLocaleString()}
                   </CardContent>
                 </Card>
                 <Card>
@@ -624,7 +599,7 @@ export default function AdminInference() {
                     <CardTitle className="text-sm text-muted-foreground">LinkedIn Replies (people)</CardTitle>
                   </CardHeader>
                   <CardContent className="text-2xl font-semibold">
-                    {loading ? <Loader2 className="h-5 w-5 animate-spin" /> : replyPeopleLinkedIn.size.toLocaleString()}
+                    {loading ? <Loader2 className="h-5 w-5 animate-spin" /> : Number(replyPeopleLinkedIn).toLocaleString()}
                   </CardContent>
                 </Card>
                 <Card>
