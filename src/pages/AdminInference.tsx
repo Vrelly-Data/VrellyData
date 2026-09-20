@@ -591,13 +591,13 @@ export default function AdminInference() {
                   <CardContent>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                       {[
-                        { title: 'Total Contacts', value: baseKpis?.totalContactsDeduped, source: baseKpis?.sources.totalContactsDeduped },
-                        { title: 'Email Sends (Reply)', value: baseKpis?.emailSendsReply, source: baseKpis?.sources.emailSendsReply },
-                        { title: 'Smartlead Email Replies', value: baseKpis?.emailRepliesSmartleadCampaign, source: baseKpis?.sources.emailRepliesSmartleadCampaign },
-                        { title: 'Reply Email Replies', value: baseKpis?.emailRepliesReplyCampaign, source: baseKpis?.sources.emailRepliesReplyCampaign },
-                        { title: 'Replies (people)', value: baseKpis?.repliedPeople, source: baseKpis?.sources.repliedPeople },
-                        { title: 'LI Connections Accepted', value: baseKpis?.linkedinConnectionsAccepted, source: baseKpis?.sources.linkedinConnectionsAccepted },
-                        { title: 'Interested (people)', value: baseKpis?.interestedPeople, source: baseKpis?.sources.interestedPeople },
+                        { title: 'Total LI Contacts', value: baseKpis?.totalContactsLinkedinDeduped, source: baseKpis?.sources.totalContactsLinkedinDeduped },
+                        { title: 'Total Email Contacts', value: baseKpis?.totalContactsEmailDeduped, source: baseKpis?.sources.totalContactsEmailDeduped },
+                        { title: 'Total LI Replies', value: baseKpis?.repliedPeopleLinkedin, source: baseKpis?.sources.repliedPeopleLinkedin },
+                        { title: 'Total LI Acceptance', value: baseKpis?.linkedinConnectionsAccepted, source: baseKpis?.sources.linkedinConnectionsAccepted },
+                        { title: 'Total Email Replies', value: baseKpis?.repliedPeopleEmail, source: baseKpis?.sources.repliedPeopleEmail },
+                        { title: 'Interested Email Replies', value: baseKpis?.interestedPeopleEmail, source: baseKpis?.sources.interestedPeopleEmail },
+                        { title: 'Interested LI Replies', value: baseKpis?.interestedPeopleLinkedin, source: baseKpis?.sources.interestedPeopleLinkedin },
                       ].map((kpi) => (
                         <Card key={kpi.title}>
                           <CardContent className="pt-6">
