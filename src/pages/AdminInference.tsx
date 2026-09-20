@@ -597,6 +597,12 @@ export default function AdminInference() {
                         { title: 'LI Connections Sent', value: baseKpis?.linkedinConnectionsSent, source: baseKpis?.sources.linkedinConnectionsSent },
                         { title: 'LI Connections Accepted', value: baseKpis?.linkedinConnectionsAccepted, source: baseKpis?.sources.linkedinConnectionsAccepted },
                         { title: 'LI Messages Sent', value: baseKpis?.linkedinMessagesSent, source: baseKpis?.sources.linkedinMessagesSent },
+<<<<<<< HEAD
+=======
+                        { title: 'Replies (people)', value: baseKpis?.repliedPeople, source: baseKpis?.sources.repliedPeople },
+                        { title: 'Email Replies (people)', value: baseKpis?.repliedPeopleEmail, source: baseKpis?.sources.repliedPeopleEmail },
+                        { title: 'LI Replies (people)', value: baseKpis?.repliedPeopleLinkedin, source: baseKpis?.sources.repliedPeopleLinkedin },
+>>>>>>> 9b5de93 (inference: add channel-split Replies (people) — email and LinkedIn — to Base KPIs)
                         { title: 'Interested (people)', value: baseKpis?.interestedPeople, source: baseKpis?.sources.interestedPeople },
                       ].map((kpi) => (
                         <Card key={kpi.title}>

@@ -272,6 +272,8 @@ export type BaseInferenceKpis = {
   linkedinConnectionsSent: number;
   linkedinConnectionsAccepted: number;
   repliedPeople: number; // distinct people who replied (all channels)
+  repliedPeopleEmail: number; // distinct people who replied on email channel
+  repliedPeopleLinkedin: number; // distinct people who replied on linkedin channel
   interestedPeople: number; // distinct people classified as interested (all channels)
   sources: {
     totalContactsDeduped: string;
@@ -283,6 +285,8 @@ export type BaseInferenceKpis = {
     linkedinConnectionsSent: string;
     linkedinConnectionsAccepted: string;
     repliedPeople: string;
+    repliedPeopleEmail: string;
+    repliedPeopleLinkedin: string;
     interestedPeople: string;
   };
 };
@@ -433,13 +437,22 @@ export function useBaseInferenceKpis(filters: InferenceFilters) {
   return useQuery({
     queryKey: ['base_inference_kpis', { teamIds: filters.teamIds, dateFrom: filters.dateFrom, dateTo: filters.dateTo }],
     queryFn: async (): Promise<BaseInferenceKpis> => {
-      const [contactsCount, campaignSums, liMsgsSent, repliedPeople, interestedPeople, repliedPeopleEmail] = await Promise.all([
+      const [
+        contactsCount,
+        campaignSums,
+        liMsgsSent,
+        repliedPeople,
+        repliedPeopleEmail,
+        repliedPeopleLinkedin,
+        interestedPeople,
+      ] = await Promise.all([
         countDedupedContacts(filters.teamIds),
         sumCampaignStats(filters.teamIds),
         countEventsQuick(filters, 'linkedin', 'sent'),
         countDistinctPeopleForEvents(filters, (r) => r.event_type === 'replied'),
-        countDistinctPeopleForEvents(filters, (r) => r.event_type === 'classified' && r.intent === 'interested'),
         countDistinctPeopleForEvents(filters, (r) => r.event_type === 'replied' && r.channel === 'email'),
+        countDistinctPeopleForEvents(filters, (r) => r.event_type === 'replied' && r.channel === 'linkedin'),
+        countDistinctPeopleForEvents(filters, (r) => r.event_type === 'classified' && r.intent === 'interested'),
       ]);
 
       if (repliedPeople > contactsCount) {
@@ -457,6 +470,8 @@ export function useBaseInferenceKpis(filters: InferenceFilters) {
         linkedinConnectionsSent: campaignSums.linkedinConnectionsSent,
         linkedinConnectionsAccepted: campaignSums.linkedinConnectionsAccepted,
         repliedPeople,
+        repliedPeopleEmail,
+        repliedPeopleLinkedin,
         interestedPeople,
         sources: {
           totalContactsDeduped: 'synced_contacts (dedup by email or linkedin_url) — Smartlead roster incomplete',
@@ -468,6 +483,8 @@ export function useBaseInferenceKpis(filters: InferenceFilters) {
           linkedinConnectionsSent: 'synced_campaigns.stats.linkedinConnectionsSent / connectionsSent',
           linkedinConnectionsAccepted: 'synced_campaigns.stats.linkedinConnectionsAccepted / connectionsAccepted',
           repliedPeople: 'inference_events_enriched distinct person_key where event_type=replied',
+          repliedPeopleEmail: "inference_events_enriched distinct person_key where event_type='replied' and channel='email'",
+          repliedPeopleLinkedin: "inference_events_enriched distinct person_key where event_type='replied' and channel='linkedin'",
           interestedPeople: "inference_events_enriched distinct person_key where event_type=classified and intent='interested'",
         },
       };
