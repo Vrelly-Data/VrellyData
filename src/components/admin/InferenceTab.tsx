@@ -14,6 +14,8 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { format } from 'date-fns';
 import { CalendarIcon, Sparkles, Filter, Users, BarChart as BarChartIcon, Loader2 } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { supabase } from '@/integrations/supabase/client';
 import {
   InferenceEvent,
   InferenceFilters,
@@ -66,6 +68,147 @@ export function InferenceTab() {
   const limit = eventsResp?.limit ?? events.length;
   const { data: replyPairs = [] } = useReplyLatency(filters);
 
+  // Exact KPI totals and people-level intent mix — fetched via paged DB aggregates (not client samples)
+  type ExactKpis = {
+    totalContacts: number;
+    totalRepliesPeople: number;
+    emailRepliesPeople: number;
+    liRepliesPeople: number;
+    replyPeopleSet: Set<string>;
+    intentComposition: Record<string, number>;
+    personIntentMap: Record<string, string>;
+  };
+  const { data: exactKpis, isLoading: loadingKpis } = useQuery({
+    queryKey: [
+      'inference-kpis-exact',
+      {
+        teamId,
+        orgId,
+        channels,
+        dateFrom: dateFrom?.toISOString(),
+        dateTo: dateTo?.toISOString(),
+      },
+    ],
+    queryFn: async (): Promise<ExactKpis> => {
+      // Helpers
+      const endOfDayIso = (d?: Date) => {
+        if (!d) return undefined;
+        const end = new Date(d);
+        end.setUTCHours(23, 59, 59, 999);
+        return end.toISOString();
+      };
+      const applyBase = (q: any) => {
+        if (teamId !== 'all') q = q.eq('team_id', teamId);
+        if (orgId !== 'all') q = q.eq('organization_id', orgId);
+        if (channels && channels.length > 0) q = q.in('channel', channels);
+        if (dateFrom) q = q.gte('occurred_at', dateFrom.toISOString());
+        if (dateTo) q = q.lte('occurred_at', endOfDayIso(dateTo));
+        return q;
+      };
+      const PAGE = 5000;
+      async function fetchDistinctPeople(eventType?: string, channelOverride?: Array<'email' | 'linkedin' | 'other'>) {
+        const people = new Set<string>();
+        let from = 0;
+        // Build base
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const sb: any = supabase;
+        while (true) {
+          let q = sb.from('inference_events_enriched' as any).select('person_key', { count: 'exact' }).order('occurred_at', { ascending: false });
+          if (eventType) q = q.eq('event_type', eventType);
+          if (teamId !== 'all') q = q.eq('team_id', teamId);
+          if (orgId !== 'all') q = q.eq('organization_id', orgId);
+          // Channels — override or use current selection
+          const ch = channelOverride ?? channels;
+          if (ch && ch.length > 0) q = q.in('channel', ch);
+          if (dateFrom) q = q.gte('occurred_at', dateFrom.toISOString());
+          if (dateTo) {
+            const end = new Date(dateTo);
+            end.setUTCHours(23, 59, 59, 999);
+            q = q.lte('occurred_at', end.toISOString());
+          }
+          q = q.range(from, from + PAGE - 1);
+          const { data, error } = await q;
+          if (error) throw error;
+          const rows = (data || []) as Array<{ person_key: string | null }>;
+          for (const r of rows) {
+            const pk = (r.person_key || '').trim();
+            if (pk) people.add(pk);
+          }
+          if (rows.length < PAGE) break;
+          from += PAGE;
+        }
+        return people;
+      }
+      // Replies base set (respect current channels selection)
+      const replyPeople = await fetchDistinctPeople('replied');
+      // Email/LI subsets (explicitly per-channel to keep stable regardless of current toggle)
+      const emailPeople = await fetchDistinctPeople('replied', ['email']);
+      const liPeople = await fetchDistinctPeople('replied', ['linkedin']);
+      // Total contacts — any event (respect current channels selection)
+      const contactPeople = await fetchDistinctPeople(undefined);
+
+      // Classified events for reply people — build best-intent per person
+      const intentOrderLocal = ['interested', 'not_interested', 'referral', 'out_of_office', 'needs_more_info', 'bounce', 'unknown'];
+      const byPersonBestIntent = new Map<string, string>();
+      const replyKeys = Array.from(replyPeople);
+      const CHUNK = 400;
+      for (let i = 0; i < replyKeys.length; i += CHUNK) {
+        const slice = replyKeys.slice(i, i + CHUNK);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const sb: any = supabase;
+        let q = sb
+          .from('inference_events_enriched' as any)
+          .select('person_key,intent,occurred_at,channel')
+          .eq('event_type', 'classified')
+          .in('person_key', slice)
+          .order('occurred_at', { ascending: false });
+        if (teamId !== 'all') q = q.eq('team_id', teamId);
+        if (orgId !== 'all') q = q.eq('organization_id', orgId);
+        // restrict to current channel selection for parity with UI
+        if (channels && channels.length > 0) q = q.in('channel', channels);
+        if (dateFrom) q = q.gte('occurred_at', dateFrom.toISOString());
+        if (dateTo) {
+          const end = new Date(dateTo);
+          end.setUTCHours(23, 59, 59, 999);
+          q = q.lte('occurred_at', end.toISOString());
+        }
+        const { data, error } = await q;
+        if (error) throw error;
+        const rows = (data || []) as Array<{ person_key: string; intent: string | null; occurred_at: string }>;
+        // Reduce into best-intent: first non-unknown in reverse-chronological order
+        for (const r of rows) {
+          const pk = (r.person_key || '').trim();
+          if (!pk) continue;
+          if (byPersonBestIntent.has(pk)) continue; // already have most recent
+          if (r.intent && r.intent !== 'unknown') {
+            byPersonBestIntent.set(pk, r.intent);
+          }
+        }
+      }
+      // Assign unknown for any reply people not classified or only unknown
+      for (const pk of replyPeople) {
+        if (!byPersonBestIntent.has(pk)) byPersonBestIntent.set(pk, 'unknown');
+      }
+      const intentCounts: Record<string, number> = Object.fromEntries(intentOrderLocal.map((k) => [k, 0]));
+      for (const v of byPersonBestIntent.values()) {
+        const key = intentOrderLocal.includes(String(v)) ? String(v) : 'unknown';
+        intentCounts[key] = (intentCounts[key] || 0) + 1;
+      }
+      const personIntentMap: Record<string, string> = {};
+      for (const [pk, intent] of byPersonBestIntent.entries()) personIntentMap[pk] = intent;
+      return {
+        totalContacts: contactPeople.size,
+        totalRepliesPeople: replyPeople.size,
+        emailRepliesPeople: emailPeople.size,
+        liRepliesPeople: liPeople.size,
+        replyPeopleSet: replyPeople,
+        intentComposition: intentCounts,
+        personIntentMap,
+      };
+    },
+    staleTime: 60_000,
+  });
+
   // Derived metrics
   const ratesByIndustry = useMemo(() => computeRatesByDimension(events, 'industry', channels), [events, channels]);
   const ratesByTitle = useMemo(() => computeRatesByDimension(events, 'job_title', channels), [events, channels]);
@@ -103,73 +246,29 @@ export function InferenceTab() {
     entries.sort((a, b) => b[1] - a[1]);
     return Object.fromEntries(entries.slice(0, n));
   }
-  const uniqueContacts = useMemo(() => new Set(events.map((r) => r.person_key).filter(Boolean)).size, [events]);
-  const replyRows = useMemo(() => events.filter((r) => r.event_type === 'replied'), [events]);
-  const classifiedRows = useMemo(() => events.filter((r) => r.event_type === 'classified'), [events]);
-  const replyPeopleAll = useMemo(() => {
+  // Exact KPI numbers derived from DB
+  const uniqueContactsExact = exactKpis?.totalContacts ?? 0;
+  const replyPeopleAllExact = exactKpis?.totalRepliesPeople ?? 0;
+  const replyPeopleEmailExact = exactKpis?.emailRepliesPeople ?? 0;
+  const replyPeopleLinkedInExact = exactKpis?.liRepliesPeople ?? 0;
+  const intentComposition = exactKpis?.intentComposition ?? {
+    interested: 0,
+    not_interested: 0,
+    referral: 0,
+    out_of_office: 0,
+    needs_more_info: 0,
+    bounce: 0,
+    unknown: 0,
+  };
+  const withinIntentPeopleExact = useMemo(() => {
+    if (!exactKpis) return new Set<string>();
+    if (intent === 'all') return new Set<string>(Array.from(exactKpis.replyPeopleSet));
     const s = new Set<string>();
-    for (const r of replyRows) if (r.person_key) s.add(r.person_key);
-    return s;
-  }, [replyRows]);
-  const replyPeopleEmail = useMemo(() => {
-    const s = new Set<string>();
-    for (const r of replyRows) if (r.person_key && r.channel === 'email') s.add(r.person_key);
-    return s;
-  }, [replyRows]);
-  const replyPeopleLinkedIn = useMemo(() => {
-    const s = new Set<string>();
-    for (const r of replyRows) if (r.person_key && r.channel === 'linkedin') s.add(r.person_key);
-    return s;
-  }, [replyRows]);
-  const intentOrder: NonNullable<InferenceEvent['intent']>[] = [
-    'interested',
-    'not_interested',
-    'referral',
-    'out_of_office',
-    'needs_more_info',
-    'bounce',
-    'unknown',
-  ];
-  const intentComposition = useMemo(() => {
-    const byPersonBestIntent = new Map<string, string>();
-    const classByPerson = groupBy(
-      classifiedRows.slice().sort((a, b) => (a.occurred_at && b.occurred_at ? (a.occurred_at < b.occurred_at ? 1 : -1) : 0)),
-      (r) => r.person_key || '',
-    );
-    for (const r of replyRows) {
-      const pk = r.person_key || '';
-      if (!pk) continue;
-      const classList = classByPerson[pk] || [];
-      const chosen =
-        classList.find((c) => c.intent && c.intent !== 'unknown')?.intent ||
-        (r.intent && r.intent !== 'unknown' ? r.intent : 'unknown');
-      byPersonBestIntent.set(pk, chosen || 'unknown');
+    for (const [pk, v] of Object.entries(exactKpis.personIntentMap)) {
+      if (v === intent) s.add(pk);
     }
-    const counts: Record<string, number> = Object.fromEntries(intentOrder.map((k) => [k, 0]));
-    for (const i of byPersonBestIntent.values()) counts[i] = (counts[i] || 0) + 1;
-    return counts;
-  }, [replyRows, classifiedRows]);
-  const withinIntentPeople = useMemo(() => {
-    const result = new Set<string>();
-    if (intent === 'all') {
-      for (const r of replyRows) if (r.person_key) result.add(r.person_key);
-      return result;
-    }
-    const classByPerson = groupBy(
-      classifiedRows.slice().sort((a, b) => (a.occurred_at && b.occurred_at ? (a.occurred_at < b.occurred_at ? 1 : -1) : 0)),
-      (r) => r.person_key || '',
-    );
-    for (const r of replyRows) {
-      const pk = r.person_key || '';
-      if (!pk) continue;
-      const classList = classByPerson[pk] || [];
-      const chosen =
-        classList.find((c) => c.intent && c.intent !== 'unknown')?.intent ||
-        (r.intent && r.intent !== 'unknown' ? r.intent : 'unknown');
-      if (chosen === intent) result.add(pk);
-    }
-    return result;
-  }, [replyRows, classifiedRows, intent]);
+    return s;
+  }, [exactKpis, intent]);
   function rankBreakdownForPeople(
     peopleSet: Set<string>,
     dim: 'job_title' | 'industry' | 'company_size' | 'city_state',
@@ -212,17 +311,17 @@ export function InferenceTab() {
     const denom = peopleSet.size || 1;
     return (withValue / denom) * 100;
   }
-  const breakdownJobTitle = useMemo(() => rankBreakdownForPeople(withinIntentPeople, 'job_title', 12), [withinIntentPeople, events]);
-  const breakdownIndustry = useMemo(() => rankBreakdownForPeople(withinIntentPeople, 'industry', 12), [withinIntentPeople, events]);
+  const breakdownJobTitle = useMemo(() => rankBreakdownForPeople(withinIntentPeopleExact, 'job_title', 12), [withinIntentPeopleExact, events]);
+  const breakdownIndustry = useMemo(() => rankBreakdownForPeople(withinIntentPeopleExact, 'industry', 12), [withinIntentPeopleExact, events]);
   const breakdownCompanySize = useMemo(
-    () => rankBreakdownForPeople(withinIntentPeople, 'company_size', 12),
-    [withinIntentPeople, events],
+    () => rankBreakdownForPeople(withinIntentPeopleExact, 'company_size', 12),
+    [withinIntentPeopleExact, events],
   );
-  const breakdownGeo = useMemo(() => rankBreakdownForPeople(withinIntentPeople, 'city_state', 12), [withinIntentPeople, events]);
-  const fillJobTitle = useMemo(() => fillRateForPeople(withinIntentPeople, 'job_title'), [withinIntentPeople, events]);
-  const fillIndustry = useMemo(() => fillRateForPeople(withinIntentPeople, 'industry'), [withinIntentPeople, events]);
-  const fillCompanySize = useMemo(() => fillRateForPeople(withinIntentPeople, 'company_size'), [withinIntentPeople, events]);
-  const fillGeo = useMemo(() => fillRateForPeople(withinIntentPeople, 'city_state'), [withinIntentPeople, events]);
+  const breakdownGeo = useMemo(() => rankBreakdownForPeople(withinIntentPeopleExact, 'city_state', 12), [withinIntentPeopleExact, events]);
+  const fillJobTitle = useMemo(() => fillRateForPeople(withinIntentPeopleExact, 'job_title'), [withinIntentPeopleExact, events]);
+  const fillIndustry = useMemo(() => fillRateForPeople(withinIntentPeopleExact, 'industry'), [withinIntentPeopleExact, events]);
+  const fillCompanySize = useMemo(() => fillRateForPeople(withinIntentPeopleExact, 'company_size'), [withinIntentPeopleExact, events]);
+  const fillGeo = useMemo(() => fillRateForPeople(withinIntentPeopleExact, 'city_state'), [withinIntentPeopleExact, events]);
   // Person timeline
   const [personKeyQuery, setPersonKeyQuery] = useState('');
   const [timelinePersonKey, setTimelinePersonKey] = useState<string | null>(null);
@@ -356,7 +455,7 @@ export function InferenceTab() {
             <CardTitle className="text-sm text-muted-foreground">Total Contacts</CardTitle>
           </CardHeader>
           <CardContent className="text-2xl font-semibold">
-            {isLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : uniqueContacts.toLocaleString()}
+            {loadingKpis ? <Loader2 className="h-5 w-5 animate-spin" /> : uniqueContactsExact.toLocaleString()}
           </CardContent>
         </Card>
         <Card>
@@ -364,7 +463,7 @@ export function InferenceTab() {
             <CardTitle className="text-sm text-muted-foreground">Total Replies (people)</CardTitle>
           </CardHeader>
           <CardContent className="text-2xl font-semibold">
-            {isLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : replyPeopleAll.size.toLocaleString()}
+            {loadingKpis ? <Loader2 className="h-5 w-5 animate-spin" /> : replyPeopleAllExact.toLocaleString()}
           </CardContent>
         </Card>
         <Card>
@@ -372,7 +471,7 @@ export function InferenceTab() {
             <CardTitle className="text-sm text-muted-foreground">Email Replies (people)</CardTitle>
           </CardHeader>
           <CardContent className="text-2xl font-semibold">
-            {isLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : replyPeopleEmail.size.toLocaleString()}
+            {loadingKpis ? <Loader2 className="h-5 w-5 animate-spin" /> : replyPeopleEmailExact.toLocaleString()}
           </CardContent>
         </Card>
         <Card>
@@ -380,7 +479,7 @@ export function InferenceTab() {
             <CardTitle className="text-sm text-muted-foreground">LinkedIn Replies (people)</CardTitle>
           </CardHeader>
           <CardContent className="text-2xl font-semibold">
-            {isLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : replyPeopleLinkedIn.size.toLocaleString()}
+            {loadingKpis ? <Loader2 className="h-5 w-5 animate-spin" /> : replyPeopleLinkedInExact.toLocaleString()}
           </CardContent>
         </Card>
         <Card>
