@@ -98,10 +98,20 @@ function applyEventFilters(
 export function useInferenceEvents(filters: InferenceFilters) {
   return useQuery({
     queryKey: ['inference_events', filters],
-    queryFn: async (): Promise<InferenceEvent[]> => {
-      // fetch minimal columns needed for aggregations and timeline
+    queryFn: async (): Promise<{ rows: InferenceEvent[]; total: number; isCapped: boolean; limit: number }> => {
+      const LIMIT = 10000;
+      // 1) Total count (head request) with identical filters
+      let countQuery = supabase
+        .from('inference_events_enriched' as any)
+        .select('id', { count: 'exact', head: true });
+      countQuery = applyEventFilters(countQuery, filters);
+      const { count: total = 0, error: countError } = await countQuery as any;
+      if (countError) {
+        // Non-fatal — proceed without a total
+      }
+
+      // 2) Fetch minimal columns needed for aggregations and timeline
       let query = supabase
-        // Prefer enriched view which coalesces industry from people when available
         .from('inference_events_enriched' as any)
         .select(
           [
@@ -141,13 +151,14 @@ export function useInferenceEvents(filters: InferenceFilters) {
           ].join(',')
         )
         .order('occurred_at', { ascending: false })
-        .limit(10000); // safety cap, dataset ~9k rows per user brief
+        .limit(LIMIT);
 
       query = applyEventFilters(query, filters);
 
       const { data, error } = await query;
       if (error) throw new Error(error.message);
-      return (data ?? []) as InferenceEvent[];
+      const rows = (data ?? []) as InferenceEvent[];
+      return { rows, total, isCapped: total > LIMIT, limit: LIMIT };
     },
   });
 }
@@ -268,7 +279,17 @@ export function computeRatesByDimension(
   const map = new Map<string, RateRow>();
   for (const e of events) {
     if (!includeAllChannels && !channels!.includes(e.channel)) continue;
-    const key = String((e as any)[dim] || '(unknown)');
+    const rawKey = String((e as any)[dim] || '').trim();
+    const isUnknown =
+      rawKey === '' ||
+      rawKey === '(unknown)' ||
+      rawKey.toLowerCase() === 'unknown' ||
+      rawKey.toLowerCase() === 'n/a';
+    if (isUnknown) {
+      // Exclude unknowns from ranked insights — product preference
+      continue;
+    }
+    const key = rawKey;
     const composite = `${key}||${e.channel}`;
     const baseKey = includeAllChannels ? key : composite;
     const existing = map.get(baseKey) || {

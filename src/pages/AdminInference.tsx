@@ -87,8 +87,9 @@ function buildInferenceQuery(filters: {
 }) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const sb: any = supabase;
+  // Prefer enriched view which coalesces firmographics from people when blanks
   let query = sb
-    .from('inference_events')
+    .from('inference_events_enriched' as any)
     .select(filters.select, { count: 'exact' });
 
   const { dateRange, teamId, organizationId, eventType, intent, channel } = filters;
@@ -189,7 +190,12 @@ function countBy<T, K extends string | number>(rows: T[], getKey: (r: T) => K | 
 }
 
 function topN(map: Record<string, number>, n: number): Record<string, number> {
-  const entries = Object.entries(map).filter(([k]) => !!k && k !== 'null' && k !== 'undefined');
+  const entries = Object.entries(map).filter(([k]) => {
+    const key = String(k || '').trim();
+    const lower = key.toLowerCase();
+    // Exclude blank/unknown buckets from the ranked bars
+    return !!key && lower !== 'unknown' && key !== '(unknown)' && key !== 'null' && key !== 'undefined';
+  });
   entries.sort((a, b) => b[1] - a[1]);
   return Object.fromEntries(entries.slice(0, n));
 }
