@@ -389,17 +389,6 @@ export function InferenceTab() {
             {loadingKpis ? <Loader2 className="h-5 w-5 animate-spin" /> : replyPeopleLinkedInExact.toLocaleString()}
           </CardContent>
         </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm text-muted-foreground">LI Connection accepts</CardTitle>
-          </CardHeader>
-          <CardContent className="text-sm">
-            —
-            <div className="text-xs text-muted-foreground mt-1">
-              Not captured in events; no safe detection available from current LinkedIn integrations.
-            </div>
-          </CardContent>
-        </Card>
       </div>
 
       {/* OF REPLIES — intent mix (counts + % of replies; classified preferred) */}

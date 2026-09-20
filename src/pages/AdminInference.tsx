@@ -668,18 +668,6 @@ export default function AdminInference() {
                     {loading ? <Loader2 className="h-5 w-5 animate-spin" /> : Number(replyPeopleLinkedIn).toLocaleString()}
                   </CardContent>
                 </Card>
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-sm text-muted-foreground">LI Connection accepts</CardTitle>
-                  </CardHeader>
-                  <CardContent className="text-sm">
-                    {/* No dedicated accept signal in prod — present honest empty note */}
-                    —
-                    <div className="text-xs text-muted-foreground mt-1">
-                      Not captured in events; no safe detection available from current LinkedIn integrations.
-                    </div>
-                  </CardContent>
-                </Card>
               </div>
 
               {/* OF REPLIES — intent mix (counts + % of replies; classified preferred) */}
