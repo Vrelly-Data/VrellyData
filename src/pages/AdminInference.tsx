@@ -590,21 +590,21 @@ export default function AdminInference() {
                   </CardHeader>
                   <CardContent>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                      {[
-                        { title: 'Total LI Contacts', value: baseKpis?.totalContactsLinkedinDeduped, source: baseKpis?.sources.totalContactsLinkedinDeduped },
-                        { title: 'Total Email Contacts', value: baseKpis?.totalContactsEmailDeduped, source: baseKpis?.sources.totalContactsEmailDeduped },
-                        { title: 'Total LI Replies', value: baseKpis?.repliedPeopleLinkedin, source: baseKpis?.sources.repliedPeopleLinkedin },
-                        { title: 'Total LI Acceptance', value: baseKpis?.linkedinConnectionsAccepted, source: baseKpis?.sources.linkedinConnectionsAccepted },
-                        { title: 'Total Email Replies', value: baseKpis?.repliedPeopleEmail, source: baseKpis?.sources.repliedPeopleEmail },
-                        { title: 'Interested Email Replies', value: baseKpis?.interestedPeopleEmail, source: baseKpis?.sources.interestedPeopleEmail },
-                        { title: 'Interested LI Replies', value: baseKpis?.interestedPeopleLinkedin, source: baseKpis?.sources.interestedPeopleLinkedin },
-                      ].map((kpi) => (
+                    {[
+                      { title: 'Total LI Contacts', value: baseKpis?.totalContactsLinkedinDeduped, footnote: 'Unique contacts (LinkedIn)' },
+                      { title: 'Total Email Contacts', value: baseKpis?.totalContactsEmailDeduped, footnote: 'Unique contacts (Email)' },
+                      { title: 'Total LI Replies', value: baseKpis?.repliedPeopleLinkedin, footnote: 'People who replied on LinkedIn' },
+                      { title: 'Total LI Acceptance', value: baseKpis?.linkedinConnectionsAccepted, footnote: 'LinkedIn connection accepts' },
+                      { title: 'Total Email Replies', value: baseKpis?.repliedPeopleEmail, footnote: 'People who replied via Email' },
+                      { title: 'Interested Email Replies', value: baseKpis?.interestedPeopleEmail, footnote: 'People classified as interested (Email)' },
+                      { title: 'Interested LI Replies', value: baseKpis?.interestedPeopleLinkedin, footnote: 'People classified as interested (LinkedIn)' },
+                    ].map((kpi) => (
                         <Card key={kpi.title}>
                           <CardContent className="pt-6">
                             <div>
                               <p className="text-sm text-muted-foreground">{kpi.title}</p>
                               <p className="text-2xl font-semibold mt-1">{loadingBase ? '…' : (kpi.value ?? 0).toLocaleString()}</p>
-                              <p className="text-[10px] text-muted-foreground mt-1">{kpi.source}</p>
+                            <p className="text-[10px] text-muted-foreground mt-1">{kpi.footnote}</p>
                             </div>
                           </CardContent>
                         </Card>
@@ -613,28 +613,25 @@ export default function AdminInference() {
                   </CardContent>
                 </Card>
 
-                {/* Smartlead campaign volumes (seats and replies) */}
+              {/* Email — campaign volume (aggregated across providers) */}
                 <Card className="md:col-span-2 lg:col-span-4">
                   <CardHeader className="pb-2">
-                    <CardTitle className="text-sm">Smartlead — campaign volumes</CardTitle>
+                  <CardTitle className="text-sm">Email — campaign volume</CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {[
-                        { title: 'Smartlead Email Replies (campaign)', value: baseKpis?.emailRepliesSmartleadCampaign, source: baseKpis?.sources.emailRepliesSmartleadCampaign },
-                        { title: 'Smartlead Email Contacts / seats', value: baseKpis?.smartleadSeats, source: baseKpis?.sources.smartleadSeats },
-                      ].map((kpi) => (
-                        <Card key={kpi.title}>
-                          <CardContent className="pt-6">
-                            <div>
-                              <p className="text-sm text-muted-foreground">{kpi.title}</p>
-                              <p className="text-2xl font-semibold mt-1">{loadingBase ? '…' : (kpi.value ?? 0).toLocaleString()}</p>
-                              <p className="text-[10px] text-muted-foreground mt-1">{kpi.source}</p>
-                            </div>
-                          </CardContent>
-                        </Card>
-                      ))}
-                    </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <Card>
+                      <CardContent className="pt-6">
+                        <div>
+                          <p className="text-sm text-muted-foreground">Email Replies (campaign)</p>
+                          <p className="text-2xl font-semibold mt-1">
+                            {loadingBase ? '…' : (baseKpis?.emailRepliesCampaignTotal ?? 0).toLocaleString()}
+                          </p>
+                          <p className="text-[10px] text-muted-foreground mt-1">Campaign replies across providers</p>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </div>
                   </CardContent>
                 </Card>
 
@@ -679,7 +676,7 @@ export default function AdminInference() {
                     {/* No dedicated accept signal in prod — present honest empty note */}
                     —
                     <div className="text-xs text-muted-foreground mt-1">
-                      Not captured in events; no safe detection in HeyReach payloads.
+                      Not captured in events; no safe detection available from current LinkedIn integrations.
                     </div>
                   </CardContent>
                 </Card>
