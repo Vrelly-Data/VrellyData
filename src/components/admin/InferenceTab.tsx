@@ -27,6 +27,7 @@ import {
 } from '@/hooks/useInferenceData';
 import { BarChartComponent } from '@/components/insights/charts/BarChartComponentEnhanced';
 import { SummaryCard } from '@/components/insights/charts/SummaryCard';
+import { Progress } from '@/components/ui/progress';
 
 export function InferenceTab() {
   // Filters
@@ -58,7 +59,11 @@ export function InferenceTab() {
     [teamId, orgId, channels, intent, eventTypes, dateFrom, dateTo]
   );
 
-  const { data: events = [], isLoading, error } = useInferenceEvents(filters);
+  const { data: eventsResp, isLoading, error } = useInferenceEvents(filters);
+  const events = (eventsResp?.rows ?? []) as InferenceEvent[];
+  const totalEventsCount = eventsResp?.total ?? events.length;
+  const isCapped = eventsResp?.isCapped ?? false;
+  const limit = eventsResp?.limit ?? events.length;
   const { data: replyPairs = [] } = useReplyLatency(filters);
 
   // Derived metrics
@@ -72,7 +77,12 @@ export function InferenceTab() {
   const interestedRateOverall = classifiedTotal > 0 ? interestedTotal / classifiedTotal : 0;
   const sentTotal = useMemo(() => events.filter((e) => e.event_type === 'sent').length, [events]);
   const repliedTotal = useMemo(() => events.filter((e) => e.event_type === 'replied').length, [events]);
-  const replyRateOverall = sentTotal > 0 ? repliedTotal / sentTotal : 0;
+  const rawReplyRate = sentTotal > 0 ? repliedTotal / sentTotal : 0;
+  const replyRateOverall = Math.min(rawReplyRate, 1); // cap at 100% to avoid misleading >100%
+  const replyRateNote =
+    sentTotal > 0 && rawReplyRate > 1
+      ? `Replies can exceed sends when replies occur to sends outside the selected date range. Capped at 100%.`
+      : undefined;
 
   // Person timeline
   const [personKeyQuery, setPersonKeyQuery] = useState('');
@@ -211,10 +221,19 @@ export function InferenceTab() {
         <SummaryCard
           title="Reply rate"
           value={`${(replyRateOverall * 100).toFixed(1)}%`}
-          description={`${repliedTotal} replies of ${sentTotal} sends`}
+          description={`${repliedTotal} replies of ${sentTotal} sends${replyRateNote ? ' — ' + replyRateNote : ''}`}
           icon={BarChartIcon}
         />
-        <SummaryCard title="Events loaded" value={events.length} icon={Users} />
+        <SummaryCard
+          title="Events loaded"
+          value={events.length}
+          description={
+            isCapped
+              ? `Showing ${events.length.toLocaleString()} of ${totalEventsCount.toLocaleString()} (capped at ${limit.toLocaleString()})`
+              : `${totalEventsCount.toLocaleString()} total`
+          }
+          icon={Users}
+        />
       </div>
 
       {/* Insights */}
@@ -224,6 +243,7 @@ export function InferenceTab() {
             <TabsTrigger value="industry">By Industry</TabsTrigger>
             <TabsTrigger value="title">By Job Title</TabsTrigger>
             <TabsTrigger value="city">By City</TabsTrigger>
+            <TabsTrigger value="quality">Data Quality</TabsTrigger>
             <TabsTrigger value="copy">By Copy</TabsTrigger>
             <TabsTrigger value="person">Person Timeline</TabsTrigger>
           </TabsList>
@@ -239,6 +259,9 @@ export function InferenceTab() {
         <TabsContent value="city" className="space-y-6">
           <InsightRatesPanel title="Reply rate by city" rows={ratesByCity} kind="reply" />
           <InsightRatesPanel title="Interested rate by city" rows={ratesByCity} kind="interested" />
+        </TabsContent>
+        <TabsContent value="quality" className="space-y-6">
+          <FirmographicQualityPanel events={events} />
         </TabsContent>
         <TabsContent value="copy" className="space-y-4">
           <CopyPerformanceTable rows={copyPerf} onOpenTimeline={(personKey) => setTimelinePersonKey(personKey)} />
@@ -383,6 +406,40 @@ function CopyPerformanceTable({
               )}
             </TableBody>
           </Table>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function FirmographicQualityPanel({ events }: { events: InferenceEvent[] }) {
+  const nonEmpty = (s: string | null | undefined) => !!(s && String(s).trim() !== '');
+  const denom = events.length || 1;
+  const jobFilled = events.filter((e) => nonEmpty(e.job_title)).length;
+  const indFilled = events.filter((e) => nonEmpty(e.industry)).length;
+  const cityFilled = events.filter((e) => nonEmpty(e.city)).length;
+  const rows: Array<{ label: string; value: number }> = [
+    { label: 'Job title filled', value: Math.round((jobFilled / denom) * 1000) / 10 },
+    { label: 'Industry filled', value: Math.round((indFilled / denom) * 1000) / 10 },
+    { label: 'City filled', value: Math.round((cityFilled / denom) * 1000) / 10 },
+  ];
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Firmographics coverage (after people join)</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {rows.map((r) => (
+          <div key={r.label} className="space-y-1">
+            <div className="flex items-center justify-between text-sm">
+              <div className="text-muted-foreground">{r.label}</div>
+              <div className="font-medium">{r.value.toFixed(1)}%</div>
+            </div>
+            <Progress value={r.value} className="h-2" />
+          </div>
+        ))}
+        <div className="text-xs text-muted-foreground">
+          Based on enriched events (coalesced from people when event fields are blank). Unknown/empty are excluded from charts.
         </div>
       </CardContent>
     </Card>
