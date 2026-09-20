@@ -28,17 +28,20 @@ export function BarChartComponent({ title, data, xAxisLabel, yAxisLabel, othersB
     value,
     fill: weak.has(name) ? 'hsl(var(--muted-foreground))' : COLORS[index % COLORS.length]
   }));
+  const total = chartData.reduce((sum, item) => sum + (typeof item.value === 'number' ? item.value : 0), 0) || 1;
 
   const CustomTooltip = ({ active, payload }: TooltipProps<number, string>) => {
     if (!active || !payload || !payload.length) return null;
     
     const item = payload[0];
     const name = item.payload.name;
+    const valueNum = typeof item.value === 'number' ? item.value : Number(item.value ?? 0);
+    const pct = ((valueNum / total) * 100).toFixed(1);
     
     if (name === 'Others' && othersBreakdown && othersBreakdown.length > 0) {
       return (
         <div className="bg-popover border rounded-md p-3 shadow-md">
-          <p className="font-semibold mb-2">{name}: {item.value}</p>
+          <p className="font-semibold mb-2">{name}: {valueNum} ({pct}%)</p>
           <div className="border-t pt-2 mt-2 max-h-60 overflow-y-auto">
             <p className="text-xs font-semibold mb-1">Breakdown:</p>
             {othersBreakdown.map(({ name, count, percentage }) => (
@@ -56,7 +59,7 @@ export function BarChartComponent({ title, data, xAxisLabel, yAxisLabel, othersB
     
     return (
       <div className="bg-popover border rounded-md p-2 shadow-md">
-        <p className="text-sm">{`${name}: ${item.value}`}</p>
+        <p className="text-sm">{`${name}: ${valueNum} (${pct}%)`}</p>
       </div>
     );
   };

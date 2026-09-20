@@ -16,19 +16,9 @@ import { useNavigate, Link } from 'react-router-dom';
 import { useAuthStore } from '@/stores/authStore';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
-import {
-  ResponsiveContainer,
-  LineChart,
-  Line,
-  CartesianGrid,
-  XAxis,
-  YAxis,
-  Tooltip as RechartsTooltip,
-  BarChart,
-  Bar,
-} from 'recharts';
 import { Badge } from '@/components/ui/badge';
 import { ChartWithToggle } from '@/components/insights/charts/ChartWithToggle';
+import { InferenceFilters, useExactInferencePeopleKpis } from '@/hooks/useInferenceData';
 
 type InferenceEvent = {
   id: string;
@@ -134,7 +124,7 @@ function useInferenceSample(filters: {
       const { data, error } = await buildInferenceQuery({
         ...filters,
         select:
-          'id, occurred_at, person_key, team_id, organization_id, event_type, intent, channel, industry, job_title, city',
+          'id, occurred_at, person_key, team_id, organization_id, event_type, intent, channel, industry, job_title, city, state, company_size',
         orderByOccurredAt: false,
       });
       if (error) throw error;
@@ -209,7 +199,9 @@ export default function AdminInference() {
   });
   const [teamId, setTeamId] = useState<string>('all');
   const [organizationId, setOrganizationId] = useState<string>('all');
+  // Event-type selector remains available but UI focuses on replies-based analytics
   const [eventType, setEventType] = useState<string>('all');
+  // "Within an intent" pivot (default all)
   const [intent, setIntent] = useState<string>('all');
   const [channel, setChannel] = useState<string>('all');
   const [page, setPage] = useState<number>(1);
@@ -260,10 +252,22 @@ export default function AdminInference() {
     [sampleRows],
   );
 
-  // KPIs
-  const totalEvents = sampleRows.length;
-  const uniquePeople = useMemo(() => new Set(sampleRows.map((r) => r.person_key).filter(Boolean)).size, [sampleRows]);
-  const distinctTeams = teamOptions.length;
+  // Exact KPIs via shared hook
+  const kpiFilters: InferenceFilters = useMemo(
+    () => ({
+      teamIds: teamId !== 'all' ? [teamId] : undefined,
+      organizationIds: organizationId !== 'all' ? [organizationId] : undefined,
+      channels: channel === 'all' ? undefined : [channel as 'email' | 'linkedin' | 'other'],
+      dateFrom: dateRange.from ? dateRange.from.toISOString() : undefined,
+      dateTo: dateRange.to ? dateRange.to.toISOString() : undefined,
+    }),
+    [teamId, organizationId, channel, dateRange.from, dateRange.to]
+  );
+  const { data: exactKpis, isLoading: loadingKpis } = useExactInferencePeopleKpis(kpiFilters);
+  const uniqueContacts = exactKpis?.totalContacts ?? 0;
+  const replyPeopleAll = useMemo(() => new Set(exactKpis?.replyPeople ?? []), [exactKpis]);
+  const replyPeopleEmail = useMemo(() => exactKpis?.emailRepliesPeople ?? 0, [exactKpis]);
+  const replyPeopleLinkedIn = useMemo(() => exactKpis?.liRepliesPeople ?? 0, [exactKpis]);
   const dateSpan = useMemo(() => {
     const dates = sampleRows.map((r) => (r.occurred_at ? new Date(r.occurred_at) : null)).filter(Boolean) as Date[];
     if (dates.length === 0) return null;
@@ -271,33 +275,115 @@ export default function AdminInference() {
     const max = new Date(Math.max(...dates.map((d) => d.getTime())));
     return `${format(min, 'yyyy-MM-dd')} → ${format(max, 'yyyy-MM-dd')}`;
   }, [sampleRows]);
-  const byEventType = useMemo(() => countBy(sampleRows, (r) => r.event_type || 'unknown'), [sampleRows]);
-  const byIntent = useMemo(() => countBy(sampleRows, (r) => r.intent || 'unknown'), [sampleRows]);
 
-  // Charts
-  const byDay = useMemo(() => {
-    const dayCounts: Record<string, number> = {};
-    for (const r of sampleRows) {
-      if (!r.occurred_at) continue;
-      const d = format(new Date(r.occurred_at), 'yyyy-MM-dd');
-      dayCounts[d] = (dayCounts[d] || 0) + 1;
+  // Replies-only subsets for composition & breakdowns
+  const replyRows = useMemo(
+    () => sampleRows.filter((r) => r.event_type === 'replied' && (channel === 'all' || r.channel === channel)),
+    [sampleRows, channel],
+  );
+  const classifiedRows = useMemo(
+    () => sampleRows.filter((r) => r.event_type === 'classified' && (channel === 'all' || r.channel === channel)),
+    [sampleRows, channel],
+  );
+
+  // Intent mix (counts + % of replies). Prefer classified rows when intent populated.
+  const intentOrder = ['interested', 'not_interested', 'referral', 'out_of_office', 'needs_more_info', 'bounce', 'unknown'];
+  const intentComposition = useMemo(() => {
+    return (
+      exactKpis?.intentComposition ?? Object.fromEntries(intentOrder.map((k) => [k, 0]))
+    );
+  }, [exactKpis]);
+
+  // "Within an intent" filter (default all replies)
+  const withinIntentPeople = useMemo(() => {
+    // Use intentComposition resolution to pick the set of people included
+    // Build set of person_keys that match selected intent (or all)
+    const result = new Set<string>();
+    if (intent === 'all') {
+      for (const r of replyRows) if (r.person_key) result.add(r.person_key);
+      return result;
     }
-    return Object.entries(dayCounts)
-      .sort(([a], [b]) => (a < b ? -1 : 1))
-      .map(([date, count]) => ({ date, count }));
-  }, [sampleRows]);
+    // Recompute best-intent mapping to know which people to include
+    const classByPerson = groupBy(
+      classifiedRows.slice().sort((a, b) => (a.occurred_at && b.occurred_at ? (a.occurred_at < b.occurred_at ? 1 : -1) : 0)),
+      (r) => r.person_key || '',
+    );
+    for (const r of replyRows) {
+      const pk = r.person_key || '';
+      if (!pk) continue;
+      const classList = classByPerson[pk] || [];
+      const chosen =
+        classList.find((c) => c.intent && c.intent !== 'unknown')?.intent ||
+        (r.intent && r.intent !== 'unknown' ? r.intent : 'unknown');
+      if (chosen === intent) result.add(pk);
+    }
+    return result;
+  }, [replyRows, classifiedRows, intent]);
 
-  const topIndustries = useMemo(() => topN(countBy(sampleRows, (r) => r.industry || 'unknown'), 10), [sampleRows]);
-  const topTitles = useMemo(() => topN(countBy(sampleRows, (r) => r.job_title || 'unknown'), 10), [sampleRows]);
-  const topCities = useMemo(() => topN(countBy(sampleRows, (r) => r.city || 'unknown'), 10), [sampleRows]);
-  const channelMix = useMemo(() => countBy(sampleRows, (r) => r.channel || 'unknown'), [sampleRows]);
+  function rankBreakdownForPeople(
+    peopleSet: Set<string>,
+    dim: 'job_title' | 'industry' | 'company_size' | 'city_state',
+    topK = 10,
+  ): Record<string, number> {
+    // One person -> one bucket. Deduplicate by person_key before counting.
+    const personToBucket = new Map<string, string>();
+    for (const r of sampleRows) {
+      const pk = (r.person_key || '').trim();
+      if (!pk || !peopleSet.has(pk) || personToBucket.has(pk)) continue;
+      let key = '';
+      if (dim === 'city_state') {
+        const city = (r.city || '').trim();
+        const state = (r.state || '').trim();
+        key = [city, state].filter(Boolean).join(', ');
+      } else {
+        key = String((r as any)[dim] || '').trim();
+      }
+      if (!key) continue; // hide unknown/blank
+      personToBucket.set(pk, key);
+    }
+    const counts: Record<string, number> = {};
+    for (const key of personToBucket.values()) counts[key] = (counts[key] || 0) + 1;
+    return topN(counts, topK);
+  }
+
+  // Data quality notes (fill rates) for each dim among the included people
+  function fillRateForPeople(peopleSet: Set<string>, field: 'job_title' | 'industry' | 'company_size' | 'city_state'): number {
+    const seen = new Set<string>();
+    let withValue = 0;
+    for (const r of sampleRows) {
+      const pk = r.person_key || '';
+      if (!peopleSet.has(pk) || seen.has(pk)) continue;
+      seen.add(pk);
+      let has = false;
+      if (field === 'city_state') {
+        has = !!((r.city || '').trim() || (r.state || '').trim());
+      } else {
+        has = !!String((r as any)[field] || '').trim();
+      }
+      if (has) withValue += 1;
+    }
+    const denom = peopleSet.size || 1;
+    return (withValue / denom) * 100;
+  }
+
+  const breakdownJobTitle = useMemo(() => rankBreakdownForPeople(withinIntentPeople, 'job_title', 12), [withinIntentPeople, sampleRows]);
+  const breakdownIndustry = useMemo(() => rankBreakdownForPeople(withinIntentPeople, 'industry', 12), [withinIntentPeople, sampleRows]);
+  const breakdownCompanySize = useMemo(
+    () => rankBreakdownForPeople(withinIntentPeople, 'company_size', 12),
+    [withinIntentPeople, sampleRows],
+  );
+  const breakdownGeo = useMemo(() => rankBreakdownForPeople(withinIntentPeople, 'city_state', 12), [withinIntentPeople, sampleRows]);
+  const fillJobTitle = useMemo(() => fillRateForPeople(withinIntentPeople, 'job_title'), [withinIntentPeople, sampleRows]);
+  const fillIndustry = useMemo(() => fillRateForPeople(withinIntentPeople, 'industry'), [withinIntentPeople, sampleRows]);
+  const fillCompanySize = useMemo(() => fillRateForPeople(withinIntentPeople, 'company_size'), [withinIntentPeople, sampleRows]);
+  const fillGeo = useMemo(() => fillRateForPeople(withinIntentPeople, 'city_state'), [withinIntentPeople, sampleRows]);
 
   // Reset page when filters change
   useEffect(() => {
     setPage(1);
   }, [teamId, organizationId, eventType, intent, channel, dateRange.from?.toISOString(), dateRange.to?.toISOString()]);
 
-  const loading = loadingAgg || loadingTable;
+  const loading = loadingAgg || loadingTable || loadingKpis;
 
   return (
     <SidebarProvider>
@@ -312,7 +398,7 @@ export default function AdminInference() {
               className="h-8 max-h-8 cursor-pointer"
               onClick={() => navigate('/')}
             />
-            <h1 className="text-lg font-semibold ml-4">Inference Events (Admin)</h1>
+            <h1 className="text-lg font-semibold ml-4">Admin — Inference Analytics (People-level)</h1>
             <div className="ml-auto">
               {!isPlatformAdmin && <Badge variant="destructive">Admin only</Badge>}
             </div>
@@ -442,16 +528,18 @@ export default function AdminInference() {
                     </Select>
                   </div>
 
-                  {/* Intent */}
+                  {/* Within intent (pivot for breakdowns) */}
                   <div>
-                    <label className="text-sm text-muted-foreground">Intent</label>
+                    <label className="text-sm text-muted-foreground">Within intent</label>
                     <Select value={intent} onValueChange={(v) => setIntent(v)}>
                       <SelectTrigger className="mt-1">
-                        <SelectValue placeholder="All intents" />
+                        <SelectValue placeholder="All replies" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="all">All</SelectItem>
-                        {intents.map((i) => (
+                        <SelectItem value="all">All replies</SelectItem>
+                        {['interested','not_interested','referral','out_of_office','needs_more_info','bounce','unknown']
+                          .filter((i) => intents.includes(i as any) || i === 'unknown')
+                          .map((i) => (
                           <SelectItem key={i} value={i}>
                             {i}
                           </SelectItem>
@@ -480,104 +568,113 @@ export default function AdminInference() {
                 </CardContent>
               </Card>
 
-              {/* KPI cards */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              {/* TOP KPIs — counts are people-level */}
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                 <Card>
                   <CardHeader className="pb-2">
-                    <CardTitle className="text-sm text-muted-foreground">Total events</CardTitle>
+                    <CardTitle className="text-sm text-muted-foreground">Total Contacts</CardTitle>
                   </CardHeader>
-                  <CardContent className="text-2xl font-semibold">{loading ? <Loader2 className="h-5 w-5 animate-spin" /> : totalEvents.toLocaleString()}</CardContent>
+                  <CardContent className="text-2xl font-semibold">
+                    {loading ? <Loader2 className="h-5 w-5 animate-spin" /> : uniqueContacts.toLocaleString()}
+                  </CardContent>
                 </Card>
                 <Card>
                   <CardHeader className="pb-2">
-                    <CardTitle className="text-sm text-muted-foreground">Unique people</CardTitle>
+                    <CardTitle className="text-sm text-muted-foreground">Total Replies (people)</CardTitle>
                   </CardHeader>
-                  <CardContent className="text-2xl font-semibold">{loading ? <Loader2 className="h-5 w-5 animate-spin" /> : uniquePeople.toLocaleString()}</CardContent>
+                  <CardContent className="text-2xl font-semibold">
+                    {loading ? <Loader2 className="h-5 w-5 animate-spin" /> : replyPeopleAll.size.toLocaleString()}
+                  </CardContent>
                 </Card>
                 <Card>
                   <CardHeader className="pb-2">
-                    <CardTitle className="text-sm text-muted-foreground">Distinct teams</CardTitle>
+                    <CardTitle className="text-sm text-muted-foreground">Email Replies (people)</CardTitle>
                   </CardHeader>
-                  <CardContent className="text-2xl font-semibold">{loading ? <Loader2 className="h-5 w-5 animate-spin" /> : distinctTeams.toLocaleString()}</CardContent>
+                  <CardContent className="text-2xl font-semibold">
+                    {loading ? <Loader2 className="h-5 w-5 animate-spin" /> : Number(replyPeopleEmail).toLocaleString()}
+                  </CardContent>
                 </Card>
                 <Card>
                   <CardHeader className="pb-2">
-                    <CardTitle className="text-sm text-muted-foreground">Date span</CardTitle>
+                    <CardTitle className="text-sm text-muted-foreground">LinkedIn Replies (people)</CardTitle>
                   </CardHeader>
-                  <CardContent className="text-sm">{loading ? <Loader2 className="h-5 w-5 animate-spin" /> : dateSpan || '—'}</CardContent>
+                  <CardContent className="text-2xl font-semibold">
+                    {loading ? <Loader2 className="h-5 w-5 animate-spin" /> : Number(replyPeopleLinkedIn).toLocaleString()}
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm text-muted-foreground">LI Connection accepts</CardTitle>
+                  </CardHeader>
+                  <CardContent className="text-sm">
+                    {/* No dedicated accept signal in prod — present honest empty note */}
+                    —
+                    <div className="text-xs text-muted-foreground mt-1">
+                      Not captured in events; no safe detection in HeyReach payloads.
+                    </div>
+                  </CardContent>
                 </Card>
               </div>
 
-              {/* Breakdowns */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* OF REPLIES — intent mix (counts + % of replies; classified preferred) */}
+              <div className="grid grid-cols-1 md:grid-cols-1 gap-4">
                 <Card>
                   <CardHeader>
-                    <CardTitle>By event type</CardTitle>
+                    <CardTitle>Intent mix (of replies)</CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <ChartWithToggle title="" data={byEventType} defaultType="bar" />
-                  </CardContent>
-                </Card>
-                <Card>
-                  <CardHeader>
-                    <CardTitle>By intent</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <ChartWithToggle title="" data={byIntent} defaultType="pie" />
+                    <div className="text-xs text-muted-foreground mb-2">
+                      Uses classified rows when available; unclassified replies counted as unknown.
+                    </div>
+                    <ChartWithToggle title="" data={intentComposition} defaultType="pie" />
                   </CardContent>
                 </Card>
               </div>
 
-              {/* Time series */}
-              <Card>
-                <CardHeader>
-                  <CardTitle>Events over time</CardTitle>
-                </CardHeader>
-                <CardContent style={{ height: 300 }}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={byDay}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="date" tick={{ fontSize: 12 }} />
-                      <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
-                      <RechartsTooltip />
-                      <Line type="monotone" dataKey="count" stroke="hsl(var(--chart-1))" strokeWidth={2} dot={false} />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </CardContent>
-              </Card>
-
-              {/* Top segments */}
+              {/* WITHIN AN INTENT — breakdowns */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <Card>
                   <CardHeader>
-                    <CardTitle>Top industries</CardTitle>
+                    <CardTitle>Job titles</CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <ChartWithToggle title="" data={topIndustries} defaultType="bar" />
+                    <ChartWithToggle title="" data={breakdownJobTitle} defaultType="bar" />
+                    <div className="text-xs text-muted-foreground mt-2">
+                      Data quality: {fillJobTitle.toFixed(0)}% of replies have a job title.
+                    </div>
                   </CardContent>
                 </Card>
                 <Card>
                   <CardHeader>
-                    <CardTitle>Top job titles</CardTitle>
+                    <CardTitle>Geography (City, State)</CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <ChartWithToggle title="" data={topTitles} defaultType="bar" />
+                    <ChartWithToggle title="" data={breakdownGeo} defaultType="bar" />
+                    <div className="text-xs text-muted-foreground mt-2">
+                      Data quality: {fillGeo.toFixed(0)}% of replies have city/state.
+                    </div>
                   </CardContent>
                 </Card>
                 <Card>
                   <CardHeader>
-                    <CardTitle>Top cities</CardTitle>
+                    <CardTitle>Industry</CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <ChartWithToggle title="" data={topCities} defaultType="bar" />
+                    <ChartWithToggle title="" data={breakdownIndustry} defaultType="bar" />
+                    <div className="text-xs text-muted-foreground mt-2">
+                      Data quality: {fillIndustry.toFixed(0)}% of replies have industry.
+                    </div>
                   </CardContent>
                 </Card>
                 <Card>
                   <CardHeader>
-                    <CardTitle>Channel mix</CardTitle>
+                    <CardTitle>Company size</CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <ChartWithToggle title="" data={channelMix} defaultType="pie" />
+                    <ChartWithToggle title="" data={breakdownCompanySize} defaultType="bar" />
+                    <div className="text-xs text-muted-foreground mt-2">
+                      Data quality: {fillCompanySize.toFixed(0)}% of replies have company size.
+                    </div>
                   </CardContent>
                 </Card>
               </div>

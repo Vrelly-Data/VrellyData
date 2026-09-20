@@ -410,3 +410,127 @@ export function computeCopyPerformance(
   return rows;
 }
 
+// Exact people-level KPIs and intent mix across full dataset (paged)
+export type ExactInferencePeopleKpis = {
+  totalContacts: number;
+  totalRepliesPeople: number;
+  emailRepliesPeople: number;
+  liRepliesPeople: number;
+  // Array form for react-query JSON serialization
+  replyPeople: string[];
+  // Counts per intent; keys include: interested, not_interested, referral, out_of_office, needs_more_info, bounce, unknown
+  intentComposition: Record<string, number>;
+  // Best intent per reply person (most recent non-unknown classified; else 'unknown')
+  personIntentMap: Record<string, string>;
+};
+
+export function useExactInferencePeopleKpis(filters: InferenceFilters) {
+  return useQuery({
+    queryKey: ['inference-kpis-exact', filters],
+    queryFn: async (): Promise<ExactInferencePeopleKpis> => {
+      // Helper to normalize end-of-day for inclusive upper bound
+      const endOfDayIso = (iso?: string) => {
+        if (!iso) return undefined;
+        const d = new Date(iso);
+        d.setUTCHours(23, 59, 59, 999);
+        return d.toISOString();
+      };
+      // Apply common filters to a query builder
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const applyFilters = (q: any) => {
+        if (filters.teamIds && filters.teamIds.length > 0) q = q.in('team_id', filters.teamIds);
+        if (filters.organizationIds && filters.organizationIds.length > 0) q = q.in('organization_id', filters.organizationIds);
+        if (filters.channels && filters.channels.length > 0) q = q.in('channel', filters.channels);
+        if (filters.dateFrom) q = q.gte('occurred_at', filters.dateFrom);
+        if (filters.dateTo) q = q.lte('occurred_at', endOfDayIso(filters.dateTo));
+        return q;
+      };
+      // Fetch distinct people keys by (optional) event type and (optional) channel override, paging by person_key only
+      const PAGE = 5000;
+      async function fetchDistinctPeople(eventType?: InferenceEvent['event_type'], channelOverride?: Array<'email' | 'linkedin' | 'other'>) {
+        const people = new Set<string>();
+        let from = 0;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const sb: any = supabase;
+        while (true) {
+          let q = sb.from('inference_events_enriched' as any).select('person_key', { count: 'exact' }).order('occurred_at', { ascending: false });
+          if (eventType) q = q.eq('event_type', eventType);
+          q = applyFilters(q);
+          if (channelOverride && channelOverride.length > 0) {
+            q = q.in('channel', channelOverride);
+          }
+          q = q.range(from, from + PAGE - 1);
+          const { data, error } = await q;
+          if (error) throw new Error(error.message);
+          const rows = (data || []) as Array<{ person_key: string | null }>;
+          for (const r of rows) {
+            const pk = (r.person_key || '').trim();
+            if (pk) people.add(pk);
+          }
+          if (rows.length < PAGE) break;
+          from += PAGE;
+        }
+        return Array.from(people);
+      }
+      // Replies (respect current channels selection if provided)
+      const replyPeople = await fetchDistinctPeople('replied');
+      // Email/LinkedIn channel subsets regardless of current filter (stable per-channel KPIs)
+      const emailPeople = await fetchDistinctPeople('replied', ['email']);
+      const liPeople = await fetchDistinctPeople('replied', ['linkedin']);
+      // Total contacts — any event respecting current filter selection
+      const contactPeople = await fetchDistinctPeople(undefined);
+
+      // Build best-intent per reply person using classified events (most recent non-unknown)
+      const byPersonBestIntent = new Map<string, string>();
+      const replyKeys = replyPeople;
+      const CHUNK = 400;
+      for (let i = 0; i < replyKeys.length; i += CHUNK) {
+        const slice = replyKeys.slice(i, i + CHUNK);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const sb: any = supabase;
+        let q = sb
+          .from('inference_events_enriched' as any)
+          .select('person_key,intent,occurred_at,channel')
+          .eq('event_type', 'classified')
+          .in('person_key', slice)
+          .order('occurred_at', { ascending: false });
+        q = applyFilters(q);
+        const { data, error } = await q;
+        if (error) throw new Error(error.message);
+        const rows = (data || []) as Array<{ person_key: string | null; intent: string | null; occurred_at: string }>;
+        for (const r of rows) {
+          const pk = (r.person_key || '').trim();
+          if (!pk) continue;
+          if (byPersonBestIntent.has(pk)) continue;
+          if (r.intent && r.intent !== 'unknown') {
+            byPersonBestIntent.set(pk, r.intent);
+          }
+        }
+      }
+      // Assign unknown for any reply people not classified or only unknown
+      for (const pk of replyPeople) {
+        if (!byPersonBestIntent.has(pk)) byPersonBestIntent.set(pk, 'unknown');
+      }
+      const orderedIntents = ['interested', 'not_interested', 'referral', 'out_of_office', 'needs_more_info', 'bounce', 'unknown'];
+      const intentCounts: Record<string, number> = Object.fromEntries(orderedIntents.map((k) => [k, 0]));
+      for (const v of byPersonBestIntent.values()) {
+        const key = orderedIntents.includes(String(v)) ? String(v) : 'unknown';
+        intentCounts[key] = (intentCounts[key] || 0) + 1;
+      }
+      const personIntentMap: Record<string, string> = {};
+      for (const [pk, intent] of byPersonBestIntent.entries()) personIntentMap[pk] = intent;
+
+      return {
+        totalContacts: new Set(contactPeople).size,
+        totalRepliesPeople: new Set(replyPeople).size,
+        emailRepliesPeople: new Set(emailPeople).size,
+        liRepliesPeople: new Set(liPeople).size,
+        replyPeople,
+        intentComposition: intentCounts,
+        personIntentMap,
+      };
+    },
+    staleTime: 60_000,
+  });
+}
+
