@@ -579,47 +579,48 @@ export function useBaseInferenceKpis(filters: InferenceFilters) {
   return useQuery({
     queryKey: ['base_inference_kpis', { teamIds: filters.teamIds, dateFrom: filters.dateFrom, dateTo: filters.dateTo }],
     queryFn: async (): Promise<BaseInferenceKpis> => {
-      const [
-        contactsCount,
-        contactsLinkedinDeduped,
-        contactsEmailDeduped,
-        campaignSums,
-        rowsBySource,
-        liMsgsSent,
-        contactsPeople,
-        repliedPeople,
-        repliedPeopleEmail,
-        repliedPeopleLinkedin,
-        interestedEmail,
-        interestedLinkedin,
-        interestedPeople,
-      ] = await Promise.all([
-        countDedupedContacts(filters.teamIds),
-        countDedupedContactsByCampaignChannel(filters.teamIds, 'linkedin'),
-        countDedupedContactsByCampaignChannel(filters.teamIds, 'email'),
+      // Server-side aggregate for heavy counts (contacts dedup + distinct people)
+      const rpcArgs = {
+        p_team_ids: filters.teamIds ?? null,
+        p_date_from: filters.dateFrom ?? null,
+        p_date_to: filters.dateTo ?? null,
+      };
+      const { data: rpcData, error: rpcError } = await (supabase as any).rpc('get_base_inference_kpis', rpcArgs);
+      if (rpcError) throw new Error(rpcError.message);
+      const kpis = (rpcData && rpcData[0]) || {
+        total_contacts_deduped: 0,
+        total_contacts_linkedin_deduped: 0,
+        total_contacts_email_deduped: 0,
+        contacts_rows_reply: 0,
+        contacts_rows_smartlead: 0,
+        contacts_people: 0,
+        replied_people: 0,
+        replied_people_email: 0,
+        replied_people_linkedin: 0,
+        interested_people_email: 0,
+        interested_people_linkedin: 0,
+        interested_people: 0,
+      };
+      // Keep cheap campaign stats client-side
+      const [campaignSums, liMsgsSent] = await Promise.all([
         sumCampaignStats(filters.teamIds),
-        countContactRowsBySource(filters.teamIds),
         countEventsQuick(filters, 'linkedin', 'sent'),
-        countDistinctPeopleForEvents(filters, (_r) => true), // any event
-        countDistinctPeopleForEvents(filters, (r) => r.event_type === 'replied'),
-        countDistinctPeopleForEvents(filters, (r) => r.event_type === 'replied' && r.channel === 'email'),
-        countDistinctPeopleForEvents(filters, (r) => r.event_type === 'replied' && r.channel === 'linkedin'),
-        countDistinctPeopleForEvents(filters, (r) => r.event_type === 'classified' && r.intent === 'interested' && r.channel === 'email'),
-        countDistinctPeopleForEvents(filters, (r) => r.event_type === 'classified' && r.intent === 'interested' && r.channel === 'linkedin'),
-        countDistinctPeopleForEvents(filters, (r) => r.event_type === 'classified' && r.intent === 'interested'),
       ]);
 
-      if (repliedPeople > contactsCount) {
+      if (kpis.replied_people > kpis.total_contacts_deduped) {
         // eslint-disable-next-line no-console
-        console.warn('Invariant violated: repliedPeople exceeds totalContacts', { repliedPeople, contactsCount });
+        console.warn('Invariant violated: repliedPeople exceeds totalContacts', {
+          repliedPeople: kpis.replied_people,
+          contactsCount: kpis.total_contacts_deduped,
+        });
       }
 
       return {
-        totalContactsDeduped: contactsCount,
-        totalContactsLinkedinDeduped: contactsLinkedinDeduped,
-        totalContactsEmailDeduped: contactsEmailDeduped,
-        contactsRowsReply: rowsBySource.replyRows,
-        contactsRowsSmartlead: rowsBySource.smartleadRows,
+        totalContactsDeduped: Number(kpis.total_contacts_deduped || 0),
+        totalContactsLinkedinDeduped: Number(kpis.total_contacts_linkedin_deduped || 0),
+        totalContactsEmailDeduped: Number(kpis.total_contacts_email_deduped || 0),
+        contactsRowsReply: Number(kpis.contacts_rows_reply || 0),
+        contactsRowsSmartlead: Number(kpis.contacts_rows_smartlead || 0),
         emailSends: campaignSums.emailSends,
         emailSendsSmartlead: campaignSums.emailSendsSmartlead,
         emailSendsReply: campaignSums.emailSendsReply,
@@ -632,13 +633,13 @@ export function useBaseInferenceKpis(filters: InferenceFilters) {
         linkedinMessagesSentCampaign: campaignSums.linkedinMessagesSentReply,
         linkedinConnectionsSent: campaignSums.linkedinConnectionsSent,
         linkedinConnectionsAccepted: campaignSums.linkedinConnectionsAccepted,
-        contactsPeople,
-        repliedPeople,
-        repliedPeopleEmail,
-        repliedPeopleLinkedin,
-        interestedPeopleEmail: interestedEmail,
-        interestedPeopleLinkedin: interestedLinkedin,
-        interestedPeople,
+        contactsPeople: Number(kpis.contacts_people || 0),
+        repliedPeople: Number(kpis.replied_people || 0),
+        repliedPeopleEmail: Number(kpis.replied_people_email || 0),
+        repliedPeopleLinkedin: Number(kpis.replied_people_linkedin || 0),
+        interestedPeopleEmail: Number(kpis.interested_people_email || 0),
+        interestedPeopleLinkedin: Number(kpis.interested_people_linkedin || 0),
+        interestedPeople: Number(kpis.interested_people || 0),
         sources: {
           totalContactsDeduped:
             'synced_contacts (dedup by email/linkedin_url/fallback id) — Smartlead roster incomplete',
@@ -648,11 +649,11 @@ export function useBaseInferenceKpis(filters: InferenceFilters) {
           contactsRowsSmartlead:
             'synced_contacts rows via joined synced_campaigns.source=smartlead — roster sync incomplete',
           smartleadSeats:
-            `synced_campaigns.stats.peopleCount (campaign seats; duplicates across campaigns). Roster sync incomplete: ${rowsBySource.smartleadRows.toLocaleString()} synced_contacts rows`,
+            `synced_campaigns.stats.peopleCount (campaign seats; duplicates across campaigns). Roster sync incomplete: ${Number(kpis.contacts_rows_smartlead || 0).toLocaleString()} synced_contacts rows`,
           emailSends: `synced_campaigns.stats.sent (channel=email, all sources). Reply null-channel excluded: ${campaignSums.emailSendsReplyNullChannel}`,
           emailSendsSmartlead: 'synced_campaigns.stats.sent where source=smartlead AND channel=email',
           emailSendsReply: 'synced_campaigns.stats.sent where source=reply_io AND channel=email',
-          emailRepliesCampaignTotal: `synced_campaigns.stats.replies (Smartlead + Reply email). IE email replied people: ${repliedPeopleEmail}`,
+          emailRepliesCampaignTotal: `synced_campaigns.stats.replies (Smartlead + Reply email). IE email replied people: ${Number(kpis.replied_people_email || 0)}`,
           emailRepliesSmartleadCampaign: 'synced_campaigns.stats.replies where source=smartlead',
           emailRepliesReplyCampaign: 'synced_campaigns.stats.replies where source=reply_io AND channel=email',
           linkedinMessagesSent: 'inference_events_enriched (channel=linkedin, event_type=sent, count exact)',
