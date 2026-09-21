@@ -12,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { MultiSelectDropdown } from '@/components/search/MultiSelectDropdown';
 import { format } from 'date-fns';
 import { CalendarIcon, Sparkles, Filter, Users, BarChart as BarChartIcon, Loader2 } from 'lucide-react';
 import {
@@ -193,13 +194,13 @@ export function InferenceTab() {
         <CardContent>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             {[
-              { title: 'Total LI Contacts', value: baseKpis?.totalContactsLinkedinDeduped, source: baseKpis?.sources.totalContactsLinkedinDeduped },
-              { title: 'Total Email Contacts', value: baseKpis?.totalContactsEmailDeduped, source: baseKpis?.sources.totalContactsEmailDeduped },
-              { title: 'Total LI Replies', value: baseKpis?.repliedPeopleLinkedin, source: baseKpis?.sources.repliedPeopleLinkedin },
-              { title: 'Total LI Acceptance', value: baseKpis?.linkedinConnectionsAccepted, source: baseKpis?.sources.linkedinConnectionsAccepted },
-              { title: 'Total Email Replies', value: baseKpis?.repliedPeopleEmail, source: baseKpis?.sources.repliedPeopleEmail },
-              { title: 'Interested Email Replies', value: baseKpis?.interestedPeopleEmail, source: baseKpis?.sources.interestedPeopleEmail },
-              { title: 'Interested LI Replies', value: baseKpis?.interestedPeopleLinkedin, source: baseKpis?.sources.interestedPeopleLinkedin },
+              { title: 'Total LI Contacts', value: baseKpis?.totalContactsLinkedinDeduped, footnote: 'Unique contacts (LinkedIn)' },
+              { title: 'Total Email Contacts', value: baseKpis?.totalContactsEmailDeduped, footnote: 'Unique contacts (Email)' },
+              { title: 'Total LI Replies', value: baseKpis?.repliedPeopleLinkedin, footnote: 'People who replied on LinkedIn' },
+              { title: 'Total LI Acceptance', value: baseKpis?.linkedinConnectionsAccepted, footnote: 'LinkedIn connection accepts' },
+              { title: 'Total Email Replies', value: baseKpis?.repliedPeopleEmail, footnote: 'People who replied via Email' },
+              { title: 'Interested Email Replies', value: baseKpis?.interestedPeopleEmail, footnote: 'People classified as interested (Email)' },
+              { title: 'Interested LI Replies', value: baseKpis?.interestedPeopleLinkedin, footnote: 'People classified as interested (LinkedIn)' },
             ].map((kpi) => (
               <Card key={kpi.title}>
                 <CardContent className="pt-6">
@@ -209,7 +210,7 @@ export function InferenceTab() {
                       <p className="text-2xl font-semibold mt-1">
                         {loadingBase ? '…' : (kpi.value ?? 0).toLocaleString()}
                       </p>
-                      <p className="text-[10px] text-muted-foreground mt-1">{kpi.source}</p>
+                      <p className="text-[10px] text-muted-foreground mt-1">{kpi.footnote}</p>
                     </div>
                   </div>
                 </CardContent>
@@ -219,27 +220,24 @@ export function InferenceTab() {
         </CardContent>
       </Card>
 
-      {/* Smartlead campaign volumes (seats and replies) */}
+      {/* Email — campaign volume (aggregated across providers) */}
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="text-base">Smartlead — campaign volumes</CardTitle>
+          <CardTitle className="text-base">Email — campaign volume</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {[
-              { title: 'Smartlead Email Replies (campaign)', value: baseKpis?.emailRepliesSmartleadCampaign, source: baseKpis?.sources.emailRepliesSmartleadCampaign },
-              { title: 'Smartlead Email Contacts / seats', value: baseKpis?.smartleadSeats, source: baseKpis?.sources.smartleadSeats },
-            ].map((kpi) => (
-              <Card key={kpi.title}>
-                <CardContent className="pt-6">
-                  <div>
-                    <p className="text-sm text-muted-foreground">{kpi.title}</p>
-                    <p className="text-2xl font-semibold mt-1">{loadingBase ? '…' : (kpi.value ?? 0).toLocaleString()}</p>
-                    <p className="text-[10px] text-muted-foreground mt-1">{kpi.source}</p>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
+            <Card>
+              <CardContent className="pt-6">
+                <div>
+                  <p className="text-sm text-muted-foreground">Email Replies (campaign)</p>
+                  <p className="text-2xl font-semibold mt-1">
+                    {loadingBase ? '…' : (baseKpis?.emailRepliesCampaignTotal ?? 0).toLocaleString()}
+                  </p>
+                  <p className="text-[10px] text-muted-foreground mt-1">Campaign replies across providers</p>
+                </div>
+              </CardContent>
+            </Card>
           </div>
         </CardContent>
       </Card>
@@ -305,22 +303,22 @@ export function InferenceTab() {
           </div>
           <div>
             <Label>Event Types</Label>
-            <ToggleGroup
-              type="multiple"
-              value={eventTypes}
-              onValueChange={(v) => setEventTypes((v?.length ?? 0) > 0 ? (v as any) : [])}
-              className="flex flex-wrap"
-            >
-              <ToggleGroupItem value="sent">sent</ToggleGroupItem>
-              <ToggleGroupItem value="replied">replied</ToggleGroupItem>
-              <ToggleGroupItem value="classified">classified</ToggleGroupItem>
-              <ToggleGroupItem value="opened">opened</ToggleGroupItem>
-              <ToggleGroupItem value="bounced">bounced</ToggleGroupItem>
-              <ToggleGroupItem value="opted_out">opted_out</ToggleGroupItem>
-              <ToggleGroupItem value="meeting_booked">meeting_booked</ToggleGroupItem>
-              <ToggleGroupItem value="closed_won">closed_won</ToggleGroupItem>
-              <ToggleGroupItem value="closed_lost">closed_lost</ToggleGroupItem>
-            </ToggleGroup>
+            <MultiSelectDropdown
+              options={[
+                'sent',
+                'replied',
+                'classified',
+                'opened',
+                'bounced',
+                'opted_out',
+                'meeting_booked',
+                'closed_won',
+                'closed_lost',
+              ]}
+              selected={eventTypes as string[]}
+              onChange={(vals) => setEventTypes(vals as InferenceEvent['event_type'][])}
+              placeholder="All events (choose types)"
+            />
           </div>
           <div>
             <Label>Date range</Label>
@@ -389,17 +387,6 @@ export function InferenceTab() {
           </CardHeader>
           <CardContent className="text-2xl font-semibold">
             {loadingKpis ? <Loader2 className="h-5 w-5 animate-spin" /> : replyPeopleLinkedInExact.toLocaleString()}
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm text-muted-foreground">LI Connection accepts</CardTitle>
-          </CardHeader>
-          <CardContent className="text-sm">
-            —
-            <div className="text-xs text-muted-foreground mt-1">
-              Not captured in events; no safe detection in HeyReach payloads.
-            </div>
           </CardContent>
         </Card>
       </div>
