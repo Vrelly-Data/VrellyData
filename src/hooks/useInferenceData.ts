@@ -579,95 +579,150 @@ export function useBaseInferenceKpis(filters: InferenceFilters) {
   return useQuery({
     queryKey: ['base_inference_kpis', { teamIds: filters.teamIds, dateFrom: filters.dateFrom, dateTo: filters.dateTo }],
     queryFn: async (): Promise<BaseInferenceKpis> => {
-      const [
-        contactsCount,
-        contactsLinkedinDeduped,
-        contactsEmailDeduped,
-        campaignSums,
-        rowsBySource,
-        liMsgsSent,
-        contactsPeople,
-        repliedPeople,
-        repliedPeopleEmail,
-        repliedPeopleLinkedin,
-        interestedEmail,
-        interestedLinkedin,
-        interestedPeople,
-      ] = await Promise.all([
-        countDedupedContacts(filters.teamIds),
-        countDedupedContactsByCampaignChannel(filters.teamIds, 'linkedin'),
-        countDedupedContactsByCampaignChannel(filters.teamIds, 'email'),
-        sumCampaignStats(filters.teamIds),
-        countContactRowsBySource(filters.teamIds),
-        countEventsQuick(filters, 'linkedin', 'sent'),
-        countDistinctPeopleForEvents(filters, (_r) => true), // any event
-        countDistinctPeopleForEvents(filters, (r) => r.event_type === 'replied'),
-        countDistinctPeopleForEvents(filters, (r) => r.event_type === 'replied' && r.channel === 'email'),
-        countDistinctPeopleForEvents(filters, (r) => r.event_type === 'replied' && r.channel === 'linkedin'),
-        countDistinctPeopleForEvents(filters, (r) => r.event_type === 'classified' && r.intent === 'interested' && r.channel === 'email'),
-        countDistinctPeopleForEvents(filters, (r) => r.event_type === 'classified' && r.intent === 'interested' && r.channel === 'linkedin'),
-        countDistinctPeopleForEvents(filters, (r) => r.event_type === 'classified' && r.intent === 'interested'),
-      ]);
+      // Fast path: single RPC that aggregates everything server-side
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data, error } = await (supabase.rpc as any)('admin_inference_base_kpis', {
+          p_team_ids: filters.teamIds ?? null,
+        });
+        if (error) throw error;
+        const d = (data || {}) as Record<string, number>;
+        const campaignSums = {
+          emailSends: d['emailSends'] || 0,
+          emailSendsSmartlead: d['emailSendsSmartlead'] || 0,
+          emailSendsReply: d['emailSendsReply'] || 0,
+          emailRepliesSmartleadCampaign: d['emailRepliesSmartleadCampaign'] || 0,
+          emailRepliesReplyCampaign: d['emailRepliesReplyCampaign'] || 0,
+          smartleadSeats: d['smartleadSeats'] || 0,
+          linkedinMessagesSentReply: d['linkedinMessagesSentCampaign'] || 0,
+          linkedinConnectionsSent: d['linkedinConnectionsSent'] || 0,
+          linkedinConnectionsAccepted: d['linkedinConnectionsAccepted'] || 0,
+          emailSendsReplyNullChannel: d['emailSendsReplyNullChannel'] || 0,
+        };
+        const rowsBySource = {
+          replyRows: d['contactsRowsReply'] || 0,
+          smartleadRows: d['contactsRowsSmartlead'] || 0,
+        };
+        const repliedPeopleEmail = d['repliedPeopleEmail'] || 0;
 
-      if (repliedPeople > contactsCount) {
+        return {
+          totalContactsDeduped: d['totalContactsDeduped'] || 0,
+          totalContactsLinkedinDeduped: d['totalContactsLinkedinDeduped'] || 0,
+          totalContactsEmailDeduped: d['totalContactsEmailDeduped'] || 0,
+          contactsRowsReply: rowsBySource.replyRows,
+          contactsRowsSmartlead: rowsBySource.smartleadRows,
+          emailSends: campaignSums.emailSends,
+          emailSendsSmartlead: campaignSums.emailSendsSmartlead,
+          emailSendsReply: campaignSums.emailSendsReply,
+          emailRepliesCampaignTotal:
+            (campaignSums.emailRepliesSmartleadCampaign || 0) + (campaignSums.emailRepliesReplyCampaign || 0),
+          emailRepliesSmartleadCampaign: campaignSums.emailRepliesSmartleadCampaign || 0,
+          emailRepliesReplyCampaign: campaignSums.emailRepliesReplyCampaign || 0,
+          smartleadSeats: campaignSums.smartleadSeats || 0,
+          linkedinMessagesSent: d['linkedinMessagesSent'] || 0,
+          linkedinMessagesSentCampaign: campaignSums.linkedinMessagesSentReply,
+          linkedinConnectionsSent: campaignSums.linkedinConnectionsSent,
+          linkedinConnectionsAccepted: campaignSums.linkedinConnectionsAccepted,
+          contactsPeople: d['contactsPeople'] || 0,
+          repliedPeople: d['repliedPeople'] || 0,
+          repliedPeopleEmail,
+          repliedPeopleLinkedin: d['repliedPeopleLinkedin'] || 0,
+          interestedPeopleEmail: d['interestedPeopleEmail'] || 0,
+          interestedPeopleLinkedin: d['interestedPeopleLinkedin'] || 0,
+          interestedPeople: d['interestedPeople'] || 0,
+          sources: {
+            totalContactsDeduped:
+              'synced_contacts (dedup by email/linkedin_url/fallback id) — Smartlead roster incomplete',
+            totalContactsLinkedinDeduped: 'synced_contacts (dedup) joined to synced_campaigns.channel=linkedin',
+            totalContactsEmailDeduped: 'synced_contacts (dedup) joined to synced_campaigns.channel=email',
+            contactsRowsReply: 'synced_contacts rows via joined synced_campaigns.source=reply_io',
+            contactsRowsSmartlead:
+              'synced_contacts rows via joined synced_campaigns.source=smartlead — roster sync incomplete',
+            smartleadSeats:
+              `synced_campaigns.stats.peopleCount (campaign seats; duplicates across campaigns). Roster sync incomplete: ${rowsBySource.smartleadRows.toLocaleString()} synced_contacts rows`,
+            emailSends: `synced_campaigns.stats.sent (channel=email, all sources). Reply null-channel excluded: ${campaignSums.emailSendsReplyNullChannel}`,
+            emailSendsSmartlead: 'synced_campaigns.stats.sent where source=smartlead AND channel=email',
+            emailSendsReply: 'synced_campaigns.stats.sent where source=reply_io AND channel=email',
+            emailRepliesCampaignTotal: `synced_campaigns.stats.replies (Smartlead + Reply email). IE email replied people: ${repliedPeopleEmail}`,
+            emailRepliesSmartleadCampaign: 'synced_campaigns.stats.replies where source=smartlead',
+            emailRepliesReplyCampaign: 'synced_campaigns.stats.replies where source=reply_io AND channel=email',
+            linkedinMessagesSent: 'inference_events_enriched (channel=linkedin, event_type=sent, count exact)',
+            linkedinMessagesSentCampaign: 'synced_campaigns.stats.linkedinMessagesSent where source=reply_io',
+            linkedinConnectionsSent: 'synced_campaigns.stats.linkedinConnectionsSent / connectionsSent',
+            linkedinConnectionsAccepted: 'synced_campaigns.stats.linkedinConnectionsAccepted / connectionsAccepted',
+            contactsPeople: 'inference_events_enriched distinct person_key across ANY event',
+            repliedPeople: 'inference_events_enriched distinct person_key where event_type=replied',
+            repliedPeopleEmail: "inference_events_enriched distinct person_key where event_type='replied' and channel='email'",
+            repliedPeopleLinkedin: "inference_events_enriched distinct person_key where event_type='replied' and channel='linkedin'",
+            interestedPeopleEmail: "inference_events_enriched distinct person_key where event_type=classified and intent='interested' and channel='email'",
+            interestedPeopleLinkedin: "inference_events_enriched distinct person_key where event_type=classified and intent='interested' and channel='linkedin'",
+            interestedPeople: "inference_events_enriched distinct person_key where event_type=classified and intent='interested'",
+          },
+        };
+      } catch (e) {
+        // Fallback (rare): keep UI responsive with partial data from campaign stats only
         // eslint-disable-next-line no-console
-        console.warn('Invariant violated: repliedPeople exceeds totalContacts', { repliedPeople, contactsCount });
+        console.warn('admin_inference_base_kpis RPC failed; falling back to campaign stats only', e);
+        const [campaignSums, rowsBySource] = await Promise.all([
+          sumCampaignStats(filters.teamIds),
+          countContactRowsBySource(filters.teamIds),
+        ]);
+        const repliedPeopleEmail = 0;
+        return {
+          totalContactsDeduped: 0,
+          totalContactsLinkedinDeduped: 0,
+          totalContactsEmailDeduped: 0,
+          contactsRowsReply: rowsBySource.replyRows,
+          contactsRowsSmartlead: rowsBySource.smartleadRows,
+          emailSends: campaignSums.emailSends,
+          emailSendsSmartlead: campaignSums.emailSendsSmartlead,
+          emailSendsReply: campaignSums.emailSendsReply,
+          emailRepliesCampaignTotal:
+            (campaignSums.emailRepliesSmartleadCampaign || 0) + (campaignSums.emailRepliesReplyCampaign || 0),
+          emailRepliesSmartleadCampaign: campaignSums.emailRepliesSmartleadCampaign || 0,
+          emailRepliesReplyCampaign: campaignSums.emailRepliesReplyCampaign || 0,
+          smartleadSeats: campaignSums.smartleadSeats || 0,
+          linkedinMessagesSent: 0,
+          linkedinMessagesSentCampaign: campaignSums.linkedinMessagesSentReply,
+          linkedinConnectionsSent: campaignSums.linkedinConnectionsSent,
+          linkedinConnectionsAccepted: campaignSums.linkedinConnectionsAccepted,
+          contactsPeople: 0,
+          repliedPeople: 0,
+          repliedPeopleEmail,
+          repliedPeopleLinkedin: 0,
+          interestedPeopleEmail: 0,
+          interestedPeopleLinkedin: 0,
+          interestedPeople: 0,
+          sources: {
+            totalContactsDeduped:
+              'synced_contacts (dedup by email/linkedin_url/fallback id) — Smartlead roster incomplete',
+            totalContactsLinkedinDeduped: 'synced_contacts (dedup) joined to synced_campaigns.channel=linkedin',
+            totalContactsEmailDeduped: 'synced_contacts (dedup) joined to synced_campaigns.channel=email',
+            contactsRowsReply: 'synced_contacts rows via joined synced_campaigns.source=reply_io',
+            contactsRowsSmartlead:
+              'synced_contacts rows via joined synced_campaigns.source=smartlead — roster sync incomplete',
+            smartleadSeats:
+              `synced_campaigns.stats.peopleCount (campaign seats; duplicates across campaigns). Roster sync incomplete: ${rowsBySource.smartleadRows.toLocaleString()} synced_contacts rows`,
+            emailSends: `synced_campaigns.stats.sent (channel=email, all sources). Reply null-channel excluded: ${campaignSums.emailSendsReplyNullChannel}`,
+            emailSendsSmartlead: 'synced_campaigns.stats.sent where source=smartlead AND channel=email',
+            emailSendsReply: 'synced_campaigns.stats.sent where source=reply_io AND channel=email',
+            emailRepliesCampaignTotal: `synced_campaigns.stats.replies (Smartlead + Reply email). IE email replied people: ${repliedPeopleEmail}`,
+            emailRepliesSmartleadCampaign: 'synced_campaigns.stats.replies where source=smartlead',
+            emailRepliesReplyCampaign: 'synced_campaigns.stats.replies where source=reply_io AND channel=email',
+            linkedinMessagesSent: 'inference_events_enriched (channel=linkedin, event_type=sent, count exact)',
+            linkedinMessagesSentCampaign: 'synced_campaigns.stats.linkedinMessagesSent where source=reply_io',
+            linkedinConnectionsSent: 'synced_campaigns.stats.linkedinConnectionsSent / connectionsSent',
+            linkedinConnectionsAccepted: 'synced_campaigns.stats.linkedinConnectionsAccepted / connectionsAccepted',
+            contactsPeople: 'inference_events_enriched distinct person_key across ANY event',
+            repliedPeople: 'inference_events_enriched distinct person_key where event_type=replied',
+            repliedPeopleEmail: "inference_events_enriched distinct person_key where event_type='replied' and channel='email'",
+            repliedPeopleLinkedin: "inference_events_enriched distinct person_key where event_type='replied' and channel='linkedin'",
+            interestedPeopleEmail: "inference_events_enriched distinct person_key where event_type=classified and intent='interested' and channel='email'",
+            interestedPeopleLinkedin: "inference_events_enriched distinct person_key where event_type=classified and intent='interested' and channel='linkedin'",
+            interestedPeople: "inference_events_enriched distinct person_key where event_type=classified and intent='interested'",
+          },
+        };
       }
-
-      return {
-        totalContactsDeduped: contactsCount,
-        totalContactsLinkedinDeduped: contactsLinkedinDeduped,
-        totalContactsEmailDeduped: contactsEmailDeduped,
-        contactsRowsReply: rowsBySource.replyRows,
-        contactsRowsSmartlead: rowsBySource.smartleadRows,
-        emailSends: campaignSums.emailSends,
-        emailSendsSmartlead: campaignSums.emailSendsSmartlead,
-        emailSendsReply: campaignSums.emailSendsReply,
-        emailRepliesCampaignTotal:
-          (campaignSums.emailRepliesSmartleadCampaign || 0) + (campaignSums.emailRepliesReplyCampaign || 0),
-        emailRepliesSmartleadCampaign: campaignSums.emailRepliesSmartleadCampaign || 0,
-        emailRepliesReplyCampaign: campaignSums.emailRepliesReplyCampaign || 0,
-        smartleadSeats: campaignSums.smartleadSeats || 0,
-        linkedinMessagesSent: liMsgsSent,
-        linkedinMessagesSentCampaign: campaignSums.linkedinMessagesSentReply,
-        linkedinConnectionsSent: campaignSums.linkedinConnectionsSent,
-        linkedinConnectionsAccepted: campaignSums.linkedinConnectionsAccepted,
-        contactsPeople,
-        repliedPeople,
-        repliedPeopleEmail,
-        repliedPeopleLinkedin,
-        interestedPeopleEmail: interestedEmail,
-        interestedPeopleLinkedin: interestedLinkedin,
-        interestedPeople,
-        sources: {
-          totalContactsDeduped:
-            'synced_contacts (dedup by email/linkedin_url/fallback id) — Smartlead roster incomplete',
-          totalContactsLinkedinDeduped: 'synced_contacts (dedup) joined to synced_campaigns.channel=linkedin',
-          totalContactsEmailDeduped: 'synced_contacts (dedup) joined to synced_campaigns.channel=email',
-          contactsRowsReply: 'synced_contacts rows via joined synced_campaigns.source=reply_io',
-          contactsRowsSmartlead:
-            'synced_contacts rows via joined synced_campaigns.source=smartlead — roster sync incomplete',
-          smartleadSeats:
-            `synced_campaigns.stats.peopleCount (campaign seats; duplicates across campaigns). Roster sync incomplete: ${rowsBySource.smartleadRows.toLocaleString()} synced_contacts rows`,
-          emailSends: `synced_campaigns.stats.sent (channel=email, all sources). Reply null-channel excluded: ${campaignSums.emailSendsReplyNullChannel}`,
-          emailSendsSmartlead: 'synced_campaigns.stats.sent where source=smartlead AND channel=email',
-          emailSendsReply: 'synced_campaigns.stats.sent where source=reply_io AND channel=email',
-          emailRepliesCampaignTotal: `synced_campaigns.stats.replies (Smartlead + Reply email). IE email replied people: ${repliedPeopleEmail}`,
-          emailRepliesSmartleadCampaign: 'synced_campaigns.stats.replies where source=smartlead',
-          emailRepliesReplyCampaign: 'synced_campaigns.stats.replies where source=reply_io AND channel=email',
-          linkedinMessagesSent: 'inference_events_enriched (channel=linkedin, event_type=sent, count exact)',
-          linkedinMessagesSentCampaign: 'synced_campaigns.stats.linkedinMessagesSent where source=reply_io',
-          linkedinConnectionsSent: 'synced_campaigns.stats.linkedinConnectionsSent / connectionsSent',
-          linkedinConnectionsAccepted: 'synced_campaigns.stats.linkedinConnectionsAccepted / connectionsAccepted',
-          contactsPeople: 'inference_events_enriched distinct person_key across ANY event',
-          repliedPeople: 'inference_events_enriched distinct person_key where event_type=replied',
-          repliedPeopleEmail: "inference_events_enriched distinct person_key where event_type='replied' and channel='email'",
-          repliedPeopleLinkedin: "inference_events_enriched distinct person_key where event_type='replied' and channel='linkedin'",
-          interestedPeopleEmail: "inference_events_enriched distinct person_key where event_type=classified and intent='interested' and channel='email'",
-          interestedPeopleLinkedin: "inference_events_enriched distinct person_key where event_type=classified and intent='interested' and channel='linkedin'",
-          interestedPeople: "inference_events_enriched distinct person_key where event_type=classified and intent='interested'",
-        },
-      };
     },
   });
 }
