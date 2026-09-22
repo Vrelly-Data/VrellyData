@@ -359,21 +359,13 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
       {
         leadId: lead.id,
         // The chosen tag (label source + opted_out flag) goes in disposition_tag;
-        // pipeline_stage gets the CHECK-valid mapped value (not_relevant->bad_lead,
-        // opted_out->dead). Only terminal stages should remove the lead from
-        // Pending Approval — active stages must NOT auto-dismiss.
-        updates: (() => {
-          const base = {
-            disposition_tag: newTag,
-            pipeline_stage: pipelineStageForTag(newTag),
-          } as Record<string, string>;
-          // Terminal/close-path stages that should leave the Pending queue:
-          // - closed_won
-          // - closed_lost
-          // - opted_out (compliance flag surfaced as a tag in some flows)
-          const shouldDismiss = ['closed_won', 'closed_lost', 'opted_out'].includes(newTag);
-          return shouldDismiss ? { ...base, inbox_status: 'dismissed' } : base;
-        })(),
+        // pipeline_stage gets the CHECK-valid mapped value (identity mapping).
+        // Pre-#74 behavior: ANY stage/tag change dismisses the lead from Pending.
+        updates: {
+          disposition_tag: newTag,
+          pipeline_stage: pipelineStageForTag(newTag),
+          inbox_status: 'dismissed',
+        },
         logStageChange: {
           oldStage: currentTag,
           newStage: newTag,
