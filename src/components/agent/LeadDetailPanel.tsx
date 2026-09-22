@@ -54,8 +54,10 @@ import { useBookingEventsForEmail } from '@/hooks/useBookingEvents';
 
 export type { AgentLead };
 
-// Lead disposition tags. Selecting any of these also flips inbox_status to
-// 'dismissed', moving the lead from Pending Approval to Total Inbox.
+// Lead disposition tags. Selecting a terminal/close stage (e.g. closed_won/closed_lost)
+// flips inbox_status to 'dismissed', moving the lead from Pending Approval to
+// Total Inbox. Active stages (e.g. in_progress/sent_proposal/call_scheduled)
+// DO NOT auto-dismiss.
 // Order mirrors the pipeline columns: negative dispositions → active → won.
 // The ONE deal-stage taxonomy — 8 stages, funnel order. Tags == stages: this
 // dropdown and the PipelineBoard columns are the same 8 in the same order.
@@ -358,12 +360,20 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
         leadId: lead.id,
         // The chosen tag (label source + opted_out flag) goes in disposition_tag;
         // pipeline_stage gets the CHECK-valid mapped value (not_relevant->bad_lead,
-        // opted_out->dead). Any tag apply moves the lead to Total Inbox.
-        updates: {
-          disposition_tag: newTag,
-          pipeline_stage: pipelineStageForTag(newTag),
-          inbox_status: 'dismissed',
-        },
+        // opted_out->dead). Only terminal stages should remove the lead from
+        // Pending Approval — active stages must NOT auto-dismiss.
+        updates: (() => {
+          const base = {
+            disposition_tag: newTag,
+            pipeline_stage: pipelineStageForTag(newTag),
+          } as Record<string, string>;
+          // Terminal/close-path stages that should leave the Pending queue:
+          // - closed_won
+          // - closed_lost
+          // - opted_out (compliance flag surfaced as a tag in some flows)
+          const shouldDismiss = ['closed_won', 'closed_lost', 'opted_out'].includes(newTag);
+          return shouldDismiss ? { ...base, inbox_status: 'dismissed' } : base;
+        })(),
         logStageChange: {
           oldStage: currentTag,
           newStage: newTag,
