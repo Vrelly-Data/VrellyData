@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 
 const db = supabase as any;
@@ -219,6 +220,36 @@ export function useAgentActivity(filters: ActivityFilters = {}) {
 
 // Live single-lead query (polls every 5s while leadId is set)
 export function useLiveLead(leadId: string | null) {
+  const queryClient = useQueryClient();
+
+  // Realtime: subscribe to updates on this lead row so the open conversation
+  // thread refreshes immediately when a new message lands (no page reload).
+  useEffect(() => {
+    if (!leadId) return;
+    const channel = supabase
+      .channel(`agent-lead-${leadId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'agent_leads',
+          filter: `id=eq.${leadId}`,
+        },
+        () => {
+          // Refresh the live lead and the surrounding inbox/activity views.
+          queryClient.invalidateQueries({ queryKey: ['agent-lead', leadId] });
+          queryClient.invalidateQueries({ queryKey: ['agent-inbox'] });
+          queryClient.invalidateQueries({ queryKey: ['agent-activity'] });
+        },
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [leadId, queryClient]);
+
   return useQuery<AgentLead | null>({
     queryKey: ['agent-lead', leadId],
     queryFn: async () => {
