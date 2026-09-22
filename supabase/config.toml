@@ -171,6 +171,9 @@ verify_jwt = false
 [functions.backfill-smartlead-sends]
 verify_jwt = false
 
+[functions.backfill-provider-tags]
+verify_jwt = false
+
 # UI-triggered Smartlead webhook reconcile (calls setup-smartlead-webhook internally).
 [functions.reconcile-smartlead-webhooks]
 verify_jwt = false
