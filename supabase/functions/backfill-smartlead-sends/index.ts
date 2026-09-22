@@ -1,16 +1,17 @@
-// [backfill-smartlead-sends v1]
+// [backfill-smartlead-sends v2]
 //
 // One-shot/resumable backfill of Smartlead OUTBOUND "SENT" messages into
 // public.inference_events (event_type='sent', channel='email'), plus additive
-// people upserts from synced_contacts. Idempotent per provider message id
+// people upserts from provider lead roster. Idempotent per provider message id
 // using the shared computeSentSourceId helper.
 //
 // Scope:
 // - Team-scoped: choose one Smartlead integration by integrationId OR all active
 //   Smartlead integrations for a given teamId.
 // - Campaigns: capture_enabled=true only (safety). Can be widened later.
-// - Contacts: walks public.synced_contacts for the selected campaigns and fetches
-//   Smartlead /message-history per lead to find "SENT" messages.
+// - Roster: PULLS LEADS DIRECTLY FROM PROVIDER (Smartlead /campaigns/{id}/leads)
+//   so every capture_enabled campaign’s leads are reachable regardless of
+//   synced_contacts size.
 //
 // Auth:
 // - Internal only via x-agent-key (AGENT_API_KEY). No frontend JWT allowed.
@@ -19,18 +20,22 @@
 //   {
 //     integrationId?: string,   // backfill one Smartlead integration
 //     teamId?: string,          // or all active Smartlead integrations for a team
-//     maxLeads?: number,        // safety cap per run (default 500)
-//     sinceDays?: number        // optional: restrict to synced_contacts updated in the last N days
+//     maxLeads?: number,        // per-run cap (default 5000)
+//     cursor?: { integrationIndex?: number; campaignIndex?: number; leadOffset?: number } | string(base64-json)
 //   }
 //
 // Response:
-//   { integrations, campaigns, leads_scanned, messages_sent_written, messages_sent_skipped, errors }
+//   {
+//     integrations, campaigns, leads_scanned,
+//     messages_sent_written, messages_sent_skipped, errors,
+//     hasMore, nextCursor: { integrationIndex, campaignIndex, leadOffset }
+//   }
 //
 // Notes:
 // - Uses computeSentSourceId(provider='smartlead', message_id preferred) to build
 //   a stable source_row_id so re-runs are no-ops for already-written messages.
 // - Does NOT touch classify-reply or send-agent-reply or any live send path.
-// - Best-effort additive upsert into public.people using synced_contacts values.
+// - Best-effort additive upsert into public.people using provider roster values.
 //
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { htmlToText } from "../_shared/html-to-text.ts";
@@ -52,6 +57,25 @@ function getCorsHeaders(req: Request) {
 }
 
 const SMARTLEAD_API_BASE = "https://server.smartlead.ai/api/v1";
+
+type SmartleadLeadEnvelope = {
+  total_leads?: number;
+  data?: Array<{
+    campaign_lead_map_id?: number | string;
+    lead?: {
+      id?: number | string;
+      email?: string;
+      phone_number?: string | null;
+      linkedin_profile?: string | null;
+      first_name?: string | null;
+      last_name?: string | null;
+      company_name?: string | null;
+      custom_fields?: Record<string, unknown> | null;
+      [k: string]: unknown;
+    } | null;
+    [k: string]: unknown;
+  }>;
+};
 
 type SmartleadMessage = {
   type?: "SENT" | "REPLY" | string;
@@ -82,6 +106,62 @@ async function fetchSmartleadHistory(apiKey: string, campaignId: string, leadId:
   return arr;
 }
 
+Deno.env.get;
+
+// Safe GET wrapper that appends api_key via URLSearchParams and never logs the full URL.
+async function smartleadGet(pathWithLeadingSlash: string, apiKey: string): Promise<Response> {
+  const url = new URL(`${SMARTLEAD_API_BASE}${pathWithLeadingSlash}`);
+  url.searchParams.set("api_key", apiKey);
+  return fetch(url.toString(), {
+    method: "GET",
+    headers: { Accept: "application/json" },
+  });
+}
+
+// Extract minimal firmographics from Smartlead custom_fields (aliases; non-empty only)
+function extractSmartleadFirmographics(customFields: unknown): {
+  job_title?: string;
+  industry?: string;
+  company_size?: string;
+  city?: string;
+  state?: string;
+  country?: string;
+} {
+  const result: Record<string, string | undefined> = {};
+  const norm = (v: unknown): string | undefined => {
+    const s = typeof v === "string" ? v : String(v ?? "");
+    const t = s.trim();
+    if (!t || t === "0") return undefined;
+    return t;
+  };
+  const nkey = (k: string) => k.trim().toLowerCase().replace(/\s+/g, " ").replace(/[_-]+/g, " ").trim();
+  const setFirst = (field: string, v: unknown) => {
+    if (result[field] === undefined) result[field] = norm(v);
+  };
+  if (customFields && typeof customFields === "object") {
+    for (const [rawK, rawV] of Object.entries(customFields as Record<string, unknown>)) {
+      const k = nkey(rawK);
+      if (["title", "job title", "job_title"].includes(k)) setFirst("job_title", rawV);
+      if (["industry", "vertical", "sector", "company industry"].includes(k)) setFirst("industry", rawV);
+      if (
+        ["company size", "company_size", "employees", "employee count", "headcount", "employee range", "company headcount"].includes(k)
+      )
+        setFirst("company_size", rawV);
+      if (["city", "location", "company city", "hq city"].includes(k)) setFirst("city", rawV);
+      if (["state", "region", "province", "company state", "hq state"].includes(k)) setFirst("state", rawV);
+      if (["country", "company country", "hq country"].includes(k)) setFirst("country", rawV);
+    }
+  }
+  return result as {
+    job_title?: string;
+    industry?: string;
+    company_size?: string;
+    city?: string;
+    state?: string;
+    country?: string;
+  };
+}
+
 Deno.serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
@@ -100,11 +180,23 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => ({}));
     const integrationId: string | undefined = body?.integrationId;
     const teamId: string | undefined = body?.teamId;
-    const maxLeads: number = Math.max(1, Number(body?.maxLeads ?? 500));
-    const sinceDaysRaw = body?.sinceDays;
-    const sinceIso: string | null = Number.isFinite(Number(sinceDaysRaw))
-      ? new Date(Date.now() - Number(sinceDaysRaw) * 86400_000).toISOString()
-      : null;
+    const maxLeads: number = Math.max(1, Number(body?.maxLeads ?? 5000));
+    // Optional resumable cursor
+    let startIntegration = 0;
+    let startCampaign = 0;
+    let startLeadOffset = 0;
+    if (body?.cursor) {
+      try {
+        const curObj = typeof body.cursor === "string"
+          ? JSON.parse(Buffer.from(String(body.cursor), "base64").toString("utf8"))
+          : body.cursor;
+        startIntegration = Number(curObj?.integrationIndex ?? 0) || 0;
+        startCampaign = Number(curObj?.campaignIndex ?? 0) || 0;
+        startLeadOffset = Number(curObj?.leadOffset ?? 0) || 0;
+      } catch {
+        // ignore malformed cursor
+      }
+    }
 
     if (!integrationId && !teamId) {
       return new Response(JSON.stringify({ error: "Provide integrationId OR teamId" }), {
@@ -154,16 +246,19 @@ Deno.serve(async (req) => {
     let messagesSentWritten = 0;
     let messagesSentSkipped = 0;
     let errors = 0;
+    let hasMore = false;
+    let nextCursor: { integrationIndex: number; campaignIndex: number; leadOffset: number } | null = null;
 
-    // Helper: additive people upsert from synced_contacts row
+    // Helper: additive people upsert from provider row
     const putNonEmpty = (obj: Record<string, unknown>, key: string, val: unknown) => {
       const s = typeof val === "string" ? val : String(val ?? "");
       const t = s.trim();
       if (t && t !== "0") obj[key] = t;
     };
 
-    for (const integ of integrations) {
-      if (!integ.api_key_encrypted) continue;
+    for (let i = startIntegration; i < integrations.length; i++) {
+      const integ = integrations[i];
+      if (!integ?.api_key_encrypted) continue;
       const apiKey = integ.api_key_encrypted;
 
       // Campaigns for this integration (safety: capture_enabled only)
@@ -176,30 +271,35 @@ Deno.serve(async (req) => {
       if (cErr) throw new Error(cErr.message);
       totalCampaigns += (campaigns ?? []).length;
 
-      for (const camp of campaigns ?? []) {
-        // Page synced_contacts for this campaign
-        let offset = 0;
-        const PAGE = 100;
+      for (let j = (i === startIntegration ? startCampaign : 0); j < (campaigns ?? []).length; j++) {
+        const camp = (campaigns ?? [])[j] as { id: string; team_id: string; external_campaign_id: string; name?: string | null };
+        // Page provider leads for this campaign
+        let offset = (i === startIntegration && j === startCampaign) ? startLeadOffset : 0;
+        const PAGE = 100; // Smartlead page size
         while (true) {
-          const sel =
-            "id, team_id, email, external_contact_id, first_name, last_name, company, job_title, industry, company_size, city, state, country, phone, linkedin_url, updated_at";
-          let q = supabase
-            .from("synced_contacts")
-            .select(sel)
-            .eq("campaign_id", (camp as any).id)
-            .order("updated_at", { ascending: false, nullsFirst: false })
-            .range(offset, offset + PAGE - 1);
-          if (sinceIso) q = q.gte("updated_at", sinceIso);
-          const { data: contacts, error: sErr } = await q;
-          if (sErr) { errors++; break; }
-          const rows = Array.isArray(contacts) ? contacts : [];
+          // Fetch one page of campaign leads from Smartlead
+          let page: SmartleadLeadEnvelope | null = null;
+          try {
+            const res = await smartleadGet(`/campaigns/${encodeURIComponent(camp.external_campaign_id)}/leads?limit=${PAGE}&offset=${offset}`, apiKey!);
+            if (!res.ok) {
+              const bodyText = await res.text().catch(() => "");
+              throw new Error(`Smartlead /campaigns/${camp.external_campaign_id}/leads failed (${res.status}): ${bodyText.substring(0, 300)}`);
+            }
+            page = await res.json().catch(() => ({} as SmartleadLeadEnvelope));
+          } catch (e) {
+            console.warn("[backfill-smartlead-sends] leads page fetch failed:", (e as Error).message);
+            errors++;
+            break;
+          }
+          const rows = Array.isArray(page?.data) ? page!.data! : [];
           if (rows.length === 0) break;
 
-          for (const sc of rows) {
+          for (const row of rows) {
             if (leadsScanned >= maxLeads) break;
             leadsScanned++;
-            const leadId = (sc as any)?.external_contact_id ? String((sc as any).external_contact_id) : null;
-            const email = typeof (sc as any)?.email === "string" ? (sc as any).email.trim().toLowerCase() : "";
+            const lead = row?.lead ?? null;
+            const leadId = lead?.id !== undefined && lead?.id !== null ? String(lead.id) : null;
+            const email = typeof lead?.email === "string" ? lead!.email.trim().toLowerCase() : "";
             if (!leadId || !email) continue;
             try {
               const messages = await fetchSmartleadHistory(apiKey, String((camp as any).external_campaign_id), leadId);
@@ -231,16 +331,22 @@ Deno.serve(async (req) => {
                     team_id: (camp as any).team_id,
                     person_key: email,
                     email,
-                    linkedin_url: (sc as any)?.linkedin_url ?? null,
-                    full_name: [String((sc as any)?.first_name ?? "").trim(), String((sc as any)?.last_name ?? "").trim()]
+                    linkedin_url: (typeof lead?.linkedin_profile === "string" && lead.linkedin_profile.trim()) ? lead.linkedin_profile.trim() : null,
+                    full_name: [String(lead?.first_name ?? "").trim(), String(lead?.last_name ?? "").trim()]
                       .filter(Boolean).join(" ") || null,
-                    job_title: (sc as any)?.job_title ?? null,
-                    company_name: (sc as any)?.company ?? null,
-                    industry: (sc as any)?.industry ?? null,
-                    city: (sc as any)?.city ?? null,
-                    state: (sc as any)?.state ?? null,
-                    country: (sc as any)?.country ?? null,
-                    company_size: (sc as any)?.company_size ?? null,
+                    // Firmographics snapshot best-effort from custom_fields
+                    ...((): Record<string, unknown> => {
+                      const fx = extractSmartleadFirmographics(lead?.custom_fields ?? {});
+                      return {
+                        job_title: fx.job_title ?? null,
+                        industry: fx.industry ?? null,
+                        company_size: fx.company_size ?? null,
+                        city: fx.city ?? null,
+                        state: fx.state ?? null,
+                        country: fx.country ?? null,
+                      };
+                    })(),
+                    company_name: (typeof lead?.company_name === "string" && lead.company_name.trim()) ? lead.company_name.trim() : null,
                     channel: "email",
                     campaign_external_id: String((camp as any).external_campaign_id ?? ""),
                     campaign_name: (camp as any)?.name ?? null,
@@ -273,17 +379,18 @@ Deno.serve(async (req) => {
                   team_id: (camp as any).team_id,
                   person_key: email,
                   email,
-                  linkedin_url: (sc as any)?.linkedin_url ?? null,
+                  linkedin_url: (typeof lead?.linkedin_profile === "string" && lead.linkedin_profile.trim()) ? lead.linkedin_profile.trim() : null,
                 };
-                putNonEmpty(p, "full_name", [String((sc as any)?.first_name ?? "").trim(), String((sc as any)?.last_name ?? "").trim()].filter(Boolean).join(" "));
-                putNonEmpty(p, "company_name", (sc as any)?.company);
-                putNonEmpty(p, "job_title", (sc as any)?.job_title);
-                putNonEmpty(p, "industry", (sc as any)?.industry);
-                putNonEmpty(p, "company_size", (sc as any)?.company_size);
-                putNonEmpty(p, "city", (sc as any)?.city);
-                putNonEmpty(p, "state", (sc as any)?.state);
-                putNonEmpty(p, "country", (sc as any)?.country);
-                putNonEmpty(p, "phone", (sc as any)?.phone);
+                putNonEmpty(p, "full_name", [String(lead?.first_name ?? "").trim(), String(lead?.last_name ?? "").trim()].filter(Boolean).join(" "));
+                putNonEmpty(p, "company_name", (lead as any)?.company_name);
+                const fx = extractSmartleadFirmographics(lead?.custom_fields ?? {});
+                putNonEmpty(p, "job_title", fx.job_title);
+                putNonEmpty(p, "industry", fx.industry);
+                putNonEmpty(p, "company_size", fx.company_size);
+                putNonEmpty(p, "city", fx.city);
+                putNonEmpty(p, "state", fx.state);
+                putNonEmpty(p, "country", fx.country);
+                putNonEmpty(p, "phone", (lead as any)?.phone_number);
                 await supabase.from("people")
                   // @ts-ignore onConflict supports column-list
                   .upsert(p, { onConflict: "team_id,person_key" });
@@ -302,8 +409,13 @@ Deno.serve(async (req) => {
           offset += rows.length;
           if (rows.length < PAGE || leadsScanned >= maxLeads) break;
         }
-        if (leadsScanned >= maxLeads) break;
+        if (leadsScanned >= maxLeads) {
+          hasMore = true;
+          nextCursor = { integrationIndex: i, campaignIndex: j, leadOffset: offset };
+          break;
+        }
       }
+      if (leadsScanned >= maxLeads) break;
     }
 
     return new Response(JSON.stringify({
@@ -314,6 +426,8 @@ Deno.serve(async (req) => {
       messages_sent_written: messagesSentWritten,
       messages_sent_skipped: messagesSentSkipped,
       errors,
+      hasMore,
+      nextCursor,
     }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

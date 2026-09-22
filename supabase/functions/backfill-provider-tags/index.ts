@@ -1,4 +1,4 @@
-// [backfill-provider-tags v1]
+// [backfill-provider-tags v2]
 //
 // Backfill provider "interested" / stage / reply-type tags into
 // public.inference_events as first-class 'classified' outcomes, without relying
@@ -12,8 +12,8 @@
 //     platform: "smartlead",          // required (pilot)
 //     integrationId?: string,         // run for one integration...
 //     teamId?: string,                // ...or all active integrations on a team
-//     maxLeads?: number,              // cap per run (default 500)
-//     sinceDays?: number              // optional: restrict to recently-updated synced_contacts
+//     maxLeads?: number,              // per-run cap (default 5000)
+//     cursor?: { integrationIndex?: number; campaignIndex?: number; leadOffset?: number } | string(base64-json)
 //   }
 //
 // Mapping (provider → standardized intent):
@@ -68,6 +68,24 @@ async function smartleadGet(pathWithLeadingSlash: string, apiKey: string): Promi
   return fetch(url.toString(), { method: "GET", headers: { Accept: "application/json" } });
 }
 
+type SmartleadLeadEnvelope = {
+  total_leads?: number;
+  data?: Array<{
+    campaign_lead_map_id?: number | string;
+    lead?: {
+      id?: number | string;
+      email?: string;
+      phone_number?: string | null;
+      linkedin_profile?: string | null;
+      first_name?: string | null;
+      last_name?: string | null;
+      company_name?: string | null;
+      [k: string]: unknown;
+    } | null;
+    [k: string]: unknown;
+  }>;
+};
+
 Deno.serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
@@ -85,10 +103,23 @@ Deno.serve(async (req) => {
     const platform = String(body?.platform || "").toLowerCase();
     const integrationId: string | undefined = body?.integrationId;
     const teamId: string | undefined = body?.teamId;
-    const maxLeads: number = Math.max(1, Number(body?.maxLeads ?? 500));
-    const sinceIso: string | null = Number.isFinite(Number(body?.sinceDays))
-      ? new Date(Date.now() - Number(body?.sinceDays) * 86400_000).toISOString()
-      : null;
+    const maxLeads: number = Math.max(1, Number(body?.maxLeads ?? 5000));
+    // Optional resumable cursor
+    let startIntegration = 0;
+    let startCampaign = 0;
+    let startLeadOffset = 0;
+    if (body?.cursor) {
+      try {
+        const curObj = typeof body.cursor === "string"
+          ? JSON.parse(Buffer.from(String(body.cursor), "base64").toString("utf8"))
+          : body.cursor;
+        startIntegration = Number(curObj?.integrationIndex ?? 0) || 0;
+        startCampaign = Number(curObj?.campaignIndex ?? 0) || 0;
+        startLeadOffset = Number(curObj?.leadOffset ?? 0) || 0;
+      } catch {
+        // ignore malformed cursor
+      }
+    }
 
     if (!platform || (platform !== "smartlead")) {
       return new Response(JSON.stringify({ error: "platform must be 'smartlead' (pilot)" }), {
@@ -139,6 +170,8 @@ Deno.serve(async (req) => {
     let eventsWritten = 0;
     let eventsSkipped = 0;
     let errors = 0;
+    let hasMore = false;
+    let nextCursor: { integrationIndex: number; campaignIndex: number; leadOffset: number } | null = null;
 
     const putNonEmpty = (obj: Record<string, unknown>, key: string, val: unknown) => {
       const s = typeof val === "string" ? val : String(val ?? "");
@@ -146,8 +179,9 @@ Deno.serve(async (req) => {
       if (t && t !== "0") obj[key] = t;
     };
 
-    for (const integ of integrations) {
-      if (!integ.api_key_encrypted) continue;
+    for (let i = startIntegration; i < integrations.length; i++) {
+      const integ = integrations[i];
+      if (!integ?.api_key_encrypted) continue;
       const apiKey = integ.api_key_encrypted;
 
       // Campaigns for this integration (safety: capture_enabled only)
@@ -158,28 +192,33 @@ Deno.serve(async (req) => {
         .eq("capture_enabled", true)
         .eq("source", "smartlead");
 
-      for (const camp of campaigns ?? []) {
-        let offset = 0;
+      for (let j = (i === startIntegration ? startCampaign : 0); j < (campaigns ?? []).length; j++) {
+        const camp = (campaigns ?? [])[j] as { id: string; team_id: string; external_campaign_id: string; name?: string | null };
+        let offset = (i === startIntegration && j === startCampaign) ? startLeadOffset : 0;
         const PAGE = 100;
         while (true) {
-          const sel =
-            "id, team_id, email, external_contact_id, first_name, last_name, company, job_title, industry, company_size, city, state, country, phone, linkedin_url, updated_at";
-          let q = supabase
-            .from("synced_contacts")
-            .select(sel)
-            .eq("campaign_id", (camp as any).id)
-            .order("updated_at", { ascending: false, nullsFirst: false })
-            .range(offset, offset + PAGE - 1);
-          if (sinceIso) q = q.gte("updated_at", sinceIso);
-          const { data: contacts, error: sErr } = await q;
-          if (sErr) { errors++; break; }
-          const rows = Array.isArray(contacts) ? contacts : [];
+          // Fetch provider roster for this campaign
+          let page: SmartleadLeadEnvelope | null = null;
+          try {
+            const res = await smartleadGet(`/campaigns/${encodeURIComponent(camp.external_campaign_id)}/leads?limit=${PAGE}&offset=${offset}`, apiKey!);
+            if (!res.ok) {
+              const bodyText = await res.text().catch(() => "");
+              throw new Error(`Smartlead /campaigns/${camp.external_campaign_id}/leads failed (${res.status}): ${bodyText.substring(0, 300)}`);
+            }
+            page = await res.json().catch(() => ({} as SmartleadLeadEnvelope));
+          } catch (e) {
+            console.warn("[backfill-provider-tags] leads page fetch failed:", (e as Error).message);
+            errors++;
+            break;
+          }
+          const rows = Array.isArray(page?.data) ? page!.data! : [];
           if (rows.length === 0) break;
 
-          for (const sc of rows) {
+          for (const row of rows) {
             if (leadsScanned >= maxLeads) break;
             leadsScanned++;
-            const email = typeof (sc as any)?.email === "string" ? (sc as any).email.trim().toLowerCase() : "";
+            const lead = row?.lead ?? null;
+            const email = typeof lead?.email === "string" ? lead!.email.trim().toLowerCase() : "";
             if (!email) continue;
             try {
               // Fetch Smartlead lead by email; extract a category/status-like field
@@ -218,7 +257,6 @@ Deno.serve(async (req) => {
               const teamId = (camp as any).team_id as string;
               const occurredAt =
                 (typeof (lead as any)?.updated_at === "string" && (lead as any).updated_at) ||
-                (sc as any)?.updated_at ||
                 new Date().toISOString();
               const sourceRowId = `smartlead:lead:${(lead as any)?.id ?? email}:tag:${providerTag.toLowerCase()}`;
 
@@ -230,16 +268,17 @@ Deno.serve(async (req) => {
                   team_id: teamId,
                   person_key: email,
                   email,
-                  linkedin_url: (sc as any)?.linkedin_url ?? null,
-                  full_name: [String((sc as any)?.first_name ?? "").trim(), String((sc as any)?.last_name ?? "").trim()]
+                  linkedin_url: (typeof (row?.lead?.linkedin_profile) === "string" && (row?.lead?.linkedin_profile as string).trim())
+                    ? (row?.lead?.linkedin_profile as string).trim() : null,
+                  full_name: [String(row?.lead?.first_name ?? "").trim(), String(row?.lead?.last_name ?? "").trim()]
                     .filter(Boolean).join(" ") || null,
-                  job_title: (sc as any)?.job_title ?? null,
-                  company_name: (sc as any)?.company ?? null,
-                  industry: (sc as any)?.industry ?? null,
-                  city: (sc as any)?.city ?? null,
-                  state: (sc as any)?.state ?? null,
-                  country: (sc as any)?.country ?? null,
-                  company_size: (sc as any)?.company_size ?? null,
+                  job_title: null,
+                  company_name: (typeof row?.lead?.company_name === "string" && row?.lead?.company_name?.trim()) ? (row?.lead?.company_name as string).trim() : null,
+                  industry: null,
+                  city: null,
+                  state: null,
+                  country: null,
+                  company_size: null,
                   channel: "email",
                   campaign_external_id: String((camp as any).external_campaign_id ?? ""),
                   campaign_name: (camp as any)?.name ?? null,
@@ -266,17 +305,12 @@ Deno.serve(async (req) => {
                 team_id: teamId,
                 person_key: email,
                 email,
-                linkedin_url: (sc as any)?.linkedin_url ?? null,
+                linkedin_url: (typeof (row?.lead?.linkedin_profile) === "string" && (row?.lead?.linkedin_profile as string).trim())
+                  ? (row?.lead?.linkedin_profile as string).trim() : null,
               };
-              putNonEmpty(p, "full_name", [String((sc as any)?.first_name ?? "").trim(), String((sc as any)?.last_name ?? "").trim()].filter(Boolean).join(" "));
-              putNonEmpty(p, "company_name", (sc as any)?.company);
-              putNonEmpty(p, "job_title", (sc as any)?.job_title);
-              putNonEmpty(p, "industry", (sc as any)?.industry);
-              putNonEmpty(p, "company_size", (sc as any)?.company_size);
-              putNonEmpty(p, "city", (sc as any)?.city);
-              putNonEmpty(p, "state", (sc as any)?.state);
-              putNonEmpty(p, "country", (sc as any)?.country);
-              putNonEmpty(p, "phone", (sc as any)?.phone);
+              putNonEmpty(p, "full_name", [String(row?.lead?.first_name ?? "").trim(), String(row?.lead?.last_name ?? "").trim()].filter(Boolean).join(" "));
+              putNonEmpty(p, "company_name", (row?.lead as any)?.company_name);
+              putNonEmpty(p, "phone", (row?.lead as any)?.phone_number);
               await supabase.from("people")
                 // @ts-ignore onConflict supports column-list
                 .upsert(p, { onConflict: "team_id,person_key" });
@@ -293,7 +327,13 @@ Deno.serve(async (req) => {
           offset += rows.length;
           if (rows.length < PAGE || leadsScanned >= maxLeads) break;
         }
+        if (leadsScanned >= maxLeads) {
+          hasMore = true;
+          nextCursor = { integrationIndex: i, campaignIndex: j, leadOffset: offset };
+          break;
+        }
       }
+      if (leadsScanned >= maxLeads) break;
     }
 
     return new Response(JSON.stringify({
@@ -303,6 +343,8 @@ Deno.serve(async (req) => {
       events_written: eventsWritten,
       events_skipped: eventsSkipped,
       errors,
+      hasMore,
+      nextCursor,
     }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
