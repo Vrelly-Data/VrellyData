@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Loader2, CheckCircle, Linkedin, Mail } from 'lucide-react';
 import { LinkedInProfileLink } from '@/components/LinkedInProfileLink';
@@ -53,17 +53,7 @@ export function AgentInbox() {
   const { leads, counts, hasMore, total, isLoading, isFetching } =
     useAgentInboxData('inbox', statusGroup, limit);
 
-  // Keep the selected lead in sync with the live list snapshot so the
-  // detail panel doesn't get stuck on a frozen object when the live
-  // single-row query is blocked (e.g. RLS) or errors. On every list
-  // refresh, replace the selected object with the latest copy by id.
-  useEffect(() => {
-    if (!selectedLead) return;
-    const fresh = leads.find((l) => l.id === selectedLead.id);
-    if (fresh && fresh !== selectedLead) {
-      setSelectedLead(fresh);
-    }
-  }, [leads, selectedLead?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  
 
   // Distinguishes "fetching a BIGGER page" from the routine 30s background
   // poll, which also sets isFetching. Keying the button's pending state off
