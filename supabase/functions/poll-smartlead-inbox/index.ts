@@ -260,19 +260,32 @@ Deno.serve(async (req) => {
           .eq('user_id', integration.created_by);
         const have = new Set<string>((existing ?? []).map((r) => String((r as { email_address: string | null }).email_address ?? '').trim().toLowerCase())).add('');
 
-        // 2) Load capture-enabled campaigns with names (for last_campaign_name)
+        // 2) Load capture-enabled campaigns with names + status + last sweep time
         const { data: enabledNamed } = await supabase
           .from('synced_campaigns')
-          .select('external_campaign_id, name')
+          .select('external_campaign_id, name, status, capture_recent_reply_sweep_at')
           .eq('source', 'smartlead')
           .eq('capture_enabled', true)
           .eq('team_id', integration.team_id);
-        const byId = new Map<string, { name: string }>();
-        for (const r of enabledNamed ?? []) {
-          const id = String((r as { external_campaign_id: string }).external_campaign_id);
-          const name = String((r as { name: string | null }).name ?? '') || `Campaign ${id}`;
-          byId.set(id, { name });
-        }
+        type CampRow = { external_campaign_id: string; name: string | null; status: string | null; capture_recent_reply_sweep_at: string | null };
+        const campaigns: CampRow[] = (enabledNamed ?? []) as any;
+        // Prioritize active/running (in_progress), then paused, then others; within each bucket, oldest sweep first (NULLs first)
+        const statusWeight = (s: string | null) => {
+          const v = (s ?? '').toLowerCase();
+          if (v === 'in_progress') return 0;
+          if (v === 'paused') return 1;
+          return 2;
+        };
+        campaigns.sort((a, b) => {
+          const aw = statusWeight(a.status ?? null); const bw = statusWeight(b.status ?? null);
+          if (aw !== bw) return aw - bw;
+          const at = a.capture_recent_reply_sweep_at ? Date.parse(a.capture_recent_reply_sweep_at) : 0;
+          const bt = b.capture_recent_reply_sweep_at ? Date.parse(b.capture_recent_reply_sweep_at) : 0;
+          if (at === bt) return String(a.external_campaign_id).localeCompare(String(b.external_campaign_id));
+          if (at === 0) return -1; // NULLs first
+          if (bt === 0) return 1;
+          return at - bt;
+        });
 
         // Helper: defensive numeric extraction for analytics-by-date
         const pickNumber = (obj: Record<string, unknown>, keys: string[]) => {
@@ -290,7 +303,8 @@ Deno.serve(async (req) => {
         const endYMD = new Date().toISOString().slice(0, 10);
         const candidateCampaigns: string[] = [];
         let considered = 0;
-        for (const id of byId.keys()) {
+        for (const row of campaigns.slice(0, Math.max(MAX_CAMPAIGNS_FOR_SWEEP * 2, MAX_CAMPAIGNS_FOR_SWEEP + 4))) {
+          const id = String(row.external_campaign_id);
           if (considered >= MAX_CAMPAIGNS_FOR_SWEEP) break;
           try {
             const u = new URL(`${SMARTLEAD_API_BASE}/campaigns/${encodeURIComponent(id)}/analytics-by-date`);
@@ -323,39 +337,63 @@ Deno.serve(async (req) => {
 
         let created = 0;
         outer: for (const campaignId of candidateCampaigns) {
-          const meta = byId.get(campaignId)!;
+          const metaName = (campaigns.find((c) => String(c.external_campaign_id) === String(campaignId))?.name ?? '') || `Campaign ${campaignId}`;
           // page through leads
           let offset = 0;
           const limit = 100;
           for (;;) {
-            // Attempt to filter to replied + recent leads; fall back progressively if unsupported
+            // Query only replied leads using Smartlead statistics endpoints (skip campaign if unsupported)
+            // Try lead-statistics first; expected to include lead_id/email/reply_time
             const after = startYMD;
             let res = await smartleadGet(
-              `/campaigns/${encodeURIComponent(campaignId)}/leads?limit=${limit}&offset=${offset}&status=REPLIED&replied_after=${encodeURIComponent(after)}`,
+              `/campaigns/${encodeURIComponent(campaignId)}/lead-statistics?limit=${limit}&offset=${offset}&status=REPLIED&replied_after=${encodeURIComponent(after)}`,
             );
-            let filteredMode = true;
-            if (!res.ok && res.status === 400) {
-              res = await smartleadGet(
-                `/campaigns/${encodeURIComponent(campaignId)}/leads?limit=${limit}&offset=${offset}&status=REPLIED`,
-              );
-            }
             if (!res.ok) {
-              res = await smartleadGet(`/campaigns/${encodeURIComponent(campaignId)}/leads?limit=${limit}&offset=${offset}`);
-              filteredMode = false;
+              // Fallback to statistics variant; if still not ok, skip campaign (do NOT fall back to unfiltered /leads)
+              res = await smartleadGet(
+                `/campaigns/${encodeURIComponent(campaignId)}/statistics?limit=${limit}&offset=${offset}&status=REPLIED&replied_after=${encodeURIComponent(after)}`,
+              );
             }
             if (!res.ok) {
               console.warn(`[poll-smartlead-inbox] leads list ${res.status} for campaign ${campaignId}`);
               break;
             }
             const body = await res.json().catch(() => ({} as any));
-            const rows: Array<{ campaign_lead_map_id?: string|number; lead?: { id?: string|number; email?: string|null; reply_time?: string|null } }> =
-              Array.isArray(body?.data) ? body.data : [];
+            // Tolerant extraction of replied leads with reply_time
+            const rowsRaw: Array<Record<string, unknown>> = Array.isArray(body?.data) ? body.data : [];
+            type ReplyRow = { leadId: string; email: string; reply_time: string | null };
+            const rows: ReplyRow[] = rowsRaw
+              .map((r) => {
+                // common shapes:
+                // { lead: { id,email,reply_time } } OR { lead_id, email, reply_time } OR { id, email, reply_time }
+                const lead = (r.lead as Record<string, unknown> | undefined) ?? undefined;
+                const lid = (lead?.id ?? r.lead_id ?? r.id) as string | number | null | undefined;
+                const em = (lead?.email ?? r.email) as string | null | undefined;
+                const rt = (lead?.reply_time ?? r.reply_time) as string | null | undefined;
+                const idStr = lid != null ? String(lid) : '';
+                const emailStr = (em ?? '').trim().toLowerCase();
+                return idStr && emailStr ? { leadId: idStr, email: emailStr, reply_time: rt ?? null } : null;
+              })
+              .filter(Boolean) as ReplyRow[];
             if (rows.length === 0) break;
 
             for (const row of rows) {
-              const leadId = row?.lead?.id != null ? String(row.lead.id) : null;
-              const email = (row?.lead?.email ?? '').trim().toLowerCase();
-              if (!leadId || !email || have.has(email)) continue;
+              const leadId = row.leadId;
+              const email = row.email;
+              if (!leadId || !email) continue;
+              // Existence check per email (robust vs. 1000-row page default)
+              if (have.has(email)) continue;
+              const { data: exists } = await supabase
+                .from('agent_leads')
+                .select('id')
+                .eq('user_id', integration.created_by)
+                .eq('email_address', email)
+                .limit(1)
+                .maybeSingle();
+              if (exists) {
+                have.add(email);
+                continue;
+              }
 
               // Fetch canonical thread and check for any prospect message
               let hist = await fetchSmartleadThread({
@@ -391,8 +429,8 @@ Deno.serve(async (req) => {
                   break;
                 }
               }
-              // Time window guard (if filters were unsupported): require lastProspectAt (or hinted reply_time) within LOOKBACK
-              const replyTimeHint = (row?.lead?.reply_time as string | null) ?? null;
+              // Time window guard: require lastProspectAt (or hinted reply_time) within LOOKBACK
+              const replyTimeHint = row.reply_time ?? null;
               const ts = Date.parse(lastProspectAt ?? replyTimeHint ?? '');
               if (Number.isFinite(ts)) {
                 const cutoff = Date.now() - LOOKBACK_DAYS_FOR_NEW * 86400_000;
@@ -412,7 +450,7 @@ Deno.serve(async (req) => {
                 smartlead_lead_id: leadId,
                 smartlead_campaign_id: campaignId,
                 smartlead_email_stats_id: hist.latestProspectStatsId ?? null,
-                last_campaign_name: meta.name,
+                last_campaign_name: metaName,
                 reply_message_id: hist.latestProspectMessageId ?? null,
                 last_reply_text: lastProspectText,
                 last_reply_at: lastProspectAt ?? new Date().toISOString(),
@@ -508,7 +546,7 @@ Deno.serve(async (req) => {
                               company_phone: null,
                               channel: 'email',
                               campaign_external_id: campaignId,
-                              campaign_name: meta.name,
+                              campaign_name: metaName,
                               sequence_step_type: null,
                               copy_fingerprint: null,
                               subject: null,
@@ -537,18 +575,13 @@ Deno.serve(async (req) => {
                             if (error) console.warn('[poll-smartlead-inbox] inference_events upsert error (non-fatal):', error);
                           }),
                       );
+                      // Insert-only for people (no clobber): minimal fields; ignore duplicates
                       writes.push(
                         supabase
                           .from('people')
-                          // @ts-ignore
-                          .upsert(
-                            {
-                              team_id: integration.team_id,
-                              person_key: personKey,
-                              email,
-                              linkedin_url: sanitizeLinkedinUrlForStorage(null),
-                            } as any,
-                            { onConflict: 'team_id,person_key' },
+                          .insert(
+                            [{ team_id: integration.team_id, person_key: personKey, email }],
+                            { onConflict: 'team_id,person_key', ignoreDuplicates: true } as any,
                           ),
                       );
                       // @ts-ignore
@@ -573,6 +606,17 @@ Deno.serve(async (req) => {
             offset += rows.length;
             if (rows.length < limit) break;
             await sleep(150);
+          }
+          // Mark campaign swept now for rotation
+          try {
+            await supabase
+              .from('synced_campaigns')
+              .update({ capture_recent_reply_sweep_at: new Date().toISOString() })
+              .eq('team_id', integration.team_id)
+              .eq('source', 'smartlead')
+              .eq('external_campaign_id', campaignId);
+          } catch {
+            // non-fatal
           }
         }
         result.newLeads += created;
