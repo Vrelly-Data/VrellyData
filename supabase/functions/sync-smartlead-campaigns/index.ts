@@ -548,8 +548,29 @@ Deno.serve(async (req) => {
         `skippedAnalytics=${skippedAnalytics}, total=${campaigns.length}`,
     );
 
-    // Note: webhook reconcile is handled when capture is explicitly enabled
-    // via Manage Campaigns Save (or separate admin flow), not implicitly here.
+    // Ensure capture webhooks exist for all capture-enabled campaigns (idempotent).
+    // This covers any path that flips capture_enabled=true outside the UI reconcile flow.
+    try {
+      const { data: enabled } = await supabase
+        .from("synced_campaigns")
+        .select("external_campaign_id")
+        .eq("integration_id", integration.id)
+        .eq("source", "smartlead")
+        .eq("capture_enabled", true);
+      const ids = (enabled ?? []).map((r) => String((r as { external_campaign_id: string }).external_campaign_id)).filter(Boolean);
+      if (ids.length > 0) {
+        const agentKey = Deno.env.get("AGENT_API_KEY") ?? "";
+        await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/setup-smartlead-webhook`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-agent-key": agentKey },
+          body: JSON.stringify({ integrationId: integration.id, campaignIds: ids }),
+        }).catch((e) => {
+          console.warn("[sync-smartlead-campaigns] ensure-webhooks call failed (non-fatal):", e);
+        });
+      }
+    } catch (e) {
+      console.warn("[sync-smartlead-campaigns] ensure-webhooks sweep threw (non-fatal):", e instanceof Error ? e.message : String(e));
+    }
 
     return new Response(
       JSON.stringify({

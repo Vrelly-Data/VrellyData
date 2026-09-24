@@ -51,6 +51,7 @@ const MAX_LEADS_PER_RUN = 100;
 // acceptable — they refresh on the next pass.
 const DELAY_MS = 200;
 const ACTIVE_WINDOW_DAYS = 7;
+const MAX_NEW_LEADS_PER_RUN = 60; // backfill cap per integration
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -101,7 +102,7 @@ Deno.serve(async (req) => {
     // 200-with-no-usable-body fell through as neither refresh nor error. That
     // silence is what hid a response-shape mismatch for the length of an
     // investigation — an empty result must be countable.
-    const result = { scanned: 0, refreshed: 0, unchanged: 0, flagged: 0, empty: 0, errors: 0, rateLimited: 0 };
+    const result = { scanned: 0, refreshed: 0, unchanged: 0, flagged: 0, empty: 0, errors: 0, rateLimited: 0, webhooksEnsured: 0, newLeads: 0 };
 
     for (const integration of integrations ?? []) {
       const apiKey = integration.api_key_encrypted as string | undefined;
@@ -215,6 +216,163 @@ Deno.serve(async (req) => {
           result.errors++;
         }
         await sleep(DELAY_MS);
+      }
+
+      // ── Safety net A: re-ensure webhooks for all capture-enabled campaigns ──
+      try {
+        const { data: enabledCampaigns } = await supabase
+          .from('synced_campaigns')
+          .select('external_campaign_id')
+          .eq('source', 'smartlead')
+          .eq('capture_enabled', true)
+          .eq('team_id', integration.team_id);
+        const ids = (enabledCampaigns ?? []).map((r) => String((r as { external_campaign_id: string }).external_campaign_id)).filter(Boolean);
+        if (ids.length > 0) {
+          const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+          const agentApiKey = Deno.env.get('AGENT_API_KEY') || '';
+          const res = await fetch(`${supabaseUrl}/functions/v1/setup-smartlead-webhook`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-agent-key': agentApiKey },
+            body: JSON.stringify({ integrationId: integration.id, campaignIds: ids }),
+          });
+          if (res.ok) result.webhooksEnsured += ids.length;
+          else {
+            console.warn('[poll-smartlead-inbox] ensure-webhooks call failed:', await res.text().catch(() => String(res.status)));
+          }
+        }
+      } catch (e) {
+        console.warn('[poll-smartlead-inbox] ensure-webhooks threw (non-fatal):', e instanceof Error ? e.message : String(e));
+      }
+
+      // ── Safety net B: detect replies for leads not yet in agent_leads ───────
+      try {
+        // 1) Build a set of existing Smartlead emails for this user (dedupe target)
+        const { data: existing } = await supabase
+          .from('agent_leads')
+          .select('email_address')
+          .eq('source', 'smartlead')
+          .eq('channel', 'email')
+          .eq('user_id', integration.created_by);
+        const have = new Set<string>((existing ?? []).map((r) => String((r as { email_address: string | null }).email_address ?? '').trim().toLowerCase())).add('');
+
+        // 2) Load capture-enabled campaigns with names (for last_campaign_name)
+        const { data: enabledNamed } = await supabase
+          .from('synced_campaigns')
+          .select('external_campaign_id, name')
+          .eq('source', 'smartlead')
+          .eq('capture_enabled', true)
+          .eq('team_id', integration.team_id);
+        const byId = new Map<string, { name: string }>();
+        for (const r of enabledNamed ?? []) {
+          const id = String((r as { external_campaign_id: string }).external_campaign_id);
+          const name = String((r as { name: string | null }).name ?? '') || `Campaign ${id}`;
+          byId.set(id, { name });
+        }
+
+        // 3) Iterate campaigns, page Smartlead leads, and backfill only when a reply exists and not in agent_leads
+        const SMARTLEAD_API_BASE = 'https://server.smartlead.ai/api/v1';
+        const smartleadGet = async (path: string): Promise<Response> => {
+          const url = new URL(`${SMARTLEAD_API_BASE}${path}`);
+          url.searchParams.set('api_key', apiKey!);
+          return fetch(url.toString(), { headers: { Accept: 'application/json' } });
+        };
+
+        let created = 0;
+        outer: for (const [campaignId, meta] of byId.entries()) {
+          // page through leads
+          let offset = 0;
+          const limit = 100;
+          for (;;) {
+            const res = await smartleadGet(`/campaigns/${encodeURIComponent(campaignId)}/leads?limit=${limit}&offset=${offset}`);
+            if (!res.ok) {
+              console.warn(`[poll-smartlead-inbox] leads list ${res.status} for campaign ${campaignId}`);
+              break;
+            }
+            const body = await res.json().catch(() => ({} as any));
+            const rows: Array<{ campaign_lead_map_id?: string|number; lead?: { id?: string|number; email?: string|null } }> =
+              Array.isArray(body?.data) ? body.data : [];
+            if (rows.length === 0) break;
+
+            for (const row of rows) {
+              const leadId = row?.lead?.id != null ? String(row.lead.id) : null;
+              const email = (row?.lead?.email ?? '').trim().toLowerCase();
+              if (!leadId || !email || have.has(email)) continue;
+
+              // Fetch canonical thread and check for any prospect message
+              let hist = await fetchSmartleadThread({
+                apiKey,
+                campaignId,
+                leadId,
+                localThread: null,
+                senderNameFor,
+              });
+              if (hist.status === 429) {
+                await sleep(1500);
+                hist = await fetchSmartleadThread({
+                  apiKey,
+                  campaignId,
+                  leadId,
+                  localThread: null,
+                  senderNameFor,
+                });
+              }
+              const thread = hist.thread ?? [];
+              const hasProspect = Array.isArray(thread) && thread.some((m) => m?.role === 'prospect' && (m?.content ?? '').trim().length > 0);
+              if (!hasProspect) {
+                await sleep(50);
+                continue;
+              }
+              // Derive last prospect message
+              let lastProspectText = '';
+              let lastProspectAt = hist.latestProspectTimestamp ?? null;
+              for (let i = thread.length - 1; i >= 0; i--) {
+                if (thread[i]?.role === 'prospect') {
+                  lastProspectText = (thread[i]?.content ?? '').trim();
+                  if (!lastProspectAt) lastProspectAt = thread[i]?.timestamp ?? null;
+                  break;
+                }
+              }
+              // Build upsert row (minimal — same shape webhook seeds, no classify here)
+              const leadRow: Record<string, unknown> = {
+                user_id: integration.created_by,
+                external_id: email, // natural id for email channel
+                email,
+                email_address: email,
+                channel: 'email',
+                source: 'smartlead',
+                smartlead_lead_id: leadId,
+                smartlead_campaign_id: campaignId,
+                smartlead_email_stats_id: hist.latestProspectStatsId ?? null,
+                last_campaign_name: meta.name,
+                reply_message_id: hist.latestProspectMessageId ?? null,
+                last_reply_text: lastProspectText,
+                last_reply_at: lastProspectAt ?? new Date().toISOString(),
+                reply_thread: thread as ThreadMessage[],
+                inbox_status: 'pending',
+              };
+              const { data: up, error: upErr } = await (supabase as any)
+                .from('agent_leads')
+                .upsert(leadRow, { onConflict: 'user_id,email_address' })
+                .select('id')
+                .single();
+              if (upErr) {
+                console.warn('[poll-smartlead-inbox] upsert new lead failed (non-fatal):', upErr.message || upErr);
+              } else {
+                created++;
+                have.add(email);
+              }
+              if (created >= MAX_NEW_LEADS_PER_RUN) break outer;
+              await sleep(100);
+            }
+
+            offset += rows.length;
+            if (rows.length < limit) break;
+            await sleep(150);
+          }
+        }
+        result.newLeads += created;
+      } catch (e) {
+        console.warn('[poll-smartlead-inbox] unknown-lead sweep threw (non-fatal):', e instanceof Error ? e.message : String(e));
       }
     }
 
