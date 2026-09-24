@@ -4,6 +4,8 @@ import {
   loadSenderNameLookup,
   type ThreadMessage,
 } from '../_shared/smartlead-thread.ts';
+import { detectLanguageCode } from '../_shared/language.ts';
+import { sanitizeLinkedinUrlForStorage } from '../_shared/normalize.ts';
 
 const allowedOrigins = ['https://vrelly.com', 'https://www.vrelly.com'];
 
@@ -51,6 +53,10 @@ const MAX_LEADS_PER_RUN = 100;
 // acceptable — they refresh on the next pass.
 const DELAY_MS = 200;
 const ACTIVE_WINDOW_DAYS = 7;
+const MAX_NEW_LEADS_PER_RUN = 60; // backfill cap per integration
+const LOOKBACK_DAYS_FOR_NEW = 3; // only consider very recent replies for sweep
+const MAX_CAMPAIGNS_FOR_SWEEP = 12; // cap candidate campaigns probed per run
+const ANALYTICS_PACE_MS = 150;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -101,7 +107,7 @@ Deno.serve(async (req) => {
     // 200-with-no-usable-body fell through as neither refresh nor error. That
     // silence is what hid a response-shape mismatch for the length of an
     // investigation — an empty result must be countable.
-    const result = { scanned: 0, refreshed: 0, unchanged: 0, flagged: 0, empty: 0, errors: 0, rateLimited: 0 };
+    const result = { scanned: 0, refreshed: 0, unchanged: 0, flagged: 0, empty: 0, errors: 0, rateLimited: 0, webhooksEnsured: 0, newLeads: 0 };
 
     for (const integration of integrations ?? []) {
       const apiKey = integration.api_key_encrypted as string | undefined;
@@ -215,6 +221,407 @@ Deno.serve(async (req) => {
           result.errors++;
         }
         await sleep(DELAY_MS);
+      }
+
+      // ── Safety net A: re-ensure webhooks only when stale/missing ───────────
+      try {
+        const staleSinceISO = new Date(Date.now() - 24 * 3600_000).toISOString();
+        const { data: enabledCampaigns } = await supabase
+          .from('synced_campaigns')
+          .select('external_campaign_id')
+          .eq('source', 'smartlead')
+          .eq('capture_enabled', true)
+          .eq('team_id', integration.team_id)
+          .or(`capture_webhook_checked_at.is.null,capture_webhook_registered.is.false,capture_webhook_checked_at.lte.${staleSinceISO}`);
+        const ids = (enabledCampaigns ?? []).map((r) => String((r as { external_campaign_id: string }).external_campaign_id)).filter(Boolean);
+        if (ids.length > 0) {
+          const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+          const agentApiKey = Deno.env.get('AGENT_API_KEY') || '';
+          const res = await fetch(`${supabaseUrl}/functions/v1/setup-smartlead-webhook`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-agent-key': agentApiKey },
+            body: JSON.stringify({ integrationId: integration.id, campaignIds: ids }),
+          });
+          if (res.ok) result.webhooksEnsured += ids.length;
+          else {
+            console.warn('[poll-smartlead-inbox] ensure-webhooks call failed:', await res.text().catch(() => String(res.status)));
+          }
+        }
+      } catch (e) {
+        console.warn('[poll-smartlead-inbox] ensure-webhooks threw (non-fatal):', e instanceof Error ? e.message : String(e));
+      }
+
+      // ── Safety net B: detect recent replies for leads NOT in agent_leads ───
+      try {
+        // 1) Build a set of existing emails for this user (dedupe target) across all sources
+        const { data: existing } = await supabase
+          .from('agent_leads')
+          .select('email_address')
+          .eq('user_id', integration.created_by);
+        const have = new Set<string>((existing ?? []).map((r) => String((r as { email_address: string | null }).email_address ?? '').trim().toLowerCase())).add('');
+
+        // 2) Load capture-enabled campaigns with names + status + last sweep time
+        const { data: enabledNamed } = await supabase
+          .from('synced_campaigns')
+          .select('external_campaign_id, name, status, capture_recent_reply_sweep_at')
+          .eq('source', 'smartlead')
+          .eq('capture_enabled', true)
+          .eq('team_id', integration.team_id);
+        type CampRow = { external_campaign_id: string; name: string | null; status: string | null; capture_recent_reply_sweep_at: string | null };
+        const campaigns: CampRow[] = (enabledNamed ?? []) as any;
+        // Prioritize active/running (in_progress), then paused, then others; within each bucket, oldest sweep first (NULLs first)
+        const statusWeight = (s: string | null) => {
+          const v = (s ?? '').toLowerCase();
+          if (v === 'in_progress') return 0;
+          if (v === 'paused') return 1;
+          return 2;
+        };
+        campaigns.sort((a, b) => {
+          const aw = statusWeight(a.status ?? null); const bw = statusWeight(b.status ?? null);
+          if (aw !== bw) return aw - bw;
+          const at = a.capture_recent_reply_sweep_at ? Date.parse(a.capture_recent_reply_sweep_at) : 0;
+          const bt = b.capture_recent_reply_sweep_at ? Date.parse(b.capture_recent_reply_sweep_at) : 0;
+          if (at === bt) return String(a.external_campaign_id).localeCompare(String(b.external_campaign_id));
+          if (at === 0) return -1; // NULLs first
+          if (bt === 0) return 1;
+          return at - bt;
+        });
+
+        // Helper: defensive numeric extraction for analytics-by-date
+        const pickNumber = (obj: Record<string, unknown>, keys: string[]) => {
+          for (const k of keys) {
+            const v = obj[k];
+            if (typeof v === 'number' && Number.isFinite(v)) return v;
+            if (typeof v === 'string' && v.trim() !== '' && !Number.isNaN(Number(v))) return Number(v);
+          }
+          return 0;
+        };
+
+        // 3) Filter to campaigns with replies in the last LOOKBACK days via analytics-by-date (reduces lead scanning)
+        const SMARTLEAD_API_BASE = 'https://server.smartlead.ai/api/v1';
+        const startYMD = new Date(Date.now() - LOOKBACK_DAYS_FOR_NEW * 86400_000).toISOString().slice(0, 10);
+        const endYMD = new Date().toISOString().slice(0, 10);
+        const candidateCampaigns: string[] = [];
+        let considered = 0;
+        for (const row of campaigns.slice(0, Math.max(MAX_CAMPAIGNS_FOR_SWEEP * 2, MAX_CAMPAIGNS_FOR_SWEEP + 4))) {
+          const id = String(row.external_campaign_id);
+          if (considered >= MAX_CAMPAIGNS_FOR_SWEEP) break;
+          try {
+            const u = new URL(`${SMARTLEAD_API_BASE}/campaigns/${encodeURIComponent(id)}/analytics-by-date`);
+            u.searchParams.set('api_key', apiKey!);
+            u.searchParams.set('start_date', startYMD);
+            u.searchParams.set('end_date', endYMD);
+            const aRes = await fetch(u.toString(), { headers: { Accept: 'application/json' } });
+            if (aRes.ok) {
+              const analytics = (await aRes.json().catch(() => ({}))) as Record<string, unknown>;
+              const replies = pickNumber(analytics, ['replies', 'reply_count', 'unique_replies', 'replied']);
+              if (replies > 0) candidateCampaigns.push(id);
+            }
+          } catch {
+            // skip campaign on error
+          }
+          considered++;
+          await sleep(ANALYTICS_PACE_MS);
+        }
+        if (candidateCampaigns.length === 0) {
+          // Nothing recent — skip sweep silently
+          continue;
+        }
+
+        // 4) Iterate candidate campaigns, fetch only replied leads (recent), and backfill only when not in agent_leads
+        const smartleadGet = async (path: string): Promise<Response> => {
+          const url = new URL(`${SMARTLEAD_API_BASE}${path}`);
+          url.searchParams.set('api_key', apiKey!);
+          return fetch(url.toString(), { headers: { Accept: 'application/json' } });
+        };
+
+        let created = 0;
+        outer: for (const campaignId of candidateCampaigns) {
+          const metaName = (campaigns.find((c) => String(c.external_campaign_id) === String(campaignId))?.name ?? '') || `Campaign ${campaignId}`;
+          // page through leads
+          let offset = 0;
+          const limit = 100;
+          for (;;) {
+            // Query only replied leads using Smartlead statistics endpoints (skip campaign if unsupported)
+            // Try lead-statistics first; expected to include lead_id/email/reply_time
+            const after = startYMD;
+            let res = await smartleadGet(
+              `/campaigns/${encodeURIComponent(campaignId)}/lead-statistics?limit=${limit}&offset=${offset}&status=REPLIED&replied_after=${encodeURIComponent(after)}`,
+            );
+            if (!res.ok) {
+              // Fallback to statistics variant; if still not ok, skip campaign (do NOT fall back to unfiltered /leads)
+              res = await smartleadGet(
+                `/campaigns/${encodeURIComponent(campaignId)}/statistics?limit=${limit}&offset=${offset}&status=REPLIED&replied_after=${encodeURIComponent(after)}`,
+              );
+            }
+            if (!res.ok) {
+              console.warn(`[poll-smartlead-inbox] leads list ${res.status} for campaign ${campaignId}`);
+              break;
+            }
+            const body = await res.json().catch(() => ({} as any));
+            // Tolerant extraction of replied leads with reply_time
+            const rowsRaw: Array<Record<string, unknown>> = Array.isArray(body?.data) ? body.data : [];
+            type ReplyRow = { leadId: string; email: string; reply_time: string | null };
+            const rows: ReplyRow[] = rowsRaw
+              .map((r) => {
+                // common shapes:
+                // { lead: { id,email,reply_time } } OR { lead_id, email, reply_time } OR { id, email, reply_time }
+                const lead = (r.lead as Record<string, unknown> | undefined) ?? undefined;
+                const lid = (lead?.id ?? r.lead_id ?? r.id) as string | number | null | undefined;
+                const em = (lead?.email ?? r.email) as string | null | undefined;
+                const rt = (lead?.reply_time ?? r.reply_time) as string | null | undefined;
+                const idStr = lid != null ? String(lid) : '';
+                const emailStr = (em ?? '').trim().toLowerCase();
+                return idStr && emailStr ? { leadId: idStr, email: emailStr, reply_time: rt ?? null } : null;
+              })
+              .filter(Boolean) as ReplyRow[];
+            if (rows.length === 0) break;
+
+            for (const row of rows) {
+              const leadId = row.leadId;
+              const email = row.email;
+              if (!leadId || !email) continue;
+              // Existence check per email (robust vs. 1000-row page default)
+              if (have.has(email)) continue;
+              const { data: exists } = await supabase
+                .from('agent_leads')
+                .select('id')
+                .eq('user_id', integration.created_by)
+                .eq('email_address', email)
+                .limit(1)
+                .maybeSingle();
+              if (exists) {
+                have.add(email);
+                continue;
+              }
+
+              // Fetch canonical thread and check for any prospect message
+              let hist = await fetchSmartleadThread({
+                apiKey,
+                campaignId,
+                leadId,
+                localThread: null,
+                senderNameFor,
+              });
+              if (hist.status === 429) {
+                await sleep(1500);
+                hist = await fetchSmartleadThread({
+                  apiKey,
+                  campaignId,
+                  leadId,
+                  localThread: null,
+                  senderNameFor,
+                });
+              }
+              const thread = hist.thread ?? [];
+              const hasProspect = Array.isArray(thread) && thread.some((m) => m?.role === 'prospect' && (m?.content ?? '').trim().length > 0);
+              if (!hasProspect) {
+                await sleep(50);
+                continue;
+              }
+              // Derive last prospect message
+              let lastProspectText = '';
+              let lastProspectAt = hist.latestProspectTimestamp ?? null;
+              for (let i = thread.length - 1; i >= 0; i--) {
+                if (thread[i]?.role === 'prospect') {
+                  lastProspectText = (thread[i]?.content ?? '').trim();
+                  if (!lastProspectAt) lastProspectAt = thread[i]?.timestamp ?? null;
+                  break;
+                }
+              }
+              // Time window guard: require lastProspectAt (or hinted reply_time) within LOOKBACK
+              const replyTimeHint = row.reply_time ?? null;
+              const ts = Date.parse(lastProspectAt ?? replyTimeHint ?? '');
+              if (Number.isFinite(ts)) {
+                const cutoff = Date.now() - LOOKBACK_DAYS_FOR_NEW * 86400_000;
+                if (ts < cutoff) {
+                  await sleep(50);
+                  continue;
+                }
+              }
+              // Build upsert row (minimal — same shape webhook seeds, no classify here)
+              const leadRow: Record<string, unknown> = {
+                user_id: integration.created_by,
+                external_id: email, // natural id for email channel
+                email,
+                email_address: email,
+                channel: 'email',
+                source: 'smartlead',
+                smartlead_lead_id: leadId,
+                smartlead_campaign_id: campaignId,
+                smartlead_email_stats_id: hist.latestProspectStatsId ?? null,
+                last_campaign_name: metaName,
+                reply_message_id: hist.latestProspectMessageId ?? null,
+                last_reply_text: lastProspectText,
+                last_reply_at: lastProspectAt ?? new Date().toISOString(),
+                reply_thread: thread as ThreadMessage[],
+                inbox_status: 'pending',
+              };
+              // Insert-only: never modify an existing agent_leads row in this sweep
+              const { data: up, error: upErr } = await (supabase as any)
+                .from('agent_leads')
+                .insert(leadRow)
+                .select('id')
+                .single();
+              if (upErr) {
+                console.warn('[poll-smartlead-inbox] upsert new lead failed (non-fatal):', upErr.message || upErr);
+              } else {
+                created++;
+                have.add(email);
+                // Mirror webhook behaviour: trigger classify-reply and write inference/people (best-effort)
+                try {
+                  const { data: agentConfig } = await supabase
+                    .from('agent_configs')
+                    .select('*')
+                    .eq('user_id', integration.created_by)
+                    .eq('is_active', true)
+                    .maybeSingle();
+                  if (agentConfig && lastProspectText.trim().length > 0) {
+                    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+                    const agentApiKey = Deno.env.get('AGENT_API_KEY') || '';
+                    const classifyPromise = fetch(`${supabaseUrl}/functions/v1/classify-reply`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json', 'x-agent-key': agentApiKey },
+                      body: JSON.stringify({
+                        reply_text: lastProspectText,
+                        thread_history: thread,
+                        lead_id: up.id,
+                        user_id: integration.created_by,
+                        channel: 'email',
+                        agent_context: {
+                          offer_description: agentConfig.offer_description,
+                          desired_action: agentConfig.desired_action,
+                          outcome_delivered: agentConfig.outcome_delivered,
+                          target_icp: agentConfig.target_icp,
+                          sender_name: agentConfig.sender_name,
+                          sender_title: agentConfig.sender_title,
+                          sender_linkedin: agentConfig.sender_linkedin || '',
+                          sender_bio: agentConfig.sender_bio,
+                          company_name: agentConfig.company_name,
+                          company_url: agentConfig.company_url,
+                          communication_style: agentConfig.communication_style,
+                          avoid_phrases: agentConfig.avoid_phrases || [],
+                          sample_message: agentConfig.sample_message || '',
+                          calendar_link: agentConfig.calendar_link || '',
+                          pricing_summary: agentConfig.pricing_summary || '',
+                          case_studies: agentConfig.case_studies || '',
+                          disqualification_criteria: agentConfig.disqualification_criteria || '',
+                          objection_handling_notes: agentConfig.objection_handling_notes || '',
+                        },
+                      }),
+                    }).catch((err) => {
+                      console.error('[poll-smartlead-inbox] classify-reply invocation failed:', err);
+                    });
+                    // @ts-ignore
+                    if (typeof EdgeRuntime !== 'undefined' && typeof EdgeRuntime.waitUntil === 'function') {
+                      // @ts-ignore
+                      EdgeRuntime.waitUntil(classifyPromise);
+                    } else {
+                      await classifyPromise;
+                    }
+                    // Inference + people writes (best-effort; keep parity with webhook)
+                    try {
+                      const personKey = email;
+                      const lang = detectLanguageCode(lastProspectText);
+                      const writes: Array<Promise<unknown>> = [];
+                      writes.push(
+                        supabase
+                          .from('inference_events')
+                          // @ts-ignore
+                          .upsert(
+                            {
+                              team_id: integration.team_id,
+                              agent_config_id: agentConfig.id,
+                              person_key: personKey,
+                              email,
+                              linkedin_url: sanitizeLinkedinUrlForStorage(null),
+                              full_name: null,
+                              job_title: null,
+                              company_name: null,
+                              industry: null,
+                              city: null,
+                              state: null,
+                              country: null,
+                              company_size: null,
+                              company_phone: null,
+                              channel: 'email',
+                              campaign_external_id: campaignId,
+                              campaign_name: metaName,
+                              sequence_step_type: null,
+                              copy_fingerprint: null,
+                              subject: null,
+                              event_type: 'replied',
+                              intent: null,
+                              is_objection: null,
+                              pipeline_stage: 'replied',
+                              disposition_tag: null,
+                              occurred_at: lastProspectAt ?? new Date().toISOString(),
+                              source: 'smartlead_webhook',
+                              source_row_id: hist.latestProspectMessageId ?? null,
+                              metadata: {
+                                provider: 'smartlead',
+                                mail_sender: null,
+                                reply_text: lastProspectText,
+                                reply_language_code: lang.code,
+                                reply_language_method: lang.method,
+                                external_message_id: hist.latestProspectMessageId ?? null,
+                                provider_thread_id: hist.latestProspectStatsId ?? null,
+                                provider_message_id: hist.latestProspectMessageId ?? null,
+                              },
+                            } as any,
+                            { onConflict: 'source,source_row_id,event_type' },
+                          )
+                          .then(({ error }) => {
+                            if (error) console.warn('[poll-smartlead-inbox] inference_events upsert error (non-fatal):', error);
+                          }),
+                      );
+                      // Insert-only for people (no clobber): minimal fields; ignore duplicates
+                      writes.push(
+                        supabase
+                          .from('people')
+                          .insert(
+                            [{ team_id: integration.team_id, person_key: personKey, email }],
+                            { onConflict: 'team_id,person_key', ignoreDuplicates: true } as any,
+                          ),
+                      );
+                      // @ts-ignore
+                      if (typeof EdgeRuntime !== 'undefined' && typeof EdgeRuntime.waitUntil === 'function') {
+                        // @ts-ignore
+                        EdgeRuntime.waitUntil(Promise.allSettled(writes));
+                      } else {
+                        await Promise.allSettled(writes);
+                      }
+                    } catch (e) {
+                      console.warn('[poll-smartlead-inbox] inference/people write failed (non-fatal):', e);
+                    }
+                  }
+                } catch (e) {
+                  console.warn('[poll-smartlead-inbox] classify/aux writes failed (non-fatal):', e instanceof Error ? e.message : String(e));
+                }
+              }
+              if (created >= MAX_NEW_LEADS_PER_RUN) break outer;
+              await sleep(100);
+            }
+
+            offset += rows.length;
+            if (rows.length < limit) break;
+            await sleep(150);
+          }
+          // Mark campaign swept now for rotation
+          try {
+            await supabase
+              .from('synced_campaigns')
+              .update({ capture_recent_reply_sweep_at: new Date().toISOString() })
+              .eq('team_id', integration.team_id)
+              .eq('source', 'smartlead')
+              .eq('external_campaign_id', campaignId);
+          } catch {
+            // non-fatal
+          }
+        }
+        result.newLeads += created;
+      } catch (e) {
+        console.warn('[poll-smartlead-inbox] unknown-lead sweep threw (non-fatal):', e instanceof Error ? e.message : String(e));
       }
     }
 
