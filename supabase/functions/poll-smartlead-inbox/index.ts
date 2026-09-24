@@ -4,6 +4,8 @@ import {
   loadSenderNameLookup,
   type ThreadMessage,
 } from '../_shared/smartlead-thread.ts';
+import { detectLanguageCode } from '../_shared/language.ts';
+import { sanitizeLinkedinUrlForStorage } from '../_shared/normalize.ts';
 
 const allowedOrigins = ['https://vrelly.com', 'https://www.vrelly.com'];
 
@@ -52,6 +54,9 @@ const MAX_LEADS_PER_RUN = 100;
 const DELAY_MS = 200;
 const ACTIVE_WINDOW_DAYS = 7;
 const MAX_NEW_LEADS_PER_RUN = 60; // backfill cap per integration
+const LOOKBACK_DAYS_FOR_NEW = 3; // only consider very recent replies for sweep
+const MAX_CAMPAIGNS_FOR_SWEEP = 12; // cap candidate campaigns probed per run
+const ANALYTICS_PACE_MS = 150;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -218,14 +223,16 @@ Deno.serve(async (req) => {
         await sleep(DELAY_MS);
       }
 
-      // ── Safety net A: re-ensure webhooks for all capture-enabled campaigns ──
+      // ── Safety net A: re-ensure webhooks only when stale/missing ───────────
       try {
+        const staleSinceISO = new Date(Date.now() - 24 * 3600_000).toISOString();
         const { data: enabledCampaigns } = await supabase
           .from('synced_campaigns')
           .select('external_campaign_id')
           .eq('source', 'smartlead')
           .eq('capture_enabled', true)
-          .eq('team_id', integration.team_id);
+          .eq('team_id', integration.team_id)
+          .or(`capture_webhook_checked_at.is.null,capture_webhook_registered.is.false,capture_webhook_checked_at.lte.${staleSinceISO}`);
         const ids = (enabledCampaigns ?? []).map((r) => String((r as { external_campaign_id: string }).external_campaign_id)).filter(Boolean);
         if (ids.length > 0) {
           const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
@@ -244,14 +251,12 @@ Deno.serve(async (req) => {
         console.warn('[poll-smartlead-inbox] ensure-webhooks threw (non-fatal):', e instanceof Error ? e.message : String(e));
       }
 
-      // ── Safety net B: detect replies for leads not yet in agent_leads ───────
+      // ── Safety net B: detect recent replies for leads NOT in agent_leads ───
       try {
-        // 1) Build a set of existing Smartlead emails for this user (dedupe target)
+        // 1) Build a set of existing emails for this user (dedupe target) across all sources
         const { data: existing } = await supabase
           .from('agent_leads')
           .select('email_address')
-          .eq('source', 'smartlead')
-          .eq('channel', 'email')
           .eq('user_id', integration.created_by);
         const have = new Set<string>((existing ?? []).map((r) => String((r as { email_address: string | null }).email_address ?? '').trim().toLowerCase())).add('');
 
@@ -269,8 +274,47 @@ Deno.serve(async (req) => {
           byId.set(id, { name });
         }
 
-        // 3) Iterate campaigns, page Smartlead leads, and backfill only when a reply exists and not in agent_leads
+        // Helper: defensive numeric extraction for analytics-by-date
+        const pickNumber = (obj: Record<string, unknown>, keys: string[]) => {
+          for (const k of keys) {
+            const v = obj[k];
+            if (typeof v === 'number' && Number.isFinite(v)) return v;
+            if (typeof v === 'string' && v.trim() !== '' && !Number.isNaN(Number(v))) return Number(v);
+          }
+          return 0;
+        };
+
+        // 3) Filter to campaigns with replies in the last LOOKBACK days via analytics-by-date (reduces lead scanning)
         const SMARTLEAD_API_BASE = 'https://server.smartlead.ai/api/v1';
+        const startYMD = new Date(Date.now() - LOOKBACK_DAYS_FOR_NEW * 86400_000).toISOString().slice(0, 10);
+        const endYMD = new Date().toISOString().slice(0, 10);
+        const candidateCampaigns: string[] = [];
+        let considered = 0;
+        for (const id of byId.keys()) {
+          if (considered >= MAX_CAMPAIGNS_FOR_SWEEP) break;
+          try {
+            const u = new URL(`${SMARTLEAD_API_BASE}/campaigns/${encodeURIComponent(id)}/analytics-by-date`);
+            u.searchParams.set('api_key', apiKey!);
+            u.searchParams.set('start_date', startYMD);
+            u.searchParams.set('end_date', endYMD);
+            const aRes = await fetch(u.toString(), { headers: { Accept: 'application/json' } });
+            if (aRes.ok) {
+              const analytics = (await aRes.json().catch(() => ({}))) as Record<string, unknown>;
+              const replies = pickNumber(analytics, ['replies', 'reply_count', 'unique_replies', 'replied']);
+              if (replies > 0) candidateCampaigns.push(id);
+            }
+          } catch {
+            // skip campaign on error
+          }
+          considered++;
+          await sleep(ANALYTICS_PACE_MS);
+        }
+        if (candidateCampaigns.length === 0) {
+          // Nothing recent — skip sweep silently
+          continue;
+        }
+
+        // 4) Iterate candidate campaigns, fetch only replied leads (recent), and backfill only when not in agent_leads
         const smartleadGet = async (path: string): Promise<Response> => {
           const url = new URL(`${SMARTLEAD_API_BASE}${path}`);
           url.searchParams.set('api_key', apiKey!);
@@ -278,18 +322,33 @@ Deno.serve(async (req) => {
         };
 
         let created = 0;
-        outer: for (const [campaignId, meta] of byId.entries()) {
+        outer: for (const campaignId of candidateCampaigns) {
+          const meta = byId.get(campaignId)!;
           // page through leads
           let offset = 0;
           const limit = 100;
           for (;;) {
-            const res = await smartleadGet(`/campaigns/${encodeURIComponent(campaignId)}/leads?limit=${limit}&offset=${offset}`);
+            // Attempt to filter to replied + recent leads; fall back progressively if unsupported
+            const after = startYMD;
+            let res = await smartleadGet(
+              `/campaigns/${encodeURIComponent(campaignId)}/leads?limit=${limit}&offset=${offset}&status=REPLIED&replied_after=${encodeURIComponent(after)}`,
+            );
+            let filteredMode = true;
+            if (!res.ok && res.status === 400) {
+              res = await smartleadGet(
+                `/campaigns/${encodeURIComponent(campaignId)}/leads?limit=${limit}&offset=${offset}&status=REPLIED`,
+              );
+            }
+            if (!res.ok) {
+              res = await smartleadGet(`/campaigns/${encodeURIComponent(campaignId)}/leads?limit=${limit}&offset=${offset}`);
+              filteredMode = false;
+            }
             if (!res.ok) {
               console.warn(`[poll-smartlead-inbox] leads list ${res.status} for campaign ${campaignId}`);
               break;
             }
             const body = await res.json().catch(() => ({} as any));
-            const rows: Array<{ campaign_lead_map_id?: string|number; lead?: { id?: string|number; email?: string|null } }> =
+            const rows: Array<{ campaign_lead_map_id?: string|number; lead?: { id?: string|number; email?: string|null; reply_time?: string|null } }> =
               Array.isArray(body?.data) ? body.data : [];
             if (rows.length === 0) break;
 
@@ -332,6 +391,16 @@ Deno.serve(async (req) => {
                   break;
                 }
               }
+              // Time window guard (if filters were unsupported): require lastProspectAt (or hinted reply_time) within LOOKBACK
+              const replyTimeHint = (row?.lead?.reply_time as string | null) ?? null;
+              const ts = Date.parse(lastProspectAt ?? replyTimeHint ?? '');
+              if (Number.isFinite(ts)) {
+                const cutoff = Date.now() - LOOKBACK_DAYS_FOR_NEW * 86400_000;
+                if (ts < cutoff) {
+                  await sleep(50);
+                  continue;
+                }
+              }
               // Build upsert row (minimal — same shape webhook seeds, no classify here)
               const leadRow: Record<string, unknown> = {
                 user_id: integration.created_by,
@@ -350,9 +419,10 @@ Deno.serve(async (req) => {
                 reply_thread: thread as ThreadMessage[],
                 inbox_status: 'pending',
               };
+              // Insert-only: never modify an existing agent_leads row in this sweep
               const { data: up, error: upErr } = await (supabase as any)
                 .from('agent_leads')
-                .upsert(leadRow, { onConflict: 'user_id,email_address' })
+                .insert(leadRow)
                 .select('id')
                 .single();
               if (upErr) {
@@ -360,6 +430,141 @@ Deno.serve(async (req) => {
               } else {
                 created++;
                 have.add(email);
+                // Mirror webhook behaviour: trigger classify-reply and write inference/people (best-effort)
+                try {
+                  const { data: agentConfig } = await supabase
+                    .from('agent_configs')
+                    .select('*')
+                    .eq('user_id', integration.created_by)
+                    .eq('is_active', true)
+                    .maybeSingle();
+                  if (agentConfig && lastProspectText.trim().length > 0) {
+                    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+                    const agentApiKey = Deno.env.get('AGENT_API_KEY') || '';
+                    const classifyPromise = fetch(`${supabaseUrl}/functions/v1/classify-reply`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json', 'x-agent-key': agentApiKey },
+                      body: JSON.stringify({
+                        reply_text: lastProspectText,
+                        thread_history: thread,
+                        lead_id: up.id,
+                        user_id: integration.created_by,
+                        channel: 'email',
+                        agent_context: {
+                          offer_description: agentConfig.offer_description,
+                          desired_action: agentConfig.desired_action,
+                          outcome_delivered: agentConfig.outcome_delivered,
+                          target_icp: agentConfig.target_icp,
+                          sender_name: agentConfig.sender_name,
+                          sender_title: agentConfig.sender_title,
+                          sender_linkedin: agentConfig.sender_linkedin || '',
+                          sender_bio: agentConfig.sender_bio,
+                          company_name: agentConfig.company_name,
+                          company_url: agentConfig.company_url,
+                          communication_style: agentConfig.communication_style,
+                          avoid_phrases: agentConfig.avoid_phrases || [],
+                          sample_message: agentConfig.sample_message || '',
+                          calendar_link: agentConfig.calendar_link || '',
+                          pricing_summary: agentConfig.pricing_summary || '',
+                          case_studies: agentConfig.case_studies || '',
+                          disqualification_criteria: agentConfig.disqualification_criteria || '',
+                          objection_handling_notes: agentConfig.objection_handling_notes || '',
+                        },
+                      }),
+                    }).catch((err) => {
+                      console.error('[poll-smartlead-inbox] classify-reply invocation failed:', err);
+                    });
+                    // @ts-ignore
+                    if (typeof EdgeRuntime !== 'undefined' && typeof EdgeRuntime.waitUntil === 'function') {
+                      // @ts-ignore
+                      EdgeRuntime.waitUntil(classifyPromise);
+                    } else {
+                      await classifyPromise;
+                    }
+                    // Inference + people writes (best-effort; keep parity with webhook)
+                    try {
+                      const personKey = email;
+                      const lang = detectLanguageCode(lastProspectText);
+                      const writes: Array<Promise<unknown>> = [];
+                      writes.push(
+                        supabase
+                          .from('inference_events')
+                          // @ts-ignore
+                          .upsert(
+                            {
+                              team_id: integration.team_id,
+                              agent_config_id: agentConfig.id,
+                              person_key: personKey,
+                              email,
+                              linkedin_url: sanitizeLinkedinUrlForStorage(null),
+                              full_name: null,
+                              job_title: null,
+                              company_name: null,
+                              industry: null,
+                              city: null,
+                              state: null,
+                              country: null,
+                              company_size: null,
+                              company_phone: null,
+                              channel: 'email',
+                              campaign_external_id: campaignId,
+                              campaign_name: meta.name,
+                              sequence_step_type: null,
+                              copy_fingerprint: null,
+                              subject: null,
+                              event_type: 'replied',
+                              intent: null,
+                              is_objection: null,
+                              pipeline_stage: 'replied',
+                              disposition_tag: null,
+                              occurred_at: lastProspectAt ?? new Date().toISOString(),
+                              source: 'smartlead_webhook',
+                              source_row_id: hist.latestProspectMessageId ?? null,
+                              metadata: {
+                                provider: 'smartlead',
+                                mail_sender: null,
+                                reply_text: lastProspectText,
+                                reply_language_code: lang.code,
+                                reply_language_method: lang.method,
+                                external_message_id: hist.latestProspectMessageId ?? null,
+                                provider_thread_id: hist.latestProspectStatsId ?? null,
+                                provider_message_id: hist.latestProspectMessageId ?? null,
+                              },
+                            } as any,
+                            { onConflict: 'source,source_row_id,event_type' },
+                          )
+                          .then(({ error }) => {
+                            if (error) console.warn('[poll-smartlead-inbox] inference_events upsert error (non-fatal):', error);
+                          }),
+                      );
+                      writes.push(
+                        supabase
+                          .from('people')
+                          // @ts-ignore
+                          .upsert(
+                            {
+                              team_id: integration.team_id,
+                              person_key: personKey,
+                              email,
+                              linkedin_url: sanitizeLinkedinUrlForStorage(null),
+                            } as any,
+                            { onConflict: 'team_id,person_key' },
+                          ),
+                      );
+                      // @ts-ignore
+                      if (typeof EdgeRuntime !== 'undefined' && typeof EdgeRuntime.waitUntil === 'function') {
+                        // @ts-ignore
+                        EdgeRuntime.waitUntil(Promise.allSettled(writes));
+                      } else {
+                        await Promise.allSettled(writes);
+                      }
+                    } catch (e) {
+                      console.warn('[poll-smartlead-inbox] inference/people write failed (non-fatal):', e);
+                    }
+                  }
+                } catch (e) {
+                  console.warn('[poll-smartlead-inbox] classify/aux writes failed (non-fatal):', e instanceof Error ? e.message : String(e));
+                }
               }
               if (created >= MAX_NEW_LEADS_PER_RUN) break outer;
               await sleep(100);

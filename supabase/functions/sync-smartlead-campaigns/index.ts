@@ -560,13 +560,26 @@ Deno.serve(async (req) => {
       const ids = (enabled ?? []).map((r) => String((r as { external_campaign_id: string }).external_campaign_id)).filter(Boolean);
       if (ids.length > 0) {
         const agentKey = Deno.env.get("AGENT_API_KEY") ?? "";
-        await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/setup-smartlead-webhook`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "x-agent-key": agentKey },
-          body: JSON.stringify({ integrationId: integration.id, campaignIds: ids }),
-        }).catch((e) => {
-          console.warn("[sync-smartlead-campaigns] ensure-webhooks call failed (non-fatal):", e);
-        });
+        // Await with timeout; non-fatal if it times out or fails
+        const url = `${Deno.env.get("SUPABASE_URL")}/functions/v1/setup-smartlead-webhook`;
+        const controller = new AbortController();
+        const t = setTimeout(() => controller.abort(), 8000);
+        try {
+          const res = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-agent-key": agentKey },
+            body: JSON.stringify({ integrationId: integration.id, campaignIds: ids }),
+            signal: controller.signal,
+          });
+          if (!res.ok) {
+            const txt = await res.text().catch(() => "");
+            console.warn("[sync-smartlead-campaigns] ensure-webhooks non-OK:", res.status, txt.substring(0, 200));
+          }
+        } catch (e) {
+          console.warn("[sync-smartlead-campaigns] ensure-webhooks call failed or timed out (non-fatal):", e instanceof Error ? e.message : String(e));
+        } finally {
+          clearTimeout(t);
+        }
       }
     } catch (e) {
       console.warn("[sync-smartlead-campaigns] ensure-webhooks sweep threw (non-fatal):", e instanceof Error ? e.message : String(e));
