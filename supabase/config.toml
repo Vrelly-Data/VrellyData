@@ -167,6 +167,13 @@ verify_jwt = false
 [functions.add-to-smartlead-campaign]
 verify_jwt = false
 
+# One-shot/resumable: write Smartlead outbound "SENT" messages to inference_events.
+[functions.backfill-smartlead-sends]
+verify_jwt = false
+
+[functions.backfill-provider-tags]
+verify_jwt = false
+
 # UI-triggered Smartlead webhook reconcile (calls setup-smartlead-webhook internally).
 [functions.reconcile-smartlead-webhooks]
 verify_jwt = false
