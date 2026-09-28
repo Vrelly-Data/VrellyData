@@ -182,3 +182,6 @@ verify_jwt = false
 
 [functions.calendly-webhook]
 verify_jwt = false
+
+[functions.backfill-replyio-sends]
+verify_jwt = false
