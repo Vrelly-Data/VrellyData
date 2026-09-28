@@ -3,6 +3,7 @@ import {
   deriveSenderSignals,
   normalizeThread,
   pickLatestGenuineProspect,
+  looksLikeOurSenderAtTop,
   type RawThreadEntry,
 } from "./thread-normalize.ts";
 
@@ -12,14 +13,14 @@ Deno.test("detects forwarded copies and relabels to sender", () => {
     {
       role: "prospect",
       channel: "email",
-      content: "-----Original Message-----\nFrom: Me <me@sourcecodeals.com>\nSubject: Hi",
+      content: "-----Original Message-----\nFrom: Alex Sender <alex@acme-leads.com>\nTo: prospect@example.com\nSubject: Hi",
       timestamp: "2026-09-10T10:05:00Z",
     },
   ];
   const signals = deriveSenderSignals({
-    agentSenderName: "Alia Ballout",
-    mailboxEmails: ["alia@sourcecodeals.com"],
-    mailboxFromNames: ["Alia Ballout"],
+    agentSenderName: "Alex Sender",
+    mailboxEmails: ["alex@acme-leads.com"],
+    mailboxFromNames: ["Alex Sender"],
   });
   const { normalized, relabelCount } = normalizeThread(thread, { channel: "email", signals });
   assertEquals(relabelCount, 1);
@@ -28,16 +29,17 @@ Deno.test("detects forwarded copies and relabels to sender", () => {
 
 Deno.test("relabels by known sender domain match", () => {
   const thread: RawThreadEntry[] = [
-    { role: "prospect", channel: "email", content: "Thanks,\n\nAlia Ballout\nSenior M&A Analyst\n@sourcecodeals.com", timestamp: "2026-09-10T10:10:00Z" },
+    { role: "prospect", channel: "email", content: "Thanks,\n\nAlex Sender\nSenior Analyst\n@acme-leads.com", timestamp: "2026-09-10T10:10:00Z" },
   ];
   const signals = deriveSenderSignals({
-    agentSenderName: "Alia Ballout",
-    mailboxEmails: ["alia@sourcecodeals.com"],
-    mailboxFromNames: ["Alia Ballout"],
+    agentSenderName: "Alex Sender",
+    mailboxEmails: ["alex@acme-leads.com"],
+    mailboxFromNames: ["Alex Sender"],
   });
   const { normalized, relabelCount } = normalizeThread(thread, { channel: "email", signals });
-  assertEquals(relabelCount, 1);
-  assertEquals(normalized[0].role, "sender");
+  // Domain mention alone must NOT relabel
+  assertEquals(relabelCount, 0);
+  assertEquals(normalized[0].role, "prospect");
 });
 
 Deno.test("keeps genuine prospect and strips quoted chains for email", () => {
@@ -68,5 +70,35 @@ Deno.test("picks latest genuine prospect by timestamp", () => {
   const { normalized } = normalizeThread(thread, { channel: "email", signals });
   const { latest } = pickLatestGenuineProspect(normalized);
   assertEquals(latest?.cleanContent, "Second");
+});
+
+Deno.test("forward wrapper header is stripped, body kept", () => {
+  const body = "Sure, happy to have a call tomorrow.\n\nBest,\nProspect Name";
+  const content =
+    "---------- Forwarded message ---------\nFrom: Prospect Name <prospect@example.com>\nTo: Alex Sender <alex@acme-leads.com>\nSubject: Fwd: Re: Hello\n\n" +
+    body;
+  const thread: RawThreadEntry[] = [{ role: "prospect", channel: "email", content, timestamp: "2026-09-10T12:00:00Z" }];
+  const signals = deriveSenderSignals({
+    agentSenderName: "Alex Sender",
+    mailboxEmails: ["alex@acme-leads.com"],
+    mailboxFromNames: ["Alex Sender"],
+  });
+  const { normalized, relabelCount } = normalizeThread(thread, { channel: "email", signals });
+  assertEquals(relabelCount, 0);
+  assertEquals(normalized[0].role, "prospect");
+  assertEquals(normalized[0].cleanContent.includes("Sure, happy to have a call"), true);
+  // Header should be gone
+  assertEquals(normalized[0].cleanContent.includes("Forwarded message"), false);
+});
+
+Deno.test("looksLikeOurSenderAtTop detects our sender at top-of-reply", () => {
+  const top =
+    "Alex Sender\nalex@acme-leads.com\n\nFrom: Marcus Reid <marcus@company.com>\nSubject: RE: Question\n\nEarlier chain...";
+  const signals = deriveSenderSignals({
+    agentSenderName: "Alex Sender",
+    mailboxEmails: ["alex@acme-leads.com"],
+    mailboxFromNames: ["Alex Sender"],
+  });
+  assertEquals(looksLikeOurSenderAtTop(top, signals), true);
 });
 

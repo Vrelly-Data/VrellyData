@@ -99,6 +99,39 @@ function indexOfForwardHeader(text: string): number {
   return m;
 }
 
+function parseForwardHeaderBlock(text: string, startIdx: number): {
+  endIdx: number;
+  fromEmail: string | null;
+  toEmail: string | null;
+} {
+  // Parse lines after header start to extract From:/To: and find end of header.
+  // Header typically spans a handful of lines (From, To, Subject, Date/Sent).
+  const rest = text.slice(startIdx);
+  const lines = rest.split(/\r?\n/);
+  let fromEmail: string | null = null;
+  let toEmail: string | null = null;
+  let endOffset = 0;
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i];
+    endOffset += (i === 1 ? lines[0].length : lines[i - 1].length) + 1; // rough byte count
+    if (!line.trim()) {
+      // blank line → end of header block
+      break;
+    }
+    const mFrom = /^From:\s*.*?<([^>\s]+)>/i.exec(line) || /^From:\s*([^<\s][^\s]+@[^\s]+)\s*$/i.exec(line);
+    if (mFrom) {
+      fromEmail = mFrom[1].toLowerCase();
+    }
+    const mTo = /^To:\s*.*?<([^>\s]+)>/i.exec(line) || /^To:\s*([^<\s][^\s]+@[^\s]+)\s*$/i.exec(line);
+    if (mTo) {
+      toEmail = mTo[1].toLowerCase();
+    }
+  }
+  // Compute absolute end index (startIdx + header block length)
+  const headerEndIdx = startIdx + endOffset;
+  return { endIdx: headerEndIdx, fromEmail, toEmail };
+}
+
 export function detectSenderMislabel(entry: RawThreadEntry, signals: SenderSignals): boolean {
   const role = (entry.role ?? "").toLowerCase();
   if (role !== "prospect") return false;
@@ -111,16 +144,15 @@ export function detectSenderMislabel(entry: RawThreadEntry, signals: SenderSigna
   if (fwdIdx >= 0) {
     const above = content.slice(0, fwdIdx).trim();
     if (!above) {
-      const tail = content.slice(fwdIdx, fwdIdx + 600); // small window
-      const emailRe = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
-      const emails = (tail.match(emailRe) ?? []).map((e) => e.toLowerCase());
-      const hasOurEmail = emails.some((e) => signals.senderEmails.has(e));
-      const hasOurDomain = emails.some((e) => {
-        const at = e.indexOf("@");
-        const d = at >= 0 ? e.slice(at + 1) : "";
-        return d && signals.senderDomains.has(d);
-      });
-      if (hasOurEmail || hasOurDomain) return true;
+      const { fromEmail, toEmail } = parseForwardHeaderBlock(content, fwdIdx);
+      const fromMatches =
+        !!fromEmail &&
+        (signals.senderEmails.has(fromEmail) ||
+          (fromEmail.includes("@") &&
+            signals.senderDomains.has(fromEmail.split("@")[1])));
+      // Presence of our mailbox in To: must NOT trigger relabel
+      const toMatches = !!toEmail && (signals.senderEmails.has(toEmail) || (toEmail.includes("@") && signals.senderDomains.has(toEmail.split("@")[1])));
+      if (fromMatches && !toMatches) return true;
     }
   }
   // Heuristic guard: quoted chains or 'From:' headers mid-text indicate the prospect
@@ -143,25 +175,48 @@ export function detectSenderMislabel(entry: RawThreadEntry, signals: SenderSigna
   return false;
 }
 
+export function looksLikeOurSenderAtTop(content: string, signals: SenderSignals): boolean {
+  const text = String(content ?? "");
+  if (!text.trim()) return false;
+  // Consider lines up to the first quoted header or 8 lines, whichever comes first.
+  const fwdIdx = indexOfForwardHeader(text);
+  const upto = fwdIdx >= 0 ? fwdIdx : text.length;
+  const head = text.slice(0, upto);
+  const lines = head.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(0, 8);
+  const lowerLines = lines.map((l) => l.toLowerCase());
+  const hasName = Array.from(signals.senderNames).some((n) => n && lowerLines.some((l) => l === n || l.endsWith(n)));
+  const emailRe = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
+  const hasEmail = lowerLines.some((l) => {
+    const m = l.match(emailRe);
+    if (!m) return false;
+    const e = m[0].toLowerCase();
+    return signals.senderEmails.has(e) || (e.includes("@") && signals.senderDomains.has(e.split("@")[1]));
+  });
+  return hasName || hasEmail;
+}
+
 function cleanProspectContentForModel(content: string, channel: string): string {
   if ((channel ?? "").toLowerCase() !== "email") return content;
   let cleaned = preprocessEmailReply(content);
   // Additional conservative trims for Outlook-style blocks and disclaimers that can
   // survive the anchored markers in preprocessEmailReply when blank lines intervene.
-  // Cut at the earliest of these markers when present.
+  // Prefer removing only the header block rather than dropping the whole body.
   if (cleaned) {
-    const cuts: number[] = [];
-    const idxFrom = cleaned.search(/^\s*From:\s/im);
-    if (idxFrom >= 0) cuts.push(idxFrom);
-    const idxConf = cleaned.search(/\bCONFIDENTIALITY NOTICE\b/i);
-    if (idxConf >= 0) cuts.push(idxConf);
-    const idxFwd = cleaned.search(/-{2,}\s*(Forwarded message|Original Message)\s*-{2,}/i);
-    if (idxFwd >= 0) cuts.push(idxFwd);
-    if (cuts.length) {
-      const cut = Math.min(...cuts.filter((n) => n >= 0));
-      const sliced = cleaned.slice(0, cut).trim();
-      if (sliced.length >= 20) cleaned = sliced;
+    // Strip a top-of-message forward header block, keep the body
+    const fwd = indexOfForwardHeader(cleaned);
+    if (fwd >= 0) {
+      const above = cleaned.slice(0, fwd).trim();
+      const { endIdx } = parseForwardHeaderBlock(cleaned, fwd);
+      if (!above && endIdx > fwd) {
+        cleaned = (cleaned.slice(0, fwd) + cleaned.slice(endIdx)).trim();
+      }
     }
+    // Remove confidentiality disclaimers
+    const idxConf = cleaned.search(/\bCONFIDENTIALITY NOTICE\b/i);
+    if (idxConf >= 0) cleaned = cleaned.slice(0, idxConf).trim();
+    // If a naked "From:" header remains mid-text (quoted chain), remove that tail
+    const idxFromMid = cleaned.search(/^\s*From:\s/im);
+    if (idxFromMid >= 0) cleaned = cleaned.slice(0, idxFromMid).trim();
   }
   // For thread turns used to build model messages, prefer the cleaned content
   // even if very short — a terse reply like "Regarding?" is still the truth.

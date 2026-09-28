@@ -8,6 +8,7 @@ import {
   pickLatestGenuineProspect,
   buildAnthropicMessages,
   detectSenderMislabel,
+  looksLikeOurSenderAtTop,
   type RawThreadEntry,
 } from './thread-normalize.ts';
 
@@ -185,6 +186,7 @@ async function checkDraftAddressesLatest(opts: {
   apiKey?: string | null;
   latestProspectText: string;
   draftText: string;
+  timeoutMs?: number;
 }): Promise<{ ok: boolean; reason: string }> {
   const latest = String(opts.latestProspectText ?? '').trim();
   const draft = String(opts.draftText ?? '').trim().toLowerCase();
@@ -200,6 +202,7 @@ async function checkDraftAddressesLatest(opts: {
         ],
         temperature: 0,
         maxTokens: 120,
+        timeoutMs: opts.timeoutMs ?? 15000,
       });
       const ok = res.json?.addresses_latest === true;
       const reason = typeof res.json?.reason === 'string' ? res.json.reason : ok ? 'addresses_latest' : 'no';
@@ -758,6 +761,7 @@ Use this campaign data to:
     let relabelCount = 0;
     let replyTextLooksSender = false;
     let latestProspectText = processed_reply_text;
+    let usedV67Messages = false;
     let messages: Array<{ role: 'user' | 'assistant'; content: string }> = collapsedV;
     let leadingOutbound = leadingOutboundV.slice(0);
     let isFirstTouch = isFirstTouchV;
@@ -772,14 +776,16 @@ Use this campaign data to:
       const norm = normalizeThread(thread_history, { channel, signals });
       relabelCount = norm.relabelCount;
       const { latest } = pickLatestGenuineProspect(norm.normalized);
+      // Strong signal: our sender appears at the TOP of the webhook reply text (pre-header)
+      const replyFromUsTop = looksLikeOurSenderAtTop(processed_reply_text, signals);
       replyTextLooksSender = detectSenderMislabel(
         { role: 'prospect', content: processed_reply_text, channel } as RawThreadEntry,
         signals,
       );
-      latestProspectText = latest?.cleanContent?.trim()
+      const latestNormalized = latest?.cleanContent?.trim()
         ? latest.cleanContent.trim()
         : processed_reply_text;
-      const built = buildAnthropicMessages(norm.normalized, latestProspectText, channel);
+      const built = buildAnthropicMessages(norm.normalized, latestNormalized, channel);
       // Guard: if newest entry would be relabelled or selection disagrees with reply_text, use v67
       const newest = rawThread[rawThread.length - 1] || null;
       const newestIsProspectInbound =
@@ -798,14 +804,28 @@ Use this campaign data to:
         processed_reply_text.trim() &&
         latestProspectText.indexOf(processed_reply_text.trim()) === -1 &&
         processed_reply_text.indexOf(latestProspectText.trim()) === -1;
-      if (!(newestWasRelabelled || disagreeWithReplyText)) {
+      if (newestWasRelabelled || disagreeWithReplyText) {
+        usedV67Messages = true;
+        latestProspectText = processed_reply_text;
+        replyTextLooksSender = false;
+        messages = collapsedV;
+        leadingOutbound = leadingOutboundV.slice(0);
+        isFirstTouch = isFirstTouchV;
+      } else {
+        latestProspectText = latestNormalized;
         messages = built.messages;
         leadingOutbound = built.leadingOutbound;
         isFirstTouch = built.isFirstTouch;
       }
+      if (replyFromUsTop) {
+        latestProspectText = latestNormalized;
+      }
     } catch (e) {
       console.warn('[classify-reply] normalization failed — using v67 build', e);
       // keep baseline v67 messages already set
+      usedV67Messages = true;
+      latestProspectText = processed_reply_text;
+      replyTextLooksSender = false;
     }
 
     // Anthropic key — required before either model call.
@@ -1137,6 +1157,7 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
           apiKey: anthropicApiKey,
           latestProspectText,
           draftText: suggestedResponse,
+          timeoutMs: Math.min(15000, remainingMs()),
         });
         addressCheckOk = check.ok;
         addressCheckReason = check.reason;
@@ -1175,6 +1196,7 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
                 apiKey: anthropicApiKey,
                 latestProspectText,
                 draftText: suggestedResponse,
+                timeoutMs: Math.min(15000, remainingMs()),
               });
               addressCheckOk = recheck.ok;
               addressCheckReason = recheck.reason;
