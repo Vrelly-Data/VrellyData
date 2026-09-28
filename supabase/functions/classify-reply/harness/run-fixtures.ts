@@ -55,6 +55,7 @@ const FIXTURES_DIR = `${UPLOADS}/fixtures`;
 const CONTEXT_DIR = `${UPLOADS}/fixtures/context`;
 const ARTIFACT_MD = "/opt/cursor/artifacts/classify-reply-report.md";
 const ARTIFACT_JSON = "/opt/cursor/artifacts/classify-reply-report.json";
+const ARTIFACT_REQUESTS = "/opt/cursor/artifacts/model-requests.json";
 
 function readJson<T>(path: string): T {
   const txt = Deno.readTextFileSync(path);
@@ -224,12 +225,32 @@ function formatMdReport(items: ReportItem[]): string {
 if (import.meta.main) {
   const args = new Set(Deno.args);
   const isDryRun = args.has("--dry-run") || !Deno.env.get("ANTHROPIC_API_KEY");
+  // Resolve current git SHA without spawning a process
+  function getGitSha(): string {
+    try {
+      const headPath = "/workspace/.git/HEAD";
+      const head = Deno.readTextFileSync(headPath).trim();
+      const m = head.match(/^ref:\s*(.+)$/);
+      if (m) {
+        const refPath = `/workspace/.git/${m[1]}`;
+        return Deno.readTextFileSync(refPath).trim();
+      }
+      return head;
+    } catch {
+      return "unknown";
+    }
+  }
+  const gitSha = getGitSha();
   const index = readJson<Array<{ file: string; client: string; channel: string }>>(
     `${FIXTURES_DIR}/INDEX.json`,
   );
 
   const reports: ReportItem[] = [];
-  const requests: ModelRequestsOut = { fixtures: [], note: "Replay with Anthropic Messages API v2023-06-01; Call 2 persona block depends on Call 1's matched_persona. Campaign-intelligence inputs are omitted for both paths as not present in the snapshot." };
+  const requests: ModelRequestsOut = {
+    fixtures: [],
+    note:
+      "Replay with Anthropic Messages API v2023-06-01; Call 2 persona block depends on Call 1's matched_persona. Campaign-intelligence inputs are omitted for both paths as not present in the snapshot.",
+  };
   for (const row of index) {
     const fpath = `${FIXTURES_DIR}/${row.file}`;
     const fx = readJson<Fixture>(fpath);
@@ -283,6 +304,10 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
 This is the prospect's first reply in this thread.`
       : `## Conversation Stage — Ongoing Thread
 This is part of an ongoing exchange.`;
+    const personaTemplate = `## Who You're Talking To
+The prospect best matches this buyer persona. Use it to calibrate your positioning, the pains you speak to, and your tone. This is reference for HOW to position — it is NOT a script to copy, and you should never quote it back to the prospect:
+
+{{MATCHED_PERSONA_CONTENT}}`;
     const call2SystemBefore = `You are an expert B2B sales agent operating on behalf of ${effSenderName}${agentCtx?.sender_title ? `, ${agentCtx.sender_title}` : ''} at ${companyName}.
 
 ## About ${effSenderName}
@@ -360,6 +385,8 @@ ${agentCtx?.sender_linkedin ? `LinkedIn: ${agentCtx.sender_linkedin}` : ''}
 ## Latest Prospect Message (ANSWER THIS FIRST)
 ${latest}
 
+${personaTemplate}
+
 ## Grounding Rules (RANKED — follow IN THIS ORDER)
 1) Respond to the latest prospect message FIRST AND FOREMOST...
 
@@ -411,15 +438,54 @@ Return ONLY valid JSON (see repo).`;
       before: { call1: beforeCall1, call2: beforeCall2 },
       after: { call1: afterCall1, call2: afterCall2 },
     });
+    // Also export new-path check/regen templates (with a draft placeholder)
+    const checkSystem =
+      'You are a precise evaluator. Decide if the DRAFT directly addresses the LATEST MESSAGE. Return ONLY {"addresses_latest": true|false, "reason": "why"}. Consider concrete asks, questions, refusals, or explicit paths (email/phone/link).';
+    const checkMessageTemplate = (draft: string) =>
+      `LATEST MESSAGE:\n"""\n${latest}\n"""\n\nDRAFT:\n"""\n${draft}\n"""`;
+    (requests as any).fixtures[requests.fixtures.length - 1].after_check = {
+      model: "claude-sonnet-4-6",
+      temperature: 0,
+      max_tokens: 120,
+      system: checkSystem,
+      messages: [{ role: "user", content: checkMessageTemplate("{{DRAFT_TEXT}}") }],
+      depends_on: "after.call2.suggested_response",
+    };
+    (requests as any).fixtures[requests.fixtures.length - 1].after_regen_call2 = {
+      model: "claude-sonnet-4-6",
+      temperature: 0.4,
+      max_tokens: 900,
+      system: call2SystemAfter,
+      messages: [
+        ...after.messages,
+        {
+          role: "user",
+          content:
+            "The previous draft did not directly answer the prospect’s latest message above. Regenerate a corrected response that STARTS by answering it in the first sentence (2–4 sentences total). Return ONLY the JSON object.",
+        },
+      ],
+      depends_on: "after.call1 + prior draft",
+    };
+    (requests as any).fixtures[requests.fixtures.length - 1].after_recheck = {
+      model: "claude-sonnet-4-6",
+      temperature: 0,
+      max_tokens: 120,
+      system: checkSystem,
+      messages: [{ role: "user", content: checkMessageTemplate("{{REGENERATED_DRAFT_TEXT}}") }],
+      depends_on: "after_regen_call2.suggested_response",
+    };
   }
 
   // Write artifacts
-  await Deno.writeTextFile(ARTIFACT_MD, formatMdReport(reports));
-  await Deno.writeTextFile(ARTIFACT_JSON, JSON.stringify(reports, null, 2));
-  await Deno.writeTextFile("/opt/cursor/artifacts/model-requests.json", JSON.stringify(requests, null, 2));
+  const mdOut = `SHA: ${gitSha}\n\n` + formatMdReport(reports);
+  const jsonOut = { git_sha: gitSha, fixtures: reports };
+  const reqOut = { git_sha: gitSha, ...requests };
+  await Deno.writeTextFile(ARTIFACT_MD, mdOut);
+  await Deno.writeTextFile(ARTIFACT_JSON, JSON.stringify(jsonOut, null, 2));
+  await Deno.writeTextFile(ARTIFACT_REQUESTS, JSON.stringify(reqOut, null, 2));
 
   console.log(`Wrote:\n- ${ARTIFACT_MD}\n- ${ARTIFACT_JSON}`);
-  console.log(`- /opt/cursor/artifacts/model-requests.json`);
+  console.log(`- ${ARTIFACT_REQUESTS}`);
   if (isDryRun) {
     console.log("Dry-run mode (no model calls).");
   } else {
