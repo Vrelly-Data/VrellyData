@@ -381,16 +381,12 @@ Deno.serve(async (req) => {
           const evRows: any[] = [];
           const pagePeopleEmails: string[] = [];
           let processedThisPage = 0;
+          let pageAbortedForBudget = false;
           for (const r of rows) {
             if (timeBudgetExceeded()) {
-              hasMore = true;
-              nextCursor = {
-                integrationId: integ.id,
-                campaignExternalId: String(camp.external_campaign_id),
-                offset: offset + processedThisPage,
-                sent_time_end_date: endDateIso,
-              };
-              break outer;
+              // Do not advance offset; retry this entire page next run
+              pageAbortedForBudget = true;
+              break;
             }
             rowsScanned++;
             const sentTime = typeof r?.sent_time === "string" && r.sent_time ? r.sent_time : null;
@@ -438,8 +434,21 @@ Deno.serve(async (req) => {
             if (rowsScanned >= maxLeads) break;
           }
 
+          if (pageAbortedForBudget || timeBudgetExceeded()) {
+            hasMore = true;
+            // Keep offset at start of page to ensure no dropped rows
+            nextCursor = {
+              integrationId: integ.id,
+              campaignExternalId: String(camp.external_campaign_id),
+              offset,
+              sent_time_end_date: endDateIso,
+            };
+            break outer;
+          }
+
           // Batched upsert for inference_events (chunks of ~500)
           const CHUNK = 500;
+          let eventsWriteFailed = false;
           for (let k = 0; k < evRows.length; k += CHUNK) {
             const chunk = evRows.slice(k, k + CHUNK);
             if (chunk.length === 0) continue;
@@ -452,11 +461,25 @@ Deno.serve(async (req) => {
               errors++;
               const em = redact(insErr.message ?? String(insErr));
               if (errorSamples.length < 5) errorSamples.push(em);
+              eventsWriteFailed = true;
+              break;
             } else {
               const written = Array.isArray(ins) ? ins.length : 0;
               messagesSentWritten += written;
               messagesSentSkipped += Math.max(0, chunk.length - written);
             }
+          }
+
+          if (eventsWriteFailed) {
+            hasMore = true;
+            // Keep offset at start of page to retry failed writes
+            nextCursor = {
+              integrationId: integ.id,
+              campaignExternalId: String(camp.external_campaign_id),
+              offset,
+              sent_time_end_date: endDateIso,
+            };
+            break outer;
           }
 
           // Batched insert-only upsert for people (distinct new emails this page)
@@ -484,6 +507,15 @@ Deno.serve(async (req) => {
               errors++;
               const em = redact(pplErr.message ?? String(pplErr));
               if (errorSamples.length < 5) errorSamples.push(em);
+              hasMore = true;
+              // Retry page to ensure people rows eventually land; keep offset at start
+              nextCursor = {
+                integrationId: integ.id,
+                campaignExternalId: String(camp.external_campaign_id),
+                offset,
+                sent_time_end_date: endDateIso,
+              };
+              break outer;
             }
           }
 
