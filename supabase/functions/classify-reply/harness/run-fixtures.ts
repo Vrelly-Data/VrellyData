@@ -43,7 +43,7 @@ type Fixture = {
 };
 
 type ClientContext = {
-  agent_context: any;
+  agent_config_prompt_fields: any;
   sender_profiles?: Array<{ sender_name: string }>;
   email_sender_mailboxes?: Array<{ mailbox_email: string; from_name?: string; sender_name?: string }>;
   sales_knowledge_global?: any;
@@ -167,6 +167,26 @@ type ReportItem = {
   after_prompt_sample: string;
 };
 
+type ModelRequest = {
+  model: string;
+  temperature: number;
+  max_tokens: number;
+  system: string;
+  messages: Array<{ role: "user" | "assistant"; content: string }>;
+  depends_on?: string | null;
+};
+
+type ModelRequestsOut = {
+  fixtures: Array<{
+    fixture_id: string;
+    client: string;
+    channel: string;
+    before: { call1: ModelRequest; call2: ModelRequest };
+    after: { call1: ModelRequest; call2: ModelRequest };
+  }>;
+  note: string;
+};
+
 function promptSampleForV67(agentCtx: any, priorOutreach: string, processed: string): string {
   const lines: string[] = [];
   lines.push(`Offer: ${agentCtx?.offer_description ?? ''}`);
@@ -209,22 +229,171 @@ if (import.meta.main) {
   );
 
   const reports: ReportItem[] = [];
+  const requests: ModelRequestsOut = { fixtures: [], note: "Replay with Anthropic Messages API v2023-06-01; Call 2 persona block depends on Call 1's matched_persona. Campaign-intelligence inputs are omitted for both paths as not present in the snapshot." };
   for (const row of index) {
     const fpath = `${FIXTURES_DIR}/${row.file}`;
     const fx = readJson<Fixture>(fpath);
     const ctx = readJson<ClientContext>(`${UPLOADS}/fixtures/${fx.context_file}`);
-    const agentCtx = ctx.agent_context ?? {};
+    const agentCtx = ctx.agent_config_prompt_fields ?? {};
     const mailboxEmails = (ctx.email_sender_mailboxes ?? []).map((m) => m.mailbox_email);
     const mailboxFromNames = (ctx.email_sender_mailboxes ?? []).map((m) => m.from_name ?? m.sender_name ?? "");
     const effSenderName: string = agentCtx?.sender_name ?? (ctx.sender_profiles?.[0]?.sender_name ?? "Sender");
+    const companyName: string = agentCtx?.company_name ?? "";
 
     // BEFORE (v67)
     const before = buildBeforeMessages(fx.request.reply_text, fx.request.thread_history, fx.channel);
     const priorV = summarizeLeadingOutbound(before.leadingOutbound, effSenderName);
+    // BEFORE Call 1 system (compact personas/guidelines/templates omitted in snapshot)
+    const personaList = "No personas defined.";
+    const call1SystemBefore = `You are an expert B2B sales analyst working on behalf of ${effSenderName} at ${companyName}. Your job is to read an inbound prospect reply and classify it precisely — you do NOT write the response, you analyze.
+
+## The Offer
+${agentCtx?.offer_description ?? ""}
+${agentCtx?.target_icp ? `Who it's for: ${agentCtx.target_icp}` : ""}
+
+## The Prospect
+${priorV}
+## Known Buyer Personas
+${personaList}
+
+## Your Task
+Analyze the prospect's latest reply together with the conversation so far, then return ONLY this JSON object:
+{
+  "intent": one of 'interested', 'not_interested', 'referral', 'out_of_office', 'bounce', 'needs_more_info', 'unknown',
+  "intent_confidence": a float from 0.00 to 1.00,
+  "is_objection": boolean,
+  "prospect_read": {
+    "seniority": one of "exec", "mid", "ic", "unknown",
+    "buying_role": one of "decision_maker", "influencer", "end_user", "unknown",
+    "matched_persona": the EXACT title of the best-fit persona above, or null,
+    "suggested_angle": "one sentence — see instructions"
+  }
+}
+Return ONLY valid JSON. No markdown fences. No explanation.`;
+    const beforeCall1: ModelRequest = {
+      model: "claude-sonnet-4-6",
+      temperature: 0,
+      max_tokens: 500,
+      system: call1SystemBefore,
+      messages: before.messages,
+    };
+    // BEFORE Call 2 system (persona section depends on Call 1)
+    const stageSectionV = before.isFirstTouch
+      ? `## Conversation Stage — First Reply
+This is the prospect's first reply in this thread.`
+      : `## Conversation Stage — Ongoing Thread
+This is part of an ongoing exchange.`;
+    const call2SystemBefore = `You are an expert B2B sales agent operating on behalf of ${effSenderName}${agentCtx?.sender_title ? `, ${agentCtx.sender_title}` : ''} at ${companyName}.
+
+## About ${effSenderName}
+${agentCtx?.sender_bio || ''}
+${agentCtx?.sender_linkedin ? `LinkedIn: ${agentCtx.sender_linkedin}` : ''}
+
+## The Offer
+Company: ${companyName}${agentCtx?.company_url ? ` (${agentCtx.company_url})` : ''}
+What we sell: ${agentCtx?.offer_description ?? ''}
+${agentCtx?.target_icp ? `Who it's for: ${agentCtx.target_icp}` : ''}
+${agentCtx?.outcome_delivered ? `Outcome we deliver: ${agentCtx.outcome_delivered}` : ''}
+${agentCtx?.desired_action ? `Desired prospect action: ${agentCtx.desired_action}` : ''}
+${agentCtx?.communication_style ? `Communication style: ${agentCtx.communication_style}` : ''}
+${Array.isArray(agentCtx?.avoid_phrases) && agentCtx.avoid_phrases.length ? 'Never say or reference: ' + agentCtx.avoid_phrases.join(', ') : ''}
+${agentCtx?.sample_message ? 'Writing style example (match this tone exactly):\n' + agentCtx.sample_message : ''}
+
+## Grounding Rules (RANKED — follow IN THIS ORDER)
+1) Respond to the latest prospect message FIRST AND FOREMOST...
+
+## Resources to Reference
+${agentCtx?.calendar_link ? `Calendar booking link: ${agentCtx.calendar_link}` : ''}
+${agentCtx?.case_studies || ''}
+
+## Pricing
+${agentCtx?.pricing_summary || 'Pricing depends on use case — direct prospects to a call rather than quoting numbers.'}
+
+## When to Disqualify
+${agentCtx?.disqualification_criteria || 'Use judgment — politely decline if the prospect is clearly outside ICP.'}
+
+## Objection Playbook
+${agentCtx?.objection_handling_notes || 'Acknowledge the objection, validate it, then redirect to value.'}
+
+## About the Prospect
+${priorV}
+
+## Concrete next step(s) the prospect provided
+${JSON.stringify(extractProspectPaths(before.processed))}
+
+${stageSectionV}
+
+## Your Task
+Return ONLY valid JSON (see repo).`;
+    const beforeCall2: ModelRequest = {
+      model: "claude-sonnet-4-6",
+      temperature: 0.5,
+      max_tokens: 1000,
+      system: call2SystemBefore,
+      messages: before.messages,
+      depends_on: "call1.matched_persona",
+    };
 
     // AFTER (new)
     const after = buildAfterMessages(before.processed, fx.request.thread_history, fx.channel, effSenderName, mailboxEmails, mailboxFromNames);
     const priorA = summarizeLeadingOutbound(after.leadingOutbound, effSenderName);
+    const latest = after.latestProspectText;
+    const call1SystemAfter = call1SystemBefore; // same structure for offline export
+    const afterCall1: ModelRequest = {
+      model: "claude-sonnet-4-6",
+      temperature: 0,
+      max_tokens: 500,
+      system: call1SystemAfter,
+      messages: after.messages,
+    };
+    const stageSectionA = after.isFirstTouch
+      ? `## Conversation Stage — First Reply
+This is the prospect's first reply in this thread.`
+      : `## Conversation Stage — Ongoing Thread
+This is part of an ongoing exchange.`;
+    const call2SystemAfter = `You are an expert B2B sales agent operating on behalf of ${effSenderName}${agentCtx?.sender_title ? `, ${agentCtx.sender_title}` : ''} at ${companyName}.
+
+## About ${effSenderName}
+${agentCtx?.sender_bio || ''}
+${agentCtx?.sender_linkedin ? `LinkedIn: ${agentCtx.sender_linkedin}` : ''}
+
+## Latest Prospect Message (ANSWER THIS FIRST)
+${latest}
+
+## Grounding Rules (RANKED — follow IN THIS ORDER)
+1) Respond to the latest prospect message FIRST AND FOREMOST...
+
+## Resources to Reference
+${agentCtx?.calendar_link ? `Calendar booking link: ${agentCtx.calendar_link}` : ''}
+${agentCtx?.case_studies || ''}
+
+## Pricing
+${agentCtx?.pricing_summary || 'Pricing depends on use case — direct prospects to a call rather than quoting numbers.'}
+
+## When to Disqualify
+${agentCtx?.disqualification_criteria || 'Use judgment — politely decline if the prospect is clearly outside ICP.'}
+
+## Objection Playbook
+${agentCtx?.objection_handling_notes || 'Acknowledge the objection, validate it, then redirect to value.'}
+
+## About the Prospect
+${priorA}
+
+## Concrete next step(s) the prospect provided
+${JSON.stringify(extractProspectPaths(latest))}
+
+${stageSectionA}
+
+## Your Task
+Return ONLY valid JSON (see repo).`;
+    const afterCall2: ModelRequest = {
+      model: "claude-sonnet-4-6",
+      temperature: 0.5,
+      max_tokens: 1000,
+      system: call2SystemAfter,
+      messages: after.messages,
+      depends_on: "call1.matched_persona",
+    };
 
     reports.push({
       fixture_id: fx.fixture_id,
@@ -235,13 +404,22 @@ if (import.meta.main) {
       v67_prompt_sample: promptSampleForV67(agentCtx, priorV, before.processed),
       after_prompt_sample: promptSampleForAfter(agentCtx, priorA, after.latestProspectText),
     });
+    requests.fixtures.push({
+      fixture_id: fx.fixture_id,
+      client: fx.client,
+      channel: fx.channel,
+      before: { call1: beforeCall1, call2: beforeCall2 },
+      after: { call1: afterCall1, call2: afterCall2 },
+    });
   }
 
   // Write artifacts
   await Deno.writeTextFile(ARTIFACT_MD, formatMdReport(reports));
   await Deno.writeTextFile(ARTIFACT_JSON, JSON.stringify(reports, null, 2));
+  await Deno.writeTextFile("/opt/cursor/artifacts/model-requests.json", JSON.stringify(requests, null, 2));
 
   console.log(`Wrote:\n- ${ARTIFACT_MD}\n- ${ARTIFACT_JSON}`);
+  console.log(`- /opt/cursor/artifacts/model-requests.json`);
   if (isDryRun) {
     console.log("Dry-run mode (no model calls).");
   } else {

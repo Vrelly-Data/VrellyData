@@ -117,16 +117,35 @@ export function detectSenderMislabel(entry: RawThreadEntry, signals: SenderSigna
   // do not treat sender name mentions as a mislabel — stripping will handle it.
   const looksQuotedChain = /\bfrom:\s/i.test(content) || /\bon\s.+wrote:/i.test(content) || />/.test(content);
   if (!looksQuotedChain && containsAny(lower, signals.senderNames)) return true;
-  if (containsAny(lower, signals.senderDomains)) return true;
+  if (!looksQuotedChain && containsAny(lower, signals.senderDomains)) return true;
   // Prefer false negatives — do not try to be clever beyond this
   return false;
 }
 
 function cleanProspectContentForModel(content: string, channel: string): string {
   if ((channel ?? "").toLowerCase() !== "email") return content;
-  const cleaned = preprocessEmailReply(content);
-  // Safety fallback: if over-stripped (<20 chars), keep original
-  return cleaned && cleaned.length >= 20 ? cleaned : content;
+  let cleaned = preprocessEmailReply(content);
+  // Additional conservative trims for Outlook-style blocks and disclaimers that can
+  // survive the anchored markers in preprocessEmailReply when blank lines intervene.
+  // Cut at the earliest of these markers when present.
+  if (cleaned) {
+    const cuts: number[] = [];
+    const idxFrom = cleaned.search(/^\s*From:\s/im);
+    if (idxFrom >= 0) cuts.push(idxFrom);
+    const idxConf = cleaned.search(/\bCONFIDENTIALITY NOTICE\b/i);
+    if (idxConf >= 0) cuts.push(idxConf);
+    const idxFwd = cleaned.search(/-{2,}\s*(Forwarded message|Original Message)\s*-{2,}/i);
+    if (idxFwd >= 0) cuts.push(idxFwd);
+    if (cuts.length) {
+      const cut = Math.min(...cuts.filter((n) => n >= 0));
+      const sliced = cleaned.slice(0, cut).trim();
+      if (sliced.length >= 20) cleaned = sliced;
+    }
+  }
+  // For thread turns used to build model messages, prefer the cleaned content
+  // even if very short — a terse reply like "Regarding?" is still the truth.
+  // Top-level processed_reply_text retains its own <20-char fallback semantics.
+  return cleaned && cleaned.length > 0 ? cleaned : content;
 }
 
 export function normalizeThread(
