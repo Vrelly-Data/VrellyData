@@ -548,8 +548,42 @@ Deno.serve(async (req) => {
         `skippedAnalytics=${skippedAnalytics}, total=${campaigns.length}`,
     );
 
-    // Note: webhook reconcile is handled when capture is explicitly enabled
-    // via Manage Campaigns Save (or separate admin flow), not implicitly here.
+    // Ensure capture webhooks exist for all capture-enabled campaigns (idempotent).
+    // This covers any path that flips capture_enabled=true outside the UI reconcile flow.
+    try {
+      const { data: enabled } = await supabase
+        .from("synced_campaigns")
+        .select("external_campaign_id")
+        .eq("integration_id", integration.id)
+        .eq("source", "smartlead")
+        .eq("capture_enabled", true);
+      const ids = (enabled ?? []).map((r) => String((r as { external_campaign_id: string }).external_campaign_id)).filter(Boolean);
+      if (ids.length > 0) {
+        const agentKey = Deno.env.get("AGENT_API_KEY") ?? "";
+        // Await with timeout; non-fatal if it times out or fails
+        const url = `${Deno.env.get("SUPABASE_URL")}/functions/v1/setup-smartlead-webhook`;
+        const controller = new AbortController();
+        const t = setTimeout(() => controller.abort(), 8000);
+        try {
+          const res = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-agent-key": agentKey },
+            body: JSON.stringify({ integrationId: integration.id, campaignIds: ids }),
+            signal: controller.signal,
+          });
+          if (!res.ok) {
+            const txt = await res.text().catch(() => "");
+            console.warn("[sync-smartlead-campaigns] ensure-webhooks non-OK:", res.status, txt.substring(0, 200));
+          }
+        } catch (e) {
+          console.warn("[sync-smartlead-campaigns] ensure-webhooks call failed or timed out (non-fatal):", e instanceof Error ? e.message : String(e));
+        } finally {
+          clearTimeout(t);
+        }
+      }
+    } catch (e) {
+      console.warn("[sync-smartlead-campaigns] ensure-webhooks sweep threw (non-fatal):", e instanceof Error ? e.message : String(e));
+    }
 
     return new Response(
       JSON.stringify({

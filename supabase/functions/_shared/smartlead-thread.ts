@@ -41,6 +41,12 @@ export interface SmartleadHistoryResult {
   endsWithOutbound: boolean;
   /** HTTP status from Smartlead, for rate-limit handling by the caller. */
   status: number;
+  /** Latest prospect (REPLY) message_id when available (for dedupe/metadata). */
+  latestProspectMessageId?: string | null;
+  /** Latest prospect (REPLY) stats_id (Smartlead thread key) when available. */
+  latestProspectStatsId?: string | null;
+  /** Timestamp of the latest prospect (REPLY) message when available. */
+  latestProspectTimestamp?: string | null;
 }
 
 export function stripZendeskMarker(text: string): string {
@@ -172,6 +178,26 @@ export async function fetchSmartleadThread(opts: {
     return { thread: null, endsWithOutbound: false, status: res.status };
   }
 
+  // Compute latest prospect (REPLY) metadata before mapping
+  let latestProspectMessageId: string | null = null;
+  let latestProspectStatsId: string | null = null;
+  let latestProspectTimestamp: string | null = null;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i] as {
+      type?: string;
+      message_id?: string | number | null;
+      stats_id?: string | number | null;
+      time?: string | null;
+      timestamp?: string | null;
+    };
+    if ((m?.type ?? "") === "REPLY") {
+      latestProspectMessageId = m?.message_id != null ? String(m.message_id) : null;
+      latestProspectStatsId = m?.stats_id != null ? String(m.stats_id) : null;
+      latestProspectTimestamp = (m?.time as string | null) ?? (m?.timestamp as string | null) ?? null;
+      break;
+    }
+  }
+
   const remote: ThreadMessage[] = messages.map(
     (raw) => {
       const msg = raw as {
@@ -208,5 +234,12 @@ export async function fetchSmartleadThread(opts: {
   );
 
   const thread = mergeThread(remote, opts.localThread);
-  return { thread, endsWithOutbound: threadEndsWithOutbound(thread), status: res.status };
+  return {
+    thread,
+    endsWithOutbound: threadEndsWithOutbound(thread),
+    status: res.status,
+    latestProspectMessageId,
+    latestProspectStatsId,
+    latestProspectTimestamp,
+  };
 }

@@ -191,10 +191,15 @@ Deno.serve(async (req) => {
       .eq("team_id", integration.team_id)
       .eq("source", "smartlead")
       .eq("capture_enabled", true)
-      .in("status", statuses)
       .order("created_at", { ascending: false });
-    if (campaignIds.length > 0) campaignQuery = campaignQuery.in("external_campaign_id", campaignIds);
-    else if (nameContains) campaignQuery = campaignQuery.ilike("name", `%${nameContains}%`);
+    // If explicit campaignIds are provided, honour them regardless of status.
+    // Status filtering applies only to broad sweeps without an explicit id list.
+    if (campaignIds.length > 0) {
+      campaignQuery = campaignQuery.in("external_campaign_id", campaignIds);
+    } else {
+      campaignQuery = campaignQuery.in("status", statuses);
+      if (nameContains) campaignQuery = campaignQuery.ilike("name", `%${nameContains}%`);
+    }
     if (limit) campaignQuery = campaignQuery.limit(limit);
     const { data: campaigns, error: campErr } = await campaignQuery;
 
@@ -236,12 +241,39 @@ Deno.serve(async (req) => {
         const res = await fetch(base);
         if (!res.ok) {
           failures.push({ campaign: cid, stage: "list", detail: `HTTP ${res.status}` });
+          // Per-campaign status write (failure)
+          if (!dryRun) {
+            await supabase
+              .from("synced_campaigns")
+              .update({
+                capture_webhook_registered: false,
+                capture_webhook_id: null,
+                capture_webhook_checked_at: new Date().toISOString(),
+                capture_webhook_error: `list: HTTP ${res.status}`,
+              })
+              .eq("team_id", integration.team_id)
+              .eq("source", "smartlead")
+              .eq("external_campaign_id", cid);
+          }
           continue;
         }
         const parsed = await res.json();
         existing = Array.isArray(parsed) ? parsed : (parsed?.data ?? []);
       } catch (e) {
         failures.push({ campaign: cid, stage: "list", detail: e instanceof Error ? e.message : String(e) });
+        if (!dryRun) {
+          await supabase
+            .from("synced_campaigns")
+            .update({
+              capture_webhook_registered: false,
+              capture_webhook_id: null,
+              capture_webhook_checked_at: new Date().toISOString(),
+              capture_webhook_error: `list: ${e instanceof Error ? e.message : String(e)}`.slice(0, 240),
+            })
+            .eq("team_id", integration.team_id)
+            .eq("source", "smartlead")
+            .eq("external_campaign_id", cid);
+        }
         continue;
       }
 
@@ -254,7 +286,26 @@ Deno.serve(async (req) => {
 
       if (alreadyCorrect) {
         skipped++;
-        for (const h of ours) if (h.id != null) registeredIds.push(`${cid}:${h.id}`);
+        // Prefer the exact-match hook id when present; fall back to the first "ours".
+        const exact = ours.find((h) => String(h.webhook_url) === callbackUrl && (h.event_types ?? []).includes("EMAIL_REPLY"));
+        const hookId = (exact?.id ?? ours.find((h) => h.id != null)?.id) as string | number | undefined;
+        if (hookId != null) {
+          registeredIds.push(`${cid}:${hookId}`);
+        }
+        // Per-campaign status write (success)
+        if (!dryRun) {
+          await supabase
+            .from("synced_campaigns")
+            .update({
+              capture_webhook_registered: true,
+              capture_webhook_id: hookId != null ? String(hookId) : null,
+              capture_webhook_checked_at: new Date().toISOString(),
+              capture_webhook_error: null,
+            })
+            .eq("team_id", integration.team_id)
+            .eq("source", "smartlead")
+            .eq("external_campaign_id", cid);
+        }
         continue;
       }
 
@@ -290,14 +341,53 @@ Deno.serve(async (req) => {
         const text = await res.text();
         if (!res.ok) {
           failures.push({ campaign: cid, stage: "create", detail: `HTTP ${res.status} ${text.slice(0, 120)}` });
+          if (!dryRun) {
+            await supabase
+              .from("synced_campaigns")
+              .update({
+                capture_webhook_registered: false,
+                capture_webhook_id: null,
+                capture_webhook_checked_at: new Date().toISOString(),
+                capture_webhook_error: `create: HTTP ${res.status} ${text.slice(0, 120)}`,
+              })
+              .eq("team_id", integration.team_id)
+              .eq("source", "smartlead")
+              .eq("external_campaign_id", cid);
+          }
         } else {
           let hookId: unknown = null;
           try { hookId = JSON.parse(text)?.id ?? null; } catch { /* keep null */ }
           if (hookId != null) registeredIds.push(`${cid}:${hookId}`);
           created++;
+          if (!dryRun) {
+            await supabase
+              .from("synced_campaigns")
+              .update({
+                capture_webhook_registered: true,
+                capture_webhook_id: hookId != null ? String(hookId) : null,
+                capture_webhook_checked_at: new Date().toISOString(),
+                capture_webhook_error: null,
+              })
+              .eq("team_id", integration.team_id)
+              .eq("source", "smartlead")
+              .eq("external_campaign_id", cid);
+          }
         }
       } catch (e) {
         failures.push({ campaign: cid, stage: "create", detail: e instanceof Error ? e.message : String(e) });
+        if (!dryRun) {
+          await supabase
+            .from("synced_campaigns")
+            .update({
+              capture_webhook_registered: false,
+              capture_webhook_id: null,
+              capture_webhook_checked_at: new Date().toISOString(),
+              capture_webhook_error: `create: ${e instanceof Error ? e.message : String(e)}`.slice(0, 240),
+            })
+            .eq("team_id", integration.team_id)
+            .eq("source", "smartlead")
+            .eq("external_campaign_id", cid);
+        }
       }
 
       await sleep(CALL_DELAY_MS);
@@ -311,13 +401,39 @@ Deno.serve(async (req) => {
     const status = anyRegistered ? "active" : "error";
 
     if (!dryRun) {
+      // Merge campaignId:hookId pairs with any existing state so partial sweeps
+      // don't drop registrations for campaigns outside the current scope.
+      const existingPairs = new Map<string, string>();
+      const raw = String(integration.webhook_subscription_id ?? "").trim();
+      if (raw) {
+        for (const tok of raw.split(",")) {
+          const s = tok.trim();
+          if (!s) continue;
+          const idx = s.indexOf(":");
+          if (idx > 0) {
+            const k = s.slice(0, idx);
+            const v = s.slice(idx + 1);
+            if (k && v) existingPairs.set(k, v);
+          }
+        }
+      }
+      for (const p of registeredIds) {
+        const idx = p.indexOf(":");
+        if (idx > 0) {
+          const k = p.slice(0, idx);
+          const v = p.slice(idx + 1);
+          if (k && v) existingPairs.set(k, v);
+        }
+      }
+      const mergedIds = existingPairs.size > 0 ? Array.from(existingPairs.entries()).map(([k, v]) => `${k}:${v}`).join(",") : null;
+
       const { error: updErr } = await supabase
         .from("outbound_integrations")
         .update({
           webhook_status: status,
           // "campaignId:hookId" pairs — needed to delete individually later,
           // since Smartlead's DELETE is campaign-scoped.
-          webhook_subscription_id: anyRegistered ? registeredIds.join(",") : null,
+          webhook_subscription_id: mergedIds,
           sync_error: failures.length
             ? `webhook registration: ${failures.length} campaign(s) failed (e.g. ${failures[0].campaign}: ${failures[0].detail})`
             : null,
