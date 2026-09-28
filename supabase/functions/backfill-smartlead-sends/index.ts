@@ -72,7 +72,7 @@ type SmartleadStatsEnvelope = {
 } | SmartleadStatsRow[] | null;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const redact = (s: string) => String(s ?? "").replace(/api_key=[^&\\s)]+/g, "api_key=***");
+const redact = (s: string) => String(s ?? "").replace(/api_key=[^&\s)]+/g, "api_key=***");
 function parseMaybeJsonOrBase64(str: string): unknown {
   try {
     return JSON.parse(str);
@@ -87,8 +87,25 @@ function parseMaybeJsonOrBase64(str: string): unknown {
   }
 }
 
+function parseRetryAfterSeconds(h: string | null): number | null {
+  if (!h) return null;
+  const n = Number(h);
+  if (!Number.isNaN(n) && Number.isFinite(n) && n >= 0) return n;
+  // HTTP-date
+  const when = Date.parse(h);
+  if (!Number.isNaN(when)) {
+    const diffMs = when - Date.now();
+    return diffMs > 0 ? diffMs / 1000 : 0;
+  }
+  return null;
+}
+
 // Safe GET wrapper that appends api_key via URLSearchParams and never logs the full URL.
-async function smartleadGet(pathWithLeadingSlash: string, apiKey: string, opts?: { backoffOn429?: boolean }): Promise<Response> {
+async function smartleadGet(
+  pathWithLeadingSlash: string,
+  apiKey: string,
+  opts?: { backoffOn429?: boolean; deadlineMs?: number },
+): Promise<Response> {
   const url = new URL(`${SMARTLEAD_API_BASE}${pathWithLeadingSlash}`);
   url.searchParams.set("api_key", apiKey);
   const doFetch = () =>
@@ -101,15 +118,24 @@ async function smartleadGet(pathWithLeadingSlash: string, apiKey: string, opts?:
   while (attempt < 3) {
     const resp = await doFetch();
     if (resp.status !== 429) return resp;
-    const ra = Number(resp.headers.get("retry-after") ?? "0");
-    const waitSecs = Math.max(ra, Math.pow(2, attempt + 1)); // 2,4,8
+    // Parse Retry-After seconds or date; cap each wait at 20s and don't exceed time budget.
+    const parsed = parseRetryAfterSeconds(resp.headers.get("retry-after"));
+    const exp = Math.pow(2, attempt + 1); // 2,4,8
+    let waitSecs = Math.max(parsed ?? 0, exp);
+    waitSecs = Math.min(waitSecs, 20);
+    if (opts?.deadlineMs) {
+      const remain = Math.max(0, Math.floor((opts.deadlineMs - Date.now()) / 1000));
+      if (remain <= 0) return resp;
+      waitSecs = Math.min(waitSecs, remain);
+    }
+    if (waitSecs <= 0) return resp;
     await sleep(waitSecs * 1000);
     attempt++;
   }
   // Signal rate limit to caller
   const last = await doFetch();
   if (last.status === 429) {
-    const ra = Number(last.headers.get("retry-after") ?? "0");
+    const ra = parseRetryAfterSeconds(last.headers.get("retry-after")) ?? 0;
     const err: any = new Error(`Smartlead 429 after retries`);
     err.rateLimited = true;
     err.retryAfterSeconds = ra;
@@ -143,6 +169,7 @@ Deno.serve(async (req) => {
     const TIME_BUDGET_MS = 100_000; // ~100s
     const timeBudgetStart = Date.now();
     const timeBudgetExceeded = () => Date.now() - timeBudgetStart > TIME_BUDGET_MS;
+    const deadlineMs = timeBudgetStart + TIME_BUDGET_MS;
 
     // Optional resumable cursor
     let cursorIntegrationId: string | null = null;
@@ -213,6 +240,7 @@ Deno.serve(async (req) => {
     let messagesSentWritten = 0;
     let messagesSentSkipped = 0;
     let errors = 0;
+    let rowsInvalid = 0;
     const errorSamples: string[] = [];
     let hasMore = false;
     let nextCursor:
@@ -221,11 +249,18 @@ Deno.serve(async (req) => {
 
     // Track people inserts once per email for the whole run
     const peopleSeen = new Set<string>();
+    let campaignFilterFound = !campaignIdFilter; // if filter absent, treat as found
 
     outer: for (const integ of integrations) {
       if (timeBudgetExceeded()) {
         hasMore = true;
-        // If no progress yet, park on the first integration/campaign later
+        // Park on this integration start
+        nextCursor = {
+          integrationId: integ.id,
+          campaignExternalId: null as unknown as any, // keep shape stable; consumer tolerates null
+          offset: 0,
+          sent_time_end_date: sentTimeEndDate || RUN_START_ISO,
+        };
         break;
       }
       if (!integ?.api_key_encrypted) continue;
@@ -254,18 +289,35 @@ Deno.serve(async (req) => {
         // Nothing to do on this integration for that specific campaign
         continue;
       }
+      if (campaignIdFilter && campaignsList.length > 0) {
+        campaignFilterFound = true;
+      }
 
-      for (const camp of campaignsList) {
-        if (cursorIntegrationId && integ.id !== cursorIntegrationId) {
-          // Not reached cursor integration yet
-          continue;
-        }
-        if (cursorCampaignExternalId && String(camp.external_campaign_id) !== String(cursorCampaignExternalId)) {
-          // Not reached cursor campaign yet
-          continue;
-        }
+      // Determine starting campaign index for resume robustness:
+      let startIndex = 0;
+      if (cursorIntegrationId && integ.id !== cursorIntegrationId) {
+        // Not yet at the cursor integration
+        continue;
+      }
+      if (cursorCampaignExternalId) {
+        // Find first campaign with external_campaign_id >= cursorCampaignExternalId
+        const asNum = (v: string) => (Number.isFinite(Number(v)) ? Number(v) : null);
+        const cursorVal = String(cursorCampaignExternalId);
+        const cursorNum = asNum(cursorVal);
+        const cmp = (a: string, b: string) => {
+          const na = asNum(a), nb = asNum(b);
+          if (na !== null && nb !== null) return na - nb;
+          return a.localeCompare(b);
+        };
+        startIndex = campaignsList.findIndex((c) => cmp(String(c.external_campaign_id), cursorVal) >= 0);
+        if (startIndex < 0) startIndex = campaignsList.length; // nothing >= cursor; will skip loop
+      }
+
+      for (let j = startIndex; j < campaignsList.length; j++) {
+        const camp = campaignsList[j];
         // Page provider statistics for this campaign
-        let offset = startOffset;
+        const sameCampaignAsCursor = !!cursorCampaignExternalId && String(camp.external_campaign_id) === String(cursorCampaignExternalId);
+        let offset = sameCampaignAsCursor ? startOffset : 0;
         const PAGE = 1000; // Smartlead stats page size
         const endDateIso = sentTimeEndDate || RUN_START_ISO;
         while (true) {
@@ -281,15 +333,13 @@ Deno.serve(async (req) => {
           }
           // Fetch one page of campaign stats from Smartlead with 429 backoff
           let page: SmartleadStatsEnvelope | null = null;
-          let rateLimited = false;
           try {
             const res = await smartleadGet(
-              `/campaigns/${encodeURIComponent(camp.external_campaign_id)}/statistics?limit=${PAGE}&offset=${offset}`,
+              `/campaigns/${encodeURIComponent(camp.external_campaign_id)}/statistics?limit=${PAGE}&offset=${offset}&sent_time_end_date=${encodeURIComponent(endDateIso)}`,
               apiKey!,
-              { backoffOn429: true },
+              { backoffOn429: true, deadlineMs },
             );
             if (res.status === 429) {
-              rateLimited = true;
               hasMore = true;
               nextCursor = {
                 integrationId: integ.id,
@@ -327,6 +377,9 @@ Deno.serve(async (req) => {
             : [];
           if (rows.length === 0) break;
 
+          // Build batched writes for this page
+          const evRows: any[] = [];
+          const pagePeopleEmails: string[] = [];
           let processedThisPage = 0;
           for (const r of rows) {
             if (timeBudgetExceeded()) {
@@ -339,93 +392,99 @@ Deno.serve(async (req) => {
               };
               break outer;
             }
-            processedThisPage++;
-            if (rowsScanned >= maxLeads) break;
             rowsScanned++;
-
             const sentTime = typeof r?.sent_time === "string" && r.sent_time ? r.sent_time : null;
-            if (!sentTime) continue; // skip rows with no sent_time, never fall back to now()
-            // Keep offsets stable within this run: ignore rows later than endDateIso
-            if (new Date(sentTime).getTime() > new Date(endDateIso).getTime()) {
+            const email = (r?.lead_email ?? "").toString().trim().toLowerCase();
+            const statsId = r?.stats_id !== undefined && r?.stats_id !== null ? String(r.stats_id) : null;
+            if (!sentTime || !email || !statsId) {
+              rowsInvalid++;
+              processedThisPage++;
               continue;
             }
-            const email = (r?.lead_email ?? "").toString().trim().toLowerCase();
-            if (!email) continue;
-            const statsId = r?.stats_id !== undefined && r?.stats_id !== null ? String(r.stats_id) : null;
-            if (!statsId) continue;
+            // Ignore rows later than endDateIso to keep offsets stable; provider query also fixed by end date
+            if (new Date(sentTime).getTime() > new Date(endDateIso).getTime()) {
+              processedThisPage++;
+              continue;
+            }
             const sourceRowId = `smartlead:stats:${statsId}`;
+            evRows.push({
+              team_id: (camp as any).team_id,
+              person_key: email,
+              email,
+              channel: "email",
+              campaign_external_id: String((camp as any).external_campaign_id ?? ""),
+              campaign_name: (camp as any)?.name ?? null,
+              sequence_step_type: "email",
+              copy_fingerprint: null,
+              subject: (typeof r?.email_subject === "string" && r.email_subject.trim()) ? r.email_subject.trim() : null,
+              event_type: "sent",
+              intent: null,
+              is_objection: null,
+              pipeline_stage: "sent",
+              disposition_tag: null,
+              occurred_at: sentTime,
+              source: "smartlead_stats",
+              source_row_id: sourceRowId,
+              metadata: {
+                provider: "smartlead",
+                sequence_number: r?.sequence_number ?? null,
+              } as Record<string, unknown>,
+            });
+            if (!peopleSeen.has(email)) {
+              peopleSeen.add(email);
+              pagePeopleEmails.push(email);
+            }
+            processedThisPage++;
+            if (rowsScanned >= maxLeads) break;
+          }
 
-            try {
-              // Insert-only inference_events with conflict-ignore and select
-              const payload = {
+          // Batched upsert for inference_events (chunks of ~500)
+          const CHUNK = 500;
+          for (let k = 0; k < evRows.length; k += CHUNK) {
+            const chunk = evRows.slice(k, k + CHUNK);
+            if (chunk.length === 0) continue;
+            const { data: ins, error: insErr } = await supabase
+              .from("inference_events")
+              // @ts-ignore onConflict supports column-list
+              .upsert(chunk, { onConflict: "source,source_row_id,event_type", ignoreDuplicates: true })
+              .select("id");
+            if (insErr) {
+              errors++;
+              const em = redact(insErr.message ?? String(insErr));
+              if (errorSamples.length < 5) errorSamples.push(em);
+            } else {
+              const written = Array.isArray(ins) ? ins.length : 0;
+              messagesSentWritten += written;
+              messagesSentSkipped += Math.max(0, chunk.length - written);
+            }
+          }
+
+          // Batched insert-only upsert for people (distinct new emails this page)
+          if (pagePeopleEmails.length > 0) {
+            const peopleRows = pagePeopleEmails.map((email) => {
+              const fullName =
+                typeof (rows.find((r2) => (r2?.lead_email ?? "").toString().trim().toLowerCase() === email) as any)?.lead_name ===
+                  "string"
+                  ? String((rows.find((r2) => (r2?.lead_email ?? "").toString().trim().toLowerCase() === email) as any)?.lead_name)
+                      .trim() || null
+                  : null;
+              return {
                 team_id: (camp as any).team_id,
                 person_key: email,
                 email,
-                channel: "email" as const,
-                campaign_external_id: String((camp as any).external_campaign_id ?? ""),
-                campaign_name: (camp as any)?.name ?? null,
-                sequence_step_type: "email" as const,
-                copy_fingerprint: null as unknown as string | null,
-                subject: (typeof r?.email_subject === "string" && r.email_subject.trim()) ? r.email_subject.trim() : null,
-                event_type: "sent" as const,
-                intent: null as unknown as string | null,
-                is_objection: null as unknown as boolean | null,
-                pipeline_stage: "sent" as const,
-                disposition_tag: null as unknown as string | null,
-                occurred_at: sentTime,
-                source: "smartlead_stats",
-                source_row_id: sourceRowId,
-                metadata: {
-                  provider: "smartlead",
-                  sequence_number: r?.sequence_number ?? null,
-                } as Record<string, unknown>,
-              };
-              const { data: ins, error: insErr } = await supabase
-                .from("inference_events")
-                // @ts-ignore onConflict supports column-list
-                .insert(payload, { onConflict: "source,source_row_id,event_type", ignoreDuplicates: true })
-                .select("id");
-              if (insErr) {
-                errors++;
-                const em = redact(insErr.message ?? String(insErr));
-                if (errorSamples.length < 5) errorSamples.push(em);
-              } else {
-                if (Array.isArray(ins) && ins.length > 0) {
-                  messagesSentWritten++;
-                } else {
-                  messagesSentSkipped++;
-                }
-              }
-
-              // Insert-only people: once per email per run
-              if (!peopleSeen.has(email)) {
-                peopleSeen.add(email);
-                const p: Record<string, unknown> = {
-                  team_id: (camp as any).team_id,
-                  person_key: email,
-                  email,
-                };
-                const { error: pplErr } = await supabase
-                  .from("people")
-                  // @ts-ignore onConflict supports column-list
-                  .upsert(p, { onConflict: "team_id,person_key", ignoreDuplicates: true })
-                  .select("id");
-                if (pplErr) {
-                  errors++;
-                  const em = redact(pplErr.message ?? String(pplErr));
-                  if (errorSamples.length < 5) errorSamples.push(em);
-                }
-              }
-              // Gentle pacing — Smartlead rate limits bursty runs
-              await sleep(75);
-            } catch (e) {
-              const msg = redact((e as Error)?.message ?? String(e));
-              console.warn("[backfill-smartlead-sends] row insert failed:", msg);
+                full_name: fullName,
+              } as Record<string, unknown>;
+            });
+            const { error: pplErr } = await supabase
+              .from("people")
+              // @ts-ignore onConflict supports column-list
+              .upsert(peopleRows, { onConflict: "team_id,person_key", ignoreDuplicates: true })
+              .select("id");
+            if (pplErr) {
               errors++;
-              if (errorSamples.length < 5) errorSamples.push(msg);
-              await sleep(150);
+              const em = redact(pplErr.message ?? String(pplErr));
+              if (errorSamples.length < 5) errorSamples.push(em);
             }
-            if (rowsScanned >= maxLeads) break;
           }
 
           offset += processedThisPage;
@@ -449,6 +508,26 @@ Deno.serve(async (req) => {
       if (rowsScanned >= maxLeads) break;
     }
 
+    if (campaignIdFilter && !campaignFilterFound) {
+      return new Response(JSON.stringify({ error: "campaignId not found or not capture_enabled for the scope" }), {
+        status: 404,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // Ensure non-null cursor when hasMore is true
+    if (hasMore && !nextCursor) {
+      const integ0 = integrations[0];
+      if (integ0) {
+        nextCursor = {
+          integrationId: integ0.id,
+          campaignExternalId: null as unknown as any,
+          offset: 0,
+          sent_time_end_date: sentTimeEndDate || RUN_START_ISO,
+        };
+      }
+    }
+
     return new Response(JSON.stringify({
       success: true,
       integrations: integrations.length,
@@ -458,6 +537,7 @@ Deno.serve(async (req) => {
       messages_sent_skipped: messagesSentSkipped,
       errors,
       error_samples: errorSamples,
+      rows_invalid: rowsInvalid,
       hasMore,
       nextCursor,
     }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
@@ -471,4 +551,19 @@ Deno.serve(async (req) => {
     });
   }
 });
+
+// Tiny unit test for redact
+try {
+  // Deno.test is available in test runner; ignored in serve
+  // deno-lint-ignore no-explicit-any
+  (globalThis as any).Deno?.test?.("redact api_key", () => {
+    const s = "https://x?k=v&api_key=abcs 123)";
+    const r = redact(s);
+    if (!r.includes("api_key=*** 123)")) {
+      throw new Error(`redact failed: ${r}`);
+    }
+  });
+} catch {
+  // ignore when not under test
+}
 
