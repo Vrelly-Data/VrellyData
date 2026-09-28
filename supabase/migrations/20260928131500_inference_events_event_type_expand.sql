@@ -1,4 +1,6 @@
--- Extend inference_events.event_type to include 'connection_sent'.
+-- Rerunnable: widen inference_events.event_type to include connection_sent and connection_accepted.
+-- Keeps existing 9 values plus the two new ones. Safe on re-run: drops any existing CHECK constraint
+-- on event_type and recreates it with the expanded allowed set.
 
 DO $mig$
 DECLARE
@@ -29,5 +31,5 @@ END
 $mig$;
 
 COMMENT ON CONSTRAINT inference_events_event_type_check ON public.inference_events IS
-  'Allowed event types incl. connection_sent/connection_accepted for LinkedIn. Recreated idempotently.';
+  'Allowed event types incl. connection_sent/connection_accepted (LinkedIn).';
 

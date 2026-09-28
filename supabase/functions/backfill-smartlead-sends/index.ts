@@ -1,17 +1,15 @@
-// [backfill-smartlead-sends v2]
+// [backfill-smartlead-sends v3]
 //
 // One-shot/resumable backfill of Smartlead OUTBOUND "SENT" messages into
 // public.inference_events (event_type='sent', channel='email'), plus additive
-// people upserts from provider lead roster. Idempotent per provider message id
-// using the shared computeSentSourceId helper.
+// insert-only people upserts (email-only) keyed by person_key.
 //
 // Scope:
 // - Team-scoped: choose one Smartlead integration by integrationId OR all active
 //   Smartlead integrations for a given teamId.
 // - Campaigns: capture_enabled=true only (safety). Can be widened later.
-// - Roster: PULLS LEADS DIRECTLY FROM PROVIDER (Smartlead /campaigns/{id}/leads)
-//   so every capture_enabled campaign’s leads are reachable regardless of
-//   synced_contacts size.
+// - Source rows: Smartlead per-email statistics: GET /campaigns/{id}/statistics?limit=1000&offset=N
+//   (one row per sequence email send; stable stats_id).
 //
 // Auth:
 // - Internal only via x-agent-key (AGENT_API_KEY). No frontend JWT allowed.
@@ -21,28 +19,29 @@
 //     integrationId?: string,   // backfill one Smartlead integration
 //     teamId?: string,          // or all active Smartlead integrations for a team
 //     maxLeads?: number,        // per-run cap (default 5000)
-//     cursor?: { integrationIndex?: number; campaignIndex?: number; leadOffset?: number } | string(base64-json)
+//     campaignId?: string,      // optional single external Smartlead campaign id (smoke test)
+//     cursor?: {
+//       integrationId?: string;
+//       campaignExternalId?: string;
+//       offset?: number;
+//       sent_time_end_date?: string; // ISO run start to keep offsets stable
+//     } | string(json or base64-json)
 //   }
 //
 // Response:
 //   {
-//     integrations, campaigns, leads_scanned,
-//     messages_sent_written, messages_sent_skipped, errors,
-//     hasMore, nextCursor: { integrationIndex, campaignIndex, leadOffset }
+//     integrations, campaigns, rows_scanned,
+//     messages_sent_written, messages_sent_skipped, errors, error_samples,
+//     hasMore, nextCursor
 //   }
 //
 // Notes:
-// - Uses computeSentSourceId(provider='smartlead', message_id preferred) to build
-//   a stable source_row_id so re-runs are no-ops for already-written messages.
+// - Stable id: source_row_id = "smartlead:stats:" + stats_id (no now() fallback).
+// - Skip rows missing sent_time.
 // - Does NOT touch classify-reply or send-agent-reply or any live send path.
-// - Best-effort additive upsert into public.people using provider roster values.
+// - Insert-only into public.people using person_key/email; ignore duplicates, no null keys.
 //
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { htmlToText } from "../_shared/html-to-text.ts";
-import { stripZendeskMarker } from "../_shared/smartlead-thread.ts";
-
-// computeSentSourceId: stable dedupe id for sent events
-const { computeSentSourceId } = await import("../_shared/sent-source-id.ts");
 
 const allowedOrigins = [
   Deno.env.get("ALLOWED_ORIGIN") || "https://vrelly.com",
@@ -58,108 +57,66 @@ function getCorsHeaders(req: Request) {
 
 const SMARTLEAD_API_BASE = "https://server.smartlead.ai/api/v1";
 
-type SmartleadLeadEnvelope = {
-  total_leads?: number;
-  data?: Array<{
-    campaign_lead_map_id?: number | string;
-    lead?: {
-      id?: number | string;
-      email?: string;
-      phone_number?: string | null;
-      linkedin_profile?: string | null;
-      first_name?: string | null;
-      last_name?: string | null;
-      company_name?: string | null;
-      custom_fields?: Record<string, unknown> | null;
-      [k: string]: unknown;
-    } | null;
-    [k: string]: unknown;
-  }>;
-};
-
-type SmartleadMessage = {
-  type?: "SENT" | "REPLY" | string;
-  message_id?: string | number | null;
+type SmartleadStatsRow = {
   stats_id?: string | number | null;
-  email_body?: string | null;
-  body?: string | null; // legacy
-  time?: string | null;
-  timestamp?: string | null; // legacy
+  sequence_number?: number | null;
+  sent_time?: string | null;
+  email_subject?: string | null;
+  lead_email?: string | null;
   [k: string]: unknown;
 };
-type SmartleadHistory = { history?: SmartleadMessage[] } | SmartleadMessage[] | null;
+type SmartleadStatsEnvelope = {
+  data?: SmartleadStatsRow[];
+  total?: number;
+  [k: string]: unknown;
+} | SmartleadStatsRow[] | null;
 
-async function fetchSmartleadHistory(apiKey: string, campaignId: string, leadId: string): Promise<SmartleadMessage[]> {
-  const url = new URL(`${SMARTLEAD_API_BASE}/campaigns/${encodeURIComponent(campaignId)}/leads/${encodeURIComponent(leadId)}/message-history`);
-  url.searchParams.set("api_key", apiKey);
-  const resp = await fetch(url.toString(), { headers: { Accept: "application/json" } });
-  if (!resp.ok) {
-    const t = await resp.text().catch(() => "");
-    throw new Error(`Smartlead message-history ${resp.status}: ${t.substring(0, 300)}`);
-  }
-  const json = (await resp.json().catch(() => null)) as SmartleadHistory;
-  const arr: SmartleadMessage[] = Array.isArray(json)
-    ? json as SmartleadMessage[]
-    : Array.isArray((json as any)?.history)
-      ? ((json as any).history as SmartleadMessage[])
-      : [];
-  return arr;
-}
-
-Deno.env.get;
-
-// Safe GET wrapper that appends api_key via URLSearchParams and never logs the full URL.
-async function smartleadGet(pathWithLeadingSlash: string, apiKey: string): Promise<Response> {
-  const url = new URL(`${SMARTLEAD_API_BASE}${pathWithLeadingSlash}`);
-  url.searchParams.set("api_key", apiKey);
-  return fetch(url.toString(), {
-    method: "GET",
-    headers: { Accept: "application/json" },
-  });
-}
-
-// Extract minimal firmographics from Smartlead custom_fields (aliases; non-empty only)
-function extractSmartleadFirmographics(customFields: unknown): {
-  job_title?: string;
-  industry?: string;
-  company_size?: string;
-  city?: string;
-  state?: string;
-  country?: string;
-} {
-  const result: Record<string, string | undefined> = {};
-  const norm = (v: unknown): string | undefined => {
-    const s = typeof v === "string" ? v : String(v ?? "");
-    const t = s.trim();
-    if (!t || t === "0") return undefined;
-    return t;
-  };
-  const nkey = (k: string) => k.trim().toLowerCase().replace(/\s+/g, " ").replace(/[_-]+/g, " ").trim();
-  const setFirst = (field: string, v: unknown) => {
-    if (result[field] === undefined) result[field] = norm(v);
-  };
-  if (customFields && typeof customFields === "object") {
-    for (const [rawK, rawV] of Object.entries(customFields as Record<string, unknown>)) {
-      const k = nkey(rawK);
-      if (["title", "job title", "job_title"].includes(k)) setFirst("job_title", rawV);
-      if (["industry", "vertical", "sector", "company industry"].includes(k)) setFirst("industry", rawV);
-      if (
-        ["company size", "company_size", "employees", "employee count", "headcount", "employee range", "company headcount"].includes(k)
-      )
-        setFirst("company_size", rawV);
-      if (["city", "location", "company city", "hq city"].includes(k)) setFirst("city", rawV);
-      if (["state", "region", "province", "company state", "hq state"].includes(k)) setFirst("state", rawV);
-      if (["country", "company country", "hq country"].includes(k)) setFirst("country", rawV);
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const redact = (s: string) => String(s ?? "").replace(/api_key=[^&\\s)]+/g, "api_key=***");
+function parseMaybeJsonOrBase64(str: string): unknown {
+  try {
+    return JSON.parse(str);
+  } catch {
+    try {
+      // Deno has atob; Buffer is not available
+      const decoded = atob(str);
+      return JSON.parse(decoded);
+    } catch {
+      return null;
     }
   }
-  return result as {
-    job_title?: string;
-    industry?: string;
-    company_size?: string;
-    city?: string;
-    state?: string;
-    country?: string;
-  };
+}
+
+// Safe GET wrapper that appends api_key via URLSearchParams and never logs the full URL.
+async function smartleadGet(pathWithLeadingSlash: string, apiKey: string, opts?: { backoffOn429?: boolean }): Promise<Response> {
+  const url = new URL(`${SMARTLEAD_API_BASE}${pathWithLeadingSlash}`);
+  url.searchParams.set("api_key", apiKey);
+  const doFetch = () =>
+    fetch(url.toString(), {
+      method: "GET",
+      headers: { Accept: "application/json" },
+    });
+  if (!opts?.backoffOn429) return doFetch();
+  let attempt = 0;
+  while (attempt < 3) {
+    const resp = await doFetch();
+    if (resp.status !== 429) return resp;
+    const ra = Number(resp.headers.get("retry-after") ?? "0");
+    const waitSecs = Math.max(ra, Math.pow(2, attempt + 1)); // 2,4,8
+    await sleep(waitSecs * 1000);
+    attempt++;
+  }
+  // Signal rate limit to caller
+  const last = await doFetch();
+  if (last.status === 429) {
+    const ra = Number(last.headers.get("retry-after") ?? "0");
+    const err: any = new Error(`Smartlead 429 after retries`);
+    err.rateLimited = true;
+    err.retryAfterSeconds = ra;
+    err.status = 429;
+    return last;
+  }
+  return last;
 }
 
 Deno.serve(async (req) => {
@@ -181,18 +138,26 @@ Deno.serve(async (req) => {
     const integrationId: string | undefined = body?.integrationId;
     const teamId: string | undefined = body?.teamId;
     const maxLeads: number = Math.max(1, Number(body?.maxLeads ?? 5000));
+    const campaignIdFilter: string | undefined = body?.campaignId ? String(body?.campaignId) : undefined;
+    const RUN_START_ISO = new Date().toISOString();
+    const TIME_BUDGET_MS = 100_000; // ~100s
+    const timeBudgetStart = Date.now();
+    const timeBudgetExceeded = () => Date.now() - timeBudgetStart > TIME_BUDGET_MS;
+
     // Optional resumable cursor
-    let startIntegration = 0;
-    let startCampaign = 0;
-    let startLeadOffset = 0;
+    let cursorIntegrationId: string | null = null;
+    let cursorCampaignExternalId: string | null = null;
+    let startOffset = 0;
+    let sentTimeEndDate: string | null = null;
     if (body?.cursor) {
       try {
-        const curObj = typeof body.cursor === "string"
-          ? JSON.parse(Buffer.from(String(body.cursor), "base64").toString("utf8"))
-          : body.cursor;
-        startIntegration = Number(curObj?.integrationIndex ?? 0) || 0;
-        startCampaign = Number(curObj?.campaignIndex ?? 0) || 0;
-        startLeadOffset = Number(curObj?.leadOffset ?? 0) || 0;
+        const curObj: any = typeof body.cursor === "string" ? parseMaybeJsonOrBase64(String(body.cursor)) : body.cursor;
+        if (curObj && typeof curObj === "object") {
+          cursorIntegrationId = curObj?.integrationId ?? null;
+          cursorCampaignExternalId = curObj?.campaignExternalId ?? null;
+          startOffset = Number(curObj?.offset ?? 0) || 0;
+          sentTimeEndDate = typeof curObj?.sent_time_end_date === "string" ? curObj.sent_time_end_date : null;
+        }
       } catch {
         // ignore malformed cursor
       }
@@ -221,6 +186,7 @@ Deno.serve(async (req) => {
         .eq("id", integrationId)
         .eq("platform", "smartlead")
         .eq("is_active", true)
+        .order("id", { ascending: true })
         .maybeSingle();
       if (error || !data) throw new Error("Integration not found or inactive");
       integrations = [data as Integration];
@@ -230,7 +196,8 @@ Deno.serve(async (req) => {
         .select("id, team_id, created_by, api_key_encrypted")
         .eq("team_id", teamId)
         .eq("platform", "smartlead")
-        .eq("is_active", true);
+        .eq("is_active", true)
+        .order("id", { ascending: true });
       if (error) throw new Error(error.message);
       integrations = (data ?? []) as Integration[];
       if (integrations.length === 0) {
@@ -242,197 +209,263 @@ Deno.serve(async (req) => {
     }
 
     let totalCampaigns = 0;
-    let leadsScanned = 0;
+    let rowsScanned = 0;
     let messagesSentWritten = 0;
     let messagesSentSkipped = 0;
     let errors = 0;
+    const errorSamples: string[] = [];
     let hasMore = false;
-    let nextCursor: { integrationIndex: number; campaignIndex: number; leadOffset: number } | null = null;
+    let nextCursor:
+      | { integrationId: string; campaignExternalId: string; offset: number; sent_time_end_date: string }
+      | null = null;
 
-    // Helper: additive people upsert from provider row
-    const putNonEmpty = (obj: Record<string, unknown>, key: string, val: unknown) => {
-      const s = typeof val === "string" ? val : String(val ?? "");
-      const t = s.trim();
-      if (t && t !== "0") obj[key] = t;
-    };
+    // Track people inserts once per email for the whole run
+    const peopleSeen = new Set<string>();
 
-    for (let i = startIntegration; i < integrations.length; i++) {
-      const integ = integrations[i];
+    outer: for (const integ of integrations) {
+      if (timeBudgetExceeded()) {
+        hasMore = true;
+        // If no progress yet, park on the first integration/campaign later
+        break;
+      }
       if (!integ?.api_key_encrypted) continue;
       const apiKey = integ.api_key_encrypted;
 
       // Campaigns for this integration (safety: capture_enabled only)
-      const { data: campaigns, error: cErr } = await supabase
-        .from("synced_campaigns")
-        .select("id, team_id, external_campaign_id, name")
-        .eq("integration_id", integ.id)
-        .eq("capture_enabled", true)
-        .eq("source", "smartlead");
-      if (cErr) throw new Error(cErr.message);
-      totalCampaigns += (campaigns ?? []).length;
+      // List and order stably by external id
+      let campaignsList: { id: string; team_id: string; external_campaign_id: string; name?: string | null }[] = [];
+      {
+        const { data: list, error: listErr } = await supabase
+          .from("synced_campaigns")
+          .select("id, team_id, external_campaign_id, name")
+          .eq("integration_id", integ.id)
+          .eq("capture_enabled", true)
+          .eq("source", "smartlead")
+          .order("external_campaign_id", { ascending: true });
+        if (listErr) throw new Error(listErr.message);
+        campaignsList = (list ?? []) as any[];
+      }
+      if (campaignIdFilter) {
+        campaignsList = campaignsList.filter((c) => String(c.external_campaign_id) === String(campaignIdFilter));
+      }
+      totalCampaigns += campaignsList.length;
+      // If campaignIdFilter provided, ensure it belongs to this integration/team
+      if (campaignIdFilter && campaignsList.length === 0) {
+        // Nothing to do on this integration for that specific campaign
+        continue;
+      }
 
-      for (let j = (i === startIntegration ? startCampaign : 0); j < (campaigns ?? []).length; j++) {
-        const camp = (campaigns ?? [])[j] as { id: string; team_id: string; external_campaign_id: string; name?: string | null };
-        // Page provider leads for this campaign
-        let offset = (i === startIntegration && j === startCampaign) ? startLeadOffset : 0;
-        const PAGE = 100; // Smartlead page size
+      for (const camp of campaignsList) {
+        if (cursorIntegrationId && integ.id !== cursorIntegrationId) {
+          // Not reached cursor integration yet
+          continue;
+        }
+        if (cursorCampaignExternalId && String(camp.external_campaign_id) !== String(cursorCampaignExternalId)) {
+          // Not reached cursor campaign yet
+          continue;
+        }
+        // Page provider statistics for this campaign
+        let offset = startOffset;
+        const PAGE = 1000; // Smartlead stats page size
+        const endDateIso = sentTimeEndDate || RUN_START_ISO;
         while (true) {
-          // Fetch one page of campaign leads from Smartlead
-          let page: SmartleadLeadEnvelope | null = null;
+          if (timeBudgetExceeded()) {
+            hasMore = true;
+            nextCursor = {
+              integrationId: integ.id,
+              campaignExternalId: String(camp.external_campaign_id),
+              offset,
+              sent_time_end_date: endDateIso,
+            };
+            break outer;
+          }
+          // Fetch one page of campaign stats from Smartlead with 429 backoff
+          let page: SmartleadStatsEnvelope | null = null;
+          let rateLimited = false;
           try {
-            const res = await smartleadGet(`/campaigns/${encodeURIComponent(camp.external_campaign_id)}/leads?limit=${PAGE}&offset=${offset}`, apiKey!);
+            const res = await smartleadGet(
+              `/campaigns/${encodeURIComponent(camp.external_campaign_id)}/statistics?limit=${PAGE}&offset=${offset}`,
+              apiKey!,
+              { backoffOn429: true },
+            );
+            if (res.status === 429) {
+              rateLimited = true;
+              hasMore = true;
+              nextCursor = {
+                integrationId: integ.id,
+                campaignExternalId: String(camp.external_campaign_id),
+                offset,
+                sent_time_end_date: endDateIso,
+              };
+              break outer;
+            }
             if (!res.ok) {
               const bodyText = await res.text().catch(() => "");
-              throw new Error(`Smartlead /campaigns/${camp.external_campaign_id}/leads failed (${res.status}): ${bodyText.substring(0, 300)}`);
+              throw new Error(
+                `Smartlead /campaigns/${camp.external_campaign_id}/statistics failed (${res.status}): ${bodyText.substring(0, 300)}`,
+              );
             }
-            page = await res.json().catch(() => ({} as SmartleadLeadEnvelope));
+            page = await res.json().catch(() => ({} as SmartleadStatsEnvelope));
           } catch (e) {
-            console.warn("[backfill-smartlead-sends] leads page fetch failed:", (e as Error).message);
+            const msg = redact((e as Error)?.message ?? String(e));
+            console.warn("[backfill-smartlead-sends] statistics page fetch failed:", msg);
             errors++;
-            break;
+            // Do not skip to next campaign on transient page failure; return cursor to retry this page
+            hasMore = true;
+            nextCursor = {
+              integrationId: integ.id,
+              campaignExternalId: String(camp.external_campaign_id),
+              offset,
+              sent_time_end_date: endDateIso,
+            };
+            break outer;
           }
-          const rows = Array.isArray(page?.data) ? page!.data! : [];
+          const rows: SmartleadStatsRow[] = Array.isArray(page)
+            ? ((page ?? []) as SmartleadStatsRow[])
+            : Array.isArray((page as any)?.data)
+            ? (((page as any).data ?? []) as SmartleadStatsRow[])
+            : [];
           if (rows.length === 0) break;
 
-          for (const row of rows) {
-            if (leadsScanned >= maxLeads) break;
-            leadsScanned++;
-            const lead = row?.lead ?? null;
-            const leadId = lead?.id !== undefined && lead?.id !== null ? String(lead.id) : null;
-            const email = typeof lead?.email === "string" ? lead!.email.trim().toLowerCase() : "";
-            if (!leadId || !email) continue;
+          let processedThisPage = 0;
+          for (const r of rows) {
+            if (timeBudgetExceeded()) {
+              hasMore = true;
+              nextCursor = {
+                integrationId: integ.id,
+                campaignExternalId: String(camp.external_campaign_id),
+                offset: offset + processedThisPage,
+                sent_time_end_date: endDateIso,
+              };
+              break outer;
+            }
+            processedThisPage++;
+            if (rowsScanned >= maxLeads) break;
+            rowsScanned++;
+
+            const sentTime = typeof r?.sent_time === "string" && r.sent_time ? r.sent_time : null;
+            if (!sentTime) continue; // skip rows with no sent_time, never fall back to now()
+            // Keep offsets stable within this run: ignore rows later than endDateIso
+            if (new Date(sentTime).getTime() > new Date(endDateIso).getTime()) {
+              continue;
+            }
+            const email = (r?.lead_email ?? "").toString().trim().toLowerCase();
+            if (!email) continue;
+            const statsId = r?.stats_id !== undefined && r?.stats_id !== null ? String(r.stats_id) : null;
+            if (!statsId) continue;
+            const sourceRowId = `smartlead:stats:${statsId}`;
+
             try {
-              const messages = await fetchSmartleadHistory(apiKey, String((camp as any).external_campaign_id), leadId);
-              for (const m of messages) {
-                if ((m?.type ?? "").toString().toUpperCase() !== "SENT") continue;
-                const raw = (m.email_body ?? m.body ?? "") as string | null;
-                const clean = stripZendeskMarker(htmlToText(raw || ""));
-                const occurredAt = (m.time ?? m.timestamp ?? new Date().toISOString()) as string;
-                const providerMessageId = m?.message_id !== undefined && m?.message_id !== null ? String(m.message_id) : null;
-                const providerThreadId = m?.stats_id !== undefined && m?.stats_id !== null ? String(m.stats_id) : null;
-
-                // Stable id for idempotency
-                const copyFingerprint = await (await import("../_shared/copy-fingerprint.ts")).computeCopyFingerprint(clean, null);
-                const sourceRowId = await computeSentSourceId({
+              // Insert-only inference_events with conflict-ignore and select
+              const payload = {
+                team_id: (camp as any).team_id,
+                person_key: email,
+                email,
+                channel: "email" as const,
+                campaign_external_id: String((camp as any).external_campaign_id ?? ""),
+                campaign_name: (camp as any)?.name ?? null,
+                sequence_step_type: "email" as const,
+                copy_fingerprint: null as unknown as string | null,
+                subject: (typeof r?.email_subject === "string" && r.email_subject.trim()) ? r.email_subject.trim() : null,
+                event_type: "sent" as const,
+                intent: null as unknown as string | null,
+                is_objection: null as unknown as boolean | null,
+                pipeline_stage: "sent" as const,
+                disposition_tag: null as unknown as string | null,
+                occurred_at: sentTime,
+                source: "smartlead_stats",
+                source_row_id: sourceRowId,
+                metadata: {
                   provider: "smartlead",
-                  personKey: email,
-                  occurredAt,
-                  providerThreadId,
-                  providerMessageId,
-                  copyFingerprint,
-                  tag: `message_history:${String((camp as any).external_campaign_id)}:${leadId}`,
-                });
-
-                // Upsert inference_events (dedup on source,source_row_id,event_type)
-                const { error: ieErr } = await supabase
-                  .from("inference_events")
-                  // @ts-ignore onConflict supports column-list
-                  .upsert({
-                    team_id: (camp as any).team_id,
-                    person_key: email,
-                    email,
-                    linkedin_url: (typeof lead?.linkedin_profile === "string" && lead.linkedin_profile.trim()) ? lead.linkedin_profile.trim() : null,
-                    full_name: [String(lead?.first_name ?? "").trim(), String(lead?.last_name ?? "").trim()]
-                      .filter(Boolean).join(" ") || null,
-                    // Firmographics snapshot best-effort from custom_fields
-                    ...((): Record<string, unknown> => {
-                      const fx = extractSmartleadFirmographics(lead?.custom_fields ?? {});
-                      return {
-                        job_title: fx.job_title ?? null,
-                        industry: fx.industry ?? null,
-                        company_size: fx.company_size ?? null,
-                        city: fx.city ?? null,
-                        state: fx.state ?? null,
-                        country: fx.country ?? null,
-                      };
-                    })(),
-                    company_name: (typeof lead?.company_name === "string" && lead.company_name.trim()) ? lead.company_name.trim() : null,
-                    channel: "email",
-                    campaign_external_id: String((camp as any).external_campaign_id ?? ""),
-                    campaign_name: (camp as any)?.name ?? null,
-                    sequence_step_type: "email",
-                    copy_fingerprint: copyFingerprint,
-                    subject: null,
-                    event_type: "sent",
-                    intent: null,
-                    is_objection: null,
-                    pipeline_stage: "sent",
-                    disposition_tag: null,
-                    occurred_at: occurredAt,
-                    source: "smartlead_message_history",
-                    source_row_id: sourceRowId,
-                    metadata: {
-                      provider: "smartlead",
-                      provider_thread_id: providerThreadId,
-                      provider_message_id: providerMessageId,
-                    },
-                  }, { onConflict: "source,source_row_id,event_type" });
-                if (ieErr) {
-                  // Unique violation → treated as skip (already present)
-                  messagesSentSkipped++;
-                } else {
+                  sequence_number: r?.sequence_number ?? null,
+                } as Record<string, unknown>,
+              };
+              const { data: ins, error: insErr } = await supabase
+                .from("inference_events")
+                // @ts-ignore onConflict supports column-list
+                .insert(payload, { onConflict: "source,source_row_id,event_type", ignoreDuplicates: true })
+                .select("id");
+              if (insErr) {
+                errors++;
+                const em = redact(insErr.message ?? String(insErr));
+                if (errorSamples.length < 5) errorSamples.push(em);
+              } else {
+                if (Array.isArray(ins) && ins.length > 0) {
                   messagesSentWritten++;
+                } else {
+                  messagesSentSkipped++;
                 }
+              }
 
-                // Best-effort additive people upsert (write-only)
+              // Insert-only people: once per email per run
+              if (!peopleSeen.has(email)) {
+                peopleSeen.add(email);
                 const p: Record<string, unknown> = {
                   team_id: (camp as any).team_id,
                   person_key: email,
                   email,
-                  linkedin_url: (typeof lead?.linkedin_profile === "string" && lead.linkedin_profile.trim()) ? lead.linkedin_profile.trim() : null,
                 };
-                putNonEmpty(p, "full_name", [String(lead?.first_name ?? "").trim(), String(lead?.last_name ?? "").trim()].filter(Boolean).join(" "));
-                putNonEmpty(p, "company_name", (lead as any)?.company_name);
-                const fx = extractSmartleadFirmographics(lead?.custom_fields ?? {});
-                putNonEmpty(p, "job_title", fx.job_title);
-                putNonEmpty(p, "industry", fx.industry);
-                putNonEmpty(p, "company_size", fx.company_size);
-                putNonEmpty(p, "city", fx.city);
-                putNonEmpty(p, "state", fx.state);
-                putNonEmpty(p, "country", fx.country);
-                putNonEmpty(p, "phone", (lead as any)?.phone_number);
-                await supabase.from("people")
+                const { error: pplErr } = await supabase
+                  .from("people")
                   // @ts-ignore onConflict supports column-list
-                  .upsert(p, { onConflict: "team_id,person_key" });
+                  .upsert(p, { onConflict: "team_id,person_key", ignoreDuplicates: true })
+                  .select("id");
+                if (pplErr) {
+                  errors++;
+                  const em = redact(pplErr.message ?? String(pplErr));
+                  if (errorSamples.length < 5) errorSamples.push(em);
+                }
               }
-
               // Gentle pacing — Smartlead rate limits bursty runs
-              await new Promise((r) => setTimeout(r, 150));
+              await sleep(75);
             } catch (e) {
-              console.warn("[backfill-smartlead-sends] history fetch failed:", (e as Error).message);
+              const msg = redact((e as Error)?.message ?? String(e));
+              console.warn("[backfill-smartlead-sends] row insert failed:", msg);
               errors++;
-              await new Promise((r) => setTimeout(r, 250));
+              if (errorSamples.length < 5) errorSamples.push(msg);
+              await sleep(150);
             }
-            if (leadsScanned >= maxLeads) break;
+            if (rowsScanned >= maxLeads) break;
           }
 
-          offset += rows.length;
-          if (rows.length < PAGE || leadsScanned >= maxLeads) break;
+          offset += processedThisPage;
+          if (processedThisPage < rows.length || rows.length < PAGE || rowsScanned >= maxLeads) break;
         }
-        if (leadsScanned >= maxLeads) {
+        // Reset cursor gates once we pass the first eligible campaign
+        cursorIntegrationId = null;
+        cursorCampaignExternalId = null;
+        startOffset = 0;
+        if (rowsScanned >= maxLeads) {
           hasMore = true;
-          nextCursor = { integrationIndex: i, campaignIndex: j, leadOffset: offset };
-          break;
+          nextCursor = {
+            integrationId: integ.id,
+            campaignExternalId: String(camp.external_campaign_id),
+            offset,
+            sent_time_end_date: sentTimeEndDate || RUN_START_ISO,
+          };
+          break outer;
         }
       }
-      if (leadsScanned >= maxLeads) break;
+      if (rowsScanned >= maxLeads) break;
     }
 
     return new Response(JSON.stringify({
       success: true,
       integrations: integrations.length,
       campaigns: totalCampaigns,
-      leads_scanned: leadsScanned,
+      rows_scanned: rowsScanned,
       messages_sent_written: messagesSentWritten,
       messages_sent_skipped: messagesSentSkipped,
       errors,
+      error_samples: errorSamples,
       hasMore,
       nextCursor,
     }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error("[backfill-smartlead-sends] fatal:", msg);
-    return new Response(JSON.stringify({ error: msg }), {
+    const red = redact(msg);
+    console.error("[backfill-smartlead-sends] fatal:", red);
+    return new Response(JSON.stringify({ error: red }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
