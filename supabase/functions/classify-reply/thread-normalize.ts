@@ -92,13 +92,11 @@ function containsAny(haystack: string, needles: Set<string>): boolean {
   return false;
 }
 
-function detectForwardHeader(text: string): boolean {
-  // Common indicators of forwarded copies
-  const t = text.toLowerCase();
-  return (
-    t.includes("forwarded message") ||
-    t.includes("-----original message-----")
-  );
+function indexOfForwardHeader(text: string): number {
+  // Return the index where a forward/original header starts, or -1 if absent.
+  const re = /(^|\n)\s*-{2,}\s*(Forwarded message|Original Message)\s*-{2,}\s*$/im;
+  const m = text.search(re);
+  return m;
 }
 
 export function detectSenderMislabel(entry: RawThreadEntry, signals: SenderSignals): boolean {
@@ -107,17 +105,40 @@ export function detectSenderMislabel(entry: RawThreadEntry, signals: SenderSigna
   const content = String(entry.content ?? "");
   const lower = content.toLowerCase();
   if (!lower.trim()) return false;
-  // Signal 1: explicit forward header (we forwarded something)
-  if (detectForwardHeader(content)) return true;
-  // Signal 2: matches sending identities (names or mailbox domains)
-  if (entry.fromName && signals.senderNames.has((entry.fromName ?? "").trim().toLowerCase())) {
-    return true;
+  // Signal 1 (forwards): only treat as our forward when the header opens the message
+  // (no prospect text above it) AND the forwarded From: matches our identities.
+  const fwdIdx = indexOfForwardHeader(content);
+  if (fwdIdx >= 0) {
+    const above = content.slice(0, fwdIdx).trim();
+    if (!above) {
+      const tail = content.slice(fwdIdx, fwdIdx + 600); // small window
+      const emailRe = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
+      const emails = (tail.match(emailRe) ?? []).map((e) => e.toLowerCase());
+      const hasOurEmail = emails.some((e) => signals.senderEmails.has(e));
+      const hasOurDomain = emails.some((e) => {
+        const at = e.indexOf("@");
+        const d = at >= 0 ? e.slice(at + 1) : "";
+        return d && signals.senderDomains.has(d);
+      });
+      if (hasOurEmail || hasOurDomain) return true;
+    }
   }
-  // Heuristic refinement: if this looks like a quoted chain ("From:" / "On ... wrote:"),
-  // do not treat sender name mentions as a mislabel — stripping will handle it.
-  const looksQuotedChain = /\bfrom:\s/i.test(content) || /\bon\s.+wrote:/i.test(content) || />/.test(content);
-  if (!looksQuotedChain && containsAny(lower, signals.senderNames)) return true;
-  if (!looksQuotedChain && containsAny(lower, signals.senderDomains)) return true;
+  // Heuristic guard: quoted chains or 'From:' headers mid-text indicate the prospect
+  // wrote above a quote — never relabel based on names/domains in that case.
+  const looksQuotedChain =
+    /^\s*From:\s/im.test(content) || /\bon\s.+wrote:/i.test(content) || />/.test(content);
+  // Signal 2 (top-of-message From: header): explicit From: <our name/email> at TOP.
+  if (!looksQuotedChain) {
+    const topFrom = /^\s*From:\s*([^\n]+)$/im.exec(content);
+    if (topFrom) {
+      const hdr = topFrom[1].toLowerCase();
+      const hasOurDomain = Array.from(signals.senderDomains).some((d) => hdr.includes(d));
+      const hasOurEmail = Array.from(signals.senderEmails).some((e) => hdr.includes(e));
+      const hasOurName = Array.from(signals.senderNames).some((n) => hdr.includes(n));
+      if (hasOurEmail || hasOurDomain || hasOurName) return true;
+    }
+  }
+  // Do NOT use naked name-substrings or fromName alone — too many false positives.
   // Prefer false negatives — do not try to be clever beyond this
   return false;
 }

@@ -107,6 +107,7 @@ async function callAnthropicJSON(opts: {
   messages: Array<{ role: 'user' | 'assistant'; content: string }>;
   temperature: number;
   maxTokens?: number;
+  timeoutMs?: number;
 }): Promise<{
   json: any;
   retried: boolean;
@@ -114,6 +115,9 @@ async function callAnthropicJSON(opts: {
   ms: number;
 }> {
   const t0 = Date.now();
+  const controller = typeof AbortSignal !== 'undefined' && typeof (AbortSignal as any).timeout === 'function'
+    ? (AbortSignal as any).timeout(opts.timeoutMs ?? 60000)
+    : undefined;
   const base = {
     model: MODEL,
     max_tokens: opts.maxTokens ?? 1000,
@@ -130,6 +134,7 @@ async function callAnthropicJSON(opts: {
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify(body),
+      signal: controller,
     });
 
   const res = await post(base);
@@ -711,28 +716,97 @@ Use this campaign data to:
           .join('\n')
       : 'No personas defined.';
 
-    // === Thread normalization & latest prospect extraction ==================
-    const signals = deriveSenderSignals({
-      agentSenderName: effSenderName,
-      profileNames: [], // populated above via sender_profiles into effSenderName already
-      mailboxEmails,
-      mailboxFromNames,
-      threadSenderNames: threadSenderName ? [threadSenderName] : [],
-    });
-    const { normalized, relabelCount } = normalizeThread(thread_history, { channel, signals });
-    const { latest } = pickLatestGenuineProspect(normalized);
-    const replyTextLooksSender = detectSenderMislabel(
-      { role: 'prospect', content: processed_reply_text, channel } as RawThreadEntry,
-      signals,
-    );
-    const latestProspectText = latest?.cleanContent?.trim()
-      ? latest.cleanContent.trim()
-      : processed_reply_text;
-    const { messages, leadingOutbound, isFirstTouch } = buildAnthropicMessages(
-      normalized,
-      latestProspectText,
-      channel,
-    );
+    // === Build messages: normalized (preferred) with a v67 guard/fallback ===
+    // v67 baseline
+    type ThreadEntry = { role?: string; content?: string };
+    const rawThread: ThreadEntry[] = Array.isArray(thread_history) ? thread_history : [];
+    const trimmedV =
+      rawThread.length > 0 &&
+      rawThread[rawThread.length - 1].role === 'prospect' &&
+      typeof rawThread[rawThread.length - 1].content === 'string' &&
+      rawThread[rawThread.length - 1].content!.trim() === processed_reply_text.trim()
+        ? rawThread.slice(0, -1)
+        : rawThread;
+    const mappedV: Array<{ role: 'user' | 'assistant'; content: string }> = trimmedV
+      .map((e) => ({
+        role: (e.role === 'prospect' ? 'user' : 'assistant') as 'user' | 'assistant',
+        content: typeof e.content === 'string' ? e.content : '',
+      }))
+      .filter((m) => m.content.trim().length > 0);
+    const firstUserIdxV = mappedV.findIndex((m) => m.role === 'user');
+    const leadingOutboundV = firstUserIdxV >= 0 ? mappedV.slice(0, firstUserIdxV) : mappedV;
+    const userFirstV = firstUserIdxV >= 0 ? mappedV.slice(firstUserIdxV) : [];
+    const collapsedV: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+    for (const m of userFirstV) {
+      const tail = collapsedV[collapsedV.length - 1];
+      if (tail && tail.role === m.role) {
+        tail.content = `${tail.content}\n\n${m.content}`;
+      } else {
+        collapsedV.push({ ...m });
+      }
+    }
+    const finalUserContentV =
+      `[Channel: ${channel}]\n${processed_reply_text}\n\nAnalyze this reply and respond as instructed.`;
+    const finalTailV = collapsedV[collapsedV.length - 1];
+    if (finalTailV && finalTailV.role === 'user') {
+      finalTailV.content = `${finalTailV.content}\n\n${finalUserContentV}`;
+    } else {
+      collapsedV.push({ role: 'user', content: finalUserContentV });
+    }
+    const isFirstTouchV = trimmedV.length === 0;
+
+    let relabelCount = 0;
+    let replyTextLooksSender = false;
+    let latestProspectText = processed_reply_text;
+    let messages: Array<{ role: 'user' | 'assistant'; content: string }> = collapsedV;
+    let leadingOutbound = leadingOutboundV.slice(0);
+    let isFirstTouch = isFirstTouchV;
+    try {
+      const signals = deriveSenderSignals({
+        agentSenderName: effSenderName,
+        profileNames: [],
+        mailboxEmails,
+        mailboxFromNames,
+        threadSenderNames: threadSenderName ? [threadSenderName] : [],
+      });
+      const norm = normalizeThread(thread_history, { channel, signals });
+      relabelCount = norm.relabelCount;
+      const { latest } = pickLatestGenuineProspect(norm.normalized);
+      replyTextLooksSender = detectSenderMislabel(
+        { role: 'prospect', content: processed_reply_text, channel } as RawThreadEntry,
+        signals,
+      );
+      latestProspectText = latest?.cleanContent?.trim()
+        ? latest.cleanContent.trim()
+        : processed_reply_text;
+      const built = buildAnthropicMessages(norm.normalized, latestProspectText, channel);
+      // Guard: if newest entry would be relabelled or selection disagrees with reply_text, use v67
+      const newest = rawThread[rawThread.length - 1] || null;
+      const newestIsProspectInbound =
+        !!newest &&
+        (newest as any).role === 'prospect' &&
+        typeof (newest as any).content === 'string' &&
+        ((newest as any).content as string).trim().length > 0;
+      const newestWasRelabelled =
+        newestIsProspectInbound &&
+        detectSenderMislabel(
+          { role: 'prospect', content: String((newest as any).content), channel } as RawThreadEntry,
+          signals,
+        );
+      const disagreeWithReplyText =
+        latestProspectText.trim() &&
+        processed_reply_text.trim() &&
+        latestProspectText.indexOf(processed_reply_text.trim()) === -1 &&
+        processed_reply_text.indexOf(latestProspectText.trim()) === -1;
+      if (!(newestWasRelabelled || disagreeWithReplyText)) {
+        messages = built.messages;
+        leadingOutbound = built.leadingOutbound;
+        isFirstTouch = built.isFirstTouch;
+      }
+    } catch (e) {
+      console.warn('[classify-reply] normalization failed — using v67 build', e);
+      // keep baseline v67 messages already set
+    }
 
     // Anthropic key — required before either model call.
     const anthropicApiKey = Deno.env.get('ANTHROPIC_API_KEY');
@@ -796,6 +870,13 @@ Classification rules:
 Return ONLY valid JSON. No markdown fences. No explanation.`;
 
     const call1SystemPromptHash = await sha256Hex(call1SystemPrompt);
+    const totalBudgetMs = 90000;
+    const regenBudgetMs = 60000;
+    const remainingMs = () => Math.max(5000, totalBudgetMs - (Date.now() - t0));
+    let extraCalls = 0;
+    let extraTokensIn = 0;
+    let extraTokensOut = 0;
+    let fallbackPromptHash: string | null = null;
 
     let call1: { json: any; retried: boolean; usage: { input_tokens: number; output_tokens: number }; ms: number } | null = null;
     try {
@@ -805,6 +886,7 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
         messages,
         temperature: 0,
         maxTokens: 500,
+        timeoutMs: Math.min(35000, remainingMs()),
       });
       console.log(`[classify-reply] Call 1 done +${Date.now() - t0}ms (intent=${call1.json?.intent}, persona=${call1.json?.prospect_read?.matched_persona ?? 'none'}, retried=${call1.retried})`);
     } catch (call1Err) {
@@ -1024,6 +1106,7 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
         messages,
         temperature: 0.5,
         maxTokens: 1000,
+        timeoutMs: Math.min(35000, remainingMs()),
       });
       console.log(`[classify-reply] Call 2 done +${Date.now() - t0}ms (retried=${call2.retried})`);
     } catch (call2Err) {
@@ -1057,7 +1140,7 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
         });
         addressCheckOk = check.ok;
         addressCheckReason = check.reason;
-        if (!check.ok) {
+        if (!check.ok && (Date.now() - t0) < regenBudgetMs) {
           // Regenerate once with a sharper instruction
           regenerated = true;
           const regenMessages = [
@@ -1075,7 +1158,11 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
               messages: regenMessages,
               temperature: 0.4,
               maxTokens: 900,
+              timeoutMs: Math.min(20000, remainingMs()),
             });
+            extraCalls += 1;
+            extraTokensIn += call2b.usage.input_tokens;
+            extraTokensOut += call2b.usage.output_tokens;
             const sr = typeof call2b.json?.suggested_response === 'string'
               ? stripBraceWrapper(call2b.json.suggested_response)
               : '';
@@ -1095,7 +1182,7 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
           } catch {
             // swallow — fallback below
           }
-          if (addressCheckOk === false) {
+          if (addressCheckOk === false && (Date.now() - t0) < totalBudgetMs) {
             // Fallback to CURRENT v67 behaviour & prompt (no normalization; use processed_reply_text)
             try {
               type ThreadEntry = { role?: string; content?: string };
@@ -1190,10 +1277,10 @@ ${personaSection ? '\n' + personaSection : ''}
 ${(() => {
   const paths = extractProspectPaths(processed_reply_text);
   const bullets: string[] = [];
-  if (paths.emails.length) bullets.push(\`- Email address(es): \${paths.emails.join(', ')}\`);
-  if (paths.phones.length) bullets.push(\`- Phone number(s): \${paths.phones.join(', ')}\`);
-  if (paths.urls.length) bullets.push(\`- Link(s): \${paths.urls.join(', ')}\`);
-  return bullets.length ? bullets.join('\\n') + "\\n\\nFollow these EXACTLY — confirm you're taking the path they offered before any sales tactics." : 'None detected.';
+  if (paths.emails.length) bullets.push(`- Email address(es): ${paths.emails.join(', ')}`);
+  if (paths.phones.length) bullets.push(`- Phone number(s): ${paths.phones.join(', ')}`);
+  if (paths.urls.length) bullets.push(`- Link(s): ${paths.urls.join(', ')}`);
+  return bullets.length ? bullets.join('\n') + "\n\nFollow these EXACTLY — confirm you're taking the path they offered before any sales tactics." : 'None detected.';
 })()}
 
 ${stageSection}
@@ -1217,13 +1304,18 @@ The prospect's intent has been classified as: ${intent}${isObjection ? ' (object
   NEVER auto-close a lead: closes (Closed Won / Closed Lost), No Show, and Sent Proposal are set by the operator, not you. Leave a not-interested reply active (in_progress) — the intent field already flags the sentiment.
 
 Return ONLY valid JSON. No markdown fences. No explanation.`;
+              fallbackPromptHash = await sha256Hex(call2SystemPromptV67);
               const call2V67 = await callAnthropicJSON({
                 apiKey: anthropicApiKey,
                 systemPrompt: call2SystemPromptV67,
                 messages: collapsedV,
                 temperature: 0.5,
                 maxTokens: 1000,
+                timeoutMs: Math.min(20000, remainingMs()),
               });
+              extraCalls += 1;
+              extraTokensIn += call2V67.usage.input_tokens;
+              extraTokensOut += call2V67.usage.output_tokens;
               const sr2 = typeof call2V67.json?.suggested_response === 'string'
                 ? stripBraceWrapper(call2V67.json.suggested_response)
                 : '';
@@ -1356,6 +1448,10 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
           address_check_reason: addressCheckReason,
           regenerated,
           fell_back_v67: fellBackV67,
+          extra_calls: extraCalls,
+          extra_tokens_in: extraTokensIn,
+          extra_tokens_out: extraTokensOut,
+          fallback_prompt_hash: fallbackPromptHash,
         },
       });
     } catch (auditErr) {
@@ -1423,7 +1519,7 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
             reply_text,
           },
         };
-        const writes: Array<Promise<unknown>> = [];
+        const writes: Array<Promise<unknown> | PromiseLike<unknown>> = [];
         writes.push(
           supabase
             .from('inference_events')
