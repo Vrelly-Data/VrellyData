@@ -19,6 +19,7 @@ export type AgentLeadBasic = {
   disposition_tag: string | null;
   last_surfaced_reply_at: string | null;
   last_reply_at?: string | null;
+  last_reply_text?: string | null;
 };
 
 // deno-lint-ignore no-explicit-any
@@ -35,26 +36,34 @@ export async function findLeadByNormalizedLinkedIn(
   {
     const { data, error } = await supabase
       .from("agent_leads")
-      .select("id, linkedin_url, disposition_tag, last_surfaced_reply_at, last_reply_at")
+      .select("id, linkedin_url, disposition_tag, last_surfaced_reply_at, last_reply_at, last_reply_text")
       .eq("user_id", userId)
       .eq("linkedin_url", rawLinkedInUrl)
       .maybeSingle();
     if (!error && data) return data as AgentLeadBasic;
   }
 
-  // 2) Fallback normalized match across likely LinkedIn rows (bounded scan)
+  // 2) Fallback normalized match across likely LinkedIn rows (paginate, no cap)
   {
-    const { data } = await supabase
-      .from("agent_leads")
-      .select("id, linkedin_url, disposition_tag, last_surfaced_reply_at, last_reply_at")
-      .eq("user_id", userId)
-      .ilike("linkedin_url", "%linkedin.com%")
-      .limit(500); // safety bound
-    const rows = (data ?? []) as AgentLeadBasic[];
-    for (const r of rows) {
-      if (normalizeLinkedInUrl(r.linkedin_url) === normalized) {
-        return r;
+    const pageSize = 1000;
+    let offset = 0;
+    // deno-lint-ignore no-constant-condition
+    while (true) {
+      const { data } = await supabase
+        .from("agent_leads")
+        .select("id, linkedin_url, disposition_tag, last_surfaced_reply_at, last_reply_at, last_reply_text")
+        .eq("user_id", userId)
+        .ilike("linkedin_url", "%linkedin.com%")
+        // PostgREST range is inclusive; end = start + pageSize - 1
+        .range(offset, offset + pageSize - 1);
+      const rows = (data ?? []) as AgentLeadBasic[];
+      for (const r of rows) {
+        if (normalizeLinkedInUrl(r.linkedin_url) === normalized) {
+          return r;
+        }
       }
+      if (!rows || rows.length < pageSize) break;
+      offset += pageSize;
     }
   }
 
