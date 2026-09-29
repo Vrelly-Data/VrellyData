@@ -270,12 +270,26 @@ Deno.serve(async (req) => {
       try {
         const { data: row } = await supabase
           .from('agent_leads')
-          .select('reply_thread, last_reply_text')
+          .select('reply_thread, last_reply_text, last_reply_at')
           .eq('id', lead_id)
           .eq('user_id', user_id)
           .maybeSingle();
         const fromDbThread = pickLastProspectContentFromThread(row?.reply_thread, { channel });
-        if (fromDbThread && fromDbThread.trim() && !isPlaceholderReplyText(fromDbThread, channel)) {
+        // Freshness guard: the stored thread can be STALE (poll hasn't synced the
+        // new message yet). Never answer a prospect message older than the reply
+        // that triggered this call (last_reply_at), allowing 5 minutes of clock slack.
+        const dbArr: any[] = Array.isArray(row?.reply_thread) ? row.reply_thread : [];
+        const lastP = [...dbArr].reverse().find(
+          (e) => String(e?.role ?? '').toLowerCase() === 'prospect' &&
+                 typeof e?.content === 'string' &&
+                 e.content.trim()
+        );
+        const lastPTs = lastP?.timestamp ? Date.parse(lastP.timestamp) : NaN;
+        const replyAtTs = row?.last_reply_at ? Date.parse(row.last_reply_at) : NaN;
+        const dbThreadStale = Number.isFinite(lastPTs) && Number.isFinite(replyAtTs) && lastPTs < (replyAtTs - 5 * 60_000);
+        if (dbThreadStale) {
+          console.warn('[classify-reply] DB reply_thread is stale vs last_reply_at — not answering an older message');
+        } else if (fromDbThread && fromDbThread.trim() && !isPlaceholderReplyText(fromDbThread, channel)) {
           effectiveReplyText = fromDbThread;
         } else if (
           typeof row?.last_reply_text === 'string' &&
@@ -1338,3 +1352,16 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
     });
   }
 });
+
+// Test-only helper (no side effects)
+export function _isDbThreadStaleForTest(thread: unknown, lastReplyAt: string | null): boolean {
+  const arr: any[] = Array.isArray(thread) ? (thread as any[]) : [];
+  const lastP = [...arr].reverse().find(
+    (e) => String(e?.role ?? '').toLowerCase() === 'prospect' &&
+           typeof e?.content === 'string' &&
+           e.content.trim()
+  );
+  const lastPTs = lastP?.timestamp ? Date.parse(lastP.timestamp) : NaN;
+  const replyAtTs = lastReplyAt ? Date.parse(lastReplyAt) : NaN;
+  return Number.isFinite(lastPTs) && Number.isFinite(replyAtTs) && lastPTs < (replyAtTs - 5 * 60_000);
+}
