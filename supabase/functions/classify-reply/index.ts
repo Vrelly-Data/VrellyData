@@ -168,7 +168,7 @@ async function callAnthropicJSON(opts: {
   }
 }
 
-Deno.serve(async (req) => {
+export async function handleClassifyReply(req: Request): Promise<Response> {
   const corsHeaders = getCorsHeaders(req);
 
   if (req.method === 'OPTIONS') {
@@ -594,7 +594,9 @@ Use this campaign data to:
           leadLastCampaignName = leadRow.last_campaign_name ?? null;
           leadCampaignExternalId = leadRow.campaign_external_id ?? null;
           leadDispositionTag = leadRow.disposition_tag ?? null;
-          leadSource = (leadRow as any).source ?? null;
+          // Selected above — present on new and backfilled rows; 'heyreach' for HeyReach.
+          // Typed access preferred over any-cast.
+          leadSource = (leadRow as { source?: string | null }).source ?? null;
           const rt = Array.isArray(leadRow.reply_thread) ? leadRow.reply_thread : [];
           for (let i = rt.length - 1; i >= 0; i--) {
             const m = rt[i] as { role?: string; fromName?: string };
@@ -1217,8 +1219,8 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
             reply_text,
           },
         };
-        const writes: Array<PromiseLike<unknown>> = [];
-        writes.push(
+        const writes: Array<Promise<unknown>> = [];
+        writes.push(Promise.resolve(
           supabase
             .from('inference_events')
           // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
@@ -1227,8 +1229,8 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
               if (error) {
                 console.warn('[classify-reply] inference_events upsert error (non-fatal):', error);
               }
-            })
-        );
+            }) as unknown as Promise<unknown>
+        ));
         // Optional additive write: maintain a normalized person roster. Non-fatal.
         const peopleRow: Record<string, unknown> = {
           team_id: teamId ?? null,
@@ -1247,7 +1249,7 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
           company_size: null,
         };
         // @ts-ignore onConflict supports column-list
-        writes.push(supabase.from('people').upsert(peopleRow as any, { onConflict: 'team_id,person_key' }));
+        writes.push(Promise.resolve(supabase.from('people').upsert(peopleRow as any, { onConflict: 'team_id,person_key' })) as unknown as Promise<unknown>);
         // @ts-ignore EdgeRuntime provided by Supabase
         if (typeof EdgeRuntime !== 'undefined' && typeof EdgeRuntime.waitUntil === 'function') {
           // @ts-ignore
@@ -1361,7 +1363,11 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
-});
+}
+
+if (import.meta.main) {
+  Deno.serve((req) => handleClassifyReply(req));
+}
 
 // Test-only helper (no side effects)
 export function _isDbThreadStaleForTest(thread: unknown, lastReplyAt: string | null): boolean {

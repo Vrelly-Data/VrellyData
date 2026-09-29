@@ -6,11 +6,18 @@ function read(fileUrl: URL): string {
 }
 
 Deno.test("shouldSuppressHeyreachDrafting logic", () => {
-  // Default env OFF in tests — suppression should trigger for LinkedIn/HeyReach
+  // Ensure OFF for this test
+  Deno.env.set("HEYREACH_DRAFTING_ENABLED", "");
   assertEquals(shouldSuppressHeyreachDrafting("linkedin", null), true);
   assertEquals(shouldSuppressHeyreachDrafting("email", "heyreach"), true);
   assertEquals(shouldSuppressHeyreachDrafting("email", "reply_io"), false);
   assertEquals(shouldSuppressHeyreachDrafting("email", null), false);
+  // ON should disable suppression
+  Deno.env.set("HEYREACH_DRAFTING_ENABLED", "true");
+  assertEquals(shouldSuppressHeyreachDrafting("linkedin", null), false);
+  assertEquals(shouldSuppressHeyreachDrafting("email", "heyreach"), false);
+  // Cleanup
+  Deno.env.delete("HEYREACH_DRAFTING_ENABLED");
 });
 
 Deno.test("classify-reply gates drafts and auto-send behind the kill switch", () => {

@@ -10,6 +10,8 @@ export const HEYREACH_DRAFTING_ENABLED: boolean =
 // Helper used by classify-reply (and testable in isolation).
 export function shouldSuppressHeyreachDrafting(channel: string | null | undefined, source: string | null | undefined): boolean {
   const isLinkedInOrHeyreach = (channel === 'linkedin') || (source === 'heyreach');
-  return isLinkedInOrHeyreach && !HEYREACH_DRAFTING_ENABLED;
+  // Re-read env at call-time so tests can toggle between ON/OFF within one process.
+  const enabledNow = ((Deno.env.get('HEYREACH_DRAFTING_ENABLED') ?? '').trim().toLowerCase() === 'true');
+  return isLinkedInOrHeyreach && !enabledNow;
 }
 
