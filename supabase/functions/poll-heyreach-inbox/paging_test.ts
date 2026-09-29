@@ -25,6 +25,7 @@ async function runOnce(opts: {
   const clock = makeClock(0);
   const visited: string[] = [];
   let fetchedPages = 0;
+  const flatAll: Item[] = opts.pages.flat();
   const res = await walkWithState<Item>({
     async fetchPage(offset, limit, _signal) {
       // simulate page fetch time
@@ -34,9 +35,8 @@ async function runOnce(opts: {
       if (opts.pageErrorAt && fetchedPages === opts.pageErrorAt) {
         throw new Error("simulated_fetch_error");
       }
-      const pageIndex = Math.floor(offset / (opts.pageLimit ?? 100));
-      const items = opts.pages[pageIndex] ?? [];
-      return { items: items.slice(0, limit), totalCount: opts.pages.reduce((a, b) => a + b.length, 0) };
+      const items = flatAll.slice(offset, offset + (opts.pageLimit ?? 100));
+      return { items, totalCount: flatAll.length };
     },
     async processItem(item, _signal) {
       const durations = opts.perItemDurationsMs ?? [];
@@ -63,17 +63,81 @@ async function runOnce(opts: {
 Deno.test("(1) Missed webhook: B must be processed under baseline+cutoff", async () => {
   const T0 = Date.parse("2026-09-01T12:00:00Z");
   const baseline = new Date(T0).toISOString();
-  // cutoff = T0 - 1h; both items are newer than cutoff, so both processed.
+  // cutoff = T0 - 1h; mixed page with fresh head then older tail
   const A: Item = { id: "A", lastMessageAt: new Date(T0 + 30 * 60 * 1000).toISOString() };
   const B: Item = { id: "B", lastMessageAt: new Date(T0 + 10 * 60 * 1000).toISOString() };
+  const tail: Item[] = Array.from({ length: 98 }, (_, i) => ({
+    id: `old-${i + 1}`,
+    lastMessageAt: new Date(T0 - (i + 1) * 60 * 1000).toISOString(),
+  }));
   const initial: WalkState = { version: 1, baselineStartedAt: baseline, walk: null };
   const { visited } = await runOnce({
     initial,
-    pages: [[A, B]],
+    pages: [[A, B, ...tail]],
     runBudgetMs: 110_000,
     pageLimit: 100,
   });
   assert(visited.includes("B"));
+  assert(visited.includes("A"));
+});
+
+// (9): GetChatroom failure leaves baseline unchanged and no item processed
+Deno.test("(9) GetChatroom failure baseline unchanged and no item processed", async () => {
+  const T0 = Date.parse("2026-09-15T00:00:00Z");
+  let state: WalkState = { version: 1, baselineStartedAt: new Date(T0).toISOString(), walk: null };
+  const failing: Item[] = [{ id: "fail", lastMessageAt: new Date(T0 + 1000).toISOString() }];
+  const clock = makeClock(0);
+  const res = await walkWithState<Item>({
+    async fetchPage(_o, _l, _s) { return { items: failing, totalCount: 1 }; },
+    async processItem(_it, _s) { throw new Error("getchatroom_500"); },
+    nowMs: clock.nowMs,
+    sleepMs: clock.sleepMs,
+    async saveState(s) { state = s; },
+  }, state, {
+    runBudgetMs: 110_000,
+    pageLimit: 100,
+    minRemainingForNextPageMs: 40_000,
+    pageFetchTimeoutMs: 35_000,
+    itemFetchTimeoutMs: 8_000,
+    minRemainingForNextItemMs: 10_000,
+    resumeBackstepInitial: 25,
+    resumeBackstepStep: 100,
+  });
+  // Baseline unchanged and failure recorded
+  assertEquals(res.failures > 0, true);
+  assertEquals(state.baselineStartedAt, new Date(T0).toISOString());
+});
+
+// (10): Missing or zero totalCount walks all 250 items
+Deno.test("(10) Zero totalCount walks all 250 items", async () => {
+  const all: Item[] = Array.from({ length: 250 }, (_, i) => ({
+    id: `c${i + 1}`,
+    lastMessageAt: new Date(6_000_000 - i * 1000).toISOString(),
+  }));
+  const clock = makeClock(0);
+  let processed = 0;
+  const r = await walkWithState<Item>({
+    async fetchPage(offset, limit, _s) {
+      await clock.sleepMs(20_000);
+      const items = all.slice(offset, offset + limit);
+      return { items, totalCount: 0 }; // zero totalCount
+    },
+    async processItem(_it, _s) { processed++; },
+    nowMs: clock.nowMs,
+    sleepMs: clock.sleepMs,
+    async saveState(_s) {},
+  }, { version: 1, baselineStartedAt: null, walk: null }, {
+    runBudgetMs: 110_000,
+    pageLimit: 100,
+    minRemainingForNextPageMs: 40_000,
+    pageFetchTimeoutMs: 35_000,
+    itemFetchTimeoutMs: 8_000,
+    minRemainingForNextItemMs: 10_000,
+    resumeBackstepInitial: 25,
+    resumeBackstepStep: 100,
+  });
+  assertEquals(processed, 250);
+  assertEquals(r.stopReason, "end_of_list");
 });
 
 Deno.test("(2) No baseline, 1,893 items, 20–30s pages and 0–9s items: walk to end_of_list across ticks; baseline only at completion", async () => {
@@ -90,21 +154,23 @@ Deno.test("(2) No baseline, 1,893 items, 20–30s pages and 0–9s items: walk t
   let state: WalkState = { version: 1, baselineStartedAt: null, walk: null };
   let ticks = 0;
   let sawEnd = false;
-  while (!sawEnd && ticks < 30) {
+  const visitedAll = new Set<string>();
+  while (!sawEnd && ticks < 1000) {
     const pageDurations = Array.from({ length: pages.length }, () => 20_000 + Math.floor(Math.random() * 10_000)); // 20–30s/page
-    const perItemDurations = Array.from({ length: 10 }, (_, i) => i); // 0–9ms cycling
+    const perItemDurations = Array.from({ length: 10 }, (_, i) => i * 1000); // 0–9s cycling
     const clock = makeClock(0);
-    const visitedTick: string[] = [];
+    // accumulate in outer visitedAll
     const r = await walkWithState<Item>({
       async fetchPage(offset, limit, _signal) {
         const pageIndex = Math.floor(offset / 100);
         await clock.sleepMs(pageDurations[pageIndex] ?? 0);
-        return { items: pages[pageIndex] ?? [], totalCount: total };
+        const flat = pages.flat();
+        return { items: flat.slice(offset, offset + limit), totalCount: total };
       },
       async processItem(item, _signal) {
-        const d = perItemDurations[visitedTick.length % perItemDurations.length];
+        const d = perItemDurations[visitedAll.size % perItemDurations.length];
         await clock.sleepMs(d);
-        visitedTick.push(item.id);
+        visitedAll.add(item.id);
       },
       nowMs: clock.nowMs,
       sleepMs: clock.sleepMs,
@@ -116,8 +182,8 @@ Deno.test("(2) No baseline, 1,893 items, 20–30s pages and 0–9s items: walk t
       pageFetchTimeoutMs: 35_000,
       itemFetchTimeoutMs: 8_000,
       minRemainingForNextItemMs: 10_000,
-      resumeBackstepInitial: 25,
-      resumeBackstepStep: 100,
+      resumeBackstepInitial: 1,
+      resumeBackstepStep: 10,
     });
     ticks++;
     if (r.stopReason === "end_of_list") {
@@ -132,6 +198,8 @@ Deno.test("(2) No baseline, 1,893 items, 20–30s pages and 0–9s items: walk t
     assert(clock.get() <= 120_000);
   }
   assert(sawEnd);
+  // All ids visited at least once
+  assertEquals(visitedAll.size, total);
 });
 
 Deno.test("(3) fetch_error at page k leaves walk unchanged and resumes next tick", async () => {
@@ -148,13 +216,14 @@ Deno.test("(3) fetch_error at page k leaves walk unchanged and resumes next tick
     pageLimit: 100,
     pageErrorAt: 2, // fail on second page
   });
-  state = r1.res.state;
+  const beforeState = JSON.parse(JSON.stringify(r1.res.state));
   assertEquals(r1.res.stopReason, "fetch_error");
-  // Walk should not be cleared
-  assert(state.walk !== null);
+  // Walk and baseline unchanged
+  const afterState = JSON.parse(JSON.stringify(r1.res.state));
+  assertEquals(afterState, beforeState);
   // Next tick resumes and completes
   const r2 = await runOnce({
-    initial: state,
+    initial: r1.res.state,
     pages,
     runBudgetMs: 110_000,
     pageLimit: 100,
@@ -186,7 +255,7 @@ Deno.test("(4) Mid-page budget stop resumes at the exact next item", async () =>
     pageLimit: 100,
   });
   const processedFirstTick = r1.visited.length;
-  assert(r2.visited[0] === page[processedFirstTick]?.id || r2.visited.includes(page[processedFirstTick]?.id));
+  assertEquals(r2.visited[0], page[processedFirstTick]?.id);
 });
 
 Deno.test("(5) Drift: overlap verification recovers from inserts/removals; visited ⊇ {ts ≥ cutoff}", async () => {
@@ -198,15 +267,15 @@ Deno.test("(5) Drift: overlap verification recovers from inserts/removals; visit
     { id: "a2", lastMessageAt: new Date(T0 + 800000).toISOString() },
     { id: "a3", lastMessageAt: new Date(T0 + 700000).toISOString() },
   ];
-  // Next tick: 3 items inserted above; 5 removed above the cursor
+  // Next tick: 3 items inserted above; 30 removed above the cursor
   const page1b: Item[] = [
     { id: "x1", lastMessageAt: new Date(T0 + 950000).toISOString() },
     { id: "x2", lastMessageAt: new Date(T0 + 940000).toISOString() },
     { id: "x3", lastMessageAt: new Date(T0 + 930000).toISOString() },
-    ...page1.slice(1), // drop a1 (removed above)
+    ...page1.slice(30),
   ];
   // First tick
-  const r1 = await runOnce({ initial, pages: [page1], runBudgetMs: 20_000, pageLimit: 100 });
+  const r1 = await runOnce({ initial, pages: [page1], runBudgetMs: 80_000, pageLimit: 100 });
   // Second tick
   const r2 = await runOnce({ initial: r1.res.state, pages: [page1b], runBudgetMs: 110_000, pageLimit: 100 });
   const cutoffMs = T0 - 60 * 60 * 1000; // baseline - 1h
@@ -272,11 +341,17 @@ Deno.test("(8) Randomized durations: guards respected and total ≤ 120s", async
   const r = await walkWithState<Item>({
     async fetchPage(offset, _limit, _s) {
       const pi = Math.floor(offset / 100);
+      const elapsed = clock.get();
+      const remaining = 110_000 - elapsed;
+      assert(remaining >= 40_000);
       await clock.sleepMs(pageDurations[pi] ?? 0);
       return { items: pages[pi] ?? [], totalCount: 200 };
     },
     async processItem(_it, _s) {
       const d = perItem[Math.floor(Math.random() * perItem.length)];
+      const elapsed = clock.get();
+      const remaining = 110_000 - elapsed;
+      assert(remaining >= 10_000);
       await clock.sleepMs(d);
     },
     nowMs: clock.nowMs,

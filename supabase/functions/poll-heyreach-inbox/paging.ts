@@ -117,6 +117,7 @@ export async function walkWithState<Item extends { id?: unknown; lastMessageAt?:
 
   let pagesFetched = 0;
   let itemsProcessed = 0;
+  let failuresCount = 0;
   let stopReason: StopReason = 'end_of_list';
 
   // Compute resume offset with overlap verification
@@ -164,14 +165,11 @@ export async function walkWithState<Item extends { id?: unknown; lastMessageAt?:
 
     // Caught up rule: only when cutoff is set (baseline known)
     if (state.walk.cutoff) {
-      const nonIncreasing = isNonIncreasingByTs(items);
       const fullyOlder = pageFullyOlderThanCutoff(items, state.walk.cutoff);
-      if (fullyOlder || (nonIncreasing && items.length > 0 && parseMs(items[items.length - 1]?.lastMessageAt) < parseMs(state.walk.cutoff))) {
+      // Only a page that is ALL older than cutoff can stop BEFORE processing
+      if (fullyOlder) {
         stopReason = 'caught_up';
         break;
-      }
-      if (!nonIncreasing) {
-        console.warn('[pager] ordering_violation: page not non-increasing by lastMessageAt — requiring fully older page to stop');
       }
     }
 
@@ -187,6 +185,7 @@ export async function walkWithState<Item extends { id?: unknown; lastMessageAt?:
         await deps.processItem(it, AbortSignal.timeout(itemTimeout));
       } catch (_e) {
         state.walk.failures = (state.walk.failures ?? 0) + 1;
+        failuresCount++;
       }
       itemsProcessed++;
       // Update item-granularity cursor (in-memory); caller persists at page end and on stop
@@ -197,14 +196,34 @@ export async function walkWithState<Item extends { id?: unknown; lastMessageAt?:
     }
     if (stopReason === 'time_budget') break;
 
+    // After processing, apply the non-increasing/last<cutoff shortcut
+    if (state.walk.cutoff && items.length > 0) {
+      const nonIncreasing = isNonIncreasingByTs(items);
+      if (!nonIncreasing) {
+        console.warn('[pager] ordering_violation: page not non-increasing by lastMessageAt — requiring fully older page to stop');
+      } else {
+        const lastMs = parseMs(items[items.length - 1]?.lastMessageAt);
+        if (Number.isFinite(lastMs) && lastMs < parseMs(state.walk.cutoff)) {
+          stopReason = 'caught_up';
+          // Persist current state and break
+          try {
+            await deps.saveState(state);
+          } catch (e) {
+            console.error('[pager] saveState failed after page processing:', e);
+          }
+          break;
+        }
+      }
+    }
+
     // Advance offset/page
     effectiveOffset += items.length;
-    const hasMore = items.length === limit && effectiveOffset < totalCount;
+    const hasMore = items.length === limit && (totalCount <= 0 || effectiveOffset < totalCount);
     // Persist at end of each processed page
     try {
       await deps.saveState(state);
-    } catch (_e) {
-      // non-fatal
+    } catch (e) {
+      console.error('[pager] saveState failed at end-of-page:', e);
     }
     if (!hasMore) {
       stopReason = 'end_of_list';
@@ -234,15 +253,15 @@ export async function walkWithState<Item extends { id?: unknown; lastMessageAt?:
   // Persist on stop as well
   try {
     await deps.saveState(state);
-  } catch (_e) {
-    // non-fatal
+  } catch (e) {
+    console.error('[pager] saveState failed on stop:', e);
   }
 
   // Caller is responsible for when to persist; return updated state.
   return {
     pagesFetched,
     itemsProcessed,
-    failures: state.walk ? (state.walk.failures ?? 0) : 0,
+    failures: failuresCount,
     stopReason,
     state,
   };

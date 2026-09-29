@@ -255,9 +255,6 @@ Deno.serve(async (req) => {
         const walker = await walkWithState<any>(
           {
             async fetchPage(offset, limit, signal) {
-              if (remaining() < MIN_NEXT_PAGE_MS) {
-                throw new Error('budget_exhausted_before_page');
-              }
               const res = await fetch(`${HEYREACH_API}/inbox/GetConversationsV2`, {
                 method: 'POST',
                 headers: {
@@ -289,10 +286,6 @@ Deno.serve(async (req) => {
               return { items: conversations, totalCount };
             },
             async processItem(convo: any, signal) {
-              // Guard: do not start an item too close to budget end
-              if (remaining() < MIN_NEXT_ITEM_MS) {
-                throw new Error('budget_exhausted_before_item');
-              }
               try {
                 const conversationId = convo.id;
                 const linkedInAccountId = convo.linkedInAccountId;
@@ -390,10 +383,16 @@ Deno.serve(async (req) => {
                       channel: 'linkedin',
                     }));
                   } else {
-                    console.warn(`[poll-heyreach-inbox] GetChatroom ${chatroomRes.status} for ${conversationId}`);
+                    // Deviation from main: If GetChatroom fails, abort this item by throwing
+                    // so the walker counts a failure and the baseline will NOT advance.
+                    // This avoids writing last_reply_text with an empty thread and then
+                    // skipping on same-text in later runs.
+                    throw new Error(`getchatroom_${chatroomRes.status}`);
                   }
                 } catch (chatroomErr) {
                   console.error(`[poll-heyreach-inbox] Failed to fetch chatroom for ${conversationId}:`, chatroomErr);
+                  // Abort this item for the same reason as above.
+                  throw chatroomErr;
                 }
 
                 // ---- Surface gate (VERBATIM from main) ---------------------
