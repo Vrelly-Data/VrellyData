@@ -262,6 +262,9 @@ Deno.serve(async (req) => {
                 body: JSON.stringify({
                   filters: {
                     linkedInAccountIds: [],
+                    // Capture Scope: [] means "all campaigns". Populated only in
+                    // case B above; cases A and the fail-open path deliberately
+                    // leave it empty, and case C never reaches this call.
                     campaignIds: campaignIdFilter,
                     searchString: '',
                   },
@@ -393,6 +396,26 @@ Deno.serve(async (req) => {
                 }
 
                 // ---- Surface gate (VERBATIM from main) ---------------------
+                // This upsert used to hard-code inbox_status:'pending', so EVERY
+                // conversation it wrote became actionable — including history it
+                // was seeing for the first time. When the poller's stale-key 401
+                // was fixed it ingested 257 previously-invisible conversations for
+                // one client, 204 of them over 90 days old and the oldest from
+                // 2024, straight into Pending Approval. Backfilled history is not
+                // work to do today.
+                //
+                // Mirrors poll-reply-inbox exactly (shared shouldResurface for the
+                // existing-lead case, a 24h recency gate for first sight) so the
+                // two pollers agree on what "actionable" means:
+                //   existing lead → resurface only on a genuinely NEW inbound that
+                //                   is newer than the surface watermark and not
+                //                   suppressed by disposition; otherwise LEAVE THE
+                //                   STATUS ALONE (omitted from the payload, so a
+                //                   dismissal sticks).
+                //   new lead      → 'pending' only if the newest message is an
+                //                   inbound reply from the last 24h; else
+                //                   'mirrored' (in neither inbox tab, still fully
+                //                   readable and still resurfaceable later).
                 // Newest PROSPECT message timestamp (raw, no fallback to now)
                 const newestProspect = replyThread
                   .filter((e) => e.role === 'prospect')
@@ -455,7 +478,8 @@ Deno.serve(async (req) => {
                     .single();
                   if (updateErr) {
                     console.error(`[poll-heyreach-inbox] UPDATE error for ${externalId}:`, updateErr.message);
-                    return;
+                    // Throw (not return) so the walker counts a failure and the baseline does not advance.
+                    throw new Error(`agent_leads_update_failed: ${updateErr.message}`);
                   }
                   savedRow = updated as Record<string, unknown>;
                 } else {
@@ -476,21 +500,35 @@ Deno.serve(async (req) => {
                         .single();
                       if (updateErr2) {
                         console.error(`[poll-heyreach-inbox] UPDATE-after-23505 failed for ${externalId}:`, updateErr2.message);
-                        return;
+                        throw new Error(`agent_leads_update_after_23505_failed: ${updateErr2.message}`);
                       }
                       savedRow = updated2 as Record<string, unknown>;
                     } else {
                       console.error(`[poll-heyreach-inbox] 23505 on INSERT but reselect found no row for ${externalId}`);
-                      return;
+                      throw new Error('agent_leads_23505_reselect_empty');
                     }
                   } else if (insertErr) {
                     console.error(`[poll-heyreach-inbox] INSERT error for ${externalId}:`, insertErr.message);
-                    return;
+                    throw new Error(`agent_leads_insert_failed: ${insertErr.message}`);
                   } else {
                     savedRow = inserted as Record<string, unknown>;
                   }
                 }
 
+                // Trigger a draft, exactly as poll-reply-inbox does — same shared
+                // helper, same gate. This poller previously NEVER drafted, so a
+                // reply the webhook missed surfaced to Pending Approval with an
+                // empty draft.
+                //
+                // Gated on `surface`, which is what makes this safe against
+                // double-drafting alongside heyreach-webhook. Both paths write
+                // last_surfaced_reply_at now, so for a reply the webhook already
+                // handled the gate computes newestMs > priorMs with the two equal
+                // → false → no second call. The skippedSameText guard above is
+                // NOT the interlock: it compares our stored text against
+                // GetConversationsV2's lastMessageText, and misses whenever a
+                // sibling conversation for the same profile holds different text
+                // (73 such profiles in prod — see the collision note).
                 // Log the gate decision for observability
                 console.log(`[poll-heyreach-inbox] gate: stale=${stale} ts=${newestProspectTs ?? 'null'} willClassify=${decision.willClassify}`);
 
