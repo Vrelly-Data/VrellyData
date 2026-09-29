@@ -1,5 +1,5 @@
 import { assert, assertEquals, assertNotEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { walkWithState, type WalkState, DEFAULT_PAGER_OPTIONS } from "./paging.ts";
+import { walkWithState, tickWithHeadScan, type WalkState, DEFAULT_PAGER_OPTIONS } from "./paging.ts";
 
 function makeClock(start = 0) {
   let now = start;
@@ -365,4 +365,250 @@ Deno.test("(5) Drift: 400 items, partial first run, >25 removed above cursor + i
   const seen = new Set(visited);
   const missing = expected.filter((id) => !seen.has(id));
   assertEquals(missing, []);
+});
+
+// ---------------------------------------------------------------------------
+// Head scan (tickWithHeadScan): page 1 re-processed each tick that resumes a
+// cursor, without touching walk state. All on DEFAULT_PAGER_OPTIONS.
+// ---------------------------------------------------------------------------
+type HeadTickOpts = {
+  pageMs: () => number;
+  itemMs: () => number;
+  failIds?: Set<string>;                     // processItem throws BEFORE the "write"
+  failFetch?: (fetchNo: number, offset: number) => boolean;
+  onWalkFirstFetch?: (stateSeenByWalk: WalkState) => void;
+};
+
+async function runHeadTick(list: () => Item[], state: WalkState, o: HeadTickOpts) {
+  const clock = makeClock(0);
+  const headExpected = !!state.walk && (state.walk.offset ?? 0) > 0;
+  const headVisited: string[] = [];
+  const walkVisited: string[] = [];
+  const written: string[] = [];
+  const saves: WalkState[] = [];
+  let fetchNo = 0;
+  let phase: "head" | "walk" = headExpected ? "head" : "walk";
+  const res = await tickWithHeadScan<Item>({
+    async fetchPage(offset, limit, _s) {
+      fetchNo++;
+      phase = headExpected && fetchNo === 1 ? "head" : "walk";
+      if (phase === "walk" && (fetchNo === 1 || (headExpected && fetchNo === 2))) {
+        o.onWalkFirstFetch?.(structuredClone(state));
+      }
+      await clock.sleepMs(o.pageMs());
+      if (o.failFetch?.(fetchNo, offset)) throw new Error("simulated_fetch_error");
+      const all = list();
+      return { items: all.slice(offset, offset + limit), totalCount: all.length };
+    },
+    async processItem(item, _s) {
+      await clock.sleepMs(o.itemMs());
+      (phase === "head" ? headVisited : walkVisited).push(item.id);
+      if (o.failIds?.has(item.id)) throw new Error("getchatroom_500"); // nothing written
+      written.push(item.id);
+    },
+    nowMs: clock.nowMs,
+    sleepMs: clock.sleepMs,
+    async saveState(st) { saves.push(structuredClone(st)); },
+  }, state, { ...DEFAULT_PAGER_OPTIONS });
+  return { res, elapsed: clock.get(), headVisited, walkVisited, written, saves, fetchNo };
+}
+
+// A walk in progress deep in a 1,893-item list: cursor just after w899.
+function deepState(all: Item[], at = 900): WalkState {
+  return {
+    version: 1,
+    baselineStartedAt: null,
+    walk: {
+      startedAt: "2026-09-19T00:00:00.000Z",
+      cutoff: null,
+      offset: at,
+      lastTs: all[at - 1].lastMessageAt,
+      lastId: all[at - 1].id,
+      failures: 2,
+    },
+  };
+}
+
+Deno.test("(H1) Missed-webhook reply inserted at the top while the cursor is at 900/1,893 is processed by the next tick's head scan; the cursor still moves forward", async () => {
+  const T0 = Date.parse("2026-09-20T00:00:00Z");
+  let all = makeList(1893, "w", T0);
+  const state = deepState(all);
+  const before = structuredClone(state.walk!);
+  // The reply the webhook missed: a brand-new conversation at the top of the inbox.
+  all = [{ id: "fresh", lastMessageAt: new Date(T0 + 60_000).toISOString() }, ...all];
+  const rnd = mulberry32(11);
+  const r = await runHeadTick(() => all, state, {
+    pageMs: () => 20_000 + Math.floor(rnd() * 10_000),
+    itemMs: () => Math.floor(rnd() * 9_000),
+  });
+  assertEquals(r.headVisited[0], "fresh", "head scan processes the new top item first");
+  assert(r.written.includes("fresh"));
+  assert(r.res.headScan.items >= 1);
+  assertEquals(r.res.headScan.failures, 0);
+  // The walk resumed after w899 (now at index 900 because of the insert) and advanced.
+  assertEquals(r.walkVisited[0], "w900");
+  assert(r.res.state.walk!.offset > before.offset + 1, `offset ${r.res.state.walk!.offset}`);
+  assertEquals(r.res.state.walk!.startedAt, before.startedAt);
+  assertEquals(r.res.state.walk!.failures, before.failures);
+  assertEquals(r.res.state.baselineStartedAt, null);
+  assertEquals(r.res.stopReason, "time_budget");
+  assert(r.elapsed <= 120_000, `tick took ${r.elapsed}ms`);
+});
+
+Deno.test("(H2) Head-scan-only tick (walk fetch fails): cursor, baseline, startedAt and failure counters deep-equal before/after", async () => {
+  const all = makeList(1893, "w");
+  const baseline = "2026-09-01T00:00:00.000Z";
+  const state = deepState(all);
+  state.baselineStartedAt = baseline;
+  state.walk!.cutoff = new Date(Date.parse(baseline) - 3600_000).toISOString();
+  const beforeWalk = structuredClone(state.walk);
+  const r = await runHeadTick(() => all, state, {
+    pageMs: () => 2_000,
+    itemMs: () => 3_000,
+    failIds: new Set(["w1"]),                 // a failing head-scan item must not touch walk.failures
+    failFetch: (n) => n >= 2,                 // every walk fetch fails → the only work is the head scan
+  });
+  assertEquals(r.res.headScan.stopReason, "time_budget");
+  assert(r.res.headScan.items >= 5, `head items ${r.res.headScan.items}`);
+  assertEquals(r.res.headScan.failures, 1);
+  assertEquals(r.res.stopReason, "fetch_error");
+  assertEquals(r.walkVisited, []);
+  assertEquals(r.res.state.walk, beforeWalk);
+  assertEquals(r.res.state.baselineStartedAt, baseline);
+  for (const saved of r.saves) {
+    assertEquals(saved.walk, beforeWalk);
+    assertEquals(saved.baselineStartedAt, baseline);
+  }
+  assertEquals(r.res.state.lastTick?.headScan, r.res.headScan);
+});
+
+Deno.test("(H3) Head scan that exhausts its share (slow items) leaves the walk exactly intact; the walk and the next tick still progress", async () => {
+  const all = makeList(1893, "w");
+  let state = deepState(all);
+  const beforeWalk = structuredClone(state.walk);
+  const seen: { st: WalkState | null } = { st: null };
+  const r1 = await runHeadTick(() => all, state, {
+    pageMs: () => 5_000,
+    itemMs: () => 9_000,
+    onWalkFirstFetch: (st) => { seen.st = st; },
+  });
+  assertEquals(r1.res.headScan.stopReason, "time_budget");
+  assertEquals(r1.res.headScan.items, 3);        // 5s fetch + 3 × 9s; a 4th would start with < 10s of the 40s share
+  assert(r1.res.headScan.elapsedMs <= DEFAULT_PAGER_OPTIONS.headScanBudgetMs);
+  assert(seen.st, "walk must still run after an exhausted head scan");
+  assertEquals(seen.st!.walk, beforeWalk);
+  assertEquals(seen.st!.baselineStartedAt, null);
+  assert(r1.res.pagesFetched >= 1);
+  assert(r1.res.state.walk!.offset > beforeWalk!.offset);
+  assert(r1.elapsed <= 120_000);
+  // Next tick: same slow head scan, walk resumes exactly where it stopped.
+  state = r1.res.state;
+  const offset1 = state.walk!.offset;
+  const r2 = await runHeadTick(() => all, state, { pageMs: () => 5_000, itemMs: () => 9_000 });
+  assertEquals(r2.res.headScan.stopReason, "time_budget");
+  assertEquals(r2.walkVisited[0], all[offset1].id);
+  assert(r2.res.state.walk!.offset > offset1);
+});
+
+Deno.test("(H4) Head-scan item failure: counted on the head scan, nothing written for it, scan continues, walk state unchanged", async () => {
+  const all = makeList(1893, "w");
+  const state = deepState(all);
+  const beforeWalk = structuredClone(state.walk);
+  const seen: { st: WalkState | null } = { st: null };
+  const r = await runHeadTick(() => all, state, {
+    pageMs: () => 1_000,
+    itemMs: () => 1_000,
+    failIds: new Set(["w0"]),
+    onWalkFirstFetch: (st) => { seen.st = st; },
+  });
+  assertEquals(r.res.headScan.failures, 1);
+  assertEquals(r.res.headScan.items, 30);         // 1s fetch + 30 × 1s items, then < 10s of share left
+  assertEquals(r.headVisited[0], "w0");
+  assert(!r.written.includes("w0"), "nothing written for the failed item");
+  assert(r.written.includes("w1"), "scan continues past the failure");
+  assertEquals(seen.st!.walk, beforeWalk);
+  assertEquals(r.res.failures, 0);                // walk-level failures untouched
+  assertEquals(r.res.state.walk!.failures, beforeWalk!.failures);
+});
+
+Deno.test("(H5) Head-scan page-1 fetch_error: walk still runs, walk state untouched by the head scan", async () => {
+  const all = makeList(1893, "w");
+  const state = deepState(all);
+  const beforeWalk = structuredClone(state.walk);
+  const seen: { st: WalkState | null } = { st: null };
+  const r = await runHeadTick(() => all, state, {
+    pageMs: () => 25_000,
+    itemMs: () => 2_000,
+    failFetch: (n) => n === 1,
+    onWalkFirstFetch: (st) => { seen.st = st; },
+  });
+  assertEquals(r.res.headScan, { items: 0, failures: 0, elapsedMs: 25_000, stopReason: "fetch_error" });
+  assertEquals(seen.st!.walk, beforeWalk);
+  assertEquals(r.walkVisited[0], "w900");
+  assert(r.res.state.walk!.offset > beforeWalk!.offset);
+});
+
+Deno.test("(H6) No walk in progress (or offset 0): head scan skipped, page 1 fetched once and processed by the walk", async () => {
+  const all = makeList(250, "s");
+  const r = await runHeadTick(() => all, { version: 1, baselineStartedAt: null, walk: null }, {
+    pageMs: () => 1_000,
+    itemMs: () => 100,
+  });
+  assertEquals(r.res.headScan, { items: 0, failures: 0, elapsedMs: 0, stopReason: "skipped_walk_at_head" });
+  assertEquals(r.walkVisited.slice(0, 3), ["s0", "s1", "s2"]);
+  assertEquals(r.res.stopReason, "end_of_list");
+  assertEquals(r.fetchNo, 3);
+  // A walk that exists but has not processed anything yet (e.g. first page failed) also starts at page 1.
+  const r0 = await runHeadTick(() => all, {
+    version: 1,
+    baselineStartedAt: null,
+    walk: { startedAt: "2026-09-19T00:00:00.000Z", cutoff: null, offset: 0, lastTs: null, lastId: null, failures: 0 },
+  }, { pageMs: () => 1_000, itemMs: () => 100 });
+  assertEquals(r0.res.headScan.stopReason, "skipped_walk_at_head");
+  assertEquals(r0.walkVisited[0], "s0");
+  assertEquals(r0.fetchNo, 3);
+});
+
+async function walkToEndWithHead(total: number, itemMs: () => number, rnd: () => number, maxRuns: number) {
+  const all = makeList(total, "w");
+  let state: WalkState = { version: 1, baselineStartedAt: null, walk: null };
+  const walkVisited: string[] = [];
+  let headItems = 0;
+  let walkItems = 0;
+  let prevOffset = -1;
+  for (let run = 1; run <= maxRuns; run++) {
+    const r = await runHeadTick(() => all, state, { pageMs: () => 20_000 + Math.floor(rnd() * 10_000), itemMs });
+    state = r.res.state;
+    walkVisited.push(...r.walkVisited);
+    headItems += r.res.headScan.items;
+    walkItems += r.res.itemsProcessed;
+    assert(r.elapsed <= 120_000, `run ${run} took ${r.elapsed}ms`);
+    if (run > 1) assert(r.res.headScan.stopReason !== "skipped_walk_at_head", `run ${run}: head scan should run while resuming`);
+    if (r.res.stopReason === "end_of_list") {
+      assertNotEquals(state.baselineStartedAt, null);
+      assertEquals(state.walk, null);
+      return { runs: run, walkVisited, headItems, walkItems };
+    }
+    assertEquals(r.res.stopReason, "time_budget");
+    assertEquals(state.baselineStartedAt, null);
+    assert(state.walk!.offset > prevOffset, `run ${run}: offset ${state.walk!.offset} did not advance past ${prevOffset}`);
+    prevOffset = state.walk!.offset;
+  }
+  throw new Error(`walk did not reach end_of_list within ${maxRuns} runs`);
+}
+
+Deno.test("(2h) 1,893 items with head scan, 20–30s pages, 0–9s items: walk still reaches end_of_list, every id processed by the walk exactly once", async () => {
+  const rnd = mulberry32(1893);
+  const r = await walkToEndWithHead(1893, () => Math.floor(rnd() * 9_000), rnd, 2000);
+  assertEquals(new Set(r.walkVisited).size, 1893);
+  assertEquals(r.walkItems, 1893, "the walk never redoes an item");
+  console.log(`(2h) runs=${r.runs} headScanItems=${r.headItems}`);
+});
+
+Deno.test("(2bh) 1,893 items with head scan at a fixed 8s per item: walk still reaches end_of_list, every id processed by the walk exactly once", async () => {
+  const rnd = mulberry32(8);
+  const r = await walkToEndWithHead(1893, () => 8_000, rnd, 2000);
+  assertEquals(new Set(r.walkVisited).size, 1893);
+  assertEquals(r.walkItems, 1893);
+  console.log(`(2bh) runs=${r.runs} headScanItems=${r.headItems}`);
 });

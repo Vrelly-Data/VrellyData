@@ -6,6 +6,11 @@
 // write error each throw out of processItem, so the walker counts a failure and
 // the baseline does NOT advance, and a GetChatroom failure happens before any
 // agent_leads write. A positive control proves the spy does see writes.
+//
+// Head-scan cases (H4): with a walk in progress deep in the list, the handler
+// re-processes page 1 first. A head-scan GetChatroom or agent_leads failure is
+// counted on perIntegration[].headScan, writes nothing for that item, and leaves
+// the persisted walk state exactly as it was. No /functions/v1/ call is made.
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
 const SUPA = "http://supabase.test";
@@ -40,9 +45,21 @@ type Scenario = {
   chatroom: "500" | "throw" | "ok";
   existingLead: boolean;
   leadWriteError?: boolean;
+  // Persisted poll state to start from (default: baseline known, no walk in progress).
+  state?: Record<string, unknown>;
+  // When set, GetConversationsV2 at any offset other than 0 returns HTTP 500.
+  walkPagesFail?: boolean;
 };
 
-type Recorded = { leadWrites: string[]; states: Record<string, unknown>[]; chatroomCalls: number; order: string[] };
+type Recorded = {
+  leadWrites: string[];
+  states: Record<string, unknown>[];
+  chatroomCalls: number;
+  order: string[];
+  convOffsets: number[];
+  functionCalls: string[];
+  logs: string[];
+};
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -65,11 +82,15 @@ function installFetch(sc: Scenario, rec: Recorded) {
     const method = req.method.toUpperCase();
     const wantsObject = (req.headers.get("Accept") ?? "").includes("vnd.pgrst.object");
 
+    if (url.origin === SUPA && url.pathname.startsWith("/functions/v1/")) {
+      rec.functionCalls.push(url.pathname);
+      return json({ ok: true });
+    }
     if (url.origin === SUPA && url.pathname.startsWith("/rest/v1/")) {
       const table = url.pathname.replace("/rest/v1/", "");
       const rows = (r: unknown[]) => wantsObject ? (r.length ? json(r[0]) : json({ code: "PGRST116", message: "no rows" }, 406)) : json(r);
       if (table === "outbound_integrations" && method === "GET") {
-        return rows([{ id: INTEGRATION_ID, created_by: USER_ID, api_key_encrypted: "dummy", heyreach_poll_state: { version: 1, baselineStartedAt: BASELINE, walk: null } }]);
+        return rows([{ id: INTEGRATION_ID, created_by: USER_ID, api_key_encrypted: "dummy", heyreach_poll_state: sc.state ?? { version: 1, baselineStartedAt: BASELINE, walk: null } }]);
       }
       if (table === "outbound_integrations" && method === "PATCH") {
         const body = JSON.parse(await req.text());
@@ -89,6 +110,9 @@ function installFetch(sc: Scenario, rec: Recorded) {
     }
     if (url.hostname === "api.heyreach.io") {
       if (url.pathname.endsWith("/inbox/GetConversationsV2")) {
+        const offset = Number(JSON.parse(await req.text())?.offset ?? 0);
+        rec.convOffsets.push(offset);
+        if (sc.walkPagesFail && offset !== 0) return json({ error: "walk page unavailable" }, 500);
         return json({
           totalCount: 1,
           items: [{
@@ -115,8 +139,10 @@ function installFetch(sc: Scenario, rec: Recorded) {
 }
 
 async function run(sc: Scenario) {
-  const rec: Recorded = { leadWrites: [], states: [], chatroomCalls: 0, order: [] };
+  const rec: Recorded = { leadWrites: [], states: [], chatroomCalls: 0, order: [], convOffsets: [], functionCalls: [], logs: [] };
   const restore = installFetch(sc, rec);
+  const realLog = console.log;
+  console.log = (...args: unknown[]) => { rec.logs.push(args.map(String).join(" ")); };
   try {
     const res = await handler!(new Request("http://local/poll-heyreach-inbox", {
       method: "POST",
@@ -124,8 +150,9 @@ async function run(sc: Scenario) {
       body: "{}",
     }));
     const body = await res.json();
-    return { status: res.status, body, rec, finalState: rec.states[rec.states.length - 1] as { baselineStartedAt: string | null; walk: unknown } };
+    return { status: res.status, body, rec, finalState: rec.states[rec.states.length - 1] as { baselineStartedAt: string | null; walk: unknown; lastTick?: { headScan?: unknown } } };
   } finally {
+    console.log = realLog;
     restore();
   }
 }
@@ -176,3 +203,74 @@ for (const existingLead of [true, false]) {
     },
   });
 }
+
+// ---- Head scan through the real handler (H4) --------------------------------
+// Walk in progress deep in the list (cursor at 900); page 1 holds conv-1. Walk
+// pages (offset != 0) fail so the head scan is the only item work this tick.
+const DEEP_WALK = {
+  startedAt: "2026-09-19T00:00:00.000Z",
+  cutoff: "2026-09-19T23:00:00.000Z",
+  offset: 900,
+  lastTs: "2026-09-18T00:00:00.000Z",
+  lastId: "conv-deep-899",
+  failures: 0,
+};
+const deepState = () => ({ version: 1, baselineStartedAt: BASELINE, walk: structuredClone(DEEP_WALK) });
+
+for (const chatroom of ["500", "throw"] as const) {
+  Deno.test({
+    name: `(H4) index head scan: GetChatroom ${chatroom} → 0 agent_leads writes, head-scan failure counted, walk state unchanged, 0 function calls`,
+    ...opts,
+    async fn() {
+      const r = await run({ chatroom, existingLead: true, state: deepState(), walkPagesFail: true });
+      assertEquals(r.status, 200);
+      assertEquals(r.rec.convOffsets[0], 0, "head scan fetches page 1 first");
+      assert(r.rec.convOffsets.slice(1).every((o) => o > 0), "walk resumes deep, not at page 1");
+      assertEquals(r.rec.chatroomCalls, 1);
+      assertEquals(r.rec.leadWrites, []);
+      assertEquals(r.rec.functionCalls, []);
+      const pi = r.body.perIntegration[0];
+      assertEquals(pi.headScan.items, 1);
+      assertEquals(pi.headScan.failures, 1);
+      assertEquals(pi.headScan.stopReason, "complete");
+      assertEquals(pi.failures, 0, "walk-level failures untouched");
+      assertEquals(pi.stopReason, "fetch_error");
+      assertEquals(r.body.headScan.failures, 1);
+      assertEquals(r.finalState.walk, DEEP_WALK);
+      assertEquals(r.finalState.baselineStartedAt, BASELINE);
+      assertEquals(r.finalState.lastTick?.headScan, pi.headScan);
+    },
+  });
+}
+
+Deno.test({
+  name: "(H4) index head scan: agent_leads write error → head-scan failure counted, walk state unchanged",
+  ...opts,
+  async fn() {
+    const r = await run({ chatroom: "ok", existingLead: true, leadWriteError: true, state: deepState(), walkPagesFail: true });
+    assertEquals(r.status, 200);
+    assertEquals(r.rec.leadWrites.length, 1);
+    assertEquals(r.body.perIntegration[0].headScan.failures, 1);
+    assertEquals(r.body.perIntegration[0].failures, 0);
+    assertEquals(r.finalState.walk, DEEP_WALK);
+    assertEquals(r.finalState.baselineStartedAt, BASELINE);
+    assertEquals(r.rec.functionCalls, []);
+  },
+});
+
+Deno.test({
+  name: "(H4c) index head scan positive control: GetChatroom 200 → write after chatroom, 0 head-scan failures, walk state unchanged, 0 function calls (kill switch)",
+  ...opts,
+  async fn() {
+    const r = await run({ chatroom: "ok", existingLead: true, state: deepState(), walkPagesFail: true });
+    assertEquals(r.status, 200);
+    assertEquals(r.rec.order, ["chatroom", "lead_PATCH"]);
+    const hs = r.body.perIntegration[0].headScan;
+    assertEquals([hs.items, hs.failures, hs.stopReason], [1, 0, "complete"]);
+    assertEquals(r.body.headScan.items, 1);
+    assertEquals(r.finalState.walk, DEEP_WALK);
+    // The surfaced reply reached the kill-switch branch, and nothing was invoked.
+    assert(r.rec.logs.some((l) => l.includes("HeyReach drafting disabled (kill switch)")), "kill-switch branch not reached");
+    assertEquals(r.rec.functionCalls, []);
+  },
+});

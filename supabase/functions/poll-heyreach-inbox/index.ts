@@ -12,7 +12,14 @@ import { sanitizeLinkedinUrlForStorage } from '../_shared/normalize.ts';
 import { findLeadByNormalizedLinkedIn } from '../_shared/agent-leads-lookup.ts';
 import { isStaleProspectMessage } from '../_shared/stale.ts';
 import { decideSurfaceAndClassify, buildSurfaceUpdateFields } from '../_shared/surface.ts';
-import { walkWithState, type StopReason, type WalkState, DEFAULT_PAGER_OPTIONS } from './paging.ts';
+import {
+  tickWithHeadScan,
+  type HeadScanResult,
+  type HeadScanStopReason,
+  type StopReason,
+  type WalkState,
+  DEFAULT_PAGER_OPTIONS,
+} from './paging.ts';
 
 const allowedOrigins = [
   'https://vrelly.com',
@@ -138,9 +145,33 @@ Deno.serve(async (req) => {
       walkStartedAt: string | null;
       walkOffset: number | null;
       baselineStartedAt: string | null;
+      headScan: HeadScanResult;
     };
     const perIntegration: PerIntegrationSummary[] = [];
     let overallStop: StopReason | null = null;
+    // Head-scan totals across integrations. stopReason precedence:
+    // fetch_error > time_budget > complete > skipped_budget > skipped_walk_at_head.
+    const headScanRank: Record<HeadScanStopReason, number> = {
+      skipped_walk_at_head: 0,
+      skipped_budget: 1,
+      complete: 2,
+      time_budget: 3,
+      fetch_error: 4,
+    };
+    const headScanTotal: { items: number; failures: number; elapsedMs: number; stopReason: HeadScanStopReason | null } = {
+      items: 0,
+      failures: 0,
+      elapsedMs: 0,
+      stopReason: null,
+    };
+    const addHeadScan = (h: HeadScanResult) => {
+      headScanTotal.items += h.items;
+      headScanTotal.failures += h.failures;
+      headScanTotal.elapsedMs += h.elapsedMs;
+      if (headScanTotal.stopReason === null || headScanRank[h.stopReason] > headScanRank[headScanTotal.stopReason]) {
+        headScanTotal.stopReason = h.stopReason;
+      }
+    };
 
     for (const integration of ordered) {
       try {
@@ -163,6 +194,7 @@ Deno.serve(async (req) => {
             walkStartedAt: (integration?.heyreach_poll_state?.walk?.startedAt as string) ?? null,
             walkOffset: (integration?.heyreach_poll_state?.walk?.offset as number) ?? null,
             baselineStartedAt: (integration?.heyreach_poll_state?.baselineStartedAt as string) ?? null,
+            headScan: { items: 0, failures: 0, elapsedMs: 0, stopReason: 'skipped_budget' },
           });
           continue;
         }
@@ -244,12 +276,15 @@ Deno.serve(async (req) => {
           );
         }
 
-        // ==== Budgeted walk with persistent state ============================
+        // ==== Head scan + budgeted walk with persistent state =================
+        // tickWithHeadScan first re-processes page 1 (when a cursor is being
+        // resumed) without touching walk state, then runs the walk with the
+        // remaining budget. Budget rules are documented in paging.ts.
         const rawState = (integration?.heyreach_poll_state as WalkState) ?? {};
         const stateIn: WalkState = (rawState && typeof rawState === 'object' && 'version' in rawState)
           ? rawState as WalkState
           : { version: 1, baselineStartedAt: null, walk: null };
-        const walker = await walkWithState<any>(
+        const walker = await tickWithHeadScan<any>(
           {
             async fetchPage(offset, limit, signal) {
               const res = await fetch(`${HEYREACH_API}/inbox/GetConversationsV2`, {
@@ -600,7 +635,9 @@ Deno.serve(async (req) => {
           walkStartedAt: walker.state.walk?.startedAt ?? null,
           walkOffset: walker.state.walk?.offset ?? null,
           baselineStartedAt: walker.state.baselineStartedAt ?? null,
+          headScan: walker.headScan,
         });
+        addHeadScan(walker.headScan);
         // Precedence: fetch_error > time_budget > others
         if (walker.stopReason === 'fetch_error') {
           overallStop = 'fetch_error';
@@ -610,7 +647,8 @@ Deno.serve(async (req) => {
           overallStop = walker.stopReason;
         }
         console.log(
-          `[poll-heyreach-inbox] integration ${integration.id} summary: pages=${walker.pagesFetched}, items=${walker.itemsProcessed}, failures=${walker.failures}, stop=${walker.stopReason}`,
+          `[poll-heyreach-inbox] integration ${integration.id} summary: pages=${walker.pagesFetched}, items=${walker.itemsProcessed}, failures=${walker.failures}, stop=${walker.stopReason}` +
+            ` | headScan items=${walker.headScan.items}, failures=${walker.headScan.failures}, elapsedMs=${walker.headScan.elapsedMs}, stop=${walker.headScan.stopReason}`,
         );
       } catch (integrationErr) {
         console.error(`[poll-heyreach-inbox] Error processing integration ${integration.id}:`, integrationErr);
@@ -623,6 +661,8 @@ Deno.serve(async (req) => {
           walkStartedAt: (integration?.heyreach_poll_state?.walk?.startedAt as string) ?? null,
           walkOffset: (integration?.heyreach_poll_state?.walk?.offset as number) ?? null,
           baselineStartedAt: (integration?.heyreach_poll_state?.baselineStartedAt as string) ?? null,
+          // Stats of a partially-run head scan are not recoverable after a throw.
+          headScan: { items: 0, failures: 0, elapsedMs: 0, stopReason: 'fetch_error' },
         });
         if (overallStop !== 'fetch_error') overallStop = 'fetch_error';
       }
@@ -642,6 +682,7 @@ Deno.serve(async (req) => {
         seen: totalConversationsSeen,
         stopReason: overallStop ?? 'end_of_list',
         elapsedMs: Date.now() - startedAtMs,
+        headScan: headScanTotal,
         perIntegration,
         integrations: integrations?.length ?? 0,
         skipped: {

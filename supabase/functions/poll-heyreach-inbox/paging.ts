@@ -20,8 +20,26 @@ export type WalkState = {
     pagesFetched: number;
     conversationsProcessed: number;
     elapsedMs: number;
+    headScan?: HeadScanResult;
   };
 };
+
+// Head scan: page 1 (offset 0) re-processed at the start of every tick that
+// resumes a cursor, so a reply the webhook missed surfaces on the next tick
+// instead of waiting for the next full walk. See tickWithHeadScan below.
+export type HeadScanStopReason =
+  | 'complete'              // every item on page 1 was attempted
+  | 'time_budget'           // the head-scan share ran out before page 1 was done
+  | 'fetch_error'           // page 1 could not be fetched; walk proceeds per the budget rule
+  | 'skipped_walk_at_head'  // the walk itself starts at offset 0 this tick (its first page IS page 1)
+  | 'skipped_budget';       // not enough total budget left to start a page
+
+export interface HeadScanResult {
+  items: number;      // items attempted (successes + failures)
+  failures: number;   // items whose processItem threw; counted here, never on the walk
+  elapsedMs: number;
+  stopReason: HeadScanStopReason;
+}
 
 export interface PagerDeps<Item extends { id?: unknown; lastMessageAt?: unknown }> {
   // Fetch a page (offset/limit). Must throw on any non-OK or parse error.
@@ -44,6 +62,9 @@ export interface PagerOptions {
   // Overlap verification backoff parameters
   resumeBackstepInitial?: number;      // 25
   resumeBackstepStep?: number;         // 100
+  // Share of runBudgetMs the head scan may use (page-1 fetch + items). Only
+  // used by tickWithHeadScan; walkWithState ignores it.
+  headScanBudgetMs?: number;           // 40_000
 }
 
 export const DEFAULT_PAGER_OPTIONS: Required<PagerOptions> = {
@@ -55,6 +76,7 @@ export const DEFAULT_PAGER_OPTIONS: Required<PagerOptions> = {
   minRemainingForNextItemMs: 10_000,
   resumeBackstepInitial: 25,
   resumeBackstepStep: 100,
+  headScanBudgetMs: 40_000,
 };
 
 export interface PagerResult {
@@ -294,3 +316,123 @@ export async function walkWithState<Item extends { id?: unknown; lastMessageAt?:
   };
 }
 
+// ---------------------------------------------------------------------------
+// Head scan
+// ---------------------------------------------------------------------------
+// Processes page 1 (offset 0, pageLimit items) with the same idempotent
+// processItem the walk uses. It deliberately takes NO WalkState: it cannot move
+// the cursor, touch the baseline, bump walk.failures, or mark a walk clean, and
+// it never contributes to caught_up / end_of_list. Items the walk later reaches
+// on its own pages are simply processed again (skip-unchanged makes that cheap).
+//
+// Budget rule inside the head scan (all relative to the head scan's own start):
+// - the page-1 fetch timeout is min(pageFetchTimeoutMs, budgetMs - 5s), floor 1s;
+// - an item is started only while at least minRemainingForNextItemMs of the
+//   head-scan share is left, so the scan ends within its share (plus at most the
+//   overrun of an item that ignores its timeout);
+// - a failed item (processItem throws: GetChatroom or DB error) is counted in
+//   `failures` and the scan continues with the next item.
+export async function runHeadScan<Item extends { id?: unknown; lastMessageAt?: unknown }>(
+  deps: Pick<PagerDeps<Item>, 'fetchPage' | 'processItem' | 'nowMs'>,
+  budgetMs: number,
+  opts: PagerOptions,
+): Promise<HeadScanResult> {
+  const startMs = deps.nowMs();
+  const limit = opts.pageLimit ?? 100;
+  const minNextItem = opts.minRemainingForNextItemMs ?? 10_000;
+  const pageTimeoutBase = opts.pageFetchTimeoutMs ?? 35_000;
+  const itemTimeout = opts.itemFetchTimeoutMs ?? 8_000;
+  const deadline = startMs + Math.max(0, budgetMs);
+  const remaining = () => Math.max(0, deadline - deps.nowMs());
+
+  let items: Item[] = [];
+  try {
+    const timeout = Math.max(1_000, Math.min(pageTimeoutBase, Math.max(0, remaining() - 5_000)));
+    const page = await deps.fetchPage(0, limit, AbortSignal.timeout(timeout));
+    items = Array.isArray(page.items) ? page.items : [];
+  } catch (_e) {
+    return { items: 0, failures: 0, elapsedMs: deps.nowMs() - startMs, stopReason: 'fetch_error' };
+  }
+
+  let attempted = 0;
+  let failures = 0;
+  let stopReason: HeadScanStopReason = 'complete';
+  for (const it of items) {
+    if (remaining() < minNextItem) {
+      stopReason = 'time_budget';
+      break;
+    }
+    try {
+      await deps.processItem(it, AbortSignal.timeout(itemTimeout));
+    } catch (_e) {
+      failures++;
+    }
+    attempted++;
+  }
+  return { items: attempted, failures, elapsedMs: deps.nowMs() - startMs, stopReason };
+}
+
+export interface TickResult extends PagerResult {
+  headScan: HeadScanResult;
+}
+
+// One poller tick for one integration: head scan, then the budgeted walk.
+//
+// When the head scan runs: whenever the tick RESUMES a cursor (a walk is in
+// progress with offset > 0). When there is no walk in progress, or the walk has
+// not processed any item yet (offset 0), the walk's first page this tick is
+// page 1 itself and is processed in full, so the head scan is skipped
+// (skipped_walk_at_head) rather than fetching and processing page 1 twice. In
+// the steady state (baseline known, each walk catches up on page 1) that is
+// every tick, so the head scan costs nothing once the backlog is drained.
+//
+// Budget rules (the tick shares one runBudgetMs, 110s by default):
+// 1. The head scan starts only if runBudgetMs >= minRemainingForNextPageMs (40s),
+//    the same bar as a walk page (otherwise skipped_budget). Its share is
+//    min(headScanBudgetMs, runBudgetMs); page-1 fetch and items both count.
+// 2. The walk then gets whatever is left: runBudgetMs minus the head scan's
+//    elapsed time, and applies its normal guards (a page needs >= 40s left, an
+//    item >= 10s). With the defaults (110s total, 40s share) the head scan ends
+//    by ~40s, so the walk has ~70s and always starts at least one page.
+// 3. A head-scan fetch_error does not stop the tick: the walk runs under rule 2
+//    (if HeyReach is down, the walk's own fetch_error preserves the walk as-is).
+// 4. The head scan never changes walk state; the walk alone moves the cursor
+//    and decides caught_up / end_of_list / baseline. Head-scan failures do not
+//    block the baseline: a page-1 item newer than walk.startedAt is covered by
+//    the next walk's cutoff anyway, and it is retried by every head scan.
+//
+// The returned state carries lastTick.headScan; the caller persists it (the
+// walk has already saved the cursor at each page end and on stop).
+export async function tickWithHeadScan<Item extends { id?: unknown; lastMessageAt?: unknown }>(
+  deps: PagerDeps<Item>,
+  initialState: WalkState | null | undefined,
+  opts: PagerOptions,
+): Promise<TickResult> {
+  const tickStartMs = deps.nowMs();
+  const minNextPage = opts.minRemainingForNextPageMs ?? 40_000;
+  const share = Math.min(opts.headScanBudgetMs ?? 40_000, opts.runBudgetMs);
+  const state: WalkState = initialState && typeof initialState === 'object'
+    ? (initialState as WalkState)
+    : { version: 1, baselineStartedAt: null, walk: null };
+
+  let headScan: HeadScanResult;
+  if (!state.walk || (state.walk.offset ?? 0) <= 0) {
+    headScan = { items: 0, failures: 0, elapsedMs: 0, stopReason: 'skipped_walk_at_head' };
+  } else if (opts.runBudgetMs < minNextPage || share <= 0) {
+    headScan = { items: 0, failures: 0, elapsedMs: 0, stopReason: 'skipped_budget' };
+  } else {
+    headScan = await runHeadScan(deps, share, opts);
+  }
+
+  const walkBudgetMs = Math.max(0, opts.runBudgetMs - (deps.nowMs() - tickStartMs));
+  const walk = await walkWithState(deps, state, { ...opts, runBudgetMs: walkBudgetMs });
+  if (walk.state.lastTick) {
+    walk.state.lastTick = {
+      ...walk.state.lastTick,
+      at: new Date(tickStartMs).toISOString(),
+      elapsedMs: deps.nowMs() - tickStartMs,
+      headScan,
+    };
+  }
+  return { ...walk, headScan };
+}
