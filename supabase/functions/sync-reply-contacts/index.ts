@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { cleanReplyPreview } from '../_shared/reply-text.ts';
-import { isTrustedServiceCaller } from "./auth.ts";
+import { decideAuth } from "./gate.ts";
 
 const allowedOrigins = [
   Deno.env.get("ALLOWED_ORIGIN") || "https://vrelly.com",
@@ -692,11 +692,20 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => ({}));
     const { campaignId, integrationId, userId: bodyUserId } = body as Record<string, unknown>;
 
-    // Auth path: service caller (x-agent-key OR service-role key) OR user JWT.
-    const serviceCaller = isTrustedServiceCaller(req.headers);
-    const authHeader = req.headers.get("Authorization");
-    if (!serviceCaller && !authHeader) {
-      return new Response(JSON.stringify({ error: "Missing authorization header" }), {
+    // Decide auth path BEFORE any DB lookups. Garbage Bearer tokens must 401.
+    const authHeader = req.headers.get("Authorization") || "";
+    const decision = await decideAuth(req.headers, async () => {
+      if (!authHeader) return false;
+      const userClient = createClient(
+        Deno.env.get("SUPABASE_URL") ?? "",
+        Deno.env.get("SUPABASE_ANON_KEY") ?? "",
+        { global: { headers: { Authorization: authHeader } } },
+      );
+      const { data: { user }, error } = await userClient.auth.getUser();
+      return Boolean(user) && !error;
+    });
+    if (decision === "unauthorized") {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
         status: 401,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -710,12 +719,12 @@ Deno.serve(async (req) => {
     }
 
     // Frontend path: use user token with RLS; Service path: use service role (bypass RLS).
-    const queryClient = serviceCaller
+    const queryClient = decision === "service"
       ? createClient(Deno.env.get("SUPABASE_URL") ?? "", Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "")
       : createClient(
           Deno.env.get("SUPABASE_URL") ?? "",
           Deno.env.get("SUPABASE_ANON_KEY") ?? "",
-          { global: { headers: { Authorization: authHeader! } } },
+          { global: { headers: { Authorization: authHeader } } },
         );
 
     // Fetch the integration (RLS enforced for frontend calls, bypassed for internal)
@@ -747,7 +756,7 @@ Deno.serve(async (req) => {
     }
 
     // Service path integrity: campaign must belong to the same team as the integration.
-    if (serviceCaller && String(campaign.team_id) !== String(integration.team_id)) {
+    if (decision === "service" && String(campaign.team_id) !== String(integration.team_id)) {
       return new Response(JSON.stringify({ error: "Campaign does not belong to the integration's team" }), {
         status: 403,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -772,7 +781,7 @@ Deno.serve(async (req) => {
     // to pass on this file (was failing in the original too).
     let userId = bodyUserId as string | undefined;
     if (!userId) {
-      if (serviceCaller) {
+      if (decision === "service") {
         if (integration?.created_by) {
           userId = String(integration.created_by);
         } else {
@@ -782,14 +791,15 @@ Deno.serve(async (req) => {
           });
         }
       } else {
-        const { data: { user }, error: userError } = await queryClient.auth.getUser();
-        if (userError || !user) {
+        // At this point decideAuth already validated the token, so get the id.
+        const { data: { user } } = await queryClient.auth.getUser();
+        userId = user?.id as string | undefined;
+        if (!userId) {
           return new Response(JSON.stringify({ error: "Unable to resolve authenticated user" }), {
             status: 401,
             headers: { ...corsHeaders, "Content-Type": "application/json" },
           });
         }
-        userId = user.id;
       }
     }
 
