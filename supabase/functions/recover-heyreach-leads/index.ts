@@ -26,6 +26,7 @@ import { findLeadByNormalizedLinkedIn } from "../_shared/agent-leads-lookup.ts";
 import { cleanReplyPreview } from "../_shared/reply-text.ts";
 import { isSuppressed } from "../_shared/inbox-reply.ts";
 import { decideSurfaceAndClassify } from "../_shared/surface.ts";
+import { listEnabledCampaignIds } from "../_shared/capture-scope.ts";
 
 type Json = Record<string, unknown>;
 
@@ -102,6 +103,13 @@ Deno.serve(async (req) => {
     const apiKey = (integration as { api_key_encrypted: string | null }).api_key_encrypted;
     if (!apiKey) return json({ error: "Integration has no API key" }, 400);
 
+    // Fail-closed capture scope: only recover conversations for ENABLED campaigns.
+    const enabled = await listEnabledCampaignIds(supabase as any, String(integration.id));
+    if (!enabled.ok) {
+      return json({ error: enabled.reason === "none_enabled" ? "No capture-enabled campaigns" : "Capture-scope lookup error" }, 400);
+    }
+    const enabledIds = enabled.ids;
+
     // Enumerate conversations
     const actions: Array<{
       conversationId: string;
@@ -129,7 +137,9 @@ Deno.serve(async (req) => {
         body: JSON.stringify({
           filters: {
             linkedInAccountIds: [],
-            campaignIds: [], // recovery scans all; scope via conversationIds if provided
+            // Scope to capture-enabled campaigns ONLY. Further allow-list via conversationIds
+            // still applies below when provided.
+            campaignIds: enabledIds,
             searchString: "",
           },
           offset,
