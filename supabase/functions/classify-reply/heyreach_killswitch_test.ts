@@ -30,9 +30,9 @@ Deno.test("classify-reply gates drafts and auto-send behind the kill switch", ()
   );
 
   // Auto-send path to send-heyreach-message must be gated by suppressDrafting
-  const autoBlock = src.split("\n").slice(1235, 1310).join("\n"); // around auto-mode block region
+  // (whole-file match; a fixed line-number window breaks whenever index.ts shifts)
   assert(
-    /isAllowed\s*&&\s*hasDraft\s*&&\s*!isOptedOut\s*&&\s*!suppressDrafting/.test(autoBlock),
+    /isAllowed\s*&&\s*hasDraft\s*&&\s*!isOptedOut\s*&&\s*!suppressDrafting/.test(src),
     "auto-send should include !suppressDrafting guard",
   );
   assert(src.includes("send-heyreach-message"), "sanity: file still contains send-heyreach-message path");

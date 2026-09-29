@@ -9,8 +9,12 @@ export type InboxGuardLead = {
 export function isHeyreachDraftingEnabled(envOverride?: string | boolean): boolean {
   if (typeof envOverride === 'boolean') return envOverride;
   if (typeof envOverride === 'string') return envOverride.trim().toLowerCase() === 'true';
-  const meta = import.meta as unknown as { env?: Record<string, unknown> };
-  const raw = meta?.env?.VITE_HEYREACH_DRAFTING_ENABLED as string | undefined;
+  // Must be a direct `import.meta.env.VITE_*` member access (after TS erasure) so Vite
+  // statically replaces it in dev and build; reading env off an aliased `import.meta`
+  // is never replaced and always yields undefined (flag stuck OFF). Under Deno
+  // (tests) import.meta.env is undefined, so this falls back to OFF.
+  const raw = (import.meta as unknown as { env?: Record<string, string | undefined> }).env
+    ?.VITE_HEYREACH_DRAFTING_ENABLED;
   return String(raw ?? '').trim().toLowerCase() === 'true';
 }
 

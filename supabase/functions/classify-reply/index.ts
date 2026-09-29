@@ -814,7 +814,8 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
 
     // Call 1 failure → cannot proceed without intent. Log + return SAFE_FALLBACK.
     if (!call1) {
-      if (lead_id) {
+      // Kill switch: suppressed (LinkedIn/HeyReach) leads get no draft_created / draft_audit rows.
+      if (lead_id && !suppressDrafting) {
         try {
           await supabase.from('agent_activity').insert({
             user_id,
@@ -827,27 +828,29 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
           console.error('[classify-reply] call1-failed activity insert failed (non-fatal):', e);
         }
       }
-      try {
-        await supabase.from('draft_audit').insert({
-          user_id,
-          lead_id: lead_id ?? null,
-          lead_name: leadName,
-          lead_company: leadCompany,
-          channel,
-          model: MODEL,
-          prompt_version: promptVersion,
-          temperature: 0,
-          system_prompt_hash: call1SystemPromptHash,
-          input_tokens: null,
-          output_tokens: null,
-          generation_ms: null,
-          intent_classified: null,
-          intent_confidence: null,
-          draft_response: null,
-          metadata: { two_call: true, call1_failed: true, call1_system_prompt_hash: call1SystemPromptHash },
-        });
-      } catch (e) {
-        console.error('[classify-reply] draft_audit (call1 fail) write failed (non-fatal):', e);
+      if (!suppressDrafting) {
+        try {
+          await supabase.from('draft_audit').insert({
+            user_id,
+            lead_id: lead_id ?? null,
+            lead_name: leadName,
+            lead_company: leadCompany,
+            channel,
+            model: MODEL,
+            prompt_version: promptVersion,
+            temperature: 0,
+            system_prompt_hash: call1SystemPromptHash,
+            input_tokens: null,
+            output_tokens: null,
+            generation_ms: null,
+            intent_classified: null,
+            intent_confidence: null,
+            draft_response: null,
+            metadata: { two_call: true, call1_failed: true, call1_system_prompt_hash: call1SystemPromptHash },
+          });
+        } catch (e) {
+          console.error('[classify-reply] draft_audit (call1 fail) write failed (non-fatal):', e);
+        }
       }
       return new Response(JSON.stringify(SAFE_FALLBACK), {
         status: 200,
