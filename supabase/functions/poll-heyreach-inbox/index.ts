@@ -8,6 +8,8 @@ ALTER TABLE public.synced_campaigns ADD COLUMN IF NOT EXISTS source TEXT DEFAULT
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { shouldResurface, fireClassifyReply } from '../_shared/inbox-reply.ts';
 import { cleanReplyPreview } from '../_shared/reply-text.ts';
+import { sanitizeLinkedinUrlForStorage } from '../_shared/normalize.ts';
+import { findLeadByNormalizedLinkedIn } from '../_shared/agent-leads-lookup.ts';
 
 const allowedOrigins = [
   'https://vrelly.com',
@@ -258,7 +260,7 @@ Deno.serve(async (req) => {
               const profile = convo.correspondentProfile || {};
               const fullName = [profile.firstName, profile.lastName].filter(Boolean).join(' ') || 'Unknown';
               const linkedinUrlRaw = profile.profileUrl || '';
-              const linkedinUrl = linkedinUrlRaw.trim() || null;
+              const linkedinUrl = sanitizeLinkedinUrlForStorage(linkedinUrlRaw);
               const externalId = conversationId;
 
               // Without a linkedin_url we have no dedup key (the unique
@@ -272,9 +274,8 @@ Deno.serve(async (req) => {
                 continue;
               }
 
-              // Existing-lead lookup on (user_id, linkedin_url) — matches the
-              // unique-index dedup key. If linkedin_url is missing we fall back
-              // to external_id so legacy rows still resolve.
+              // Existing-lead lookup on (user_id, normalized linkedin_url).
+              // If linkedin_url is missing we fall back to external_id so legacy rows still resolve.
               let existingLead: {
                 id: string;
                 last_reply_text: string | null;
@@ -282,13 +283,15 @@ Deno.serve(async (req) => {
                 last_surfaced_reply_at: string | null;
               } | null = null;
               if (linkedinUrl) {
-                const { data } = await supabase
-                  .from('agent_leads')
-                  .select('id, last_reply_text, disposition_tag, last_surfaced_reply_at')
-                  .eq('user_id', userId)
-                  .eq('linkedin_url', linkedinUrl)
-                  .maybeSingle();
-                existingLead = data ?? null;
+                const found = await findLeadByNormalizedLinkedIn(supabase, userId, linkedinUrl);
+                existingLead = found
+                  ? {
+                      id: found.id,
+                      last_reply_text: null,
+                      disposition_tag: found.disposition_tag,
+                      last_surfaced_reply_at: found.last_surfaced_reply_at,
+                    }
+                  : null;
               }
               if (!existingLead && externalId) {
                 const { data } = await supabase
@@ -400,18 +403,51 @@ Deno.serve(async (req) => {
                 heyreach_account_id: linkedInAccountId,
               };
 
-              const { data: upsertedLead, error: upsertError } = await supabase
-                .from('agent_leads')
-                .upsert(upsertPayload, {
-                  onConflict: 'user_id,linkedin_url',
-                  ignoreDuplicates: false,
-                })
-                .select()
-                .single();
-
-              if (upsertError) {
-                console.error(`[poll-heyreach-inbox] Upsert error for ${externalId}:`, upsertError.message);
-                continue;
+              // Deterministic save: update-or-insert with 23505 retry
+              let savedRow: Record<string, unknown> | null = null;
+              if (existingLead?.id) {
+                const { data: updated, error: updateErr } = await supabase
+                  .from('agent_leads')
+                  .update(upsertPayload)
+                  .eq('id', existingLead.id)
+                  .select()
+                  .single();
+                if (updateErr) {
+                  console.error(`[poll-heyreach-inbox] UPDATE error for ${externalId}:`, updateErr.message);
+                  continue;
+                }
+                savedRow = updated as Record<string, unknown>;
+              } else {
+                const { data: inserted, error: insertErr } = await supabase
+                  .from('agent_leads')
+                  .insert(upsertPayload)
+                  .select()
+                  .single();
+                if (insertErr && (insertErr as { code?: string }).code === '23505') {
+                  // Race: another writer created the row — reselect and update
+                  const raced = await findLeadByNormalizedLinkedIn(supabase, userId, linkedinUrl);
+                  if (raced?.id) {
+                    const { data: updated2, error: updateErr2 } = await supabase
+                      .from('agent_leads')
+                      .update(upsertPayload)
+                      .eq('id', raced.id)
+                      .select()
+                      .single();
+                    if (updateErr2) {
+                      console.error(`[poll-heyreach-inbox] UPDATE-after-23505 failed for ${externalId}:`, updateErr2.message);
+                      continue;
+                    }
+                    savedRow = updated2 as Record<string, unknown>;
+                  } else {
+                    console.error(`[poll-heyreach-inbox] 23505 on INSERT but reselect found no row for ${externalId}`);
+                    continue;
+                  }
+                } else if (insertErr) {
+                  console.error(`[poll-heyreach-inbox] INSERT error for ${externalId}:`, insertErr.message);
+                  continue;
+                } else {
+                  savedRow = inserted as Record<string, unknown>;
+                }
               }
 
               // Trigger a draft, exactly as poll-reply-inbox does — same shared
@@ -428,11 +464,12 @@ Deno.serve(async (req) => {
               // GetConversationsV2's lastMessageText, and misses whenever a
               // sibling conversation for the same profile holds different text
               // (73 such profiles in prod — see the collision note).
-              if (surface && upsertedLead) {
+              if (surface && savedRow) {
                 fireClassifyReply({
                   supabaseUrl,
                   agentKey: expectedKey || '',
-                  leadId: upsertedLead.id,
+                  // deno-lint-ignore no-explicit-any
+                  leadId: (savedRow as any).id,
                   replyText: lastMessageText,
                   threadHistory: replyThread,
                   agentConfig,
@@ -441,14 +478,15 @@ Deno.serve(async (req) => {
                 });
               }
 
-              if (upsertedLead && !existingLead) {
+              if (savedRow && !existingLead) {
                 totalNew++;
 
                 // Log activity
                 await supabase.from('agent_activity').insert({
                   user_id: userId,
                   agent_config_id: agentConfig.id,
-                  lead_id: upsertedLead.id,
+                  // deno-lint-ignore no-explicit-any
+                  lead_id: (savedRow as any).id,
                   lead_name: fullName,
                   lead_company: profile.companyName || '',
                   activity_type: 'reply_received',

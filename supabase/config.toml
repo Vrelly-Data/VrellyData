@@ -182,3 +182,6 @@ verify_jwt = false
 
 [functions.calendly-webhook]
 verify_jwt = false
+
+[functions.recover-heyreach-leads]
+verify_jwt = false
