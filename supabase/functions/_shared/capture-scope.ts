@@ -129,3 +129,132 @@ export function normalizeStatus(raw: string | null | undefined): string {
       return raw.toLowerCase();
   }
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// Fail-closed Capture gate — SINGLE SOURCE OF TRUTH for inbox capture
+// ---------------------------------------------------------------------------
+// A reply/lead is captured only when:
+//   1) a campaign id is present on the event (or thread), AND
+//   2) a row exists in synced_campaigns for (integration_id, external_campaign_id), AND
+//   3) that row has capture_enabled === true.
+//
+// Everything else FAILS CLOSED: a missing id, a missing row, or any lookup
+// error returns { allowed:false, reason: … } and the caller MUST SKIP capture.
+//
+// DB lookups are bounded with a timeout so a stuck network never stalls a
+// webhook. The underlying fetch cannot be aborted from here (db comes from
+// the caller), but the gate returns a conservative "lookup_error" on timeout.
+// ────────────────────────────────────────────────────────────────────────────
+
+export type CaptureGateSkipReason =
+  | "no_campaign_id"
+  | "no_synced_row"
+  | "capture_disabled"
+  | "lookup_error";
+
+export interface CaptureGateResult {
+  allowed: boolean;
+  reason: "allowed" | CaptureGateSkipReason;
+  campaignName?: string | null;
+}
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error("timeout")), ms);
+    p.then((v) => {
+      clearTimeout(t);
+      resolve(v);
+    }, (e) => {
+      clearTimeout(t);
+      reject(e);
+    });
+  });
+}
+
+/**
+ * Fail-closed gate for one campaign id.
+ * Returns { allowed:true } only when a capture_enabled row exists.
+ * Otherwise { allowed:false, reason } with one of:
+ *   - no_campaign_id
+ *   - no_synced_row
+ *   - capture_disabled
+ *   - lookup_error
+ */
+export async function checkCaptureGate(
+  // deno-lint-ignore no-explicit-any
+  db: any,
+  integrationId: string,
+  campaignExternalId: string | null | undefined,
+  opts?: { timeoutMs?: number },
+): Promise<CaptureGateResult> {
+  if (!campaignExternalId) {
+    return { allowed: false, reason: "no_campaign_id" };
+  }
+  const timeoutMs = Math.max(250, Math.min(5000, Number(opts?.timeoutMs ?? 1500)));
+  try {
+    const q = db
+      .from("synced_campaigns")
+      .select("capture_enabled, name")
+      .eq("integration_id", integrationId)
+      .eq("external_campaign_id", String(campaignExternalId))
+      .maybeSingle();
+    const { data, error } = await withTimeout(q as Promise<{ data: unknown; error: { message: string } | null }>, timeoutMs);
+    if (error) {
+      console.warn(`[capture-scope] lookup_error for campaign ${campaignExternalId}: ${error.message}`);
+      return { allowed: false, reason: "lookup_error" };
+    }
+    const row = data as { capture_enabled?: boolean | null; name?: string | null } | null;
+    if (!row) return { allowed: false, reason: "no_synced_row" };
+    if (row.capture_enabled !== true) {
+      return { allowed: false, reason: "capture_disabled", campaignName: row.name ?? null };
+    }
+    return { allowed: true, reason: "allowed", campaignName: row.name ?? null };
+  } catch (e) {
+    console.warn(`[capture-scope] lookup_error (threw) for campaign ${campaignExternalId}: ${e instanceof Error ? e.message : String(e)}`);
+    return { allowed: false, reason: "lookup_error" };
+  }
+}
+
+export interface EnabledIdsResultOk {
+  ok: true;
+  ids: string[];
+}
+export interface EnabledIdsResultErr {
+  ok: false;
+  reason: "lookup_error" | "none_enabled";
+}
+export type EnabledIdsResult = EnabledIdsResultOk | EnabledIdsResultErr;
+
+/**
+ * Enumerate capture-enabled campaign ids for an integration.
+ * Pollers/recovery use this to FILTER AT SOURCE (provider API) where supported,
+ * or locally when not.
+ */
+export async function listEnabledCampaignIds(
+  // deno-lint-ignore no-explicit-any
+  db: any,
+  integrationId: string,
+  opts?: { timeoutMs?: number },
+): Promise<EnabledIdsResult> {
+  const timeoutMs = Math.max(250, Math.min(5000, Number(opts?.timeoutMs ?? 2000)));
+  try {
+    const q = db
+      .from("synced_campaigns")
+      .select("external_campaign_id")
+      .eq("integration_id", integrationId)
+      .eq("capture_enabled", true);
+    const { data, error } = await withTimeout(q as Promise<{ data: unknown; error: { message: string } | null }>, timeoutMs);
+    if (error) {
+      console.warn(`[capture-scope] listEnabledCampaignIds lookup_error for integration ${integrationId}: ${error.message}`);
+      return { ok: false, reason: "lookup_error" };
+    }
+    const ids = (Array.isArray(data) ? data : [])
+      .map((r) => String((r as { external_campaign_id?: unknown }).external_campaign_id ?? ""))
+      .filter((s) => !!s);
+    if (ids.length === 0) return { ok: false, reason: "none_enabled" };
+    return { ok: true, ids };
+  } catch (e) {
+    console.warn(`[capture-scope] listEnabledCampaignIds threw for integration ${integrationId}: ${e instanceof Error ? e.message : String(e)}`);
+    return { ok: false, reason: "lookup_error" };
+  }
+}
