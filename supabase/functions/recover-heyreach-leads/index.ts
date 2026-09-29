@@ -26,6 +26,7 @@ import { findLeadByNormalizedLinkedIn } from "../_shared/agent-leads-lookup.ts";
 import { cleanReplyPreview } from "../_shared/reply-text.ts";
 import { isSuppressed } from "../_shared/inbox-reply.ts";
 import { decideSurfaceAndClassify } from "../_shared/surface.ts";
+import { listEnabledCampaignIds, numericCampaignIds } from "../_shared/capture-scope.ts";
 
 type Json = Record<string, unknown>;
 
@@ -102,6 +103,21 @@ Deno.serve(async (req) => {
     const apiKey = (integration as { api_key_encrypted: string | null }).api_key_encrypted;
     if (!apiKey) return json({ error: "Integration has no API key" }, 400);
 
+    // Fail-closed capture scope: only recover conversations for ENABLED
+    // campaigns. HeyReach filters on INTEGER campaign ids (same as
+    // poll-heyreach-inbox), and campaignIds: [] means "all campaigns", so an
+    // empty numeric list must refuse rather than scan everything.
+    const enabled = await listEnabledCampaignIds(supabase as any, String(integration.id));
+    const enabledIds = enabled.ok ? numericCampaignIds(enabled.ids) : [];
+    if (!enabled.ok || enabledIds.length === 0) {
+      const reason = enabled.ok ? "none_enabled" : enabled.reason;
+      console.warn(`[recover-heyreach-leads] refusing: capture scope ${reason} for integration ${integrationId} — no HeyReach calls, no writes`);
+      return json({
+        error: reason === "none_enabled" ? "No capture-enabled campaigns" : "Capture-scope lookup error",
+        skipped: reason,
+      }, 400);
+    }
+
     // Enumerate conversations
     const actions: Array<{
       conversationId: string;
@@ -129,7 +145,9 @@ Deno.serve(async (req) => {
         body: JSON.stringify({
           filters: {
             linkedInAccountIds: [],
-            campaignIds: [], // recovery scans all; scope via conversationIds if provided
+            // Scope to capture-enabled campaigns ONLY (integer ids). The
+            // conversationIds allow-list still applies below when provided.
+            campaignIds: enabledIds,
             searchString: "",
           },
           offset,

@@ -4,10 +4,11 @@
 // from the UI; Stages 4-5 add enforcement.
 //
 // NOT A REPLACEMENT FOR fetch-available-campaigns. That function serves
-// Reply.io's ManageCampaignsDialog and is deliberately untouched and never
-// redeployed by this feature. This is a separate function for the platforms
-// that have no capture control at all today (Smartlead, HeyReach), so a bug
-// here cannot reach Reply.io.
+// Reply.io's ManageCampaignsDialog (is_linked, Data Analysis scope) and is
+// untouched by this feature. This function serves the Capture Scope UI
+// (capture_enabled) for Smartlead, HeyReach and — since capture is enforced
+// fail-closed on Reply.io too — Reply.io, whose list is read from
+// synced_campaigns only (no Reply.io API call; see capture-scope-replyio.ts).
 //
 // Modes:
 //   list    (default) — every campaign for the integration, from
@@ -30,9 +31,12 @@ import {
 } from "../_shared/capture-scope.ts";
 import { smartleadCaptureScopeAdapter } from "../_shared/capture-scope-smartlead.ts";
 import { heyreachCaptureScopeAdapter } from "../_shared/capture-scope-heyreach.ts";
+import { isReplyIoPlatform, replyioCaptureScopeAdapter } from "../_shared/capture-scope-replyio.ts";
 
 // Registering only implemented adapters keeps the error message honest: an
-// unsupported platform (reply.io) gets a clear 400 rather than failing deeper.
+// unsupported platform gets a clear 400 rather than failing deeper. Reply.io is
+// selected directly below (capture-scope.ts, and so its registry type, is
+// shared byte-for-byte with PR #90 and cannot change here).
 registerAdapter(smartleadCaptureScopeAdapter);
 registerAdapter(heyreachCaptureScopeAdapter);
 
@@ -109,13 +113,16 @@ Deno.serve(async (req) => {
     if (intErr) return json({ error: `Integration lookup failed: ${intErr.message}` }, 500);
     if (!integration) return json({ error: "Integration not found or access denied" }, 404);
 
-    const adapter = getAdapter(integration.platform);
+    const adapter: {
+      listCampaigns: typeof replyioCaptureScopeAdapter.listCampaigns;
+      listSenders?: NonNullable<ReturnType<typeof getAdapter>>["listSenders"];
+    } | null = isReplyIoPlatform(integration.platform)
+      ? replyioCaptureScopeAdapter
+      : getAdapter(integration.platform);
     if (!adapter) {
-      // Reply.io lands here by design — it is served by the untouched
-      // fetch-available-campaigns path, not this one.
       return json({
         error: `Capture Scope does not manage '${integration.platform}' integrations`,
-        supported: supportedPlatforms(),
+        supported: [...supportedPlatforms(), replyioCaptureScopeAdapter.platform],
       }, 400);
     }
 

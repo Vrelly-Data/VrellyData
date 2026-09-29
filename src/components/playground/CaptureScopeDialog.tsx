@@ -1,5 +1,5 @@
-// Capture Scope — campaign selection for platforms with no capture control.
-// Stage 3 of 5.
+// Capture Scope — campaign selection (capture_enabled) for Smartlead, HeyReach
+// and Reply.io. Stage 3 of 5; Reply.io added in the PR #91 follow-up.
 //
 // A FORK of ManageCampaignsDialog, not a generalisation of it. That dialog
 // serves Reply.io, most clients are on Reply.io, and making it platform-
@@ -36,6 +36,9 @@ interface CaptureScopeDialogProps {
   onOpenChange: (open: boolean) => void;
   integrationId: string | null;
   platformLabel?: string;
+  // Defaults to "Manage Campaigns". Reply.io passes "Capture Scope" because
+  // its row also has the (unrelated, is_linked) Manage Campaigns dialog.
+  title?: string;
 }
 
 function statusBadge(status: string) {
@@ -57,7 +60,7 @@ function statusBadge(status: string) {
 }
 
 export function CaptureScopeDialog({
-  open, onOpenChange, integrationId, platformLabel,
+  open, onOpenChange, integrationId, platformLabel, title,
 }: CaptureScopeDialogProps) {
   const {
     campaigns, groups, counts, sendersAvailable, sendersDeferred, sendersLoadedFor,
@@ -120,13 +123,11 @@ export function CaptureScopeDialog({
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent className="max-w-3xl max-h-[85vh] flex flex-col">
           <DialogHeader>
-            {/* Same user-facing name as Reply.io's dialog: it is the same
-                concept to the user. The separate implementation underneath is
-                an engineering safety decision, not a product distinction. The
-                two buttons are mutually exclusive per integration row
-                (isReplyIo vs isCaptureScopePlatform), so they never appear
-                together and the shared label cannot be ambiguous. */}
-            <DialogTitle>Manage Campaigns{platformLabel ? ` — ${platformLabel}` : ''}</DialogTitle>
+            {/* Smartlead/HeyReach: same user-facing name as Reply.io's
+                is_linked dialog, since those rows have no other Manage
+                Campaigns button. Reply.io rows show BOTH buttons, so the
+                caller passes title="Capture Scope" to keep them distinct. */}
+            <DialogTitle>{title ?? 'Manage Campaigns'}{platformLabel ? ` — ${platformLabel}` : ''}</DialogTitle>
             <DialogDescription>
               Turn capture on for campaigns you want Vrelly to listen to. Replies from campaigns that are switched off are not captured at all — no lead is created and no draft is written. This is separate from Data Analysis reporting scope.
             </DialogDescription>
