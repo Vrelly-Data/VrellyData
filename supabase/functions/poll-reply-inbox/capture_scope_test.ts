@@ -1,0 +1,120 @@
+// Handler-level fail-closed Capture scope tests for poll-reply-inbox (REAL
+// index.ts, fake PostgREST + fake Reply.io v3; synthetic data only).
+//
+// Proves: an integration with no enabled sequence, or whose scope lookup
+// errors, is SKIPPED for the run (no inbox fetch, no agent_leads write, reason
+// in the response); otherwise only threads whose sequence is capture-enabled
+// are processed, and threads with no sequence id are dropped (fail closed).
+import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { AGENT_KEY, FakeSupabase, json, loadHandler, testOpts, withFakes, type Row } from "../_shared/testing/fake_platform.ts";
+
+const handler = await loadHandler(new URL("./index.ts", import.meta.url).href);
+
+const INT = "00000000-0000-4000-8000-000000000101";
+const INT2 = "00000000-0000-4000-8000-000000000102";
+const TEAM = "00000000-0000-4000-8000-0000000000c1";
+const USER = "00000000-0000-4000-8000-0000000000b1";
+const USER2 = "00000000-0000-4000-8000-0000000000b2";
+const RECENT = new Date(Date.now() - 600_000).toISOString();
+
+const integ = (id: string, user: string, key: string): Row => ({ id, created_by: user, team_id: TEAM, api_key_encrypted: key, is_active: true, platform: "reply.io" });
+const row = (id: string, enabled: boolean, integrationId = INT): Row => ({ id: `sc-${integrationId}-${id}`, integration_id: integrationId, team_id: TEAM, external_campaign_id: id, capture_enabled: enabled });
+
+// Threads: 701 enabled seq (number id), 702 enabled seq (string id), 703
+// disabled seq, 704 unknown seq, 705 no sequence at all.
+const THREADS = [
+  { id: 701, channel: "email", lastActivityDate: RECENT, contact: { id: 1, fullName: "Test One", email: "t1@example.test" }, sequence: { id: 13579, name: "S1" } },
+  { id: 702, channel: "linkedIn", lastActivityDate: RECENT, contact: { id: 2, fullName: "Test Two", email: "t2@example.test" }, sequence: { id: "24680", name: "S2" } },
+  { id: 703, channel: "email", lastActivityDate: RECENT, contact: { id: 3, fullName: "Test Three", email: "t3@example.test" }, sequence: { id: 11111, name: "S3" } },
+  { id: 704, channel: "email", lastActivityDate: RECENT, contact: { id: 4, fullName: "Test Four", email: "t4@example.test" }, sequence: { id: 99999, name: "S4" } },
+  { id: 705, channel: "email", lastActivityDate: RECENT, contact: { id: 5, fullName: "Test Five", email: "t5@example.test" }, sequence: null },
+];
+
+const replyApi = (_req: Request, url: URL) => {
+  if (url.hostname !== "api.reply.io") return undefined;
+  const m = url.pathname.match(/\/inbox\/threads\/(\d+)\/messages$/);
+  if (m) {
+    return json({ items: [{ date: RECENT, body: `Reply on thread ${m[1]}`, fromName: "Prospect", isOutbound: false, channel: "email" }], hasMore: false });
+  }
+  if (url.pathname.endsWith("/inbox/threads")) return json({ items: THREADS, hasMore: false });
+  return undefined;
+};
+
+async function run(db: FakeSupabase) {
+  const { result, rec } = await withFakes(db, replyApi, async () => {
+    const res = await handler(new Request("http://local/poll-reply-inbox", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-agent-key": AGENT_KEY },
+      body: "{}",
+    }));
+    return { status: res.status, body: await res.json() };
+  });
+  const threadListCalls = rec.providerCalls.filter((c) => new URL(c.url).pathname.endsWith("/inbox/threads"));
+  const messageCalls = rec.providerCalls
+    .map((c) => new URL(c.url).pathname.match(/\/inbox\/threads\/(\d+)\/messages$/)?.[1])
+    .filter(Boolean) as string[];
+  return { ...result, rec, threadListCalls, messageCalls };
+}
+
+const skipCases: Array<{ name: string; rows: Row[]; fail?: boolean; reason: string }> = [
+  { name: "no synced rows", rows: [], reason: "none_enabled" },
+  { name: "all sequences capture-disabled", rows: [row("13579", false), row("24680", false)], reason: "none_enabled" },
+  { name: "enabled only on another integration", rows: [row("13579", true, INT2)], reason: "none_enabled" },
+  { name: "lookup error", rows: [row("13579", true)], fail: true, reason: "lookup_error" },
+];
+
+for (const c of skipCases) {
+  Deno.test({
+    name: `poll-reply-inbox scope: ${c.name} → integration skipped (${c.reason}), no inbox fetch, no agent_leads write`,
+    ...testOpts,
+    async fn() {
+      const db = new FakeSupabase({ outbound_integrations: [integ(INT, USER, "k1")], agent_configs: [{ id: "cfg-1", user_id: USER, is_active: true }], synced_campaigns: c.rows });
+      if (c.fail) db.fail["synced_campaigns:GET"] = "error";
+      const r = await run(db);
+      assertEquals(r.status, 200);
+      assertEquals(r.threadListCalls.length, 0, "no Reply.io inbox fetch for a skipped integration");
+      assertEquals(db.writes("agent_leads").length, 0);
+      assertEquals(r.body.processed, 0);
+      assertEquals(r.body.captureScope.skippedIntegrations, [{ integrationId: INT, reason: c.reason }]);
+      assert(r.rec.logs.some((l) => l.includes(`skip integration ${INT} — capture scope ${c.reason}`)), "skip is logged");
+    },
+  });
+}
+
+Deno.test({
+  name: "poll-reply-inbox scope: only capture-enabled sequence threads are processed; no-sequence threads dropped",
+  ...testOpts,
+  async fn() {
+    const db = new FakeSupabase({
+      outbound_integrations: [integ(INT, USER, "k1")],
+      agent_configs: [{ id: "cfg-1", user_id: USER, is_active: true }],
+      synced_campaigns: [row("13579", true), row("24680", true), row("11111", false)],
+    });
+    const r = await run(db);
+    assertEquals(r.status, 200);
+    assertEquals(r.messageCalls.sort(), ["701", "702"], "messages fetched only for enabled-sequence threads");
+    assertEquals(r.body.processed, 2);
+    const inserted = db.writes("agent_leads").filter((w) => w.method === "POST").map((w) => String((w.body as Row).external_id));
+    assertEquals(inserted.sort(), ["701", "702"]);
+    assertEquals(r.body.captureScope.threadsDroppedNoSequence, 1);
+    assertEquals(r.body.captureScope.threadsDroppedNotEnabled, 2);
+    assertEquals(r.body.captureScope.skippedIntegrations, []);
+  },
+});
+
+Deno.test({
+  name: "poll-reply-inbox scope: skip is per integration (one skipped, the other still processed)",
+  ...testOpts,
+  async fn() {
+    const db = new FakeSupabase({
+      outbound_integrations: [integ(INT, USER, "k1"), integ(INT2, USER2, "k2")],
+      agent_configs: [{ id: "cfg-1", user_id: USER, is_active: true }, { id: "cfg-2", user_id: USER2, is_active: true }],
+      synced_campaigns: [row("13579", false, INT), row("13579", true, INT2)],
+    });
+    const r = await run(db);
+    assertEquals(r.body.captureScope.skippedIntegrations, [{ integrationId: INT, reason: "none_enabled" }]);
+    assertEquals(r.threadListCalls.length, 1);
+    assertEquals(r.messageCalls, ["701"]);
+    assertEquals(r.body.processed, 1);
+  },
+});

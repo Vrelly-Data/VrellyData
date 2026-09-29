@@ -9,7 +9,7 @@ import { htmlToText } from '../_shared/html-to-text.ts';
 import { shouldResurface, fireClassifyReply } from '../_shared/inbox-reply.ts';
 import { cleanReplyPreview } from '../_shared/reply-text.ts';
 import { detectLanguageCode } from '../_shared/language.ts';
-import { listEnabledCampaignIds } from '../_shared/capture-scope.ts';
+import { listEnabledCampaignIds, normalizeCampaignId } from '../_shared/capture-scope.ts';
 
 const allowedOrigins = [
   'https://vrelly.com',
@@ -273,6 +273,10 @@ Deno.serve(async (req) => {
     let totalProcessed = 0;
     let totalNew = 0;
     let totalMirrored = 0;
+    // Fail-closed capture scope accounting (counts + integration ids only).
+    const captureScopeSkips: Array<{ integrationId: string; reason: string }> = [];
+    let threadsDroppedNoSequence = 0;
+    let threadsDroppedNotEnabled = 0;
 
     for (const integration of integrations ?? []) {
       try {
@@ -281,17 +285,6 @@ Deno.serve(async (req) => {
           console.warn(`[poll-reply-inbox] No API key for integration ${integration.id}`);
           continue;
         }
-
-        // Fail-closed capture scope: only process threads for ENABLED sequences
-        const scope = await listEnabledCampaignIds(supabase as any, String(integration.id));
-        if (!scope.ok) {
-          console.log(
-            `[poll-reply-inbox] skip integration ${integration.id} — ` +
-            (scope.reason === 'none_enabled' ? 'no enabled campaigns' : 'capture-scope lookup error'),
-          );
-          continue;
-        }
-        const enabledSet = new Set(scope.ids.map(String));
 
         const userId = integration.created_by;
 
@@ -308,6 +301,17 @@ Deno.serve(async (req) => {
           continue;
         }
 
+        // Fail-closed capture scope (synced_campaigns.capture_enabled keyed by
+        // integration): no enabled sequence or a lookup error skips the whole
+        // integration for this run: no inbox fetch, no agent_leads writes.
+        const scope = await listEnabledCampaignIds(supabase as any, String(integration.id));
+        if (!scope.ok) {
+          console.log(`[poll-reply-inbox] skip integration ${integration.id} — capture scope ${scope.reason}`);
+          captureScopeSkips.push({ integrationId: String(integration.id), reason: scope.reason });
+          continue;
+        }
+        const enabledSet = new Set(scope.ids);
+
         // Fetch the inbox threads (the correct reply source — see
         // fetchInboxThreads). Newest-first, capped at maxPages so each poll is
         // fast and focused on recent replies.
@@ -320,12 +324,29 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        // Filter to capture-enabled campaigns ONLY; drop threads with no sequence id
-        inboxThreads = inboxThreads.filter((t) => {
-          const seqId = t?.sequence?.id;
-          if (seqId === undefined || seqId === null) return false;
-          return enabledSet.has(String(seqId));
-        });
+        // Filter to capture-enabled sequences ONLY. A thread with no sequence
+        // id cannot be attributed, so it is dropped (fail closed).
+        {
+          const before = inboxThreads.length;
+          let noSeq = 0;
+          inboxThreads = inboxThreads.filter((t) => {
+            const seqId = normalizeCampaignId(t?.sequence?.id);
+            if (!seqId) {
+              noSeq++;
+              return false;
+            }
+            return enabledSet.has(seqId);
+          });
+          const notEnabled = before - noSeq - inboxThreads.length;
+          threadsDroppedNoSequence += noSeq;
+          threadsDroppedNotEnabled += notEnabled;
+          if (noSeq || notEnabled) {
+            console.log(
+              `[poll-reply-inbox] capture scope dropped ${noSeq} thread(s) with no sequence id and ` +
+              `${notEnabled} in capture-disabled/unknown sequences for integration ${integration.id}; ${inboxThreads.length} kept`,
+            );
+          }
+        }
 
         const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
@@ -665,7 +686,7 @@ Deno.serve(async (req) => {
                 const externalMessageId = null; // Reply.io v3 messages endpoint used here does not return per-message id
                 const lang = detectLanguageCode(inboundText);
                 if (personKey && stableId) {
-                  const writes: Array<Promise<unknown>> = [];
+                  const writes: Array<PromiseLike<unknown>> = [];
                   writes.push(
                     supabase.from('inference_events').upsert(
                       {
@@ -751,7 +772,17 @@ Deno.serve(async (req) => {
 
     console.log(`[poll-reply-inbox] Done. Processed: ${totalProcessed}, New leads: ${totalNew}, Mirrored: ${totalMirrored}`);
 
-    return new Response(JSON.stringify({ success: true, processed: totalProcessed, new: totalNew, mirrored: totalMirrored }), {
+    return new Response(JSON.stringify({
+      success: true,
+      processed: totalProcessed,
+      new: totalNew,
+      mirrored: totalMirrored,
+      captureScope: {
+        skippedIntegrations: captureScopeSkips,
+        threadsDroppedNoSequence,
+        threadsDroppedNotEnabled,
+      },
+    }), {
       status: 200,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });

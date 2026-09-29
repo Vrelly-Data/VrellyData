@@ -8,7 +8,7 @@ import { htmlToText } from '../_shared/html-to-text.ts';
 import { isSuppressed, fireClassifyReply } from '../_shared/inbox-reply.ts';
 import { cleanReplyPreview } from '../_shared/reply-text.ts';
 import { detectLanguageCode } from '../_shared/language.ts';
-import { checkCaptureGate } from '../_shared/capture-scope.ts';
+import { checkCaptureGate, type CaptureGateResult } from '../_shared/capture-scope.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -472,6 +472,19 @@ Deno.serve(async (req) => {
       event_data: event,
     });
 
+    // Fail-closed capture gate (synced_campaigns.capture_enabled keyed by
+    // integration). Evaluated lazily and at most ONCE per event: both the
+    // legacy agent_leads write and the inbox-routing write below consult the
+    // same result. Stats, webhook_events and synced_contacts updates are NOT
+    // gated (they are not capture).
+    let captureGate: CaptureGateResult | null = null;
+    const getCaptureGate = async (): Promise<CaptureGateResult> => {
+      if (!captureGate) {
+        captureGate = await checkCaptureGate(supabase as any, integration.id, campaignId || null);
+      }
+      return captureGate;
+    };
+
     // Update campaign stats. `name` is also selected so we can record the source
     // campaign on the lead at capture (last_campaign_name), making the campaign
     // show in the inbox for pending leads too — not just after Add to Campaign.
@@ -581,11 +594,12 @@ Deno.serve(async (req) => {
         // the same lead instead of racing it into a duplicate. Awaiting it also
         // guarantees inbox-routing sees this row when it resolves.
         if (normalizedType === 'email_replied' && engagement.lastReplyText && integration.created_by) {
-          // Fail-closed capture gate for legacy write as well
-          const gateLegacy = await checkCaptureGate(supabase as any, integration.id, campaignId || null);
+          // Fail-closed capture gate for the legacy write as well.
+          const gateLegacy = await getCaptureGate();
           if (!gateLegacy.allowed) {
-            console.log(`[reply-webhook] legacy path skip (${gateLegacy.reason}) campaign=${campaignId ?? 'null'}`);
-            // Still proceed to fire-and-forget sync-reply-contacts below
+            console.log(`[reply-webhook] legacy path skip (${gateLegacy.reason}) for integration=${integration.id} campaign=${campaignId || 'null'} event=${eventType}`);
+            // sync-reply-contacts is still fired below; its agent_leads writes
+            // are gated by the same helper inside that function.
           } else {
           const legacyUserId = integration.created_by;
           const externalId = contact.external_contact_id ||
@@ -654,11 +668,12 @@ Deno.serve(async (req) => {
     console.log(`[inbox-routing] isReplyEvent=${isReplyEvent} eventType=${eventType} created_by=${integration.created_by}`);
 
     if (isReplyEvent && integration.created_by) {
-      // Fail-closed capture gate BEFORE any agent_leads write
-      const gate = await checkCaptureGate(supabase as any, integration.id, campaignId || null);
+      // Fail-closed capture gate BEFORE any agent_leads write. A skip is a 200
+      // (Reply.io must not retry) with the reason in the body.
+      const gate = await getCaptureGate();
       if (!gate.allowed) {
-        console.log(`[inbox-routing] skip (${gate.reason}) for integration=${integration.id} campaign=${campaignId ?? 'null'} event=${eventType}`);
-        return new Response(JSON.stringify({ success: true, skipped: gate.reason, campaignId }), {
+        console.log(`[inbox-routing] skip (${gate.reason}) for integration=${integration.id} campaign=${campaignId || 'null'} event=${eventType}`);
+        return new Response(JSON.stringify({ success: true, skipped: gate.reason, campaignId: campaignId || null, eventType }), {
           status: 200,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });

@@ -1,6 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { cleanReplyPreview } from '../_shared/reply-text.ts';
 import { decideAuth } from "./gate.ts";
+import { checkCaptureGate, listEnabledCampaignIds } from "../_shared/capture-scope.ts";
 
 const allowedOrigins = [
   Deno.env.get("ALLOWED_ORIGIN") || "https://vrelly.com",
@@ -956,18 +957,31 @@ Deno.serve(async (req) => {
       (firmoIncomplete ? ` — workspace pull was INCOMPLETE (${firmoStopReason}); unenriched contacts kept their existing values` : ""),
     );
 
-    // Upsert replied contacts with reply text into agent_leads
-    const { data: repliedContacts } = await serviceClient
-      .from("synced_contacts")
-      .select("external_contact_id, first_name, last_name, email, engagement_data")
-      .eq("campaign_id", campaignId)
-      .eq("status", "replied")
-      .not("engagement_data->lastReplyText", "is", null);
+    // Upsert replied contacts with reply text into agent_leads — CAPTURE, so it
+    // is behind the fail-closed capture gate (synced_campaigns.capture_enabled
+    // for this integration + sequence). A skip is logged; the contacts and
+    // campaign sync above/below is not capture and still runs.
+    const captureGate = await checkCaptureGate(serviceClient, String(integrationId), externalCampaignId);
+    let repliedContacts: any[] | null = null;
+    if (!captureGate.allowed) {
+      console.log(
+        `[sync-reply-contacts] agent_leads upsert skipped (capture ${captureGate.reason}) ` +
+        `for integration=${integrationId} campaign=${externalCampaignId ?? "null"}`,
+      );
+    } else {
+      const { data } = await serviceClient
+        .from("synced_contacts")
+        .select("external_contact_id, first_name, last_name, email, engagement_data")
+        .eq("campaign_id", campaignId)
+        .eq("status", "replied")
+        .not("engagement_data->lastReplyText", "is", null);
+      repliedContacts = data;
+    }
 
     if (repliedContacts && repliedContacts.length > 0) {
       const agentLeadRows = repliedContacts
-        .filter((c) => c.external_contact_id && c.engagement_data?.lastReplyText)
-        .map((c) => ({
+        .filter((c: any) => c.external_contact_id && c.engagement_data?.lastReplyText)
+        .map((c: any) => ({
           user_id: userId,
           external_id: c.external_contact_id!,
           full_name: [c.first_name, c.last_name].filter(Boolean).join(" ") || null,
@@ -1102,12 +1116,22 @@ Deno.serve(async (req) => {
         if (agentConfig) {
           console.log(`Active agent config found (${agentConfig.id}) for user ${ownerUserId}, populating agent_leads`);
 
-          // 3. Find all synced_contacts for this integration where the contact has replied
-          const { data: repliedSyncedContacts } = await serviceClient
-            .from("synced_contacts")
-            .select("*")
-            .eq("team_id", teamId)
-            .or("engagement_data->>replied.eq.true,status.eq.replied");
+          // 3. Find replied synced_contacts for this team, restricted to
+          //    capture-enabled campaigns of THIS integration (fail closed:
+          //    none enabled / lookup error → nothing is written).
+          const scope = await listEnabledCampaignIds(serviceClient, String(integrationId));
+          let repliedSyncedContacts: any[] | null = null;
+          if (!scope.ok) {
+            console.log(`[sync-reply-contacts] agent_leads population skipped (capture scope ${scope.reason}) for integration=${integrationId}`);
+          } else {
+            const { data } = await serviceClient
+              .from("synced_contacts")
+              .select("*")
+              .eq("team_id", teamId)
+              .in("campaign_id", scope.rowIds)
+              .or("engagement_data->>replied.eq.true,status.eq.replied");
+            repliedSyncedContacts = data;
+          }
 
           if (repliedSyncedContacts && repliedSyncedContacts.length > 0) {
             console.log(`Found ${repliedSyncedContacts.length} replied contacts to upsert into agent_leads`);
@@ -1231,6 +1255,7 @@ Deno.serve(async (req) => {
         // (webhook-populated) or synced_campaigns.stats (Step 3a reporting).
         mode: "roster_only",
         agentLeadsCreated,
+        captureGate: captureGate.reason,
         // Firmographic observability. `incomplete` means the workspace pull
         // stopped early (retries spent, page cap, or enrichment threw) and
         // some contacts were not enriched THIS run. It never means data was

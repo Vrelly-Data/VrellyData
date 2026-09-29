@@ -5,7 +5,23 @@ import { detectLanguageCode } from "../_shared/language.ts";
 import { sanitizeLinkedinUrlForStorage } from "../_shared/normalize.ts";
 import { findLeadByNormalizedLinkedIn } from "../_shared/agent-leads-lookup.ts";
 import { decideSurfaceAndClassify, buildSurfaceUpdateFields } from "../_shared/surface.ts";
-import { checkCaptureGate } from "../_shared/capture-scope.ts";
+import { checkCaptureGate, normalizeCampaignId } from "../_shared/capture-scope.ts";
+
+// HeyReach reply webhooks carry the campaign as a nested object
+// (campaign: { id: <number>, name }). A flat top-level campaignId is accepted
+// as a fallback. Used for BOTH integration disambiguation and the capture
+// gate, so the two can never disagree about which campaign an event is for.
+function extractHeyReachCampaign(event: Record<string, unknown>): {
+  id: string | null;
+  name: string | null;
+} {
+  const obj = event.campaign;
+  const nested = obj && typeof obj === "object" ? (obj as { id?: unknown; name?: unknown }) : null;
+  const id = normalizeCampaignId(nested?.id) ?? normalizeCampaignId(event.campaignId);
+  const rawName = nested?.name;
+  const name = typeof rawName === "string" && rawName.trim() ? rawName : null;
+  return { id, name };
+}
 
 const allowedOrigins = [
   Deno.env.get("ALLOWED_ORIGIN") || "https://vrelly.com",
@@ -148,7 +164,8 @@ Deno.serve(async (req) => {
     // Resolve which HeyReach integration this webhook belongs to.
     // Order of preference: (1) explicit UUID in URL → (2) sole active
     // HeyReach integration → (3) disambiguate via synced_campaigns lookup
-    // using event.campaignId → (4) error.
+    // using the event's campaign id (nested campaign.id, see
+    // extractHeyReachCampaign) → (4) error.
     type IntegrationRow = {
       id: string;
       team_id: string;
@@ -195,7 +212,7 @@ Deno.serve(async (req) => {
         integration = rows[0];
       } else {
         // Disambiguate multiple integrations via campaign membership
-        const campaignExternalIdForLookup = (event as { campaignId?: unknown }).campaignId?.toString();
+        const campaignExternalIdForLookup = extractHeyReachCampaign(event).id;
         if (campaignExternalIdForLookup) {
           const { data: campaignRow } = await supabase
             .from("synced_campaigns")
@@ -211,7 +228,7 @@ Deno.serve(async (req) => {
         if (!integration) {
           console.error("Could not disambiguate HeyReach integration", {
             candidates: rows.length,
-            campaignId: (event as { campaignId?: unknown }).campaignId,
+            campaignId: extractHeyReachCampaign(event).id,
           });
           return new Response(
             JSON.stringify({
@@ -286,10 +303,7 @@ Deno.serve(async (req) => {
       (event as { type?: string }).type ||
       (looksLikeReplyPayload ? "EVERY_MESSAGE_REPLY_RECEIVED" : "unknown");
 
-    const campaignObj = (event as { campaign?: { id?: unknown; name?: unknown } }).campaign ?? null;
-    const campaignExternalId =
-      (campaignObj?.id ?? (event as { campaignId?: unknown }).campaignId)?.toString() || null;
-    const lastCampaignName = campaignObj?.name != null ? String(campaignObj.name) : null;
+    const { id: campaignExternalId, name: payloadCampaignName } = extractHeyReachCampaign(event);
     console.log(
       `HeyReach event: ${eventType} for integration ${integration.id} (campaignId=${campaignExternalId}, inferred=${!(event as { eventType?: string }).eventType && !(event as { type?: string }).type && looksLikeReplyPayload})`,
     );
@@ -313,9 +327,11 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Categorize: campaign reply (matches a synced campaign) vs inbound lead (cold DM).
-    // We capture both — inbound LinkedIn DMs are often high-value — but tag them so the
-    // agent inbox can separate "replies to our outreach" from "cold inbound leads".
+    // Categorize: campaign reply (matches a synced campaign) vs inbound lead.
+    // NOTE: since the fail-closed capture gate below, only events whose campaign
+    // has a capture-enabled synced_campaigns row are captured, so a captured
+    // lead is always "campaign_reply"; unattributed / cold inbound DMs are
+    // skipped (no_campaign_id / no_synced_row). The lookup is kept unchanged.
     let leadCategory: "campaign_reply" | "inbound_lead" = "inbound_lead";
 
     if (campaignExternalId) {
@@ -437,15 +453,17 @@ Deno.serve(async (req) => {
     // Only capture when the campaign id exists AND synced_campaigns has a row
     // for this integration with capture_enabled === true. Everything else is
     // a SKIP with an explicit reason.
+    let gateCampaignName: string | null = null;
     {
       const gate = await checkCaptureGate(supabase as any, integration.id, campaignExternalId);
+      gateCampaignName = gate.campaignName ?? null;
       if (!gate.allowed) {
         console.log(
           `[heyreach-webhook] skip (${gate.reason}) for integration=${integration.id} ` +
             `campaign=${campaignExternalId ?? "null"} event=${eventType}`,
         );
         return new Response(
-          JSON.stringify({ success: true, skipped: gate.reason, campaignId: campaignExternalId }),
+          JSON.stringify({ success: true, skipped: gate.reason, campaignId: campaignExternalId, eventType }),
           { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
         );
       }
@@ -536,6 +554,7 @@ Deno.serve(async (req) => {
       alreadyPending: (existingLead as any)?.inbox_status === "pending",
     });
 
+    const lastCampaignName = payloadCampaignName ?? gateCampaignName;
     const baseRow: Record<string, unknown> = {
       user_id: integration.created_by,
       external_id: externalId,
@@ -552,7 +571,9 @@ Deno.serve(async (req) => {
       heyreach_conversation_id: conversationId,
       heyreach_account_id: accountId ? Number(accountId) : null,
       linkedin_url: linkedinUrlForKey,
-      last_campaign_name: lastCampaignName,
+      // Conditional like campaign_external_id: baseRow is also used for
+      // UPDATEs, so an unconditional null would erase a known name.
+      ...(lastCampaignName ? { last_campaign_name: lastCampaignName } : {}),
       ...(campaignExternalId ? { campaign_external_id: campaignExternalId } : {}),
     };
 

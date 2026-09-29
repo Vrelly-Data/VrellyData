@@ -6,6 +6,7 @@ import {
 } from '../_shared/smartlead-thread.ts';
 import { detectLanguageCode } from '../_shared/language.ts';
 import { sanitizeLinkedinUrlForStorage } from '../_shared/normalize.ts';
+import { listEnabledCampaignIds } from '../_shared/capture-scope.ts';
 
 const allowedOrigins = ['https://vrelly.com', 'https://www.vrelly.com'];
 
@@ -108,6 +109,8 @@ Deno.serve(async (req) => {
     // silence is what hid a response-shape mismatch for the length of an
     // investigation — an empty result must be countable.
     const result = { scanned: 0, refreshed: 0, unchanged: 0, flagged: 0, empty: 0, errors: 0, rateLimited: 0, webhooksEnsured: 0, newLeads: 0 };
+    // Fail-closed capture scope for the new-lead sweep (integration ids + reason only).
+    const captureScopeSkips: Array<{ integrationId: string; reason: string }> = [];
 
     for (const integration of integrations ?? []) {
       const apiKey = integration.api_key_encrypted as string | undefined;
@@ -260,15 +263,31 @@ Deno.serve(async (req) => {
           .eq('user_id', integration.created_by);
         const have = new Set<string>((existing ?? []).map((r) => String((r as { email_address: string | null }).email_address ?? '').trim().toLowerCase())).add('');
 
-        // 2) Load capture-enabled campaigns with names + status + last sweep time
-        const { data: enabledNamed } = await supabase
+        // 2) Capture-enabled campaigns for THIS integration — the fail-closed
+        //    capture scope (synced_campaigns.capture_enabled keyed by
+        //    integration_id). A lookup error or no enabled campaign skips the
+        //    sweep for this integration: no new agent_leads rows.
+        const scope = await listEnabledCampaignIds(supabase, String(integration.id));
+        if (!scope.ok) {
+          console.log(`[poll-smartlead-inbox] new-lead sweep skipped for integration ${integration.id} — capture scope ${scope.reason}`);
+          captureScopeSkips.push({ integrationId: String(integration.id), reason: scope.reason });
+          continue;
+        }
+        type CampRow = { external_campaign_id: string; name: string | null; status: string | null; capture_recent_reply_sweep_at: string | null };
+        // Names + status + last sweep time are ordering metadata only; the
+        // authorised set is scope.ids. If the metadata read fails, sweep the
+        // authorised ids with default ordering.
+        const { data: enabledNamed, error: metaErr } = await supabase
           .from('synced_campaigns')
           .select('external_campaign_id, name, status, capture_recent_reply_sweep_at')
-          .eq('source', 'smartlead')
-          .eq('capture_enabled', true)
-          .eq('team_id', integration.team_id);
-        type CampRow = { external_campaign_id: string; name: string | null; status: string | null; capture_recent_reply_sweep_at: string | null };
-        const campaigns: CampRow[] = (enabledNamed ?? []) as any;
+          .eq('integration_id', integration.id)
+          .in('external_campaign_id', scope.ids);
+        if (metaErr) console.warn(`[poll-smartlead-inbox] campaign metadata read failed (${metaErr.message}); using default ordering`);
+        const metaById = new Map<string, CampRow>();
+        for (const r of (enabledNamed ?? []) as CampRow[]) metaById.set(String(r.external_campaign_id), r);
+        const campaigns: CampRow[] = scope.ids.map((id) =>
+          metaById.get(id) ?? { external_campaign_id: id, name: null, status: null, capture_recent_reply_sweep_at: null }
+        );
         // Prioritize active/running (in_progress), then paused, then others; within each bucket, oldest sweep first (NULLs first)
         const statusWeight = (s: string | null) => {
           const v = (s ?? '').toLowerCase();
@@ -523,7 +542,7 @@ Deno.serve(async (req) => {
                     try {
                       const personKey = email;
                       const lang = detectLanguageCode(lastProspectText);
-                      const writes: Array<Promise<unknown>> = [];
+                      const writes: Array<PromiseLike<unknown>> = [];
                       writes.push(
                         supabase
                           .from('inference_events')
@@ -626,7 +645,7 @@ Deno.serve(async (req) => {
     }
 
     console.log('[poll-smartlead-inbox]', JSON.stringify(result));
-    return json({ success: true, ...result });
+    return json({ success: true, ...result, captureScope: { skippedIntegrations: captureScopeSkips } });
   } catch (e) {
     console.error('[poll-smartlead-inbox] fatal:', e);
     return json({ error: (e as Error).message }, 500);

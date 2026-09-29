@@ -799,7 +799,7 @@ Deno.serve(async (req) => {
               (externalId ?? "");
             if (personKey && replyMessageId) {
               const lang = detectLanguageCode(replyText);
-            const writes: Array<PromiseLike<unknown>> = [];
+              const writes: Array<PromiseLike<unknown>> = [];
               writes.push(
                 supabase.from("inference_events").upsert(
                   {

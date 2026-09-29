@@ -4,11 +4,18 @@
 // capturing replies for them". Adding a 4th platform means implementing
 // CaptureScopeAdapter and registering it — no UI work, no new edge function.
 //
-// DELIBERATELY EXCLUDES REPLY.IO. Reply.io's capture scope is unmanaged by
-// design and served by the untouched fetch-available-campaigns /
-// ManageCampaignsDialog path. Nothing here reads, writes, or imports any
-// Reply.io code, and synced_campaigns.capture_enabled is never set on a
-// reply_io row (see migration 20260822020000).
+// The ADAPTER REGISTRY below (campaign/sender listing for the Capture Scope
+// UI) does not cover Reply.io: Reply.io campaigns are listed by the
+// fetch-available-campaigns / ManageCampaignsDialog path, and migration
+// 20260822020000 left every reply_io row at the column default (false).
+//
+// The FAIL-CLOSED CAPTURE GATE at the bottom of this file is different: it is
+// the single source of truth for inbox capture on EVERY platform, Reply.io
+// included. A reply_io campaign captures nothing until its synced_campaigns
+// row has capture_enabled = true.
+//
+// Keep this file dependency-free (no imports): it is shared byte-for-byte by
+// several functions and PRs.
 
 export type CaptureScopePlatform = "smartlead" | "heyreach";
 
@@ -133,17 +140,24 @@ export function normalizeStatus(raw: string | null | undefined): string {
 // ────────────────────────────────────────────────────────────────────────────
 // Fail-closed Capture gate — SINGLE SOURCE OF TRUTH for inbox capture
 // ---------------------------------------------------------------------------
-// A reply/lead is captured only when:
+// A reply/lead is captured into agent_leads only when:
 //   1) a campaign id is present on the event (or thread), AND
-//   2) a row exists in synced_campaigns for (integration_id, external_campaign_id), AND
+//   2) synced_campaigns has a row for (integration_id, external_campaign_id), AND
 //   3) that row has capture_enabled === true.
 //
-// Everything else FAILS CLOSED: a missing id, a missing row, or any lookup
-// error returns { allowed:false, reason: … } and the caller MUST SKIP capture.
+// Everything else FAILS CLOSED: a missing id, a missing row, capture disabled,
+// or any lookup error (including a timeout) returns { allowed:false, reason }
+// and the caller MUST skip the agent_leads write and log the reason.
 //
-// DB lookups are bounded with a timeout so a stuck network never stalls a
-// webhook. The underlying fetch cannot be aborted from here (db comes from
-// the caller), but the gate returns a conservative "lookup_error" on timeout.
+// Ids: synced_campaigns.external_campaign_id is TEXT. Providers send numbers
+// (HeyReach campaign.id, Smartlead campaign_id, Reply.io sequence ids) or
+// strings; normalizeCampaignId maps both to the same canonical string, so
+// 518402 and "518402" gate identically.
+//
+// Timeouts: the lookup is aborted, not just abandoned. The query gets an
+// AbortSignal (PostgREST builders expose .abortSignal()), and the await is
+// raced against the same deadline, so a stuck network call is cancelled and
+// the gate returns lookup_error on time.
 // ────────────────────────────────────────────────────────────────────────────
 
 export type CaptureGateSkipReason =
@@ -158,23 +172,89 @@ export interface CaptureGateResult {
   campaignName?: string | null;
 }
 
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error("timeout")), ms);
-    p.then((v) => {
-      clearTimeout(t);
-      resolve(v);
-    }, (e) => {
-      clearTimeout(t);
-      reject(e);
-    });
-  });
+/**
+ * Canonical campaign id: a finite number becomes its decimal string, a string
+ * is trimmed; anything else (null, undefined, "", "null", "undefined",
+ * objects, NaN) is treated as missing.
+ */
+export function normalizeCampaignId(raw: unknown): string | null {
+  if (typeof raw === "number") {
+    return Number.isFinite(raw) ? String(raw) : null;
+  }
+  if (typeof raw === "bigint") return raw.toString();
+  if (typeof raw === "string") {
+    const s = raw.trim();
+    if (!s || s === "null" || s === "undefined") return null;
+    return s;
+  }
+  return null;
 }
 
 /**
+ * Numeric form of campaign ids, for provider APIs that filter on integer ids
+ * (HeyReach GetConversationsV2 campaignIds). Non-integer ids are dropped and
+ * the result is de-duplicated. Callers must treat an EMPTY result as "nothing
+ * enabled": for HeyReach, campaignIds [] means every campaign.
+ */
+export function numericCampaignIds(ids: readonly string[]): number[] {
+  const out: number[] = [];
+  for (const id of ids) {
+    const n = Number(id);
+    if (Number.isSafeInteger(n) && n > 0 && !out.includes(n)) out.push(n);
+  }
+  return out;
+}
+
+const LOOKUP_TIMEOUT_MIN_MS = 250;
+const LOOKUP_TIMEOUT_MAX_MS = 5000;
+
+function clampTimeout(ms: unknown, fallback: number): number {
+  const n = Number(ms ?? fallback);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(LOOKUP_TIMEOUT_MIN_MS, Math.min(LOOKUP_TIMEOUT_MAX_MS, n));
+}
+
+// Runs build(signal) with a hard deadline. The signal is aborted at the
+// deadline (cancelling the underlying fetch when the builder honours it) and
+// the returned promise rejects at the same moment even if it does not.
+function runBounded<T>(build: (signal: AbortSignal) => PromiseLike<T>, ms: number): Promise<T> {
+  const ctrl = new AbortController();
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      ctrl.abort(new Error(`capture-scope lookup timed out after ${ms}ms`));
+      reject(new Error(`timeout after ${ms}ms`));
+    }, ms);
+    const done = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn();
+    };
+    try {
+      build(ctrl.signal).then(
+        (v) => done(() => resolve(v)),
+        (e) => done(() => reject(e)),
+      );
+    } catch (e) {
+      done(() => reject(e));
+    }
+  });
+}
+
+// deno-lint-ignore no-explicit-any
+function withAbort(q: any, signal: AbortSignal): any {
+  return typeof q?.abortSignal === "function" ? q.abortSignal(signal) : q;
+}
+
+type LookupResult = { data: unknown; error: { message: string } | null };
+
+/**
  * Fail-closed gate for one campaign id.
- * Returns { allowed:true } only when a capture_enabled row exists.
- * Otherwise { allowed:false, reason } with one of:
+ * Returns { allowed:true } only when a capture_enabled row exists for this
+ * integration. Otherwise { allowed:false, reason } with one of:
  *   - no_campaign_id
  *   - no_synced_row
  *   - capture_disabled
@@ -184,23 +264,33 @@ export async function checkCaptureGate(
   // deno-lint-ignore no-explicit-any
   db: any,
   integrationId: string,
-  campaignExternalId: string | null | undefined,
+  campaignExternalId: unknown,
   opts?: { timeoutMs?: number },
 ): Promise<CaptureGateResult> {
-  if (!campaignExternalId) {
+  const campaignId = normalizeCampaignId(campaignExternalId);
+  if (!campaignId) {
     return { allowed: false, reason: "no_campaign_id" };
   }
-  const timeoutMs = Math.max(250, Math.min(5000, Number(opts?.timeoutMs ?? 1500)));
+  if (!integrationId) {
+    console.warn(`[capture-scope] lookup_error for campaign ${campaignId}: no integration id`);
+    return { allowed: false, reason: "lookup_error" };
+  }
+  const timeoutMs = clampTimeout(opts?.timeoutMs, 1500);
   try {
-    const q = db
-      .from("synced_campaigns")
-      .select("capture_enabled, name")
-      .eq("integration_id", integrationId)
-      .eq("external_campaign_id", String(campaignExternalId))
-      .maybeSingle();
-    const { data, error } = await withTimeout(q as Promise<{ data: unknown; error: { message: string } | null }>, timeoutMs);
+    const { data, error } = await runBounded<LookupResult>(
+      (signal) =>
+        withAbort(
+          db
+            .from("synced_campaigns")
+            .select("capture_enabled, name")
+            .eq("integration_id", integrationId)
+            .eq("external_campaign_id", campaignId),
+          signal,
+        ).maybeSingle(),
+      timeoutMs,
+    );
     if (error) {
-      console.warn(`[capture-scope] lookup_error for campaign ${campaignExternalId}: ${error.message}`);
+      console.warn(`[capture-scope] lookup_error for campaign ${campaignId}: ${error.message}`);
       return { allowed: false, reason: "lookup_error" };
     }
     const row = data as { capture_enabled?: boolean | null; name?: string | null } | null;
@@ -210,14 +300,17 @@ export async function checkCaptureGate(
     }
     return { allowed: true, reason: "allowed", campaignName: row.name ?? null };
   } catch (e) {
-    console.warn(`[capture-scope] lookup_error (threw) for campaign ${campaignExternalId}: ${e instanceof Error ? e.message : String(e)}`);
+    console.warn(`[capture-scope] lookup_error (threw) for campaign ${campaignId}: ${e instanceof Error ? e.message : String(e)}`);
     return { allowed: false, reason: "lookup_error" };
   }
 }
 
 export interface EnabledIdsResultOk {
   ok: true;
+  // Canonical external campaign ids (see normalizeCampaignId), de-duplicated.
   ids: string[];
+  // synced_campaigns.id of the same rows, for callers that join on the row id.
+  rowIds: string[];
 }
 export interface EnabledIdsResultErr {
   ok: false;
@@ -228,7 +321,9 @@ export type EnabledIdsResult = EnabledIdsResultOk | EnabledIdsResultErr;
 /**
  * Enumerate capture-enabled campaign ids for an integration.
  * Pollers/recovery use this to FILTER AT SOURCE (provider API) where supported,
- * or locally when not.
+ * or locally when not. Fails closed: a lookup error (or timeout) returns
+ * lookup_error and no enabled row returns none_enabled; callers must then skip
+ * capture for the integration entirely (never poll unfiltered).
  */
 export async function listEnabledCampaignIds(
   // deno-lint-ignore no-explicit-any
@@ -236,23 +331,39 @@ export async function listEnabledCampaignIds(
   integrationId: string,
   opts?: { timeoutMs?: number },
 ): Promise<EnabledIdsResult> {
-  const timeoutMs = Math.max(250, Math.min(5000, Number(opts?.timeoutMs ?? 2000)));
+  if (!integrationId) {
+    console.warn(`[capture-scope] listEnabledCampaignIds lookup_error: no integration id`);
+    return { ok: false, reason: "lookup_error" };
+  }
+  const timeoutMs = clampTimeout(opts?.timeoutMs, 2000);
   try {
-    const q = db
-      .from("synced_campaigns")
-      .select("external_campaign_id")
-      .eq("integration_id", integrationId)
-      .eq("capture_enabled", true);
-    const { data, error } = await withTimeout(q as Promise<{ data: unknown; error: { message: string } | null }>, timeoutMs);
+    const { data, error } = await runBounded<LookupResult>(
+      (signal) =>
+        withAbort(
+          db
+            .from("synced_campaigns")
+            .select("id, external_campaign_id")
+            .eq("integration_id", integrationId)
+            .eq("capture_enabled", true),
+          signal,
+        ),
+      timeoutMs,
+    );
     if (error) {
       console.warn(`[capture-scope] listEnabledCampaignIds lookup_error for integration ${integrationId}: ${error.message}`);
       return { ok: false, reason: "lookup_error" };
     }
-    const ids = (Array.isArray(data) ? data : [])
-      .map((r) => String((r as { external_campaign_id?: unknown }).external_campaign_id ?? ""))
-      .filter((s) => !!s);
+    const ids: string[] = [];
+    const rowIds: string[] = [];
+    for (const r of Array.isArray(data) ? data : []) {
+      const row = r as { id?: unknown; external_campaign_id?: unknown };
+      const id = normalizeCampaignId(row.external_campaign_id);
+      if (!id || ids.includes(id)) continue;
+      ids.push(id);
+      if (row.id != null) rowIds.push(String(row.id));
+    }
     if (ids.length === 0) return { ok: false, reason: "none_enabled" };
-    return { ok: true, ids };
+    return { ok: true, ids, rowIds };
   } catch (e) {
     console.warn(`[capture-scope] listEnabledCampaignIds threw for integration ${integrationId}: ${e instanceof Error ? e.message : String(e)}`);
     return { ok: false, reason: "lookup_error" };
