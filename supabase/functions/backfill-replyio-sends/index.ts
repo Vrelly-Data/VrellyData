@@ -135,7 +135,7 @@ function normalizeChannel(c: unknown): "email" | "linkedin" | "other" {
 
 type ByEventType = Record<string, { channel: string; count: number }>;
 
-Deno.serve(async (req) => {
+export async function handler(req: Request): Promise<Response> {
   const corsHeaders = getCorsHeaders(req);
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
@@ -449,7 +449,12 @@ Deno.serve(async (req) => {
       headers: { ...getCorsHeaders(req), "Content-Type": "application/json" },
     });
   }
-});
+}
+
+// Start the server only when executed as the main module.
+if (import.meta.main) {
+  Deno.serve(handler);
+}
 
 // ---- Inline unit tests for pure helpers -----------------------------------
 try {
