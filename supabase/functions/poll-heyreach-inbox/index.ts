@@ -12,7 +12,7 @@ import { sanitizeLinkedinUrlForStorage } from '../_shared/normalize.ts';
 import { findLeadByNormalizedLinkedIn } from '../_shared/agent-leads-lookup.ts';
 import { isStaleProspectMessage } from '../_shared/stale.ts';
 import { decideSurfaceAndClassify, buildSurfaceUpdateFields } from '../_shared/surface.ts';
-import { walkWithState, type StopReason, type WalkState } from './paging.ts';
+import { walkWithState, type StopReason, type WalkState, DEFAULT_PAGER_OPTIONS } from './paging.ts';
 
 const allowedOrigins = [
   'https://vrelly.com',
@@ -28,12 +28,6 @@ function getCorsHeaders(req: Request) {
 }
 
 const HEYREACH_API = 'https://api.heyreach.io/api/public';
-// Budgets and timeouts (ms)
-const RUN_BUDGET_MS = 110_000;
-const MIN_NEXT_PAGE_MS = 40_000;
-const MIN_NEXT_ITEM_MS = 10_000;
-const PAGE_FETCH_TIMEOUT_MS = 35_000; // capped by remaining - 5_000
-const CHATROOM_TIMEOUT_MS = 8_000;
 
 Deno.serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
@@ -132,7 +126,7 @@ Deno.serve(async (req) => {
     });
 
     const startedAtMs = Date.now();
-    const deadline = startedAtMs + RUN_BUDGET_MS;
+    const deadline = startedAtMs + DEFAULT_PAGER_OPTIONS.runBudgetMs;
     const remaining = () => Math.max(0, deadline - Date.now());
 
     type PerIntegrationSummary = {
@@ -159,7 +153,7 @@ Deno.serve(async (req) => {
 
         const userId = integration.created_by;
         // Skip starting when not enough remaining budget
-        if (remaining() < MIN_NEXT_PAGE_MS) {
+        if (remaining() < DEFAULT_PAGER_OPTIONS.minRemainingForNextPageMs) {
           perIntegration.push({
             integrationId: integration.id,
             stopReason: 'time_budget',
@@ -251,7 +245,10 @@ Deno.serve(async (req) => {
         }
 
         // ==== Budgeted walk with persistent state ============================
-        const stateIn: WalkState = (integration?.heyreach_poll_state as WalkState) ?? { version: 1, baselineStartedAt: null, walk: null };
+        const rawState = (integration?.heyreach_poll_state as WalkState) ?? {};
+        const stateIn: WalkState = (rawState && typeof rawState === 'object' && 'version' in rawState)
+          ? rawState as WalkState
+          : { version: 1, baselineStartedAt: null, walk: null };
         const walker = await walkWithState<any>(
           {
             async fetchPage(offset, limit, signal) {
@@ -271,7 +268,7 @@ Deno.serve(async (req) => {
                   offset,
                   limit,
                 }),
-                signal: AbortSignal.timeout(Math.max(1_000, Math.min(PAGE_FETCH_TIMEOUT_MS, Math.max(0, remaining() - 5_000)))),
+                signal: AbortSignal.timeout(Math.max(1_000, Math.min(DEFAULT_PAGER_OPTIONS.pageFetchTimeoutMs, Math.max(0, remaining() - 5_000)))),
               });
               if (!res.ok) {
                 const t = await res.text().catch(() => '');
@@ -367,7 +364,7 @@ Deno.serve(async (req) => {
                         'X-API-KEY': apiKey,
                         'Accept': 'application/json',
                       },
-                      signal: AbortSignal.timeout(CHATROOM_TIMEOUT_MS),
+                      signal: AbortSignal.timeout(DEFAULT_PAGER_OPTIONS.itemFetchTimeoutMs),
                     },
                   );
 
@@ -498,8 +495,9 @@ Deno.serve(async (req) => {
                 console.log(`[poll-heyreach-inbox] gate: stale=${stale} ts=${newestProspectTs ?? 'null'} willClassify=${decision.willClassify}`);
 
                 if (surface && savedRow) {
-                  // Drafting is disabled for HeyReach; nothing to trigger here.
-                  console.log("[poll-heyreach-inbox] HeyReach drafting is disabled by policy");
+                  // Drafting kill switch: HeyReach drafting disabled.
+                  // Re-enable later only behind an explicit flag that defaults OFF.
+                  console.log("[poll-heyreach-inbox] HeyReach drafting disabled (kill switch)");
                 }
 
                 if (savedRow && !existingLead) {
@@ -531,30 +529,28 @@ Deno.serve(async (req) => {
             nowMs: () => Date.now(),
             sleepMs: (ms: number) => new Promise((r) => setTimeout(r, ms)),
             async saveState(next: WalkState) {
-              await supabase
+              const { error } = await supabase
                 .from('outbound_integrations')
                 .update({ heyreach_poll_state: next as any })
                 .eq('id', integration.id);
+              if (error) throw error;
             },
           },
           stateIn,
           {
+            ...DEFAULT_PAGER_OPTIONS,
             runBudgetMs: remaining(),
-            pageLimit: 100,
-            minRemainingForNextPageMs: MIN_NEXT_PAGE_MS,
-            pageFetchTimeoutMs: PAGE_FETCH_TIMEOUT_MS,
-            itemFetchTimeoutMs: CHATROOM_TIMEOUT_MS,
-            minRemainingForNextItemMs: MIN_NEXT_ITEM_MS,
-            resumeBackstepInitial: 25,
-            resumeBackstepStep: 100,
           },
         );
 
         // Persist final state from walker (already saved in-page and on stop)
-        await supabase
+        const { error: finalSaveErr } = await supabase
           .from('outbound_integrations')
           .update({ heyreach_poll_state: walker.state as any })
           .eq('id', integration.id);
+        if (finalSaveErr) {
+          console.error('[poll-heyreach-inbox] final saveState error:', finalSaveErr);
+        }
 
         // Summarize
         perIntegration.push({

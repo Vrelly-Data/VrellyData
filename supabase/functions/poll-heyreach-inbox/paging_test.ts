@@ -1,5 +1,5 @@
 import { assert, assertEquals, assertNotEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { walkWithState, type WalkState } from "./paging.ts";
+import { walkWithState, type WalkState, DEFAULT_PAGER_OPTIONS } from "./paging.ts";
 
 function makeClock(start = 0) {
   let now = start;
@@ -47,16 +47,7 @@ async function runOnce(opts: {
     nowMs: clock.nowMs,
     sleepMs: clock.sleepMs,
     async saveState(_s) { /* no-op for unit tests */ },
-  }, opts.initial, {
-    runBudgetMs: opts.runBudgetMs,
-    pageLimit: opts.pageLimit ?? 100,
-    minRemainingForNextPageMs: 40_000,
-    pageFetchTimeoutMs: 35_000,
-    itemFetchTimeoutMs: 8_000,
-    minRemainingForNextItemMs: 10_000,
-    resumeBackstepInitial: 25,
-    resumeBackstepStep: 100,
-  });
+  }, opts.initial, { ...DEFAULT_PAGER_OPTIONS });
   return { res, visited, clock, fetchedPages };
 }
 
@@ -93,16 +84,7 @@ Deno.test("(9) GetChatroom failure baseline unchanged and no item processed", as
     nowMs: clock.nowMs,
     sleepMs: clock.sleepMs,
     async saveState(s) { state = s; },
-  }, state, {
-    runBudgetMs: 110_000,
-    pageLimit: 100,
-    minRemainingForNextPageMs: 40_000,
-    pageFetchTimeoutMs: 35_000,
-    itemFetchTimeoutMs: 8_000,
-    minRemainingForNextItemMs: 10_000,
-    resumeBackstepInitial: 25,
-    resumeBackstepStep: 100,
-  });
+  }, state, { ...DEFAULT_PAGER_OPTIONS });
   // Baseline unchanged and failure recorded
   assertEquals(res.failures > 0, true);
   assertEquals(state.baselineStartedAt, new Date(T0).toISOString());
@@ -126,16 +108,7 @@ Deno.test("(10) Zero totalCount walks all 250 items", async () => {
     nowMs: clock.nowMs,
     sleepMs: clock.sleepMs,
     async saveState(_s) {},
-  }, { version: 1, baselineStartedAt: null, walk: null }, {
-    runBudgetMs: 110_000,
-    pageLimit: 100,
-    minRemainingForNextPageMs: 40_000,
-    pageFetchTimeoutMs: 35_000,
-    itemFetchTimeoutMs: 8_000,
-    minRemainingForNextItemMs: 10_000,
-    resumeBackstepInitial: 25,
-    resumeBackstepStep: 100,
-  });
+  }, { version: 1, baselineStartedAt: null, walk: null }, { ...DEFAULT_PAGER_OPTIONS });
   assertEquals(processed, 250);
   assertEquals(r.stopReason, "end_of_list");
 });
@@ -175,16 +148,7 @@ Deno.test("(2) No baseline, 1,893 items, 20–30s pages and 0–9s items: walk t
       nowMs: clock.nowMs,
       sleepMs: clock.sleepMs,
       async saveState(s) { state = s; },
-    }, state, {
-      runBudgetMs: 110_000,
-      pageLimit: 100,
-      minRemainingForNextPageMs: 40_000,
-      pageFetchTimeoutMs: 35_000,
-      itemFetchTimeoutMs: 8_000,
-      minRemainingForNextItemMs: 10_000,
-      resumeBackstepInitial: 1,
-      resumeBackstepStep: 10,
-    });
+    }, state, { ...DEFAULT_PAGER_OPTIONS });
     ticks++;
     if (r.stopReason === "end_of_list") {
       sawEnd = true;
@@ -232,18 +196,20 @@ Deno.test("(3) fetch_error at page k leaves walk unchanged and resumes next tick
 });
 
 Deno.test("(4) Mid-page budget stop resumes at the exact next item", async () => {
-  const page: Item[] = Array.from({ length: 10 }, (_, i) => ({
+  // 100 items at 8s each + ~30s page fetch ⇒ exceeds 110s budget → mid-page stop
+  const page: Item[] = Array.from({ length: 100 }, (_, i) => ({
     id: `p1-${i}`,
     lastMessageAt: new Date(4_000_000 - i * 1000).toISOString(),
   }));
   let state: WalkState = { version: 1, baselineStartedAt: null, walk: null };
-  // First tick: small budget to process only 3 items
+  // First tick: default budget; heavy per-item so we stop mid-page
   const r1 = await runOnce({
     initial: state,
     pages: [page],
-    runBudgetMs: 15_000, // allow one page fetch and a few items
+    runBudgetMs: 110_000,
     pageLimit: 100,
-    perItemDurationsMs: [2_000, 2_000, 2_000, 2_000],
+    pageDurationsMs: [30_000],
+    perItemDurationsMs: [8_000],
   });
   state = r1.res.state;
   assertEquals(r1.res.stopReason, "time_budget");
@@ -301,16 +267,7 @@ Deno.test("(6) Item failures: baseline NOT advanced on completion", async () => 
       nowMs: clock.nowMs,
       sleepMs: clock.sleepMs,
       async saveState(s) { state = s; },
-    }, state, {
-      runBudgetMs: 110_000,
-      pageLimit: 100,
-      minRemainingForNextPageMs: 40_000,
-      pageFetchTimeoutMs: 35_000,
-      itemFetchTimeoutMs: 8_000,
-      minRemainingForNextItemMs: 10_000,
-      resumeBackstepInitial: 25,
-      resumeBackstepStep: 100,
-    });
+    }, state, { ...DEFAULT_PAGER_OPTIONS });
   })();
   assertEquals(r.stopReason, "end_of_list");
   // Baseline should remain the previous value since failures > 0
@@ -357,16 +314,7 @@ Deno.test("(8) Randomized durations: guards respected and total ≤ 120s", async
     nowMs: clock.nowMs,
     sleepMs: clock.sleepMs,
     async saveState(_s) {},
-  }, { version: 1, baselineStartedAt: null, walk: null }, {
-    runBudgetMs: 110_000,
-    pageLimit: 100,
-    minRemainingForNextPageMs: 40_000,
-    pageFetchTimeoutMs: 35_000,
-    itemFetchTimeoutMs: 8_000,
-    minRemainingForNextItemMs: 10_000,
-    resumeBackstepInitial: 25,
-    resumeBackstepStep: 100,
-  });
+  }, { version: 1, baselineStartedAt: null, walk: null }, { ...DEFAULT_PAGER_OPTIONS });
   assert(clock.get() <= 120_000);
 });
 

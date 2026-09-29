@@ -46,6 +46,17 @@ export interface PagerOptions {
   resumeBackstepStep?: number;         // 100
 }
 
+export const DEFAULT_PAGER_OPTIONS: Required<PagerOptions> = {
+  runBudgetMs: 110_000,
+  pageLimit: 100,
+  minRemainingForNextPageMs: 40_000,
+  pageFetchTimeoutMs: 35_000,
+  itemFetchTimeoutMs: 8_000,
+  minRemainingForNextItemMs: 10_000,
+  resumeBackstepInitial: 25,
+  resumeBackstepStep: 100,
+};
+
 export interface PagerResult {
   pagesFetched: number;
   itemsProcessed: number;
@@ -123,6 +134,7 @@ export async function walkWithState<Item extends { id?: unknown; lastMessageAt?:
   // Compute resume offset with overlap verification
   let effectiveOffset = Math.max(0, (state.walk.offset ?? 0) - backInitial);
   let verified = false;
+  let resumeAppliedThisPage = false;
 
   while (true) {
     // Budget guard before a new page
@@ -148,7 +160,8 @@ export async function walkWithState<Item extends { id?: unknown; lastMessageAt?:
     if (!verified) {
       const lastId = state.walk.lastId;
       const lastTs = state.walk.lastTs;
-      const haveId = lastId != null && items.some((it) => String(it?.id ?? '') === String(lastId));
+      const idIndex = lastId != null ? items.findIndex((it) => String(it?.id ?? '') === String(lastId)) : -1;
+      const haveId = idIndex >= 0;
       const haveTs = lastTs != null && items.some((it) => {
         const ms = parseMs(it?.lastMessageAt);
         const last = parseMs(lastTs);
@@ -161,6 +174,19 @@ export async function walkWithState<Item extends { id?: unknown; lastMessageAt?:
         continue;
       }
       verified = true;
+      // Resume rule: if lastId is found on the page at index j, start processing at j+1.
+      // This is VERIFICATION-only overlap; do not reprocess the overlap segment.
+      if (haveId && idIndex >= 0) {
+        const startAt = idIndex + 1;
+        if (startAt > 0) {
+          // Pre-advance the in-memory cursor to reflect that we are skipping `startAt` items on this page.
+          state.walk.offset = effectiveOffset + startAt;
+          resumeAppliedThisPage = true;
+        }
+      } else {
+        // When lastId isn't found (drift), process the whole page again.
+        resumeAppliedThisPage = false;
+      }
     }
 
     // Caught up rule: only when cutoff is set (baseline known)
@@ -174,7 +200,8 @@ export async function walkWithState<Item extends { id?: unknown; lastMessageAt?:
     }
 
     // Process items
-    for (let i = 0; i < items.length; i++) {
+    const startIndex = resumeAppliedThisPage ? Math.min(items.length, Math.max(0, (state.walk.offset ?? effectiveOffset) - effectiveOffset)) : 0;
+    for (let i = startIndex; i < items.length; i++) {
       if (remaining() < minNextItem) {
         stopReason = 'time_budget';
         // Cursor is already updated in memory below; persist happens at page end/stop via caller
