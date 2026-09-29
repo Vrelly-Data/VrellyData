@@ -15,6 +15,9 @@ const corsHeaders = {
     'authorization, x-client-info, apikey, content-type',
 };
 
+// Reply.io v3 API base URL (aligns with poll-reply-inbox)
+const REPLY_API_V3 = 'https://api.reply.io/v3';
+
 // ---------------------------------------------------------------------------
 // Reply.io v3 webhook receiver (Foundation phase 4/6, paired with
 // setup-reply-webhook #5 in the same commit).
@@ -367,6 +370,8 @@ Deno.serve(async (req) => {
         event.message,
       ) ?? `${channel} reply received`
     );
+    // Body-less placeholder path (no actual reply body in webhook)
+    const hasReplyBody = replyText !== `${channel} reply received`;
 
     // Campaign ID — v2: event.sequence_fields.id; v3: likely
     // event.sequenceId or top-level
@@ -752,7 +757,7 @@ Deno.serve(async (req) => {
             // (c) not newer than what we already surfaced. Only opt-out blocks
             // permanently — a 'dismissed'/'in_progress' lead resurfaces.
             resurface =
-              !isSuppressed(existing?.disposition_tag) && !alreadyRecorded && newerThanSurfaced;
+              hasReplyBody && !isSuppressed(existing?.disposition_tag) && !alreadyRecorded && newerThanSurfaced;
             updatedThread = alreadyRecorded ? existingThread : [...existingThread, newMsg];
 
             const { data: updated, error: updateError } = await supabase
@@ -766,7 +771,7 @@ Deno.serve(async (req) => {
                 job_title: jobTitle || undefined,
                 channel,
                 last_reply_at: replyAt,
-                last_reply_text: cleanReplyPreview(replyText),
+                last_reply_text: hasReplyBody ? cleanReplyPreview(replyText) : undefined,
                 // reply_thread DELIBERATELY NOT WRITTEN. poll-reply-inbox is the
                 // sole owner: it builds the thread from Reply.io's PER-MESSAGE
                 // bodies (GET /v3/inbox/threads/{id}/messages), which arrive
@@ -794,6 +799,8 @@ Deno.serve(async (req) => {
             // partial (user_id, external_id) index makes onConflict inference
             // unreliable).
             updatedThread = [newMsg];
+            // Only surface a brand-new lead when webhook carries a real body
+            resurface = hasReplyBody;
             const { data: inserted, error: insertError } = await supabase
               .from('agent_leads')
               .insert({
@@ -808,11 +815,11 @@ Deno.serve(async (req) => {
                 channel,
                 source: 'reply_io',
                 pipeline_stage: 'replied',
-                inbox_status: 'pending',
+                inbox_status: hasReplyBody ? 'pending' : 'mirrored',
                 last_reply_at: replyAt,
                 // New lead lands actionable → seed the surface watermark.
-                last_surfaced_reply_at: newMsg.timestamp,
-                last_reply_text: cleanReplyPreview(replyText),
+                last_surfaced_reply_at: hasReplyBody ? newMsg.timestamp : null,
+                last_reply_text: hasReplyBody ? cleanReplyPreview(replyText) : null,
                 // reply_thread NOT written here either — same ownership split.
                 // A webhook-created lead therefore has an empty thread until the
                 // next poll (<=15 min) populates it. Verified safe: the inbox
@@ -981,3 +988,8 @@ Deno.serve(async (req) => {
     });
   }
 });
+
+// Test-only helpers (no side effects)
+export function _isBodylessPlaceholderForTest(channel: string, replyText: string): boolean {
+  return String(replyText ?? '') === `${String(channel ?? '').toLowerCase() === 'linkedin' ? 'linkedin' : 'email'} reply received`;
+}
