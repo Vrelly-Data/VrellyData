@@ -24,6 +24,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { sanitizeLinkedinUrlForStorage } from "../_shared/normalize.ts";
 import { findLeadByNormalizedLinkedIn } from "../_shared/agent-leads-lookup.ts";
 import { cleanReplyPreview } from "../_shared/reply-text.ts";
+import { isSuppressed } from "../_shared/inbox-reply.ts";
 
 type Json = Record<string, unknown>;
 
@@ -262,6 +263,8 @@ Deno.serve(async (req) => {
                 await supabase.from("agent_leads").update({
                   last_reply_text: replySnippet,
                   last_reply_at: latestProspectTs,
+                  inbox_status: "pending",
+                  last_surfaced_reply_at: latestProspectTs,
                 }).eq("id", raced.id);
               } else {
                 console.error(`[recover-heyreach-leads] 23505 on INSERT but no row found for ${conversationId}`);
@@ -291,6 +294,7 @@ Deno.serve(async (req) => {
                 last_reply_text: replySnippet,
                 last_reply_at: latestProspectTs,
                 last_surfaced_reply_at: latestProspectTs,
+                ...(existing && !isSuppressed(existing.disposition_tag) ? { inbox_status: "pending" } : {}),
               })
               .eq("id", existing.id);
             if (updErr) {

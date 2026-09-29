@@ -11,6 +11,7 @@ import { cleanReplyPreview } from '../_shared/reply-text.ts';
 import { sanitizeLinkedinUrlForStorage } from '../_shared/normalize.ts';
 import { findLeadByNormalizedLinkedIn } from '../_shared/agent-leads-lookup.ts';
 import { isStaleProspectMessage } from '../_shared/stale.ts';
+import { decideSurfaceAndClassify } from '../_shared/surface.ts';
 
 const allowedOrigins = [
   'https://vrelly.com',
@@ -365,29 +366,35 @@ Deno.serve(async (req) => {
               //                   inbound reply from the last 24h; else
               //                   'mirrored' (in neither inbox tab, still fully
               //                   readable and still resurfaceable later).
-              const newest = replyThread.length > 0
-                ? replyThread.reduce((a, b) =>
-                    Date.parse(b.timestamp || '') > Date.parse(a.timestamp || '') ? b : a)
-                : null;
-              const newestRole = newest?.role ?? null;
-              const newestMs = newest ? Date.parse(newest.timestamp || '') : NaN;
+              // Newest PROSPECT message timestamp (raw, no fallback to now)
+              const newestProspect = replyThread
+                .filter((e) => e.role === 'prospect')
+                .reduce<{ timestamp: string | null } | null>(
+                  (a, b) => {
+                    const bt = b?.timestamp ? Date.parse(b.timestamp) : NaN;
+                    if (!Number.isFinite(bt)) return a;
+                    if (!a) return { timestamp: b.timestamp };
+                    const at = a.timestamp ? Date.parse(a.timestamp) : NaN;
+                    return (!Number.isFinite(at) || bt > at) ? { timestamp: b.timestamp } : a;
+                  },
+                  null
+                );
+              const newestProspectTs = newestProspect?.timestamp ?? null;
+              const newestMs = newestProspectTs ? Date.parse(newestProspectTs) : NaN;
               const priorMs = existingLead?.last_surfaced_reply_at
                 ? Date.parse(existingLead.last_surfaced_reply_at)
                 : 0;
               const newerThanPrior = Number.isFinite(newestMs) && newestMs > priorMs;
-              const isRecent = Number.isFinite(newestMs)
-                ? newestMs >= Date.now() - 24 * 60 * 60 * 1000
-                : false;
-              const messageTs = newest?.timestamp ?? null;
-              const stale = isStaleProspectMessage(messageTs, Date.now());
-
-              const surface = existingLead
-                ? shouldResurface({
-                    dispositionTag: existingLead.disposition_tag,
-                    newestRole,
-                    newerThanPrior,
-                  })
-                : (newestRole === 'prospect' && isRecent);
+              // Surface/classify decision (centralized)
+              const decision = decideSurfaceAndClassify({
+                dispositionTag: existingLead?.disposition_tag ?? null,
+                isExistingLead: !!existingLead,
+                newestProspectTimestamp: newestProspectTs,
+                priorWatermark: existingLead?.last_surfaced_reply_at ?? null,
+                nowMs: Date.now(),
+              });
+              const surface = decision.surface;
+              const stale = decision.isStale;
 
               const upsertPayload: Record<string, unknown> = {
                 user_id: userId,
@@ -396,18 +403,18 @@ Deno.serve(async (req) => {
                 full_name: fullName,
                 linkedin_url: linkedinUrl,
                 last_reply_text: cleanReplyPreview(lastMessageText),
-                last_reply_at: newest?.timestamp ?? null,
+                ...(newestProspectTs ? { last_reply_at: newestProspectTs } : {}),
                 reply_thread: replyThread.length > 0 ? replyThread : undefined,
                 // Omitted entirely for an existing lead we are not surfacing —
                 // an omitted column is preserved on conflict, so a dismissal is
                 // not silently undone. A brand-new lead needs an explicit value.
                 ...(surface
                   ? {
-                      // only set pending if not already pending
                       ...(existingLead?.inbox_status === 'pending' ? {} : { inbox_status: 'pending' }),
-                      last_surfaced_reply_at: newest?.timestamp ?? null
+                      ...(decision.newWatermark ? { last_surfaced_reply_at: decision.newWatermark } : {}),
                     }
-                  : existingLead ? {} : { inbox_status: 'mirrored' }),
+                  : // New-lead non-surface path is not used anymore; new leads always surface to pending
+                    existingLead ? {} : { inbox_status: 'pending', ...(newestProspectTs ? { last_surfaced_reply_at: newestProspectTs } : {}) }),
                 channel: 'linkedin',
                 source: 'heyreach',
                 heyreach_conversation_id: conversationId,
@@ -475,10 +482,11 @@ Deno.serve(async (req) => {
               // GetConversationsV2's lastMessageText, and misses whenever a
               // sibling conversation for the same profile holds different text
               // (73 such profiles in prod — see the collision note).
+              // Log the gate decision for observability
+              console.log(`[poll-heyreach-inbox] gate: stale=${stale} ts=${newestProspectTs ?? 'null'} willClassify=${surface && !stale}`);
+
               if (surface && savedRow) {
-                if (stale) {
-                  console.log("[poll-heyreach-inbox] stale prospect message (>24h), surfaced as pending without classify");
-                } else {
+                if (!stale) {
                   fireClassifyReply({
                     supabaseUrl,
                     agentKey: expectedKey || '',

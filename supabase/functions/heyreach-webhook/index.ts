@@ -505,12 +505,21 @@ Deno.serve(async (req) => {
       linkedinUrlForKey,
     );
 
-    const newestEntry = replyThread.length > 0
-      ? replyThread.reduce((a, b) =>
-        Date.parse(b.timestamp || "") > Date.parse(a.timestamp || "") ? b : a
-      )
-      : null;
-    const newestMs = newestEntry ? Date.parse(newestEntry.timestamp || "") : NaN;
+    // Newest PROSPECT message timestamp (raw from payload, not fallback now())
+    const newestProspectEntry = replyThread
+      .filter((e) => e.role === "prospect")
+      .reduce<{ timestamp: string | null } | null>(
+        (a, b) => {
+          const bt = b?.timestamp ? Date.parse(b.timestamp) : NaN;
+          if (!Number.isFinite(bt)) return a;
+          if (!a) return { timestamp: b.timestamp };
+          const at = a.timestamp ? Date.parse(a.timestamp) : NaN;
+          return (!Number.isFinite(at) || bt > at) ? { timestamp: b.timestamp } : a;
+        },
+        null
+      );
+    const newestProspectTs = newestProspectEntry?.timestamp ?? null;
+    const newestMs = newestProspectTs ? Date.parse(newestProspectTs) : NaN;
     const priorMs = existingLead?.last_surfaced_reply_at
       ? Date.parse(existingLead.last_surfaced_reply_at)
       : 0;
@@ -523,20 +532,21 @@ Deno.serve(async (req) => {
     const surface = existingLead
       ? shouldResurface({
         dispositionTag: existingLead.disposition_tag,
-        newestRole: newestEntry?.role ?? null,
+        newestRole: newestProspectTs ? "prospect" : null,
         newerThanPrior,
       })
       : true;
-    const messageTs = newestEntry?.timestamp ?? null;
+    const messageTs = newestProspectTs;
     const stale = isStaleProspectMessage(messageTs, Date.now());
 
     console.log(
       `[heyreach-webhook] surface=${surface} existing=${!!existingLead} ` +
-        `newestRole=${newestEntry?.role ?? "none"} newest=${newestEntry?.timestamp ?? "none"} ` +
+        `newestRole=${messageTs ? "prospect" : "none"} newest=${messageTs ?? "none"} ` +
         `prior=${existingLead?.last_surfaced_reply_at ?? "null"} disposition=${existingLead?.disposition_tag ?? "null"}`,
     );
+    console.log(`[heyreach-webhook] gate: stale=${stale} ts=${messageTs ?? "null"} willClassify=${surface && !stale}`);
 
-    const replyAt = newestThreadTimestamp(replyThread) ?? new Date().toISOString();
+    const replyAt = newestProspectTs ?? newestThreadTimestamp(replyThread) ?? null;
     // Deterministic save: lookup-then-update-or-insert with 23505 retry
     const baseRow: Record<string, unknown> = {
       user_id: integration.created_by,
@@ -546,12 +556,12 @@ Deno.serve(async (req) => {
       job_title: jobTitle,
       company,
       last_reply_text: cleanReplyPreview(replyText),
-      last_reply_at: replyAt,
+      ...(replyAt ? { last_reply_at: replyAt } : {}),
       reply_thread: replyThread,
       ...(surface
         ? {
             ...(existingLead?.inbox_status === "pending" ? {} : { inbox_status: "pending" }),
-            last_surfaced_reply_at: newestThreadTimestamp(replyThread) ?? replyAt,
+            ...(messageTs ? { last_surfaced_reply_at: messageTs } : {}),
           }
         : {}),
       channel: "linkedin",
