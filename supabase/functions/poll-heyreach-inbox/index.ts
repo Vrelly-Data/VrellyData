@@ -6,10 +6,12 @@ ALTER TABLE public.synced_campaigns ADD COLUMN IF NOT EXISTS source TEXT DEFAULT
 */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { shouldResurface, fireClassifyReply } from '../_shared/inbox-reply.ts';
+import { shouldResurface } from '../_shared/inbox-reply.ts';
 import { cleanReplyPreview } from '../_shared/reply-text.ts';
 import { sanitizeLinkedinUrlForStorage } from '../_shared/normalize.ts';
 import { findLeadByNormalizedLinkedIn } from '../_shared/agent-leads-lookup.ts';
+import { isStaleProspectMessage } from '../_shared/stale.ts';
+import { decideSurfaceAndClassify, buildSurfaceUpdateFields } from '../_shared/surface.ts';
 
 const allowedOrigins = [
   'https://vrelly.com',
@@ -281,16 +283,19 @@ Deno.serve(async (req) => {
                 last_reply_text: string | null;
                 disposition_tag: string | null;
                 last_surfaced_reply_at: string | null;
+                inbox_status?: string | null;
               } | null = null;
               if (linkedinUrl) {
                 const found = await findLeadByNormalizedLinkedIn(supabase, userId, linkedinUrl);
                 existingLead = found
                   ? {
                       id: found.id,
-                      last_reply_text: null,
+                      last_reply_text: found.last_reply_text ?? null,
                       disposition_tag: found.disposition_tag,
                       last_surfaced_reply_at: found.last_surfaced_reply_at,
-                    }
+                      // @ts-ignore extend shape locally for pending-check
+                      inbox_status: (found as any).inbox_status ?? null,
+                    } as any
                   : null;
               }
               if (!existingLead && externalId) {
@@ -330,11 +335,12 @@ Deno.serve(async (req) => {
                   replyThread = messages.map((msg: { sender?: string; body?: string; createdAt?: string }) => ({
                     role: msg.sender === 'ME' ? 'sender' : 'prospect',
                     content: msg.body || '',
-                    timestamp: msg.createdAt || new Date().toISOString(),
+                    // Keep raw timestamp; missing stays empty (treated as stale in gate)
+                    timestamp: msg.createdAt || '',
                     channel: 'linkedin',
                   }));
                 } else {
-                  console.warn(`[poll-heyreach-inbox] GetChatroom ${res.status} for ${conversationId}`);
+                  console.warn(`[poll-heyreach-inbox] GetChatroom ${chatroomRes.status} for ${conversationId}`);
                 }
               } catch (chatroomErr) {
                 console.error(`[poll-heyreach-inbox] Failed to fetch chatroom for ${conversationId}:`, chatroomErr);
@@ -361,27 +367,40 @@ Deno.serve(async (req) => {
               //                   inbound reply from the last 24h; else
               //                   'mirrored' (in neither inbox tab, still fully
               //                   readable and still resurfaceable later).
-              const newest = replyThread.length > 0
-                ? replyThread.reduce((a, b) =>
-                    Date.parse(b.timestamp || '') > Date.parse(a.timestamp || '') ? b : a)
-                : null;
-              const newestRole = newest?.role ?? null;
-              const newestMs = newest ? Date.parse(newest.timestamp || '') : NaN;
+              // Newest PROSPECT message timestamp (raw, no fallback to now)
+              const newestProspect = replyThread
+                .filter((e) => e.role === 'prospect')
+                .reduce<{ timestamp: string | null } | null>(
+                  (a, b) => {
+                    const bt = b?.timestamp ? Date.parse(b.timestamp) : NaN;
+                    if (!Number.isFinite(bt)) return a;
+                    if (!a) return { timestamp: b.timestamp };
+                    const at = a.timestamp ? Date.parse(a.timestamp) : NaN;
+                    return (!Number.isFinite(at) || bt > at) ? { timestamp: b.timestamp } : a;
+                  },
+                  null
+                );
+              const newestProspectTs = newestProspect?.timestamp ?? null;
+              const newestMs = newestProspectTs ? Date.parse(newestProspectTs) : NaN;
               const priorMs = existingLead?.last_surfaced_reply_at
                 ? Date.parse(existingLead.last_surfaced_reply_at)
                 : 0;
               const newerThanPrior = Number.isFinite(newestMs) && newestMs > priorMs;
-              const isRecent = Number.isFinite(newestMs)
-                ? newestMs >= Date.now() - 24 * 60 * 60 * 1000
-                : false;
+              // Surface/classify decision (centralized)
+              const decision = decideSurfaceAndClassify({
+                dispositionTag: existingLead?.disposition_tag ?? null,
+                isExistingLead: !!existingLead,
+                newestProspectTimestamp: newestProspectTs,
+                priorWatermark: existingLead?.last_surfaced_reply_at ?? null,
+                nowMs: Date.now(),
+              });
+              const surface = decision.surface;
+              const stale = decision.isStale;
 
-              const surface = existingLead
-                ? shouldResurface({
-                    dispositionTag: existingLead.disposition_tag,
-                    newestRole,
-                    newerThanPrior,
-                  })
-                : (newestRole === 'prospect' && isRecent);
+              const surfaceFields = buildSurfaceUpdateFields(decision, {
+                isExistingLead: !!existingLead,
+                alreadyPending: existingLead?.inbox_status === 'pending',
+              });
 
               const upsertPayload: Record<string, unknown> = {
                 user_id: userId,
@@ -390,13 +409,9 @@ Deno.serve(async (req) => {
                 full_name: fullName,
                 linkedin_url: linkedinUrl,
                 last_reply_text: cleanReplyPreview(lastMessageText),
+                ...(newestProspectTs ? { last_reply_at: newestProspectTs } : {}),
                 reply_thread: replyThread.length > 0 ? replyThread : undefined,
-                // Omitted entirely for an existing lead we are not surfacing —
-                // an omitted column is preserved on conflict, so a dismissal is
-                // not silently undone. A brand-new lead needs an explicit value.
-                ...(surface
-                  ? { inbox_status: 'pending', last_surfaced_reply_at: newest?.timestamp ?? null }
-                  : existingLead ? {} : { inbox_status: 'mirrored' }),
+                ...surfaceFields,
                 channel: 'linkedin',
                 source: 'heyreach',
                 heyreach_conversation_id: conversationId,
@@ -464,18 +479,13 @@ Deno.serve(async (req) => {
               // GetConversationsV2's lastMessageText, and misses whenever a
               // sibling conversation for the same profile holds different text
               // (73 such profiles in prod — see the collision note).
+              // Log the gate decision for observability
+              console.log(`[poll-heyreach-inbox] gate: stale=${stale} ts=${newestProspectTs ?? 'null'} willClassify=${decision.willClassify}`);
+
               if (surface && savedRow) {
-                fireClassifyReply({
-                  supabaseUrl,
-                  agentKey: expectedKey || '',
-                  // deno-lint-ignore no-explicit-any
-                  leadId: (savedRow as any).id,
-                  replyText: lastMessageText,
-                  threadHistory: replyThread,
-                  agentConfig,
-                  channel: 'linkedin',
-                  userId,
-                });
+                // Drafting kill switch: HeyReach drafting disabled.
+                // Re-enable later only behind an explicit flag that defaults OFF.
+                console.log("[poll-heyreach-inbox] HeyReach drafting disabled (kill switch)");
               }
 
               if (savedRow && !existingLead) {

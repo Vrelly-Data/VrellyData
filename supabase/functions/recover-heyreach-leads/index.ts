@@ -17,13 +17,15 @@
 // - Insert-only / fill-forward:
 //   * For a missing lead: INSERT with inbox_status='pending' and NO draft.
 //   * For an existing lead: only set last_reply_at + last_reply_text when newer.
-// - Never calls classify-reply, send-agent-reply, or any send path. Never sends.
+// - Never triggers drafting or any send path. Never sends.
 // - Never logs secrets.
 //
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { sanitizeLinkedinUrlForStorage } from "../_shared/normalize.ts";
 import { findLeadByNormalizedLinkedIn } from "../_shared/agent-leads-lookup.ts";
 import { cleanReplyPreview } from "../_shared/reply-text.ts";
+import { isSuppressed } from "../_shared/inbox-reply.ts";
+import { decideSurfaceAndClassify } from "../_shared/surface.ts";
 
 type Json = Record<string, unknown>;
 
@@ -77,9 +79,13 @@ Deno.serve(async (req) => {
   if (!integrationId) return json({ error: "integrationId is required" }, 400);
   const sinceMs = parseSince(body["since"]);
   const dryRun = body["dryRun"] !== false; // default true
+  const maxConversations = Number.isFinite(Number(body["maxConversations"])) ? Number(body["maxConversations"]) : null;
   const filterConversationIds: Set<string> = new Set(
     Array.isArray(body["conversationIds"]) ? (body["conversationIds"] as unknown[]).map((v) => String(v ?? "")).filter(Boolean) : [],
   );
+  if (!dryRun && filterConversationIds.size === 0 && !(Number.isFinite(maxConversations ?? NaN) && (maxConversations as number) > 0)) {
+    return json({ error: "When dryRun=false, require conversationIds or maxConversations" }, 400);
+  }
 
   try {
     // Resolve integration
@@ -104,12 +110,13 @@ Deno.serve(async (req) => {
       campaign: string | null;
       reply_time: string | null;
       reply_snippet: string;
-      action: "insert_lead" | "update_reply" | "skip_up_to_date";
+      action: "insert_lead" | "update_reply" | "skip_up_to_date" | "skip_empty" | "seed_watermark";
     }> = [];
 
     let offset = 0;
     const limit = 100;
     let hasMore = true;
+    let mutatedCount = 0;
 
     while (hasMore) {
       const res = await fetch(`${HEYREACH_API}/inbox/GetConversationsV2`, {
@@ -147,6 +154,10 @@ Deno.serve(async (req) => {
       });
 
       for (const convo of list) {
+        if (!dryRun && maxConversations && mutatedCount >= maxConversations) {
+          hasMore = false;
+          break;
+        }
         const conversationId = String(convo.id);
         const linkedInAccountId = Number(convo.linkedInAccountId);
         const profile = (convo.correspondentProfile ?? {}) as Json;
@@ -154,7 +165,8 @@ Deno.serve(async (req) => {
         const lastName = String(profile["lastName"] ?? "").trim();
         const fullName = [firstName, lastName].filter(Boolean).join(" ") || "Unknown";
         const linkedinUrl = sanitizeLinkedinUrlForStorage(String(profile["profileUrl"] ?? ""));
-        const campaignName = String((convo as Json)["groupChat"] ?? "") || null; // HeyReach does not expose campaign name here; keep null
+        // HeyReach GetConversationsV2 does not expose campaign id/name; do not misuse groupChat.
+        const campaignName = null as string | null;
         if (!linkedinUrl) continue; // no dedup key
 
         // Fetch chatroom to find the last PROSPECT message since the cutoff
@@ -167,15 +179,16 @@ Deno.serve(async (req) => {
           );
           if (chatroomRes.ok) {
             const chatroom = await chatroomRes.json();
-            const messages: Array<{ sender?: string; body?: string; createdAt?: string }> = Array.isArray(chatroom?.messages)
+            const messages: Array<{ sender?: string; body?: unknown; createdAt?: string }> = Array.isArray(chatroom?.messages)
               ? chatroom.messages : [];
             for (const msg of messages) {
               if ((msg?.sender ?? "") !== "ME") {
                 const ts = msg?.createdAt ? new Date(msg.createdAt).getTime() : NaN;
-                if (Number.isFinite(ts) && ts >= sinceMs) {
-                  // track the last prospect message meeting cutoff
+                const body = typeof msg?.body === "string" ? String(msg.body).trim() : "";
+                if (Number.isFinite(ts) && ts >= sinceMs && body) {
+                  // track the last non-empty prospect message meeting cutoff
                   latestProspectTs = new Date(ts).toISOString();
-                  latestProspectText = String(msg?.body ?? "");
+                  latestProspectText = body;
                 }
               }
             }
@@ -187,7 +200,7 @@ Deno.serve(async (req) => {
         }
 
         if (!latestProspectTs) {
-          // No qualifying prospect message since cutoff
+          // No qualifying prospect message since cutoff (or empty body)
           actions.push({
             conversationId,
             prospectName: fullName,
@@ -195,18 +208,21 @@ Deno.serve(async (req) => {
             campaign: campaignName,
             reply_time: null,
             reply_snippet: "",
-            action: "skip_up_to_date",
+            action: "skip_empty",
           });
           continue;
         }
 
         // Determine existing lead and whether it's up-to-date
         const existing = await findLeadByNormalizedLinkedIn(supabase, userId, linkedinUrl);
-        const priorMs = existing?.last_surfaced_reply_at
-          ? new Date(existing.last_surfaced_reply_at).getTime()
-          : 0;
-        const newestMs = new Date(latestProspectTs).getTime();
-        const isNewer = Number.isFinite(newestMs) && newestMs > priorMs;
+        const decision = decideSurfaceAndClassify({
+          dispositionTag: existing?.disposition_tag ?? null,
+          isExistingLead: !!existing,
+          newestProspectTimestamp: latestProspectTs,
+          priorWatermark: existing?.last_surfaced_reply_at ?? null,
+          nowMs: Date.now(),
+        });
+        const isNewer = decision.surface && !!decision.newWatermark || (!existing && decision.surface);
         const replySnippet = cleanReplyPreview(latestProspectText);
 
         if (!existing) {
@@ -220,17 +236,19 @@ Deno.serve(async (req) => {
             action: "insert_lead",
           });
           if (!dryRun) {
+            mutatedCount++;
             const row = {
               user_id: userId,
-              external_id: conversationId,
+              external_id: linkedinUrl || conversationId,
               full_name: fullName,
               email: null,
               job_title: null,
               company: String(profile["companyName"] ?? "") || null,
               last_reply_text: replySnippet,
-              last_reply_at: new Date().toISOString(),
-              // Deliberately do NOT call classify-reply. Insert as pending.
+              last_reply_at: latestProspectTs,
+              // Deliberately do NOT trigger drafting. Insert as pending.
               inbox_status: "pending",
+              last_surfaced_reply_at: latestProspectTs,
               channel: "linkedin",
               source: "heyreach",
               heyreach_conversation_id: conversationId,
@@ -248,7 +266,9 @@ Deno.serve(async (req) => {
               if (raced?.id) {
                 await supabase.from("agent_leads").update({
                   last_reply_text: replySnippet,
-                  last_reply_at: new Date().toISOString(),
+                  last_reply_at: latestProspectTs,
+                  ...(isSuppressed(raced.disposition_tag) ? {} : { inbox_status: "pending" }),
+                  last_surfaced_reply_at: latestProspectTs,
                 }).eq("id", raced.id);
               } else {
                 console.error(`[recover-heyreach-leads] 23505 on INSERT but no row found for ${conversationId}`);
@@ -271,15 +291,46 @@ Deno.serve(async (req) => {
             action: "update_reply",
           });
           if (!dryRun) {
+            mutatedCount++;
             const { error: updErr } = await supabase
               .from("agent_leads")
-              .update({
-                last_reply_text: replySnippet,
-                last_reply_at: new Date().toISOString(),
-              })
+              .update(
+                decision.surface
+                  ? {
+                      last_reply_text: replySnippet,
+                      last_reply_at: latestProspectTs,
+                      last_surfaced_reply_at: latestProspectTs,
+                      ...(existing && !isSuppressed(existing.disposition_tag) ? { inbox_status: "pending" } : {}),
+                    }
+                  : {
+                      last_reply_text: replySnippet,
+                      last_reply_at: latestProspectTs,
+                      ...(decision.seedWatermark ? { last_surfaced_reply_at: decision.seedWatermark } : {}),
+                    }
+              )
               .eq("id", existing.id);
             if (updErr) {
               console.error(`[recover-heyreach-leads] UPDATE failed for ${conversationId}:`, updErr);
+            }
+          }
+        } else if (decision.seedWatermark) {
+          actions.push({
+            conversationId,
+            prospectName: fullName,
+            linkedin_url: linkedinUrl,
+            campaign: campaignName,
+            reply_time: latestProspectTs,
+            reply_snippet: replySnippet,
+            action: "seed_watermark",
+          });
+          if (!dryRun && existing) {
+            mutatedCount++;
+            const { error: updErr2 } = await supabase
+              .from("agent_leads")
+              .update({ last_surfaced_reply_at: decision.seedWatermark })
+              .eq("id", existing.id);
+            if (updErr2) {
+              console.error(`[recover-heyreach-leads] SEED failed for ${conversationId}:`, updErr2);
             }
           }
         } else {

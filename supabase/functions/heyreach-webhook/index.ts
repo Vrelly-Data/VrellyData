@@ -4,6 +4,7 @@ import { cleanReplyPreview } from "../_shared/reply-text.ts";
 import { detectLanguageCode } from "../_shared/language.ts";
 import { sanitizeLinkedinUrlForStorage } from "../_shared/normalize.ts";
 import { findLeadByNormalizedLinkedIn } from "../_shared/agent-leads-lookup.ts";
+import { decideSurfaceAndClassify, buildSurfaceUpdateFields } from "../_shared/surface.ts";
 
 const allowedOrigins = [
   Deno.env.get("ALLOWED_ORIGIN") || "https://vrelly.com",
@@ -382,7 +383,8 @@ Deno.serve(async (req) => {
     }> = recentMessages.map((msg) => ({
       role: msg.is_reply === true ? "prospect" : "sender",
       content: msg.message || "",
-      timestamp: msg.creation_time || new Date().toISOString(),
+      // Keep raw timestamp; missing stays empty (treated as stale in gate)
+      timestamp: msg.creation_time || "",
       channel: "linkedin",
     }));
 
@@ -484,7 +486,7 @@ Deno.serve(async (req) => {
     // with no notion of whether the reply was NEW. HeyReach re-delivers events:
     // on 2026-08-16 it re-sent the webhook for a 2026-08-04 message, which
     // un-dismissed a lead the operator had already tagged 'in_progress' and
-    // spent a full classify-reply call drafting an answer to a message that had
+    // spent a full draft-generation call answering a message that had
     // already been handled. The live GetChatroom for that conversation held two
     // messages, both from 08-04 — there was no new reply at all.
     //
@@ -504,12 +506,21 @@ Deno.serve(async (req) => {
       linkedinUrlForKey,
     );
 
-    const newestEntry = replyThread.length > 0
-      ? replyThread.reduce((a, b) =>
-        Date.parse(b.timestamp || "") > Date.parse(a.timestamp || "") ? b : a
-      )
-      : null;
-    const newestMs = newestEntry ? Date.parse(newestEntry.timestamp || "") : NaN;
+    // Newest PROSPECT message timestamp (raw from payload, not fallback now())
+    const newestProspectEntry = replyThread
+      .filter((e) => e.role === "prospect")
+      .reduce<{ timestamp: string | null } | null>(
+        (a, b) => {
+          const bt = b?.timestamp ? Date.parse(b.timestamp) : NaN;
+          if (!Number.isFinite(bt)) return a;
+          if (!a) return { timestamp: b.timestamp };
+          const at = a.timestamp ? Date.parse(a.timestamp) : NaN;
+          return (!Number.isFinite(at) || bt > at) ? { timestamp: b.timestamp } : a;
+        },
+        null
+      );
+    const newestProspectTs = newestProspectEntry?.timestamp ?? null;
+    const newestMs = newestProspectTs ? Date.parse(newestProspectTs) : NaN;
     const priorMs = existingLead?.last_surfaced_reply_at
       ? Date.parse(existingLead.last_surfaced_reply_at)
       : 0;
@@ -519,21 +530,31 @@ Deno.serve(async (req) => {
     // would silently swallow a real reply.
     const newerThanPrior = Number.isFinite(newestMs) && newestMs > priorMs;
 
-    const surface = existingLead
-      ? shouldResurface({
-        dispositionTag: existingLead.disposition_tag,
-        newestRole: newestEntry?.role ?? null,
-        newerThanPrior,
-      })
-      : true;
+    const decision = decideSurfaceAndClassify({
+      dispositionTag: existingLead?.disposition_tag ?? null,
+      isExistingLead: !!existingLead,
+      newestProspectTimestamp: newestProspectTs,
+      priorWatermark: existingLead?.last_surfaced_reply_at ?? null,
+      nowMs: Date.now(),
+    });
+    const surface = decision.surface;
+    const messageTs = newestProspectTs;
+    const stale = decision.isStale;
 
     console.log(
       `[heyreach-webhook] surface=${surface} existing=${!!existingLead} ` +
-        `newestRole=${newestEntry?.role ?? "none"} newest=${newestEntry?.timestamp ?? "none"} ` +
+        `newestRole=${messageTs ? "prospect" : "none"} newest=${messageTs ?? "none"} ` +
         `prior=${existingLead?.last_surfaced_reply_at ?? "null"} disposition=${existingLead?.disposition_tag ?? "null"}`,
     );
+    console.log(`[heyreach-webhook] gate: stale=${stale} ts=${messageTs ?? "null"} willClassify=${decision.willClassify}`);
 
+    const replyAt = newestProspectTs ?? newestThreadTimestamp(replyThread) ?? null;
     // Deterministic save: lookup-then-update-or-insert with 23505 retry
+    const surfaceFields = buildSurfaceUpdateFields(decision, {
+      isExistingLead: !!existingLead,
+      alreadyPending: (existingLead as any)?.inbox_status === "pending",
+    });
+
     const baseRow: Record<string, unknown> = {
       user_id: integration.created_by,
       external_id: externalId,
@@ -542,15 +563,9 @@ Deno.serve(async (req) => {
       job_title: jobTitle,
       company,
       last_reply_text: cleanReplyPreview(replyText),
-      last_reply_at: new Date().toISOString(),
+      ...(replyAt ? { last_reply_at: replyAt } : {}),
       reply_thread: replyThread,
-      ...(surface
-        ? {
-          inbox_status: "pending",
-          last_surfaced_reply_at: newestThreadTimestamp(replyThread) ??
-            new Date().toISOString(),
-        }
-        : {}),
+      ...surfaceFields,
       channel: "linkedin",
       source: "heyreach",
       heyreach_conversation_id: conversationId,
@@ -704,10 +719,10 @@ Deno.serve(async (req) => {
                 threadUpdateErr,
               );
               // Keep the partial that's already in the row from the upsert.
-              // Signal to classify-reply (below) to use the partial too.
+              // Signal the classification step (if/when re-enabled) to use the partial too.
               fullReplyThread = null;
             } else {
-              // Propagate the merged thread to classify-reply so it sees
+            // Propagate the merged thread to the classifier so it sees
               // the same view of history that's now persisted on the row.
               fullReplyThread = mergedThread;
               const addedFromPartial = mergedThread.length - canonicalLen;
@@ -718,7 +733,7 @@ Deno.serve(async (req) => {
           } else {
             // GetChatroom returned an empty messages array. Don't overwrite —
             // the partial we wrote at upsert (which has the new reply) is
-            // already in the row. Signal classify-reply to use it.
+            // already in the row. Signal the classifier to use it.
             fullReplyThread = null;
           }
         }
@@ -730,14 +745,9 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Fire classify-reply asynchronously so the webhook can return 200 fast.
-    // Runs after the response thanks to EdgeRuntime.waitUntil.
+    // Drafting kill switch: remove HeyReach drafting invocation.
+    // Re-enable later only behind an explicit flag that defaults OFF.
     //
-    // Gated on `surface` for the same reason reply-webhook gates on `resurface`:
-    // a re-delivery, or a reply on an opted-out lead, records the message
-    // silently and must NOT produce a draft. This is the specific gate that
-    // stops the 2026-08-16 case — a re-sent 08-04 event that generated a draft
-    // (22,589 input tokens) for a message already handled.
     if (surface && savedLeadId) {
       const { data: agentConfig } = await supabase
         .from("agent_configs")
@@ -747,58 +757,7 @@ Deno.serve(async (req) => {
         .maybeSingle();
 
       if (agentConfig) {
-        const agentApiKey = Deno.env.get("AGENT_API_KEY") || "";
-        const classifyPromise = fetch(
-          `${supabaseUrl}/functions/v1/classify-reply`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "x-agent-key": agentApiKey,
-            },
-            body: JSON.stringify({
-              reply_text: replyText,
-              // Prefer the canonical full thread from GetChatroom when the
-              // best-effort fetch succeeded; fall back to the partial
-              // payload-derived thread otherwise.
-              thread_history: fullReplyThread ?? replyThread,
-              lead_id: savedLeadId,
-              user_id: integration.created_by,
-              channel: "linkedin",
-              agent_context: {
-                offer_description: agentConfig.offer_description,
-                desired_action: agentConfig.desired_action,
-                outcome_delivered: agentConfig.outcome_delivered,
-                target_icp: agentConfig.target_icp,
-                sender_name: agentConfig.sender_name,
-                sender_title: agentConfig.sender_title,
-                sender_linkedin: agentConfig.sender_linkedin || "",
-                sender_bio: agentConfig.sender_bio,
-                company_name: agentConfig.company_name,
-                company_url: agentConfig.company_url,
-                communication_style: agentConfig.communication_style,
-                avoid_phrases: agentConfig.avoid_phrases || [],
-                sample_message: agentConfig.sample_message || "",
-                calendar_link: agentConfig.calendar_link || "",
-                pricing_summary: agentConfig.pricing_summary || "",
-                case_studies: agentConfig.case_studies || "",
-                disqualification_criteria: agentConfig.disqualification_criteria || "",
-                objection_handling_notes: agentConfig.objection_handling_notes || "",
-              },
-            }),
-          },
-        ).catch((err) => {
-          console.error("classify-reply invocation failed:", err);
-        });
-
-        // @ts-ignore — EdgeRuntime is injected by Supabase runtime
-        if (typeof EdgeRuntime !== "undefined" && typeof EdgeRuntime.waitUntil === "function") {
-          // @ts-ignore
-          EdgeRuntime.waitUntil(classifyPromise);
-        } else {
-          // Fallback for non-Edge runtimes — await synchronously
-          await classifyPromise;
-        }
+        console.log("[heyreach-webhook] HeyReach drafting disabled (kill switch)");
         // Best-effort: record 'replied' inference event (non-blocking)
         try {
           const personKey =
@@ -896,7 +855,7 @@ Deno.serve(async (req) => {
         }
       } else {
         console.log(
-          `No active agent_config for user ${integration.created_by} — skipping classify-reply`,
+          `No active agent_config for user ${integration.created_by} — drafting disabled`,
         );
       }
     } else if (savedLeadId) {
