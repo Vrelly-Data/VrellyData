@@ -1,5 +1,14 @@
 import { assert, assertEquals, assertNotEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { walkWithState, tickWithHeadScan, type WalkState, DEFAULT_PAGER_OPTIONS } from "./paging.ts";
+import {
+  applyScope,
+  canonicalScope,
+  checkPage,
+  tickHeadScanOnly,
+  tickWithHeadScan,
+  walkWithState,
+  type WalkState,
+  DEFAULT_PAGER_OPTIONS,
+} from "./paging.ts";
 
 function makeClock(start = 0) {
   let now = start;
@@ -45,7 +54,6 @@ async function runOnce(opts: {
       visited.push(item.id);
     },
     nowMs: clock.nowMs,
-    sleepMs: clock.sleepMs,
     async saveState(_s) { /* no-op for unit tests */ },
   }, opts.initial, { ...DEFAULT_PAGER_OPTIONS });
   return { res, visited, clock, fetchedPages };
@@ -86,7 +94,6 @@ Deno.test("(9w) processItem throw: failure counted, baseline unchanged", async (
       throw new Error("getchatroom_500");
     },
     nowMs: clock.nowMs,
-    sleepMs: clock.sleepMs,
     async saveState(s) { state = s; },
   }, state, { ...DEFAULT_PAGER_OPTIONS });
   // Baseline unchanged and failure recorded
@@ -94,14 +101,17 @@ Deno.test("(9w) processItem throw: failure counted, baseline unchanged", async (
   assertEquals(state.baselineStartedAt, new Date(T0).toISOString());
 });
 
-// (10): Missing or zero totalCount walks all 250 items
-Deno.test("(10) Zero totalCount walks all 250 items", async () => {
+// (10): a zero totalCount alongside items is inconsistent → fetch_error, not a
+// walk of an unknown-length list. (GetConversationsV2 always returns a real
+// totalCount; v44 on main relied on it for hasMore.)
+Deno.test("(10) Zero totalCount with items: fetch_error, nothing processed, walk and baseline unchanged", async () => {
   const all: Item[] = Array.from({ length: 250 }, (_, i) => ({
     id: `c${i + 1}`,
     lastMessageAt: new Date(6_000_000 - i * 1000).toISOString(),
   }));
   const clock = makeClock(0);
   let processed = 0;
+  const baseline = "1970-01-01T00:00:00.000Z";
   const r = await walkWithState<Item>({
     async fetchPage(offset, limit, _s) {
       await clock.sleepMs(20_000);
@@ -110,11 +120,13 @@ Deno.test("(10) Zero totalCount walks all 250 items", async () => {
     },
     async processItem(_it, _s) { processed++; },
     nowMs: clock.nowMs,
-    sleepMs: clock.sleepMs,
     async saveState(_s) {},
-  }, { version: 1, baselineStartedAt: null, walk: null }, { ...DEFAULT_PAGER_OPTIONS });
-  assertEquals(processed, 250);
-  assertEquals(r.stopReason, "end_of_list");
+  }, { version: 1, baselineStartedAt: baseline, walk: null }, { ...DEFAULT_PAGER_OPTIONS });
+  assertEquals(processed, 0);
+  assertEquals(r.stopReason, "fetch_error");
+  assertEquals(r.state.baselineStartedAt, baseline);
+  assertEquals(r.state.walk!.offset, 0);
+  assertEquals(r.state.lastTick?.fetchError, "items_with_zero_total@0");
 });
 
 // (old (2) test removed — replaced by new (2) and (2b) using production defaults)
@@ -166,7 +178,6 @@ Deno.test("(6) Item failures: baseline NOT advanced on completion", async () => 
       async fetchPage(_o, _l, _s) { return { items, totalCount: items.length }; },
       async processItem(it, _s) { if (it.id === "bad") throw new Error("fail"); },
       nowMs: clock.nowMs,
-      sleepMs: clock.sleepMs,
       async saveState(s) { state = s; },
     }, state, { ...DEFAULT_PAGER_OPTIONS });
   })();
@@ -213,7 +224,6 @@ Deno.test("(8) Randomized durations: guards respected and total ≤ 120s", async
       await clock.sleepMs(d);
     },
     nowMs: clock.nowMs,
-    sleepMs: clock.sleepMs,
     async saveState(_s) {},
   }, { version: 1, baselineStartedAt: null, walk: null }, { ...DEFAULT_PAGER_OPTIONS });
   assert(clock.get() <= 120_000);
@@ -257,7 +267,6 @@ async function runTick(
       visited.push(item.id);
     },
     nowMs: clock.nowMs,
-    sleepMs: clock.sleepMs,
     async saveState(st) { saved = structuredClone(st); },
   }, state, { ...DEFAULT_PAGER_OPTIONS });
   return { res, elapsed: clock.get(), saved };
@@ -291,13 +300,15 @@ Deno.test("(2) 1,893 items, 20–30s pages, 0–9s items drawn per call: strictl
   assertEquals(new Set(visited).size, 1893);
   assertEquals(visited.length, 1893, "no item should be processed twice without drift");
   assert(runs > 1, "must span multiple runs");
+  console.log(`(2) runs=${runs}`);
 });
 
 Deno.test("(2b) 1,893 items at a fixed 8s per item: still reaches end_of_list with strictly increasing offset", async () => {
   const rnd = mulberry32(8);
-  const { visited } = await walkToEnd(1893, () => 8_000, rnd, 400);
+  const { runs, visited } = await walkToEnd(1893, () => 8_000, rnd, 400);
   assertEquals(new Set(visited).size, 1893);
   assertEquals(visited.length, 1893);
+  console.log(`(2b) runs=${runs}`);
 });
 
 Deno.test("(3) fetch_error: walk and baseline equal the state saved before the failed page; only lastTick differs", async () => {
@@ -315,7 +326,6 @@ Deno.test("(3) fetch_error: walk and baseline equal the state saved before the f
     },
     async processItem(_it, _s) { await clock.sleepMs(10); },
     nowMs: clock.nowMs,
-    sleepMs: clock.sleepMs,
     async saveState(st) { saves.push(structuredClone(st)); },
   }, { version: 1, baselineStartedAt: baseline, walk: null }, { ...DEFAULT_PAGER_OPTIONS });
   assertEquals(res.stopReason, "fetch_error");
@@ -407,7 +417,6 @@ async function runHeadTick(list: () => Item[], state: WalkState, o: HeadTickOpts
       written.push(item.id);
     },
     nowMs: clock.nowMs,
-    sleepMs: clock.sleepMs,
     async saveState(st) { saves.push(structuredClone(st)); },
   }, state, { ...DEFAULT_PAGER_OPTIONS });
   return { res, elapsed: clock.get(), headVisited, walkVisited, written, saves, fetchNo };
@@ -611,4 +620,339 @@ Deno.test("(2bh) 1,893 items with head scan at a fixed 8s per item: walk still r
   assertEquals(new Set(r.walkVisited).size, 1893);
   assertEquals(r.walkItems, 1893);
   console.log(`(2bh) runs=${r.runs} headScanItems=${r.headItems}`);
+});
+
+// ---------------------------------------------------------------------------
+// Page validation (B*): a malformed, empty or short page is a fetch_error and
+// never marks a walk clean. All on DEFAULT_PAGER_OPTIONS.
+// ---------------------------------------------------------------------------
+type RawPage = { items?: unknown; totalCount?: unknown };
+
+async function walkScripted(
+  state: WalkState,
+  respond: (offset: number, limit: number, fetchNo: number) => RawPage,
+  itemMs = 10,
+) {
+  const clock = makeClock(0);
+  const visited: string[] = [];
+  const offsets: number[] = [];
+  const saves: WalkState[] = [];
+  const res = await walkWithState<Item>({
+    async fetchPage(offset, limit, _s) {
+      offsets.push(offset);
+      await clock.sleepMs(1_000);
+      return respond(offset, limit, offsets.length);
+    },
+    async processItem(item, _s) { await clock.sleepMs(itemMs); visited.push(item.id); },
+    nowMs: clock.nowMs,
+    async saveState(st) { saves.push(structuredClone(st)); },
+  }, state, { ...DEFAULT_PAGER_OPTIONS });
+  return { res, visited, offsets, saves };
+}
+
+const healthy = (all: Item[]) => (offset: number, limit: number): RawPage => ({ items: all.slice(offset, offset + limit), totalCount: all.length });
+
+Deno.test("(B1) CTO repro: 300 items, empty page at offset 100 → fetch_error, baseline not advanced; next tick visits all 241 items newer than the cutoff", async () => {
+  const T0 = Date.parse("2026-09-20T00:00:00Z");
+  const all = makeList(300, "r", T0); // r_i at T0 - i min
+  // cutoff = baseline - 1h lands between r240 and r241 → 241 items are newer than the cutoff.
+  const baseline = new Date(T0 - 180.5 * 60_000).toISOString();
+  const cutoffMs = Date.parse(baseline) - 3600_000;
+  const newer = all.filter((x) => Date.parse(x.lastMessageAt) >= cutoffMs).map((x) => x.id);
+  assertEquals(newer.length, 241);
+  const t1 = await walkScripted({ version: 1, baselineStartedAt: baseline, walk: null }, (offset, limit) =>
+    offset === 100 ? { items: [], totalCount: 300 } : healthy(all)(offset, limit));
+  assertEquals(t1.res.stopReason, "fetch_error");
+  assertEquals(t1.res.state.baselineStartedAt, baseline, "baseline must not advance");
+  assertEquals(t1.res.state.walk!.offset, 100, "walk kept at the failed page");
+  assertEquals(t1.res.state.lastTick?.fetchError, "empty_page@100(total=300)");
+  assertEquals(t1.visited.length, 100);
+  // HeyReach healthy again: the next tick resumes at 100 and reaches every newer item.
+  const t2 = await walkScripted(t1.res.state, healthy(all));
+  assertEquals(t2.res.stopReason, "caught_up");
+  const seen = new Set([...t1.visited, ...t2.visited]);
+  assertEquals(newer.filter((id) => !seen.has(id)), [], "no newer item skipped");
+  assertEquals(t2.visited[0], "r100");
+  assertNotEquals(t2.res.state.baselineStartedAt, baseline);
+});
+
+function resumeState(all: Item[], at: number, baseline: string): WalkState {
+  return {
+    version: 1,
+    baselineStartedAt: baseline,
+    walk: { startedAt: "2026-09-19T00:00:00.000Z", cutoff: new Date(Date.parse(baseline) - 3600_000).toISOString(), offset: at, lastTs: all[at - 1].lastMessageAt, lastId: all[at - 1].id, failures: 0 },
+  };
+}
+
+Deno.test("(B2) Resume: empty page on the verification fetch → fetch_error, walk deep-equal, no step-back to 0, not marked clean", async () => {
+  const all = makeList(300, "v");
+  const baseline = "2026-09-01T00:00:00.000Z"; // older than every item
+  const state = resumeState(all, 250, baseline);
+  const before = structuredClone(state.walk);
+  const r = await walkScripted(state, () => ({ items: [], totalCount: 300 }));
+  assertEquals(r.res.stopReason, "fetch_error");
+  assertEquals(r.offsets, [225]);
+  assertEquals(r.res.state.walk, before);
+  assertEquals(r.res.state.baselineStartedAt, baseline);
+  assertEquals(r.visited, []);
+});
+
+Deno.test("(B2b) Resume: empty page DURING step-back (lastId not on the first page) → fetch_error, walk deep-equal, never reaches offset 0", async () => {
+  const all = makeList(300, "v");
+  const baseline = "2026-09-01T00:00:00.000Z";
+  const state = resumeState(all, 250, baseline);
+  const before = structuredClone(state.walk);
+  // First verification page: different ids, all older than lastTs → step back by 100; that page is empty.
+  const stale: Item[] = Array.from({ length: 100 }, (_, i) => ({ id: `x${i}`, lastMessageAt: "2026-09-02T00:00:00.000Z" }));
+  const r = await walkScripted(state, (offset) => offset === 225 ? { items: stale, totalCount: 300 } : { items: [], totalCount: 300 });
+  assertEquals(r.offsets, [225, 125]);
+  assertEquals(r.res.stopReason, "fetch_error");
+  assertEquals(r.res.state.walk, before);
+  assertEquals(r.res.state.baselineStartedAt, baseline);
+  assertEquals(r.visited, []);
+});
+
+Deno.test("(B3) Short page before totalCount (37 of 100 at offset 100, total 300) → fetch_error, short page not processed, walk at 100", async () => {
+  const all = makeList(300, "s");
+  const baseline = "2026-09-01T00:00:00.000Z";
+  const r = await walkScripted({ version: 1, baselineStartedAt: baseline, walk: null }, (offset, limit) =>
+    offset === 100 ? { items: all.slice(100, 137), totalCount: 300 } : healthy(all)(offset, limit));
+  assertEquals(r.res.stopReason, "fetch_error");
+  assertEquals(r.visited.length, 100);
+  assertEquals(r.res.state.walk!.offset, 100);
+  assertEquals(r.res.state.baselineStartedAt, baseline);
+  assertEquals(r.res.state.lastTick?.fetchError, "short_page@100(37<100,total=300)");
+  // A short LAST page (reaching totalCount) is the real end of the list.
+  const ok = await walkScripted({ version: 1, baselineStartedAt: null, walk: null }, healthy(all.slice(0, 237)));
+  assertEquals(ok.res.stopReason, "end_of_list");
+  assertEquals(ok.visited.length, 237);
+});
+
+Deno.test("(B4) items not an array (missing, null, object) → fetch_error, nothing processed, walk and baseline unchanged", async () => {
+  const baseline = "2026-09-01T00:00:00.000Z";
+  for (const bad of [{ totalCount: 300 }, { items: null, totalCount: 300 }, { items: { a: 1 }, totalCount: 300 }] as RawPage[]) {
+    const all = makeList(300, "n");
+    const state = resumeState(all, 150, baseline);
+    const before = structuredClone(state.walk);
+    const r = await walkScripted(state, () => bad);
+    assertEquals(r.res.stopReason, "fetch_error");
+    assertEquals(r.res.state.walk, before);
+    assertEquals(r.res.state.baselineStartedAt, baseline);
+    assertEquals(r.res.state.lastTick?.fetchError, "items_not_array");
+    assertEquals(r.visited, []);
+  }
+});
+
+Deno.test("(B5) totalCount missing / null / non-numeric / negative / fractional → fetch_error; digit string accepted", async () => {
+  const all = makeList(50, "t");
+  const baseline = "2026-09-01T00:00:00.000Z";
+  for (const tc of [undefined, null, "abc", -1, 1.5, "", true]) {
+    const r = await walkScripted({ version: 1, baselineStartedAt: baseline, walk: null }, () => ({ items: all, totalCount: tc }));
+    assertEquals(r.res.stopReason, "fetch_error", `totalCount=${String(tc)}`);
+    assertEquals(r.res.state.lastTick?.fetchError, "bad_total_count");
+    assertEquals(r.res.state.baselineStartedAt, baseline);
+    assertEquals(r.visited, []);
+  }
+  const ok = await walkScripted({ version: 1, baselineStartedAt: null, walk: null }, () => ({ items: all, totalCount: "50" }));
+  assertEquals(ok.res.stopReason, "end_of_list");
+  assertEquals(ok.visited.length, 50);
+});
+
+Deno.test("(B6) Empty inbox (offset 0, totalCount 0): walk ends, baseline NOT advanced (null stays null, a known baseline is kept); offset 0 empty with totalCount > 0 → fetch_error", async () => {
+  const fresh = await walkScripted({ version: 1, baselineStartedAt: null, walk: null }, () => ({ items: [], totalCount: 0 }));
+  assertEquals(fresh.res.stopReason, "end_of_list");
+  assertEquals(fresh.res.state.walk, null);
+  assertEquals(fresh.res.state.baselineStartedAt, null);
+  const baseline = "2026-09-01T00:00:00.000Z";
+  const known = await walkScripted({ version: 1, baselineStartedAt: baseline, walk: null }, () => ({ items: [], totalCount: 0 }));
+  assertEquals(known.res.stopReason, "end_of_list", "an empty page is never 'older than the cutoff'");
+  assertEquals(known.res.state.baselineStartedAt, baseline);
+  const bad = await walkScripted({ version: 1, baselineStartedAt: baseline, walk: null }, () => ({ items: [], totalCount: 5 }));
+  assertEquals(bad.res.stopReason, "fetch_error");
+  assertEquals(bad.res.state.baselineStartedAt, baseline);
+  assertEquals(bad.res.state.walk!.offset, 0);
+});
+
+Deno.test("(B7) List shrank below the resume point: steps back to the reported end, finds lastId, resumes after it; mid-walk shrink → fetch_error", async () => {
+  const full = makeList(300, "k");
+  const baseline = "2026-09-01T00:00:00.000Z";
+  const state = resumeState(full, 250, baseline); // cursor after k249
+  const shrunk = full.slice(100); // 100 conversations removed from the top: k249 is now at index 149
+  const r = await walkScripted(state, healthy(shrunk));
+  assertEquals(r.offsets[0], 225, "first fetch is the normal resume point");
+  assertEquals(r.offsets[1], 125, "then back by min(backStep, to totalCount - 25): min(225-100, 200-25)");
+  assert(!r.offsets.includes(0), "never resets to offset 0");
+  assertEquals(r.visited[0], "k250");
+  assertEquals(r.visited.length, 50);
+  assertEquals(r.res.stopReason, "end_of_list");
+  // Mid-walk (already verified): an empty page claiming the list ended at this offset is still a fetch_error.
+  const all = makeList(150, "m");
+  const r2 = await walkScripted({ version: 1, baselineStartedAt: baseline, walk: null }, (offset, limit) =>
+    offset === 100 ? { items: [], totalCount: 100 } : { items: all.slice(offset, offset + limit), totalCount: 150 });
+  assertEquals(r2.res.stopReason, "fetch_error");
+  assertEquals(r2.res.state.baselineStartedAt, baseline);
+  assertEquals(r2.res.state.walk!.offset, 100);
+});
+
+Deno.test("(B8) checkPage rules", () => {
+  const it = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `c${i}` }));
+  assertEquals(checkPage(null, 0, 100).ok, false);
+  assertEquals(checkPage({ items: [], totalCount: 0 }, 0, 100).ok, true);
+  assertEquals(checkPage({ items: [], totalCount: 0 }, 100, 100).ok, false);
+  assertEquals(checkPage({ items: it(100), totalCount: 250 }, 100, 100).ok, true);
+  assertEquals(checkPage({ items: it(50), totalCount: 250 }, 200, 100).ok, true);
+  assertEquals(checkPage({ items: it(49), totalCount: 250 }, 200, 100).ok, false);
+  assertEquals(checkPage({ items: it(3), totalCount: 0 }, 0, 100).ok, false);
+});
+
+Deno.test("(BH) Head scan: page 1 empty (total > 0) / short / non-array / bad totalCount → head-scan fetch_error, walk state untouched, walk still runs; empty inbox → complete, 0 items", async () => {
+  const all = makeList(1893, "w");
+  const bads: RawPage[] = [
+    { items: [], totalCount: 1893 },
+    { items: all.slice(0, 40), totalCount: 1893 },
+    { items: "nope", totalCount: 1893 },
+    { items: all.slice(0, 100) },
+  ];
+  for (const bad of bads) {
+    const state = deepState(all);
+    const before = structuredClone(state.walk);
+    const clock = makeClock(0);
+    const walkVisited: string[] = [];
+    const headVisited: string[] = [];
+    let walkSawState: WalkState | null = null;
+    let fetches = 0;
+    const res = await tickWithHeadScan<Item>({
+      async fetchPage(offset, limit, _s, phase) {
+        fetches++;
+        await clock.sleepMs(1_000);
+        if (phase === "head") return bad;
+        if (!walkSawState) walkSawState = structuredClone(state);
+        return { items: all.slice(offset, offset + limit), totalCount: all.length };
+      },
+      async processItem(item, _s, phase) { await clock.sleepMs(100); (phase === "head" ? headVisited : walkVisited).push(item.id); },
+      nowMs: clock.nowMs,
+      async saveState(_st) {},
+    }, state, { ...DEFAULT_PAGER_OPTIONS });
+    assertEquals(res.headScan.stopReason, "fetch_error", JSON.stringify(bad).slice(0, 60));
+    assertEquals(res.headScan.items, 0);
+    assertEquals(headVisited, []);
+    assertEquals(walkSawState!.walk, before);
+    assertEquals(walkVisited[0], "w900");
+    assert(fetches >= 2);
+  }
+  // Empty inbox on page 1 is not an error: nothing to do.
+  const clock = makeClock(0);
+  const st: WalkState = { version: 1, baselineStartedAt: null, walk: { startedAt: "2026-09-19T00:00:00.000Z", cutoff: null, offset: 5, lastTs: null, lastId: "gone", failures: 0 } };
+  const r = await tickWithHeadScan<Item>({
+    async fetchPage(_o, _l, _s) { return { items: [], totalCount: 0 }; },
+    async processItem() {},
+    nowMs: clock.nowMs,
+    async saveState() {},
+  }, st, { ...DEFAULT_PAGER_OPTIONS });
+  assertEquals(r.headScan.stopReason, "complete");
+  assertEquals(r.headScan.items, 0);
+});
+
+// ---------------------------------------------------------------------------
+// Capture Scope keying (S*)
+// ---------------------------------------------------------------------------
+Deno.test("(S1) applyScope: same set (any order) keeps state; changed set, scoped<->unfiltered, or unrecorded scope resets baseline and walk", () => {
+  const walk = { startedAt: "2026-09-19T00:00:00.000Z", cutoff: null, offset: 400, lastTs: null, lastId: "c399", failures: 0 };
+  const base = (scope?: WalkState["scope"]): WalkState => ({ version: 1, baselineStartedAt: "2026-09-10T00:00:00.000Z", walk: { ...walk }, ...(scope ? { scope } : {}) });
+  assertEquals(canonicalScope([508828, 518402, 508828]), { unfiltered: false, campaignIds: [508828, 518402] });
+  assertEquals(canonicalScope([]), { unfiltered: true, campaignIds: [] });
+
+  const same = applyScope(base({ unfiltered: false, campaignIds: [508828, 518402] }), canonicalScope([518402, 508828]));
+  assertEquals([same.changed, same.reset], [false, false]);
+  assertEquals(same.state.walk!.offset, 400);
+  assertEquals(same.state.baselineStartedAt, "2026-09-10T00:00:00.000Z");
+
+  for (const [prev, next] of [
+    [{ unfiltered: false, campaignIds: [508828] }, canonicalScope([508828, 518402])], // campaign enabled
+    [{ unfiltered: false, campaignIds: [508828, 518402] }, canonicalScope([508828])], // campaign disabled
+    [{ unfiltered: true, campaignIds: [] }, canonicalScope([508828])],               // unfiltered -> scoped
+    [{ unfiltered: false, campaignIds: [508828] }, canonicalScope([])],              // scoped -> unfiltered
+    [undefined, canonicalScope([])],                                                // unrecorded (pre-patch state)
+  ] as const) {
+    const r = applyScope(base(prev as WalkState["scope"]), next);
+    assertEquals([r.changed, r.reset], [true, true], JSON.stringify(prev));
+    assertEquals(r.state.baselineStartedAt, null);
+    assertEquals(r.state.walk, null);
+    assertEquals(r.state.scope, next);
+  }
+  // Fresh state: scope recorded, nothing to reset.
+  const fresh = applyScope({ version: 1, baselineStartedAt: null, walk: null }, canonicalScope([7]));
+  assertEquals([fresh.changed, fresh.reset], [true, false]);
+  assertEquals(fresh.state.scope, { unfiltered: false, campaignIds: [7] });
+});
+
+Deno.test("(S2) Scope change end to end: a newly enabled campaign's conversations older than the old baseline are walked after the reset", async () => {
+  const T0 = Date.parse("2026-09-20T00:00:00Z");
+  const all = makeList(150, "c", T0 - 30 * 24 * 3600_000); // all 30+ days older than the baseline
+  const oldState: WalkState = { version: 1, baselineStartedAt: new Date(T0).toISOString(), walk: null, scope: { unfiltered: false, campaignIds: [1] } };
+  // Without a reset, the old baseline makes the first page caught_up with nothing processed.
+  const kept = await walkScripted(applyScope(structuredClone(oldState), canonicalScope([1])).state, healthy(all));
+  assertEquals(kept.res.stopReason, "caught_up");
+  assertEquals(kept.visited, []);
+  // Campaign 2 enabled: reset → every conversation of the new scope is walked.
+  const reset = await walkScripted(applyScope(structuredClone(oldState), canonicalScope([1, 2])).state, healthy(all));
+  assertEquals(reset.res.stopReason, "end_of_list");
+  assertEquals(reset.visited.length, 150);
+  assertEquals(reset.res.state.scope, { unfiltered: false, campaignIds: [1, 2] });
+});
+
+Deno.test("(S3) tickHeadScanOnly (scope lookup failed): page 1 processed even with no walk, baseline/walk/scope untouched, lastTick fetch_error", async () => {
+  const all = makeList(300, "h");
+  for (const walk of [null, { startedAt: "2026-09-19T00:00:00.000Z", cutoff: null, offset: 200, lastTs: all[199].lastMessageAt, lastId: all[199].id, failures: 1 }]) {
+    const state: WalkState = { version: 1, baselineStartedAt: "2026-09-10T00:00:00.000Z", walk: structuredClone(walk), scope: { unfiltered: false, campaignIds: [9] } };
+    const before = structuredClone(state);
+    const clock = makeClock(0);
+    const offsets: number[] = [];
+    const visited: string[] = [];
+    let saved: WalkState | null = null;
+    const r = await tickHeadScanOnly<Item>({
+      async fetchPage(offset, limit, _s) { offsets.push(offset); await clock.sleepMs(1_000); return { items: all.slice(offset, offset + limit), totalCount: all.length }; },
+      async processItem(it, _s) { await clock.sleepMs(100); visited.push(it.id); },
+      nowMs: clock.nowMs,
+      async saveState(st) { saved = structuredClone(st); },
+    }, state, { ...DEFAULT_PAGER_OPTIONS }, "scope_lookup_failed");
+    assertEquals(offsets, [0]);
+    assertEquals(visited.length, 100);
+    assertEquals(r.headScan.stopReason, "complete");
+    assertEquals(r.stopReason, "fetch_error");
+    assertEquals(r.state.walk, before.walk);
+    assertEquals(r.state.baselineStartedAt, before.baselineStartedAt);
+    assertEquals(r.state.scope, before.scope);
+    assertEquals(r.state.lastTick?.fetchError, "scope_lookup_failed");
+    assertEquals(saved!.walk, before.walk);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Missing lastMessageAt (L1)
+// ---------------------------------------------------------------------------
+Deno.test("(L1) Items without lastMessageAt: one warning per tick (head scan + walk combined) and lastTick.missingLastMessageAt", async () => {
+  const all = makeList(1893, "w");
+  delete (all[3] as { lastMessageAt?: string }).lastMessageAt;            // on page 1 (head scan)
+  (all[905] as { lastMessageAt: string }).lastMessageAt = "not a date";  // on the walk's first page
+  const state = deepState(all);
+  const warns: string[] = [];
+  const realWarn = console.warn;
+  console.warn = (...a: unknown[]) => { warns.push(a.map(String).join(" ")); };
+  try {
+    const clock = makeClock(0);
+    const r = await tickWithHeadScan<Item>({
+      async fetchPage(offset, limit, _s) { await clock.sleepMs(2_000); return { items: all.slice(offset, offset + limit), totalCount: all.length }; },
+      async processItem() { await clock.sleepMs(500); },
+      nowMs: clock.nowMs,
+      async saveState() {},
+    }, state, { ...DEFAULT_PAGER_OPTIONS });
+    const missing = warns.filter((w) => w.includes("missing_lastMessageAt"));
+    assertEquals(missing.length, 1, warns.join("\n"));
+    assert(missing[0].includes("2 item(s)"), missing[0]);
+    assert(missing[0].includes("first id=w3"), missing[0]);
+    assertEquals(r.state.lastTick?.missingLastMessageAt, 2);
+  } finally {
+    console.warn = realWarn;
+  }
 });

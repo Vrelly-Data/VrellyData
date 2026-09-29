@@ -21,8 +21,20 @@ export type WalkState = {
     conversationsProcessed: number;
     elapsedMs: number;
     headScan?: HeadScanResult;
+    // Why the walk stopped with fetch_error (HTTP status, invalid page, scope
+    // lookup failure). Diagnostic only; absent on other stop reasons.
+    fetchError?: string;
+    // Items on pages fetched this tick with no parseable lastMessageAt (> 0 only).
+    missingLastMessageAt?: number;
   };
+  // Capture Scope the baseline and walk were built under. See applyScope.
+  scope?: CaptureScope;
 };
+
+// The request-level campaign filter the poller walks. `unfiltered` covers both
+// "no campaigns synced" and an empty allow-list (HeyReach treats [] as all).
+// campaignIds is sorted ascending and de-duplicated so equal sets compare equal.
+export type CaptureScope = { unfiltered: boolean; campaignIds: number[] };
 
 // Head scan: page 1 (offset 0) re-processed at the start of every tick that
 // resumes a cursor, so a reply the webhook missed surfaces on the next tick
@@ -41,13 +53,21 @@ export interface HeadScanResult {
   stopReason: HeadScanStopReason;
 }
 
+// Which part of a tick is calling: the head scan (page 1) or the walk. Lets the
+// caller keep separate counters; the pager itself treats both the same.
+export type Phase = 'head' | 'walk';
+
 export interface PagerDeps<Item extends { id?: unknown; lastMessageAt?: unknown }> {
-  // Fetch a page (offset/limit). Must throw on any non-OK or parse error.
-  fetchPage: (offset: number, limit: number, signal: AbortSignal) => Promise<{ items: Item[]; totalCount: number }>;
+  // Fetch a page (offset/limit). Must throw on any non-OK HTTP or parse error.
+  // Return the response's `items` and `totalCount` UNCOERCED: the pager
+  // validates the page shape itself (see checkPage) and treats a malformed,
+  // empty or short page as fetch_error.
+  fetchPage: (offset: number, limit: number, signal: AbortSignal, phase: Phase) => Promise<{ items?: unknown; totalCount?: unknown }>;
   // Process one item. Should throw on failure; caller increments failures.
-  processItem: (item: Item, signal: AbortSignal) => Promise<void>;
+  // `signal` is the per-item deadline (itemFetchTimeoutMs); honour it for every
+  // network and DB call so one item cannot overrun the budget.
+  processItem: (item: Item, signal: AbortSignal, phase: Phase) => Promise<void>;
   nowMs: () => number;
-  sleepMs: (ms: number) => Promise<void>;
   // Persist state fully-replaced (writer decides when to call).
   saveState: (state: WalkState) => Promise<void>;
 }
@@ -57,7 +77,7 @@ export interface PagerOptions {
   pageLimit?: number;                  // default 100
   minRemainingForNextPageMs?: number;  // 40_000
   pageFetchTimeoutMs?: number;         // 35_000 (capped by remaining - 5_000)
-  itemFetchTimeoutMs?: number;         // 8_000 for chatroom
+  itemFetchTimeoutMs?: number;         // 8_000: per-item deadline (GetChatroom + DB calls)
   minRemainingForNextItemMs?: number;  // 10_000
   // Overlap verification backoff parameters
   resumeBackstepInitial?: number;      // 25
@@ -105,6 +125,8 @@ function isNonIncreasingByTs<Item extends { lastMessageAt?: unknown }>(items: It
 }
 
 function pageFullyOlderThanCutoff<Item extends { lastMessageAt?: unknown }>(items: Item[], cutoffIso: string): boolean {
+  // An empty page proves nothing about what is older than the cutoff.
+  if (items.length === 0) return false;
   const cutoffMs = parseMs(cutoffIso);
   if (!Number.isFinite(cutoffMs)) return false;
   for (const it of items) {
@@ -115,11 +137,124 @@ function pageFullyOlderThanCutoff<Item extends { lastMessageAt?: unknown }>(item
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// Page validation (walk and head scan)
+// ---------------------------------------------------------------------------
+// A page is only trusted when its shape is consistent with the list HeyReach
+// reports. Anything else is a fetch_error: the walk stays exactly as saved and
+// the baseline does not move, so a bad response can never mark a walk clean.
+//
+// - `items` must be an array.
+// - `totalCount` must be a non-negative integer (number, or a digit string).
+//   Missing / null / non-numeric → invalid. GetConversationsV2 always returns
+//   it (v44 on main relied on it for `hasMore`), so without it a short or empty
+//   page cannot be told apart from the real end of the list.
+// - Empty page: valid only at offset 0 with totalCount 0 (an empty inbox; see
+//   walkWithState: it ends the walk but never advances the baseline). An empty
+//   page at offset > 0, or at offset 0 with totalCount > 0, is invalid.
+// - Items present but totalCount 0: inconsistent → invalid.
+// - Short page (fewer than `limit` items) with offset + items.length <
+//   totalCount: truncated → invalid.
+// - A full page, or a short page reaching totalCount, is valid. A list that
+//   grew or shrank between pages is fine as long as each page is consistent
+//   with its own totalCount; drift is handled by the resume verification.
+export type PageCheck<Item> =
+  | { ok: true; items: Item[]; totalCount: number }
+  | { ok: false; kind: 'shape' | 'empty' | 'short'; reason: string; totalCount: number | null };
+
+function parseTotalCount(v: unknown): number | null {
+  if (typeof v === 'number') return Number.isInteger(v) && v >= 0 ? v : null;
+  if (typeof v === 'string' && /^\d+$/.test(v.trim())) return Number(v.trim());
+  return null;
+}
+
+export function checkPage<Item>(page: unknown, offset: number, limit: number): PageCheck<Item> {
+  const p = (page && typeof page === 'object') ? page as { items?: unknown; totalCount?: unknown } : {};
+  if (!Array.isArray(p.items)) return { ok: false, kind: 'shape', reason: 'items_not_array', totalCount: null };
+  const total = parseTotalCount(p.totalCount);
+  if (total === null) return { ok: false, kind: 'shape', reason: 'bad_total_count', totalCount: null };
+  const n = p.items.length;
+  if (n === 0) {
+    if (offset === 0 && total === 0) return { ok: true, items: [], totalCount: 0 };
+    return { ok: false, kind: 'empty', reason: `empty_page@${offset}(total=${total})`, totalCount: total };
+  }
+  if (total === 0) return { ok: false, kind: 'shape', reason: `items_with_zero_total@${offset}`, totalCount: total };
+  if (n < limit && offset + n < total) {
+    return { ok: false, kind: 'short', reason: `short_page@${offset}(${n}<${limit},total=${total})`, totalCount: total };
+  }
+  return { ok: true, items: p.items as Item[], totalCount: total };
+}
+
+// Per-tick diagnostics shared by the head scan and the walk, so the
+// missing-lastMessageAt warning is logged once per tick.
+export interface TickDiagnostics { missingTs: number; firstMissingId: string | null }
+const newDiagnostics = (): TickDiagnostics => ({ missingTs: 0, firstMissingId: null });
+
+function noteMissingTs<Item extends { id?: unknown; lastMessageAt?: unknown }>(items: Item[], diag: TickDiagnostics) {
+  for (const it of items) {
+    if (!Number.isFinite(parseMs(it?.lastMessageAt))) {
+      diag.missingTs++;
+      if (diag.firstMissingId === null) diag.firstMissingId = String(it?.id ?? '');
+    }
+  }
+}
+
+function logDiagnostics(diag: TickDiagnostics) {
+  if (diag.missingTs > 0) {
+    console.warn(
+      `[pager] missing_lastMessageAt: ${diag.missingTs} item(s) on pages fetched this tick have no parseable ` +
+        `lastMessageAt (first id=${diag.firstMissingId}); such pages never count as sorted or as older than the cutoff`,
+    );
+  }
+}
+
+function errReason(e: unknown): string {
+  const m = e instanceof Error ? e.message : String(e);
+  return (m || 'fetch_failed').slice(0, 120);
+}
+
+// ---------------------------------------------------------------------------
+// Capture Scope keying
+// ---------------------------------------------------------------------------
+export function canonicalScope(campaignIds: number[]): CaptureScope {
+  const ids = [...new Set(campaignIds.filter((n) => Number.isFinite(n)))].sort((a, b) => a - b);
+  return ids.length === 0 ? { unfiltered: true, campaignIds: [] } : { unfiltered: false, campaignIds: ids };
+}
+
+function sameScope(a: CaptureScope | undefined | null, b: CaptureScope): boolean {
+  if (!a || typeof a !== 'object' || !Array.isArray(a.campaignIds)) return false;
+  return a.unfiltered === b.unfiltered && a.campaignIds.length === b.campaignIds.length &&
+    a.campaignIds.every((v, i) => v === b.campaignIds[i]);
+}
+
+// The baseline and the walk cursor only mean something for the list they were
+// built from. If the campaign filter changes (a campaign enabled or disabled,
+// scoped <-> unfiltered), offsets point into a different list and conversations
+// of a newly enabled campaign may be older than the baseline, so both are reset
+// and the next walk covers the new scope from the top (as v44 did every run).
+// State without a recorded scope (written before this field existed) is treated
+// as a different scope. Returns the state to use; `reset` is true when a
+// baseline or walk was discarded.
+export function applyScope(
+  state: WalkState,
+  scope: CaptureScope,
+): { state: WalkState; changed: boolean; reset: boolean; previous: CaptureScope | null } {
+  const previous = (state.scope && typeof state.scope === 'object') ? state.scope : null;
+  if (sameScope(previous, scope)) return { state, changed: false, reset: false, previous };
+  const reset = state.baselineStartedAt != null || state.walk != null;
+  state.baselineStartedAt = null;
+  state.walk = null;
+  state.scope = { unfiltered: scope.unfiltered, campaignIds: [...scope.campaignIds] };
+  return { state, changed: true, reset, previous };
+}
+
 export async function walkWithState<Item extends { id?: unknown; lastMessageAt?: unknown }>(
   deps: PagerDeps<Item>,
   initialState: WalkState | null | undefined,
   opts: PagerOptions,
+  sharedDiag?: TickDiagnostics,
 ): Promise<PagerResult> {
+  const diag = sharedDiag ?? newDiagnostics();
   const startedAtMs = deps.nowMs();
   const startedAtIso = new Date(startedAtMs).toISOString();
   const limit = opts.pageLimit ?? 100;
@@ -152,6 +287,8 @@ export async function walkWithState<Item extends { id?: unknown; lastMessageAt?:
   let itemsProcessed = 0;
   let failuresCount = 0;
   let stopReason: StopReason = 'end_of_list';
+  let fetchError: string | undefined;
+  let emptyInbox = false;
 
   // Compute resume offset with overlap verification
   let effectiveOffset = Math.max(0, (state.walk.offset ?? 0) - backInitial);
@@ -166,17 +303,39 @@ export async function walkWithState<Item extends { id?: unknown; lastMessageAt?:
     }
     // Cap page fetch timeout by remaining-5s guard
     const timeout = Math.max(1_000, Math.min(pageTimeoutBase, Math.max(0, remaining() - 5_000)));
-    let items: Item[] = [];
-    let totalCount = 0;
+    let page: unknown;
     try {
-      const page = await deps.fetchPage(effectiveOffset, limit, AbortSignal.timeout(timeout));
-      items = Array.isArray(page.items) ? page.items : [];
-      totalCount = Number.isFinite(Number(page.totalCount)) ? Number(page.totalCount) : 0;
-      pagesFetched++;
-    } catch (_e) {
+      page = await deps.fetchPage(effectiveOffset, limit, AbortSignal.timeout(timeout), 'walk');
+    } catch (e) {
       stopReason = 'fetch_error';
+      fetchError = errReason(e);
       break;
     }
+    const checked = checkPage<Item>(page, effectiveOffset, limit);
+    if (!checked.ok) {
+      // Resume only: the list now ends before the resume point (it shrank, e.g.
+      // a sender account was removed). Step back towards the reported end and
+      // keep verifying; nothing is processed or marked clean on the way. An
+      // empty page that does not claim the list ended here is a bad response.
+      if (
+        !verified && checked.kind === 'empty' && effectiveOffset > 0 &&
+        checked.totalCount !== null && checked.totalCount <= effectiveOffset
+      ) {
+        const next = Math.max(0, Math.min(effectiveOffset - backStep, checked.totalCount - backInitial));
+        console.warn(`[pager] list_shrank: ${checked.reason} while resuming; stepping back to offset ${next}`);
+        effectiveOffset = next;
+        continue;
+      }
+      console.warn(`[pager] invalid page: ${checked.reason} — treated as fetch_error (walk and baseline unchanged)`);
+      stopReason = 'fetch_error';
+      fetchError = checked.reason;
+      break;
+    }
+    pagesFetched++;
+    const items: Item[] = checked.items;
+    const totalCount = checked.totalCount;
+    noteMissingTs(items, diag);
+    if (items.length === 0) emptyInbox = true; // only reachable at offset 0 with totalCount 0
 
     // Verify overlap on first fetched page after resume
     if (!verified) {
@@ -231,7 +390,7 @@ export async function walkWithState<Item extends { id?: unknown; lastMessageAt?:
       }
       const it = items[i];
       try {
-        await deps.processItem(it, AbortSignal.timeout(itemTimeout));
+        await deps.processItem(it, AbortSignal.timeout(itemTimeout), 'walk');
       } catch (_e) {
         state.walk.failures = (state.walk.failures ?? 0) + 1;
         failuresCount++;
@@ -267,7 +426,7 @@ export async function walkWithState<Item extends { id?: unknown; lastMessageAt?:
 
     // Advance offset/page
     effectiveOffset += items.length;
-    const hasMore = items.length === limit && (totalCount <= 0 || effectiveOffset < totalCount);
+    const hasMore = items.length === limit && effectiveOffset < totalCount;
     // Persist at end of each processed page
     try {
       await deps.saveState(state);
@@ -283,7 +442,13 @@ export async function walkWithState<Item extends { id?: unknown; lastMessageAt?:
   const elapsedMs = deps.nowMs() - startedAtMs;
   // Finalize baseline/walk per rules
   if (stopReason === 'caught_up' || stopReason === 'end_of_list') {
-    if ((state.walk.failures ?? 0) === 0) {
+    if (emptyInbox) {
+      // Empty inbox (offset 0, totalCount 0): the walk is over, but nothing was
+      // seen, so the baseline is left as it was. A transient empty response can
+      // therefore never make older conversations permanently skippable, and a
+      // brand-new integration keeps walking without a cutoff until it has data.
+      console.log('[pager] empty inbox (totalCount 0): walk ended, baseline unchanged');
+    } else if ((state.walk.failures ?? 0) === 0) {
       state.baselineStartedAt = state.walk.startedAt;
     } else {
       // keep previous baseline; log elsewhere
@@ -292,12 +457,15 @@ export async function walkWithState<Item extends { id?: unknown; lastMessageAt?:
   } else {
     // time_budget or fetch_error → preserve walk as-is
   }
+  if (!sharedDiag) logDiagnostics(diag);
   state.lastTick = {
     at: startedAtIso,
     stopReason,
     pagesFetched,
     conversationsProcessed: itemsProcessed,
     elapsedMs,
+    ...(fetchError !== undefined ? { fetchError } : {}),
+    ...(diag.missingTs > 0 ? { missingLastMessageAt: diag.missingTs } : {}),
   };
   // Persist on stop as well
   try {
@@ -332,11 +500,15 @@ export async function walkWithState<Item extends { id?: unknown; lastMessageAt?:
 //   overrun of an item that ignores its timeout);
 // - a failed item (processItem throws: GetChatroom or DB error) is counted in
 //   `failures` and the scan continues with the next item.
+// Page 1 goes through the same checkPage rules as a walk page: a malformed,
+// empty (unless the inbox is empty) or short page is a head-scan fetch_error.
 export async function runHeadScan<Item extends { id?: unknown; lastMessageAt?: unknown }>(
   deps: Pick<PagerDeps<Item>, 'fetchPage' | 'processItem' | 'nowMs'>,
   budgetMs: number,
   opts: PagerOptions,
+  sharedDiag?: TickDiagnostics,
 ): Promise<HeadScanResult> {
+  const diag = sharedDiag ?? newDiagnostics();
   const startMs = deps.nowMs();
   const limit = opts.pageLimit ?? 100;
   const minNextItem = opts.minRemainingForNextItemMs ?? 10_000;
@@ -345,14 +517,21 @@ export async function runHeadScan<Item extends { id?: unknown; lastMessageAt?: u
   const deadline = startMs + Math.max(0, budgetMs);
   const remaining = () => Math.max(0, deadline - deps.nowMs());
 
-  let items: Item[] = [];
+  let page: unknown;
   try {
     const timeout = Math.max(1_000, Math.min(pageTimeoutBase, Math.max(0, remaining() - 5_000)));
-    const page = await deps.fetchPage(0, limit, AbortSignal.timeout(timeout));
-    items = Array.isArray(page.items) ? page.items : [];
+    page = await deps.fetchPage(0, limit, AbortSignal.timeout(timeout), 'head');
   } catch (_e) {
     return { items: 0, failures: 0, elapsedMs: deps.nowMs() - startMs, stopReason: 'fetch_error' };
   }
+  const checked = checkPage<Item>(page, 0, limit);
+  if (!checked.ok) {
+    console.warn(`[pager] head scan: invalid page 1: ${checked.reason} — treated as fetch_error`);
+    return { items: 0, failures: 0, elapsedMs: deps.nowMs() - startMs, stopReason: 'fetch_error' };
+  }
+  const items: Item[] = checked.items;
+  noteMissingTs(items, diag);
+  if (!sharedDiag) logDiagnostics(diag);
 
   let attempted = 0;
   let failures = 0;
@@ -363,7 +542,7 @@ export async function runHeadScan<Item extends { id?: unknown; lastMessageAt?: u
       break;
     }
     try {
-      await deps.processItem(it, AbortSignal.timeout(itemTimeout));
+      await deps.processItem(it, AbortSignal.timeout(itemTimeout), 'head');
     } catch (_e) {
       failures++;
     }
@@ -415,17 +594,19 @@ export async function tickWithHeadScan<Item extends { id?: unknown; lastMessageA
     ? (initialState as WalkState)
     : { version: 1, baselineStartedAt: null, walk: null };
 
+  const diag = newDiagnostics();
   let headScan: HeadScanResult;
   if (!state.walk || (state.walk.offset ?? 0) <= 0) {
     headScan = { items: 0, failures: 0, elapsedMs: 0, stopReason: 'skipped_walk_at_head' };
   } else if (opts.runBudgetMs < minNextPage || share <= 0) {
     headScan = { items: 0, failures: 0, elapsedMs: 0, stopReason: 'skipped_budget' };
   } else {
-    headScan = await runHeadScan(deps, share, opts);
+    headScan = await runHeadScan(deps, share, opts, diag);
   }
 
   const walkBudgetMs = Math.max(0, opts.runBudgetMs - (deps.nowMs() - tickStartMs));
-  const walk = await walkWithState(deps, state, { ...opts, runBudgetMs: walkBudgetMs });
+  const walk = await walkWithState(deps, state, { ...opts, runBudgetMs: walkBudgetMs }, diag);
+  logDiagnostics(diag);
   if (walk.state.lastTick) {
     walk.state.lastTick = {
       ...walk.state.lastTick,
@@ -435,4 +616,46 @@ export async function tickWithHeadScan<Item extends { id?: unknown; lastMessageA
     };
   }
   return { ...walk, headScan };
+}
+
+// Head scan only, walk skipped: used when the Capture Scope lookup failed. The
+// poller then fails open like main (page 1 of the unfiltered inbox is still
+// processed, so capture does not silently stop), but the persisted baseline,
+// walk and scope are left exactly as they are: an unfiltered walk would move a
+// cursor that belongs to the scoped list, and resetting on a transient lookup
+// error would throw the baseline away. Only lastTick is updated (stopReason
+// fetch_error, fetchError = reason).
+export async function tickHeadScanOnly<Item extends { id?: unknown; lastMessageAt?: unknown }>(
+  deps: PagerDeps<Item>,
+  initialState: WalkState | null | undefined,
+  opts: PagerOptions,
+  reason: string,
+): Promise<TickResult> {
+  const tickStartMs = deps.nowMs();
+  const minNextPage = opts.minRemainingForNextPageMs ?? 40_000;
+  const share = Math.min(opts.headScanBudgetMs ?? 40_000, opts.runBudgetMs);
+  const state: WalkState = initialState && typeof initialState === 'object'
+    ? (initialState as WalkState)
+    : { version: 1, baselineStartedAt: null, walk: null };
+  const diag = newDiagnostics();
+  const headScan: HeadScanResult = (opts.runBudgetMs < minNextPage || share <= 0)
+    ? { items: 0, failures: 0, elapsedMs: 0, stopReason: 'skipped_budget' }
+    : await runHeadScan(deps, share, opts, diag);
+  logDiagnostics(diag);
+  state.lastTick = {
+    at: new Date(tickStartMs).toISOString(),
+    stopReason: 'fetch_error',
+    pagesFetched: 0,
+    conversationsProcessed: 0,
+    elapsedMs: deps.nowMs() - tickStartMs,
+    headScan,
+    fetchError: reason,
+    ...(diag.missingTs > 0 ? { missingLastMessageAt: diag.missingTs } : {}),
+  };
+  try {
+    await deps.saveState(state);
+  } catch (e) {
+    console.error('[pager] saveState failed (head-scan-only tick):', e);
+  }
+  return { pagesFetched: 0, itemsProcessed: 0, failures: 0, stopReason: 'fetch_error', state, headScan };
 }

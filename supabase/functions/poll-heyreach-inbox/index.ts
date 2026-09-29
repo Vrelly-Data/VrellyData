@@ -13,9 +13,13 @@ import { findLeadByNormalizedLinkedIn } from '../_shared/agent-leads-lookup.ts';
 import { isStaleProspectMessage } from '../_shared/stale.ts';
 import { decideSurfaceAndClassify, buildSurfaceUpdateFields } from '../_shared/surface.ts';
 import {
+  applyScope,
+  canonicalScope,
+  tickHeadScanOnly,
   tickWithHeadScan,
   type HeadScanResult,
   type HeadScanStopReason,
+  type Phase,
   type StopReason,
   type WalkState,
   DEFAULT_PAGER_OPTIONS,
@@ -35,6 +39,42 @@ function getCorsHeaders(req: Request) {
 }
 
 const HEYREACH_API = 'https://api.heyreach.io/api/public';
+
+// DB calls outside item processing (integration/config/scope lookups, state
+// saves) are capped at this so a hung supabase-js request cannot push a run past
+// the 150s edge limit. On timeout supabase-js resolves with an error.
+const DB_TIMEOUT_MS = 5_000;
+
+// Every DB call made while processing one conversation honours the pager's
+// per-item signal (itemFetchTimeoutMs, 8s, shared with GetChatroom), so a whole
+// item stays inside the 10s minRemainingForNextItemMs guard. The query is
+// aborted where supabase-js allows it, and the await is raced against the
+// signal, so even a call that ignores the abort (the shared lookup helper)
+// cannot hang the item. A timeout throws: the item counts as a failure and
+// nothing after the timed-out call is written.
+async function itemDb<T>(label: string, signal: AbortSignal, run: (signal: AbortSignal) => PromiseLike<T>): Promise<T> {
+  if (signal.aborted) throw new Error(`db_timeout: ${label}`);
+  let onAbort = () => {};
+  const timedOut = new Promise<never>((_, reject) => {
+    onAbort = () => reject(new Error(`db_timeout: ${label}`));
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([Promise.resolve(run(signal)), timedOut]);
+  } finally {
+    signal.removeEventListener('abort', onAbort);
+  }
+}
+
+type Counts = {
+  seen: number;
+  polled: number;
+  new: number;
+  skippedNoText: number;
+  skippedSenderMe: number;
+  skippedSameText: number;
+};
+const newCounts = (): Counts => ({ seen: 0, polled: 0, new: 0, skippedNoText: 0, skippedSenderMe: 0, skippedSameText: 0 });
 
 Deno.serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
@@ -90,7 +130,8 @@ Deno.serve(async (req) => {
       .from('outbound_integrations')
       .select('id, created_by, api_key_encrypted, heyreach_poll_state')
       .eq('is_active', true)
-      .eq('platform', 'heyreach');
+      .eq('platform', 'heyreach')
+      .abortSignal(AbortSignal.timeout(DB_TIMEOUT_MS));
 
     if (filterUserId) {
       query = query.eq('created_by', filterUserId);
@@ -113,12 +154,11 @@ Deno.serve(async (req) => {
           : ''),
     );
 
-    let totalPolled = 0;
-    let totalNew = 0;
-    let totalConversationsSeen = 0;
-    let skippedNoText = 0;
-    let skippedSenderMe = 0;
-    let skippedSameText = 0;
+    // Walk and head-scan counters are kept apart: the top-level polled/new/seen/
+    // skipped totals count walk work only, and head-scan work is reported under
+    // headScan.counts, so page-1 items are not double-counted.
+    const walkCounts = newCounts();
+    const headCounts = newCounts();
     let integrationsSkippedNoKey = 0;
     let integrationsSkippedAllDisabled = 0;
     let integrationsSkippedNoAgentConfig = 0;
@@ -158,11 +198,12 @@ Deno.serve(async (req) => {
       time_budget: 3,
       fetch_error: 4,
     };
-    const headScanTotal: { items: number; failures: number; elapsedMs: number; stopReason: HeadScanStopReason | null } = {
+    const headScanTotal: { items: number; failures: number; elapsedMs: number; stopReason: HeadScanStopReason | null; counts: Counts } = {
       items: 0,
       failures: 0,
       elapsedMs: 0,
       stopReason: null,
+      counts: headCounts,
     };
     const addHeadScan = (h: HeadScanResult) => {
       headScanTotal.items += h.items;
@@ -200,13 +241,19 @@ Deno.serve(async (req) => {
         }
 
         // Check for active agent config
-        const { data: agentConfig } = await supabase
+        const { data: agentConfig, error: agentConfigErr } = await supabase
           .from('agent_configs')
           .select('*')
           .eq('user_id', userId)
           .eq('is_active', true)
+          .abortSignal(AbortSignal.timeout(DB_TIMEOUT_MS))
           .maybeSingle();
 
+        if (agentConfigErr) {
+          console.error(`[poll-heyreach-inbox] agent config lookup failed for user ${userId}: ${agentConfigErr.message} — skipping this tick`);
+          integrationsSkippedNoAgentConfig++;
+          continue;
+        }
         if (!agentConfig) {
           console.log(`[poll-heyreach-inbox] No active agent config for user ${userId}, skipping`);
           integrationsSkippedNoAgentConfig++;
@@ -232,12 +279,17 @@ Deno.serve(async (req) => {
         const { data: scopeRows, error: scopeErr } = await supabase
           .from('synced_campaigns')
           .select('external_campaign_id, capture_enabled')
-          .eq('integration_id', integration.id);
+          .eq('integration_id', integration.id)
+          .abortSignal(AbortSignal.timeout(DB_TIMEOUT_MS));
 
         let campaignIdFilter: number[] = [];
+        let scopeKnown = true;
         if (scopeErr) {
           // Fail open — a transient lookup failure must not silently stop
           // capture for a whole integration.
+          // With persistent walk state this tick is head-scan only (page 1,
+          // unfiltered): see tickHeadScanOnly in paging.ts.
+          scopeKnown = false;
           console.warn(
             `[poll-heyreach-inbox] capture scope lookup failed for integration ` +
             `${integration.id} (${scopeErr.message}) — polling unfiltered (fail-open)`,
@@ -281,12 +333,26 @@ Deno.serve(async (req) => {
         // resumed) without touching walk state, then runs the walk with the
         // remaining budget. Budget rules are documented in paging.ts.
         const rawState = (integration?.heyreach_poll_state as WalkState) ?? {};
-        const stateIn: WalkState = (rawState && typeof rawState === 'object' && 'version' in rawState)
+        let stateIn: WalkState = (rawState && typeof rawState === 'object' && 'version' in rawState)
           ? rawState as WalkState
           : { version: 1, baselineStartedAt: null, walk: null };
-        const walker = await tickWithHeadScan<any>(
-          {
-            async fetchPage(offset, limit, signal) {
+        // Key the state to the Capture Scope: a changed campaign filter resets
+        // the baseline and walk (applyScope in paging.ts).
+        if (scopeKnown) {
+          const scope = canonicalScope(campaignIdFilter);
+          const scoped = applyScope(stateIn, scope);
+          stateIn = scoped.state;
+          if (scoped.changed && (scoped.reset || scoped.previous)) {
+            const fmt = (s: { unfiltered: boolean; campaignIds: number[] } | null) =>
+              !s ? 'unrecorded' : s.unfiltered ? 'unfiltered' : `campaigns[${s.campaignIds.join(',')}]`;
+            console.log(
+              `[poll-heyreach-inbox] capture scope changed for integration ${integration.id}: ` +
+                `${fmt(scoped.previous)} -> ${fmt(scope)} — baseline and walk reset`,
+            );
+          }
+        }
+        const deps = {
+            async fetchPage(offset: number, limit: number, signal: AbortSignal, phase: Phase) {
               const res = await fetch(`${HEYREACH_API}/inbox/GetConversationsV2`, {
                 method: 'POST',
                 headers: {
@@ -306,7 +372,7 @@ Deno.serve(async (req) => {
                   offset,
                   limit,
                 }),
-                signal: AbortSignal.timeout(Math.max(1_000, Math.min(DEFAULT_PAGER_OPTIONS.pageFetchTimeoutMs, Math.max(0, remaining() - 5_000)))),
+                signal: AbortSignal.any([signal, AbortSignal.timeout(Math.max(1_000, Math.min(DEFAULT_PAGER_OPTIONS.pageFetchTimeoutMs, Math.max(0, remaining() - 5_000))))]),
               });
               if (!res.ok) {
                 const t = await res.text().catch(() => '');
@@ -314,25 +380,28 @@ Deno.serve(async (req) => {
                 throw new Error(`fetch_error_${res.status}`);
               }
               const data = await res.json();
-              const conversations = Array.isArray(data?.items) ? data.items : [];
-              const totalCount = Number.isFinite(Number(data?.totalCount)) ? Number(data.totalCount) : 0;
-              console.log(`[poll-heyreach-inbox] Fetched ${conversations.length} conversations (offset=${offset}, total=${totalCount})`);
-              totalConversationsSeen += conversations.length;
-              return { items: conversations, totalCount };
+              // Returned uncoerced: the pager validates items/totalCount and
+              // treats a malformed, empty or short page as fetch_error.
+              const n = Array.isArray(data?.items) ? data.items.length : 'non-array';
+              console.log(`[poll-heyreach-inbox] Fetched ${n} conversations (offset=${offset}, total=${data?.totalCount}, phase=${phase})`);
+              if (Array.isArray(data?.items)) (phase === 'head' ? headCounts : walkCounts).seen += data.items.length;
+              return { items: data?.items, totalCount: data?.totalCount };
             },
-            async processItem(convo: any, signal) {
+            // deno-lint-ignore no-explicit-any
+            async processItem(convo: any, signal: AbortSignal, phase: Phase) {
+              const counts = phase === 'head' ? headCounts : walkCounts;
               try {
                 const conversationId = convo.id;
                 const linkedInAccountId = convo.linkedInAccountId;
                 const lastMessageText = convo.lastMessageText || '';
 
                 if (!lastMessageText) {
-                  skippedNoText++;
+                  counts.skippedNoText++;
                   return;
                 }
 
                 if (convo.lastMessageSender === 'ME') {
-                  skippedSenderMe++;
+                  counts.skippedSenderMe++;
                   return;
                 }
 
@@ -363,7 +432,7 @@ Deno.serve(async (req) => {
                   inbox_status?: string | null;
                 } | null = null;
                 if (linkedinUrl) {
-                  const found = await findLeadByNormalizedLinkedIn(supabase, userId, linkedinUrl);
+                  const found = await itemDb('lead_lookup', signal, () => findLeadByNormalizedLinkedIn(supabase, userId, linkedinUrl));
                   existingLead = found
                     ? {
                         id: found.id,
@@ -376,21 +445,27 @@ Deno.serve(async (req) => {
                     : null;
                 }
                 if (!existingLead && externalId) {
-                  const { data } = await supabase
-                    .from('agent_leads')
-                    .select('id, last_reply_text, disposition_tag, last_surfaced_reply_at')
-                    .eq('user_id', userId)
-                    .eq('external_id', externalId)
-                    .maybeSingle();
+                  const { data, error: lookupErr } = await itemDb('lead_lookup_external_id', signal, (s) =>
+                    supabase
+                      .from('agent_leads')
+                      .select('id, last_reply_text, disposition_tag, last_surfaced_reply_at')
+                      .eq('user_id', userId)
+                      .eq('external_id', externalId)
+                      .abortSignal(s)
+                      .maybeSingle()
+                  );
+                  // A failed (or aborted) lookup must not be read as "no lead":
+                  // that would INSERT a duplicate. Fail the item instead.
+                  if (lookupErr) throw new Error(`agent_leads_lookup_failed: ${lookupErr.message}`);
                   existingLead = data ?? null;
                 }
 
                 if (existingLead && existingLead.last_reply_text === lastMessageText) {
-                  skippedSameText++;
+                  counts.skippedSameText++;
                   return;
                 }
 
-                totalPolled++;
+                counts.polled++;
 
                 // Fetch full chatroom messages
                 let replyThread: { role: string; content: string; timestamp: string; channel: string }[] = [];
@@ -402,7 +477,7 @@ Deno.serve(async (req) => {
                         'X-API-KEY': apiKey,
                         'Accept': 'application/json',
                       },
-                      signal: AbortSignal.timeout(DEFAULT_PAGER_OPTIONS.itemFetchTimeoutMs),
+                      signal: AbortSignal.any([signal, AbortSignal.timeout(DEFAULT_PAGER_OPTIONS.itemFetchTimeoutMs)]),
                     },
                   );
 
@@ -505,12 +580,16 @@ Deno.serve(async (req) => {
                 // Deterministic save: update-or-insert with 23505 retry
                 let savedRow: Record<string, unknown> | null = null;
                 if (existingLead?.id) {
-                  const { data: updated, error: updateErr } = await supabase
-                    .from('agent_leads')
-                    .update(upsertPayload)
-                    .eq('id', existingLead.id)
-                    .select()
-                    .single();
+                  const leadId = existingLead.id;
+                  const { data: updated, error: updateErr } = await itemDb('agent_leads_update', signal, (s) =>
+                    supabase
+                      .from('agent_leads')
+                      .update(upsertPayload)
+                      .eq('id', leadId)
+                      .select()
+                      .abortSignal(s)
+                      .single()
+                  );
                   if (updateErr) {
                     console.error(`[poll-heyreach-inbox] UPDATE error for ${externalId}:`, updateErr.message);
                     // Throw (not return) so the walker counts a failure and the baseline does not advance.
@@ -518,21 +597,28 @@ Deno.serve(async (req) => {
                   }
                   savedRow = updated as Record<string, unknown>;
                 } else {
-                  const { data: inserted, error: insertErr } = await supabase
-                    .from('agent_leads')
-                    .insert(upsertPayload)
-                    .select()
-                    .single();
+                  const { data: inserted, error: insertErr } = await itemDb('agent_leads_insert', signal, (s) =>
+                    supabase
+                      .from('agent_leads')
+                      .insert(upsertPayload)
+                      .select()
+                      .abortSignal(s)
+                      .single()
+                  );
                   if (insertErr && (insertErr as { code?: string }).code === '23505') {
                     // Race: another writer created the row — reselect and update
-                    const raced = await findLeadByNormalizedLinkedIn(supabase, userId, linkedinUrl);
+                    const raced = await itemDb('lead_reselect', signal, () => findLeadByNormalizedLinkedIn(supabase, userId, linkedinUrl));
                     if (raced?.id) {
-                      const { data: updated2, error: updateErr2 } = await supabase
-                        .from('agent_leads')
-                        .update(upsertPayload)
-                        .eq('id', raced.id)
-                        .select()
-                        .single();
+                      const racedId = raced.id;
+                      const { data: updated2, error: updateErr2 } = await itemDb('agent_leads_update_after_23505', signal, (s) =>
+                        supabase
+                          .from('agent_leads')
+                          .update(upsertPayload)
+                          .eq('id', racedId)
+                          .select()
+                          .abortSignal(s)
+                          .single()
+                      );
                       if (updateErr2) {
                         console.error(`[poll-heyreach-inbox] UPDATE-after-23505 failed for ${externalId}:`, updateErr2.message);
                         throw new Error(`agent_leads_update_after_23505_failed: ${updateErr2.message}`);
@@ -550,20 +636,6 @@ Deno.serve(async (req) => {
                   }
                 }
 
-                // Trigger a draft, exactly as poll-reply-inbox does — same shared
-                // helper, same gate. This poller previously NEVER drafted, so a
-                // reply the webhook missed surfaced to Pending Approval with an
-                // empty draft.
-                //
-                // Gated on `surface`, which is what makes this safe against
-                // double-drafting alongside heyreach-webhook. Both paths write
-                // last_surfaced_reply_at now, so for a reply the webhook already
-                // handled the gate computes newestMs > priorMs with the two equal
-                // → false → no second call. The skippedSameText guard above is
-                // NOT the interlock: it compares our stored text against
-                // GetConversationsV2's lastMessageText, and misses whenever a
-                // sibling conversation for the same profile holds different text
-                // (73 such profiles in prod — see the collision note).
                 // Log the gate decision for observability
                 console.log(`[poll-heyreach-inbox] gate: stale=${stale} ts=${newestProspectTs ?? 'null'} willClassify=${decision.willClassify}`);
 
@@ -574,10 +646,10 @@ Deno.serve(async (req) => {
                 }
 
                 if (savedRow && !existingLead) {
-                  totalNew++;
+                  counts.new++;
 
                   // Log activity
-                  await supabase.from('agent_activity').insert({
+                  await itemDb('agent_activity_insert', signal, (s) => supabase.from('agent_activity').insert({
                     user_id: userId,
                     agent_config_id: agentConfig.id,
                     // deno-lint-ignore no-explicit-any
@@ -587,7 +659,7 @@ Deno.serve(async (req) => {
                     activity_type: 'reply_received',
                     description: `LinkedIn reply detected via HeyReach polling from ${fullName}${profile.companyName ? ' at ' + profile.companyName : ''}`,
                     metadata: { channel: 'linkedin', intent: 'pending', source: 'heyreach_poll' },
-                  });
+                  }).abortSignal(s));
                 }
 
                 // Rate limit between chatroom fetches
@@ -600,27 +672,30 @@ Deno.serve(async (req) => {
               }
             },
             nowMs: () => Date.now(),
-            sleepMs: (ms: number) => new Promise((r) => setTimeout(r, ms)),
             async saveState(next: WalkState) {
               const { error } = await supabase
                 .from('outbound_integrations')
+                // deno-lint-ignore no-explicit-any
                 .update({ heyreach_poll_state: next as any })
-                .eq('id', integration.id);
+                .eq('id', integration.id)
+                .abortSignal(AbortSignal.timeout(DB_TIMEOUT_MS));
               if (error) throw error;
             },
-          },
-          stateIn,
-          {
-            ...DEFAULT_PAGER_OPTIONS,
-            runBudgetMs: remaining(),
-          },
-        );
+        };
+        const tickOpts = { ...DEFAULT_PAGER_OPTIONS, runBudgetMs: remaining() };
+        const walker = scopeKnown
+          // deno-lint-ignore no-explicit-any
+          ? await tickWithHeadScan<any>(deps, stateIn, tickOpts)
+          // deno-lint-ignore no-explicit-any
+          : await tickHeadScanOnly<any>(deps, stateIn, tickOpts, 'scope_lookup_failed');
 
         // Persist final state from walker (already saved in-page and on stop)
         const { error: finalSaveErr } = await supabase
           .from('outbound_integrations')
+          // deno-lint-ignore no-explicit-any
           .update({ heyreach_poll_state: walker.state as any })
-          .eq('id', integration.id);
+          .eq('id', integration.id)
+          .abortSignal(AbortSignal.timeout(DB_TIMEOUT_MS));
         if (finalSaveErr) {
           console.error('[poll-heyreach-inbox] final saveState error:', finalSaveErr);
         }
@@ -669,26 +744,27 @@ Deno.serve(async (req) => {
     }
 
     console.log(
-      `[poll-heyreach-inbox] Done. polled=${totalPolled} new=${totalNew} seen=${totalConversationsSeen} ` +
-        `skippedNoText=${skippedNoText} skippedSenderMe=${skippedSenderMe} skippedSameText=${skippedSameText} ` +
-        `intSkipNoKey=${integrationsSkippedNoKey} intSkipNoAgentConfig=${integrationsSkippedNoAgentConfig}`,
+      `[poll-heyreach-inbox] Done. polled=${walkCounts.polled} new=${walkCounts.new} seen=${walkCounts.seen} ` +
+        `skippedNoText=${walkCounts.skippedNoText} skippedSenderMe=${walkCounts.skippedSenderMe} skippedSameText=${walkCounts.skippedSameText} ` +
+        `intSkipNoKey=${integrationsSkippedNoKey} intSkipNoAgentConfig=${integrationsSkippedNoAgentConfig}` +
+        ` | headScan seen=${headCounts.seen} polled=${headCounts.polled} new=${headCounts.new}`,
     );
 
     return new Response(
       JSON.stringify({
         success: true,
-        polled: totalPolled,
-        new: totalNew,
-        seen: totalConversationsSeen,
+        polled: walkCounts.polled,
+        new: walkCounts.new,
+        seen: walkCounts.seen,
         stopReason: overallStop ?? 'end_of_list',
         elapsedMs: Date.now() - startedAtMs,
         headScan: headScanTotal,
         perIntegration,
         integrations: integrations?.length ?? 0,
         skipped: {
-          noText: skippedNoText,
-          senderMe: skippedSenderMe,
-          sameText: skippedSameText,
+          noText: walkCounts.skippedNoText,
+          senderMe: walkCounts.skippedSenderMe,
+          sameText: walkCounts.skippedSameText,
           integrationsNoKey: integrationsSkippedNoKey,
           integrationsNoAgentConfig: integrationsSkippedNoAgentConfig,
         },
