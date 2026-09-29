@@ -1,31 +1,33 @@
-import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
-async function fileContains(path: string, needle: string): Promise<boolean> {
-  try {
-    const txt = await Deno.readTextFile(path);
-    return txt.includes(needle);
-  } catch {
-    return false;
-  }
+function read(fileUrl: URL): string {
+  return Deno.readTextFileSync(fileUrl);
 }
 
-Deno.test("kill switch: no classify-reply references in HeyReach ingestion", async () => {
-  // Skip when read permission not granted
-  // deno-lint-ignore no-explicit-any
-  const q: any = await (Deno.permissions as any).query?.({ name: "read" }).catch(() => null);
-  if (q && q.state !== "granted") {
-    console.log("[killswitch-test] read permission not granted — skipping source grep");
-    assert(true);
-    return;
-  }
+function containsAny(hay: string, needles: (string | RegExp)[]): boolean {
+  return needles.some((n) => (typeof n === "string" ? hay.includes(n) : n.test(hay)));
+}
+
+Deno.test("kill switch: no classify/draft/send invocations in HeyReach ingestion", () => {
   const files = [
-    "supabase/functions/poll-heyreach-inbox/index.ts",
-    "supabase/functions/heyreach-webhook/index.ts",
-    "supabase/functions/recover-heyreach-leads/index.ts",
+    new URL("./poll-heyreach-inbox/index.ts", import.meta.url),
+    new URL("./heyreach-webhook/index.ts", import.meta.url),
+    new URL("./recover-heyreach-leads/index.ts", import.meta.url),
   ];
-  for (const f of files) {
-    const has = await fileContains(f, "classify-reply");
-    assertEquals(has, false, `File ${f} must not reference classify-reply`);
+  const forbidden: (string | RegExp)[] = [
+    "classify-reply",
+    /fireClassifyReply/,
+    /functions\.invoke\(/,
+    /send-agent-reply/,
+    /send-heyreach-message/,
+  ];
+  for (const url of files) {
+    const src = read(url);
+    const bad = containsAny(src, forbidden);
+    assertEquals(bad, false, `Forbidden reference found in ${url.pathname}`);
   }
+  // Negative self-check: ensure the matcher would flag a sample classify string
+  const sample = "POST /functions/v1/classify-reply";
+  assertEquals(containsAny(sample, forbidden), true);
 });
 

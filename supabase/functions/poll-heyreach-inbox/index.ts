@@ -6,7 +6,7 @@ ALTER TABLE public.synced_campaigns ADD COLUMN IF NOT EXISTS source TEXT DEFAULT
 */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { shouldResurface, fireClassifyReply } from '../_shared/inbox-reply.ts';
+import { shouldResurface } from '../_shared/inbox-reply.ts';
 import { cleanReplyPreview } from '../_shared/reply-text.ts';
 import { sanitizeLinkedinUrlForStorage } from '../_shared/normalize.ts';
 import { findLeadByNormalizedLinkedIn } from '../_shared/agent-leads-lookup.ts';
@@ -480,12 +480,12 @@ Deno.serve(async (req) => {
               // sibling conversation for the same profile holds different text
               // (73 such profiles in prod — see the collision note).
               // Log the gate decision for observability
-              console.log(`[poll-heyreach-inbox] gate: stale=${stale} ts=${newestProspectTs ?? 'null'} willClassify=${surface && !stale}`);
+              console.log(`[poll-heyreach-inbox] gate: stale=${stale} ts=${newestProspectTs ?? 'null'} willClassify=${decision.willClassify}`);
 
               if (surface && savedRow) {
-                // Drafting kill switch: HeyReach classify-reply is disabled.
+                // Drafting kill switch: HeyReach drafting disabled.
                 // Re-enable later only behind an explicit flag that defaults OFF.
-                console.log("[poll-heyreach-inbox] classify-reply disabled for HeyReach (kill switch)");
+                console.log("[poll-heyreach-inbox] HeyReach drafting disabled (kill switch)");
               }
 
               if (savedRow && !existingLead) {

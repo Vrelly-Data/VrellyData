@@ -486,7 +486,7 @@ Deno.serve(async (req) => {
     // with no notion of whether the reply was NEW. HeyReach re-delivers events:
     // on 2026-08-16 it re-sent the webhook for a 2026-08-04 message, which
     // un-dismissed a lead the operator had already tagged 'in_progress' and
-    // spent a full classify-reply call drafting an answer to a message that had
+    // spent a full draft-generation call answering a message that had
     // already been handled. The live GetChatroom for that conversation held two
     // messages, both from 08-04 — there was no new reply at all.
     //
@@ -546,7 +546,7 @@ Deno.serve(async (req) => {
         `newestRole=${messageTs ? "prospect" : "none"} newest=${messageTs ?? "none"} ` +
         `prior=${existingLead?.last_surfaced_reply_at ?? "null"} disposition=${existingLead?.disposition_tag ?? "null"}`,
     );
-    console.log(`[heyreach-webhook] gate: stale=${stale} ts=${messageTs ?? "null"} willClassify=${surface && !stale}`);
+    console.log(`[heyreach-webhook] gate: stale=${stale} ts=${messageTs ?? "null"} willClassify=${decision.willClassify}`);
 
     const replyAt = newestProspectTs ?? newestThreadTimestamp(replyThread) ?? null;
     // Deterministic save: lookup-then-update-or-insert with 23505 retry
@@ -719,10 +719,10 @@ Deno.serve(async (req) => {
                 threadUpdateErr,
               );
               // Keep the partial that's already in the row from the upsert.
-              // Signal to classify-reply (below) to use the partial too.
+              // Signal the classification step (if/when re-enabled) to use the partial too.
               fullReplyThread = null;
             } else {
-              // Propagate the merged thread to classify-reply so it sees
+            // Propagate the merged thread to the classifier so it sees
               // the same view of history that's now persisted on the row.
               fullReplyThread = mergedThread;
               const addedFromPartial = mergedThread.length - canonicalLen;
@@ -733,7 +733,7 @@ Deno.serve(async (req) => {
           } else {
             // GetChatroom returned an empty messages array. Don't overwrite —
             // the partial we wrote at upsert (which has the new reply) is
-            // already in the row. Signal classify-reply to use it.
+            // already in the row. Signal the classifier to use it.
             fullReplyThread = null;
           }
         }
@@ -745,7 +745,7 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Drafting kill switch: remove classify-reply invocation for HeyReach.
+    // Drafting kill switch: remove HeyReach drafting invocation.
     // Re-enable later only behind an explicit flag that defaults OFF.
     //
     if (surface && savedLeadId) {
@@ -757,7 +757,7 @@ Deno.serve(async (req) => {
         .maybeSingle();
 
       if (agentConfig) {
-        console.log("[heyreach-webhook] classify-reply disabled for HeyReach (kill switch)");
+        console.log("[heyreach-webhook] HeyReach drafting disabled (kill switch)");
         // Best-effort: record 'replied' inference event (non-blocking)
         try {
           const personKey =
@@ -855,7 +855,7 @@ Deno.serve(async (req) => {
         }
       } else {
         console.log(
-          `No active agent_config for user ${integration.created_by} — skipping classify-reply`,
+          `No active agent_config for user ${integration.created_by} — drafting disabled`,
         );
       }
     } else if (savedLeadId) {

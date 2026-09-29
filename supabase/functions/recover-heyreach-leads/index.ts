@@ -17,7 +17,7 @@
 // - Insert-only / fill-forward:
 //   * For a missing lead: INSERT with inbox_status='pending' and NO draft.
 //   * For an existing lead: only set last_reply_at + last_reply_text when newer.
-// - Never calls classify-reply, send-agent-reply, or any send path. Never sends.
+// - Never triggers drafting or any send path. Never sends.
 // - Never logs secrets.
 //
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -246,7 +246,7 @@ Deno.serve(async (req) => {
               company: String(profile["companyName"] ?? "") || null,
               last_reply_text: replySnippet,
               last_reply_at: latestProspectTs,
-              // Deliberately do NOT call classify-reply. Insert as pending.
+              // Deliberately do NOT trigger drafting. Insert as pending.
               inbox_status: "pending",
               last_surfaced_reply_at: latestProspectTs,
               channel: "linkedin",
