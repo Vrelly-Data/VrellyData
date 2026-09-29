@@ -4,6 +4,7 @@ import { cleanReplyPreview } from "../_shared/reply-text.ts";
 import { detectLanguageCode } from "../_shared/language.ts";
 import { sanitizeLinkedinUrlForStorage } from "../_shared/normalize.ts";
 import { findLeadByNormalizedLinkedIn } from "../_shared/agent-leads-lookup.ts";
+import { isStaleProspectMessage } from "../_shared/stale.ts";
 
 const allowedOrigins = [
   Deno.env.get("ALLOWED_ORIGIN") || "https://vrelly.com",
@@ -526,6 +527,8 @@ Deno.serve(async (req) => {
         newerThanPrior,
       })
       : true;
+    const messageTs = newestEntry?.timestamp ?? null;
+    const stale = isStaleProspectMessage(messageTs, Date.now());
 
     console.log(
       `[heyreach-webhook] surface=${surface} existing=${!!existingLead} ` +
@@ -533,6 +536,7 @@ Deno.serve(async (req) => {
         `prior=${existingLead?.last_surfaced_reply_at ?? "null"} disposition=${existingLead?.disposition_tag ?? "null"}`,
     );
 
+    const replyAt = newestThreadTimestamp(replyThread) ?? new Date().toISOString();
     // Deterministic save: lookup-then-update-or-insert with 23505 retry
     const baseRow: Record<string, unknown> = {
       user_id: integration.created_by,
@@ -542,14 +546,13 @@ Deno.serve(async (req) => {
       job_title: jobTitle,
       company,
       last_reply_text: cleanReplyPreview(replyText),
-      last_reply_at: new Date().toISOString(),
+      last_reply_at: replyAt,
       reply_thread: replyThread,
       ...(surface
         ? {
-          inbox_status: "pending",
-          last_surfaced_reply_at: newestThreadTimestamp(replyThread) ??
-            new Date().toISOString(),
-        }
+            ...(existingLead?.inbox_status === "pending" ? {} : { inbox_status: "pending" }),
+            last_surfaced_reply_at: newestThreadTimestamp(replyThread) ?? replyAt,
+          }
         : {}),
       channel: "linkedin",
       source: "heyreach",
@@ -748,7 +751,9 @@ Deno.serve(async (req) => {
 
       if (agentConfig) {
         const agentApiKey = Deno.env.get("AGENT_API_KEY") || "";
-        const classifyPromise = fetch(
+        const classifyPromise = stale
+          ? Promise.resolve(null)
+          : fetch(
           `${supabaseUrl}/functions/v1/classify-reply`,
           {
             method: "POST",
@@ -791,13 +796,17 @@ Deno.serve(async (req) => {
           console.error("classify-reply invocation failed:", err);
         });
 
-        // @ts-ignore — EdgeRuntime is injected by Supabase runtime
-        if (typeof EdgeRuntime !== "undefined" && typeof EdgeRuntime.waitUntil === "function") {
-          // @ts-ignore
-          EdgeRuntime.waitUntil(classifyPromise);
+        if (stale) {
+          console.log("[heyreach-webhook] stale prospect message (>24h), surfaced as pending without classify");
         } else {
-          // Fallback for non-Edge runtimes — await synchronously
-          await classifyPromise;
+          // @ts-ignore — EdgeRuntime is injected by Supabase runtime
+          if (typeof EdgeRuntime !== "undefined" && typeof EdgeRuntime.waitUntil === "function") {
+            // @ts-ignore
+            EdgeRuntime.waitUntil(classifyPromise);
+          } else {
+            // Fallback for non-Edge runtimes — await synchronously
+            await classifyPromise;
+          }
         }
         // Best-effort: record 'replied' inference event (non-blocking)
         try {

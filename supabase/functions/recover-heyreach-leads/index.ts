@@ -243,6 +243,7 @@ Deno.serve(async (req) => {
               last_reply_at: latestProspectTs,
               // Deliberately do NOT call classify-reply. Insert as pending.
               inbox_status: "pending",
+              last_surfaced_reply_at: latestProspectTs,
               channel: "linkedin",
               source: "heyreach",
               heyreach_conversation_id: conversationId,
@@ -289,6 +290,7 @@ Deno.serve(async (req) => {
               .update({
                 last_reply_text: replySnippet,
                 last_reply_at: latestProspectTs,
+                last_surfaced_reply_at: latestProspectTs,
               })
               .eq("id", existing.id);
             if (updErr) {

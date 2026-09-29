@@ -10,6 +10,7 @@ import { shouldResurface, fireClassifyReply } from '../_shared/inbox-reply.ts';
 import { cleanReplyPreview } from '../_shared/reply-text.ts';
 import { sanitizeLinkedinUrlForStorage } from '../_shared/normalize.ts';
 import { findLeadByNormalizedLinkedIn } from '../_shared/agent-leads-lookup.ts';
+import { isStaleProspectMessage } from '../_shared/stale.ts';
 
 const allowedOrigins = [
   'https://vrelly.com',
@@ -281,6 +282,7 @@ Deno.serve(async (req) => {
                 last_reply_text: string | null;
                 disposition_tag: string | null;
                 last_surfaced_reply_at: string | null;
+                inbox_status?: string | null;
               } | null = null;
               if (linkedinUrl) {
                 const found = await findLeadByNormalizedLinkedIn(supabase, userId, linkedinUrl);
@@ -290,7 +292,9 @@ Deno.serve(async (req) => {
                       last_reply_text: found.last_reply_text ?? null,
                       disposition_tag: found.disposition_tag,
                       last_surfaced_reply_at: found.last_surfaced_reply_at,
-                    }
+                      // @ts-ignore extend shape locally for pending-check
+                      inbox_status: (found as any).inbox_status ?? null,
+                    } as any
                   : null;
               }
               if (!existingLead && externalId) {
@@ -374,6 +378,8 @@ Deno.serve(async (req) => {
               const isRecent = Number.isFinite(newestMs)
                 ? newestMs >= Date.now() - 24 * 60 * 60 * 1000
                 : false;
+              const messageTs = newest?.timestamp ?? null;
+              const stale = isStaleProspectMessage(messageTs, Date.now());
 
               const surface = existingLead
                 ? shouldResurface({
@@ -390,12 +396,17 @@ Deno.serve(async (req) => {
                 full_name: fullName,
                 linkedin_url: linkedinUrl,
                 last_reply_text: cleanReplyPreview(lastMessageText),
+                last_reply_at: newest?.timestamp ?? null,
                 reply_thread: replyThread.length > 0 ? replyThread : undefined,
                 // Omitted entirely for an existing lead we are not surfacing —
                 // an omitted column is preserved on conflict, so a dismissal is
                 // not silently undone. A brand-new lead needs an explicit value.
                 ...(surface
-                  ? { inbox_status: 'pending', last_surfaced_reply_at: newest?.timestamp ?? null }
+                  ? {
+                      // only set pending if not already pending
+                      ...(existingLead?.inbox_status === 'pending' ? {} : { inbox_status: 'pending' }),
+                      last_surfaced_reply_at: newest?.timestamp ?? null
+                    }
                   : existingLead ? {} : { inbox_status: 'mirrored' }),
                 channel: 'linkedin',
                 source: 'heyreach',
@@ -465,17 +476,21 @@ Deno.serve(async (req) => {
               // sibling conversation for the same profile holds different text
               // (73 such profiles in prod — see the collision note).
               if (surface && savedRow) {
-                fireClassifyReply({
-                  supabaseUrl,
-                  agentKey: expectedKey || '',
-                  // deno-lint-ignore no-explicit-any
-                  leadId: (savedRow as any).id,
-                  replyText: lastMessageText,
-                  threadHistory: replyThread,
-                  agentConfig,
-                  channel: 'linkedin',
-                  userId,
-                });
+                if (stale) {
+                  console.log("[poll-heyreach-inbox] stale prospect message (>24h), surfaced as pending without classify");
+                } else {
+                  fireClassifyReply({
+                    supabaseUrl,
+                    agentKey: expectedKey || '',
+                    // deno-lint-ignore no-explicit-any
+                    leadId: (savedRow as any).id,
+                    replyText: lastMessageText,
+                    threadHistory: replyThread,
+                    agentConfig,
+                    channel: 'linkedin',
+                    userId,
+                  });
+                }
               }
 
               if (savedRow && !existingLead) {

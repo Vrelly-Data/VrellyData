@@ -1,6 +1,7 @@
 import { assertEquals, assert } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { normalizeLinkedInUrl } from "./_shared/lead-dedup.ts";
 import { findLeadByNormalizedLinkedIn } from "./_shared/agent-leads-lookup.ts";
+import { isStaleProspectMessage } from "./_shared/stale.ts";
 
 // 1) linkedin_url normalization (comparison key)
 Deno.test("normalizeLinkedInUrl canonicalizes protocol/www/trailing slash", () => {
@@ -143,5 +144,23 @@ Deno.test("recovery idempotency: second run skips when last_reply_at is newer-or
   const n = new Date(newest).getTime();
   const p = new Date(prior).getTime();
   assertEquals(Number.isFinite(n) && n > p, false);
+});
+
+// 6) Stale/fresh/missing-ts gating via real helper
+Deno.test("stale message: helper returns true; classify should be gated off", () => {
+  const now = new Date("2026-09-30T12:00:00Z").getTime();
+  const msg = "2026-09-28T11:59:59Z";
+  assertEquals(isStaleProspectMessage(msg, now), true);
+});
+Deno.test("fresh message: helper returns false", () => {
+  const now = new Date("2026-09-30T12:00:00Z").getTime();
+  const msg = "2026-09-30T11:30:00Z";
+  assertEquals(isStaleProspectMessage(msg, now), false);
+});
+Deno.test("missing timestamp: treated as stale", () => {
+  const now = Date.now();
+  assertEquals(isStaleProspectMessage(null, now), true);
+  assertEquals(isStaleProspectMessage(undefined, now), true);
+  assertEquals(isStaleProspectMessage("not-a-date", now), true);
 });
 

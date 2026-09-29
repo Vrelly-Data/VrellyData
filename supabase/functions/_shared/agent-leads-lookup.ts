@@ -20,6 +20,7 @@ export type AgentLeadBasic = {
   last_surfaced_reply_at: string | null;
   last_reply_at?: string | null;
   last_reply_text?: string | null;
+  inbox_status?: string | null;
 };
 
 // deno-lint-ignore no-explicit-any
@@ -36,7 +37,7 @@ export async function findLeadByNormalizedLinkedIn(
   {
     const { data, error } = await supabase
       .from("agent_leads")
-      .select("id, linkedin_url, disposition_tag, last_surfaced_reply_at, last_reply_at, last_reply_text")
+      .select("id, linkedin_url, disposition_tag, last_surfaced_reply_at, last_reply_at, last_reply_text, inbox_status")
       .eq("user_id", userId)
       .eq("linkedin_url", rawLinkedInUrl)
       .maybeSingle();
@@ -51,7 +52,7 @@ export async function findLeadByNormalizedLinkedIn(
     while (true) {
       const { data } = await supabase
         .from("agent_leads")
-        .select("id, linkedin_url, disposition_tag, last_surfaced_reply_at, last_reply_at, last_reply_text")
+        .select("id, linkedin_url, disposition_tag, last_surfaced_reply_at, last_reply_at, last_reply_text, inbox_status")
         .eq("user_id", userId)
         .ilike("linkedin_url", "%linkedin.com%")
         // PostgREST range is inclusive; end = start + pageSize - 1
