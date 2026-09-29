@@ -11,6 +11,7 @@ function containsAny(hay: string, needles: (string | RegExp)[]): boolean {
 Deno.test("kill switch: no classify/draft/send invocations in HeyReach ingestion", () => {
   const files = [
     new URL("./poll-heyreach-inbox/index.ts", import.meta.url),
+    new URL("./poll-heyreach-inbox/paging.ts", import.meta.url),
     new URL("./heyreach-webhook/index.ts", import.meta.url),
     new URL("./recover-heyreach-leads/index.ts", import.meta.url),
   ];
