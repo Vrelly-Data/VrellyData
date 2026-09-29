@@ -483,19 +483,9 @@ Deno.serve(async (req) => {
               console.log(`[poll-heyreach-inbox] gate: stale=${stale} ts=${newestProspectTs ?? 'null'} willClassify=${surface && !stale}`);
 
               if (surface && savedRow) {
-                if (!stale) {
-                  fireClassifyReply({
-                    supabaseUrl,
-                    agentKey: expectedKey || '',
-                    // deno-lint-ignore no-explicit-any
-                    leadId: (savedRow as any).id,
-                    replyText: lastMessageText,
-                    threadHistory: replyThread,
-                    agentConfig,
-                    channel: 'linkedin',
-                    userId,
-                  });
-                }
+                // Drafting kill switch: HeyReach classify-reply is disabled.
+                // Re-enable later only behind an explicit flag that defaults OFF.
+                console.log("[poll-heyreach-inbox] classify-reply disabled for HeyReach (kill switch)");
               }
 
               if (savedRow && !existingLead) {

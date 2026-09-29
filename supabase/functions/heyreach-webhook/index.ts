@@ -745,14 +745,9 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Fire classify-reply asynchronously so the webhook can return 200 fast.
-    // Runs after the response thanks to EdgeRuntime.waitUntil.
+    // Drafting kill switch: remove classify-reply invocation for HeyReach.
+    // Re-enable later only behind an explicit flag that defaults OFF.
     //
-    // Gated on `surface` for the same reason reply-webhook gates on `resurface`:
-    // a re-delivery, or a reply on an opted-out lead, records the message
-    // silently and must NOT produce a draft. This is the specific gate that
-    // stops the 2026-08-16 case — a re-sent 08-04 event that generated a draft
-    // (22,589 input tokens) for a message already handled.
     if (surface && savedLeadId) {
       const { data: agentConfig } = await supabase
         .from("agent_configs")
@@ -762,64 +757,7 @@ Deno.serve(async (req) => {
         .maybeSingle();
 
       if (agentConfig) {
-        const agentApiKey = Deno.env.get("AGENT_API_KEY") || "";
-        const classifyPromise = stale
-          ? Promise.resolve(null)
-          : fetch(
-          `${supabaseUrl}/functions/v1/classify-reply`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "x-agent-key": agentApiKey,
-            },
-            body: JSON.stringify({
-              reply_text: replyText,
-              // Prefer the canonical full thread from GetChatroom when the
-              // best-effort fetch succeeded; fall back to the partial
-              // payload-derived thread otherwise.
-              thread_history: fullReplyThread ?? replyThread,
-              lead_id: savedLeadId,
-              user_id: integration.created_by,
-              channel: "linkedin",
-              agent_context: {
-                offer_description: agentConfig.offer_description,
-                desired_action: agentConfig.desired_action,
-                outcome_delivered: agentConfig.outcome_delivered,
-                target_icp: agentConfig.target_icp,
-                sender_name: agentConfig.sender_name,
-                sender_title: agentConfig.sender_title,
-                sender_linkedin: agentConfig.sender_linkedin || "",
-                sender_bio: agentConfig.sender_bio,
-                company_name: agentConfig.company_name,
-                company_url: agentConfig.company_url,
-                communication_style: agentConfig.communication_style,
-                avoid_phrases: agentConfig.avoid_phrases || [],
-                sample_message: agentConfig.sample_message || "",
-                calendar_link: agentConfig.calendar_link || "",
-                pricing_summary: agentConfig.pricing_summary || "",
-                case_studies: agentConfig.case_studies || "",
-                disqualification_criteria: agentConfig.disqualification_criteria || "",
-                objection_handling_notes: agentConfig.objection_handling_notes || "",
-              },
-            }),
-          },
-        ).catch((err) => {
-          console.error("classify-reply invocation failed:", err);
-        });
-
-        if (stale) {
-          console.log("[heyreach-webhook] stale prospect message (>24h), surfaced as pending without classify");
-        } else {
-          // @ts-ignore — EdgeRuntime is injected by Supabase runtime
-          if (typeof EdgeRuntime !== "undefined" && typeof EdgeRuntime.waitUntil === "function") {
-            // @ts-ignore
-            EdgeRuntime.waitUntil(classifyPromise);
-          } else {
-            // Fallback for non-Edge runtimes — await synchronously
-            await classifyPromise;
-          }
-        }
+        console.log("[heyreach-webhook] classify-reply disabled for HeyReach (kill switch)");
         // Best-effort: record 'replied' inference event (non-blocking)
         try {
           const personKey =

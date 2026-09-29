@@ -75,7 +75,8 @@ export function decideSurfaceAndClassify(input: SurfaceDecisionInput): SurfaceDe
   }
 
   const setPending = surface && (!isExistingLead || !SUPPRESSED_TAGS.includes(String(dispositionTag ?? "")));
-  const willClassify = surface && !stale;
+  // HeyReach drafting kill switch: never classify from ingestion.
+  const willClassify = false;
   const newWatermark = tsNorm;
   const seedWatermark = (!surface && isExistingLead && !priorNorm && tsNorm) ? tsNorm : null;
 

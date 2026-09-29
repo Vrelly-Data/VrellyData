@@ -55,7 +55,7 @@ Deno.test("stale: surface pending, no classify, watermark advanced", () => {
   assertEquals(r.newWatermark, ts);
 });
 
-Deno.test("fresh: classify invoked", () => {
+Deno.test("fresh: willClassify=false (kill switch)", () => {
   const now = new Date("2026-09-30T12:00:00Z").getTime();
   const ts = "2026-09-30T11:30:00.000Z";
   const r = decideSurfaceAndClassify({
@@ -66,7 +66,7 @@ Deno.test("fresh: classify invoked", () => {
     nowMs: now,
   });
   assertEquals(r.surface, true);
-  assertEquals(r.willClassify, true);
+  assertEquals(r.willClassify, false);
 });
 
 Deno.test("handled lead + stale with older non-null watermark: pending only", () => {
@@ -154,7 +154,7 @@ Deno.test("null watermark + fresh surfaces", () => {
   });
   assertEquals(r.surface, true);
   assertEquals(r.setPending, true);
-  assertEquals(r.willClassify, true);
+  assertEquals(r.willClassify, false);
 });
 
 Deno.test("normalizeIsoMs aligns precision", () => {

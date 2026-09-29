@@ -152,7 +152,7 @@ Deno.test("stale message: helper returns true; classify should be gated off", ()
   const msg = "2026-09-28T11:59:59Z";
   assertEquals(isStaleProspectMessage(msg, now), true);
 });
-Deno.test("fresh message: helper returns false", () => {
+Deno.test("fresh message: helper returns false (kill switch)", () => {
   const now = new Date("2026-09-30T12:00:00Z").getTime();
   const msg = "2026-09-30T11:30:00Z";
   assertEquals(isStaleProspectMessage(msg, now), false);
