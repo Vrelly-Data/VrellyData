@@ -5,6 +5,7 @@ import { detectLanguageCode } from "../_shared/language.ts";
 import { sanitizeLinkedinUrlForStorage } from "../_shared/normalize.ts";
 import { findLeadByNormalizedLinkedIn } from "../_shared/agent-leads-lookup.ts";
 import { decideSurfaceAndClassify, buildSurfaceUpdateFields } from "../_shared/surface.ts";
+import { checkCaptureGate } from "../_shared/capture-scope.ts";
 
 const allowedOrigins = [
   Deno.env.get("ALLOWED_ORIGIN") || "https://vrelly.com",
@@ -285,8 +286,10 @@ Deno.serve(async (req) => {
       (event as { type?: string }).type ||
       (looksLikeReplyPayload ? "EVERY_MESSAGE_REPLY_RECEIVED" : "unknown");
 
+    const campaignObj = (event as { campaign?: { id?: unknown; name?: unknown } }).campaign ?? null;
     const campaignExternalId =
-      (event as { campaignId?: unknown }).campaignId?.toString() || null;
+      (campaignObj?.id ?? (event as { campaignId?: unknown }).campaignId)?.toString() || null;
+    const lastCampaignName = campaignObj?.name != null ? String(campaignObj.name) : null;
     console.log(
       `HeyReach event: ${eventType} for integration ${integration.id} (campaignId=${campaignExternalId}, inferred=${!(event as { eventType?: string }).eventType && !(event as { type?: string }).type && looksLikeReplyPayload})`,
     );
@@ -430,41 +433,19 @@ Deno.serve(async (req) => {
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
-    // === Capture Scope gate =================================================
-    // Enforcement point 3 of 4 for HeyReach. Mirrors smartlead-webhook: placed
-    // immediately before the first agent_leads write so a disabled campaign
-    // produces NO lead row at all — not a mirrored one.
-    //
-    // Fails OPEN on a missing row, a lookup error, or an event with no
-    // campaignId at all. HeyReach reply payloads do not always carry one (see
-    // the attribution note below), and dropping a real reply because the event
-    // was unattributed would be far worse than capturing one the operator can
-    // switch off. Only an explicit capture_enabled === false suppresses.
-    if (campaignExternalId) {
-      const { data: scopeRow, error: scopeErr } = await supabase
-        .from("synced_campaigns")
-        .select("capture_enabled, name")
-        .eq("integration_id", integration.id)
-        .eq("external_campaign_id", String(campaignExternalId))
-        .maybeSingle();
-
-      if (scopeErr) {
-        console.warn(
-          `[heyreach-webhook] capture scope lookup failed for campaign ${campaignExternalId} ` +
-          `(${scopeErr.message}) — proceeding (fail-open)`,
-        );
-      } else if (scopeRow && scopeRow.capture_enabled === false) {
+    // === Capture Scope gate (FAIL-CLOSED) ===================================
+    // Only capture when the campaign id exists AND synced_campaigns has a row
+    // for this integration with capture_enabled === true. Everything else is
+    // a SKIP with an explicit reason.
+    {
+      const gate = await checkCaptureGate(supabase as any, integration.id, campaignExternalId);
+      if (!gate.allowed) {
         console.log(
-          `[heyreach-webhook] capture disabled for campaign ${campaignExternalId} ` +
-          `("${scopeRow.name}") — dropping ${eventType} without creating a lead`,
+          `[heyreach-webhook] skip (${gate.reason}) for integration=${integration.id} ` +
+            `campaign=${campaignExternalId ?? "null"} event=${eventType}`,
         );
         return new Response(
-          JSON.stringify({
-            success: true,
-            skipped: "capture_disabled",
-            campaignId: String(campaignExternalId),
-            eventType,
-          }),
+          JSON.stringify({ success: true, skipped: gate.reason, campaignId: campaignExternalId }),
           { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
         );
       }
@@ -571,6 +552,7 @@ Deno.serve(async (req) => {
       heyreach_conversation_id: conversationId,
       heyreach_account_id: accountId ? Number(accountId) : null,
       linkedin_url: linkedinUrlForKey,
+      last_campaign_name: lastCampaignName,
       ...(campaignExternalId ? { campaign_external_id: campaignExternalId } : {}),
     };
 
