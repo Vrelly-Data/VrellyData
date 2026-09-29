@@ -6,13 +6,14 @@ ALTER TABLE public.synced_campaigns ADD COLUMN IF NOT EXISTS source TEXT DEFAULT
 */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { shouldResurface } from '../_shared/inbox-reply.ts';
+import { shouldResurface, fireClassifyReply } from '../_shared/inbox-reply.ts';
 import { cleanReplyPreview } from '../_shared/reply-text.ts';
 import { sanitizeLinkedinUrlForStorage } from '../_shared/normalize.ts';
 import { findLeadByNormalizedLinkedIn } from '../_shared/agent-leads-lookup.ts';
 import { isStaleProspectMessage } from '../_shared/stale.ts';
 import { decideSurfaceAndClassify, buildSurfaceUpdateFields } from '../_shared/surface.ts';
 import { listEnabledCampaignIds, numericCampaignIds } from '../_shared/capture-scope.ts';
+import { HEYREACH_DRAFTING_ENV, heyreachClassifyGate, isHeyReachDraftingEnabled } from '../_shared/heyreach-drafting.ts';
 import {
   applyScope,
   canonicalScope,
@@ -124,6 +125,11 @@ Deno.serve(async (req) => {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
+
+    // HeyReach drafting switch, read per request so unsetting the secret is an
+    // instant off switch. Default OFF: only the exact string 'true' enables it.
+    const draftingEnabled = isHeyReachDraftingEnabled(Deno.env.get(HEYREACH_DRAFTING_ENV));
+    console.log(`[poll-heyreach-inbox] drafting=${draftingEnabled ? 'on' : 'off'} (${HEYREACH_DRAFTING_ENV})`);
 
     // Fetch active HeyReach integrations (include persistent state)
     let query = supabase
@@ -611,12 +617,34 @@ Deno.serve(async (req) => {
                 }
 
                 // Log the gate decision for observability
-                console.log(`[poll-heyreach-inbox] gate: stale=${stale} ts=${newestProspectTs ?? 'null'} willClassify=${decision.willClassify}`);
+                console.log(`[poll-heyreach-inbox] gate: stale=${stale} ts=${newestProspectTs ?? 'null'} willClassify=${decision.willClassify} drafting=${draftingEnabled ? 'on' : 'off'}`);
 
+                // Only reached for conversations of capture-enabled campaigns:
+                // the GetConversationsV2 request is filtered to the enabled
+                // campaign ids and an empty/failed scope skips the integration
+                // above. classify-reply additionally needs surface + fresh
+                // (willClassify) and HEYREACH_DRAFTING_ENABLED === 'true'.
                 if (surface && savedRow) {
-                  // Drafting kill switch: HeyReach drafting disabled.
-                  // Re-enable later only behind an explicit flag that defaults OFF.
-                  console.log("[poll-heyreach-inbox] HeyReach drafting disabled (kill switch)");
+                  const classifyGate = heyreachClassifyGate(decision, draftingEnabled);
+                  if (classifyGate.classify) {
+                    fireClassifyReply({
+                      supabaseUrl,
+                      agentKey: expectedKey || '',
+                      // deno-lint-ignore no-explicit-any
+                      leadId: (savedRow as any).id,
+                      replyText: lastMessageText,
+                      threadHistory: replyThread,
+                      agentConfig,
+                      channel: 'linkedin',
+                      userId,
+                    });
+                  } else if (classifyGate.reason === 'drafting_disabled') {
+                    console.log(
+                      // deno-lint-ignore no-explicit-any
+                      `[poll-heyreach-inbox] fresh surfaced reply for lead ${(savedRow as any).id} not classified: ` +
+                        `${HEYREACH_DRAFTING_ENV} is not 'true' (HeyReach drafting off)`,
+                    );
+                  }
                 }
 
                 if (savedRow && !existingLead) {

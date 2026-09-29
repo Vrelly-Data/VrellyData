@@ -55,7 +55,7 @@ Deno.test("stale: surface pending, no classify, watermark advanced", () => {
   assertEquals(r.newWatermark, ts);
 });
 
-Deno.test("fresh: willClassify=false (kill switch)", () => {
+Deno.test("fresh: classify invoked", () => {
   const now = new Date("2026-09-30T12:00:00Z").getTime();
   const ts = "2026-09-30T11:30:00.000Z";
   const r = decideSurfaceAndClassify({
@@ -66,7 +66,7 @@ Deno.test("fresh: willClassify=false (kill switch)", () => {
     nowMs: now,
   });
   assertEquals(r.surface, true);
-  assertEquals(r.willClassify, false);
+  assertEquals(r.willClassify, true);
 });
 
 Deno.test("handled lead + stale with older non-null watermark: pending only", () => {
@@ -154,7 +154,7 @@ Deno.test("null watermark + fresh surfaces", () => {
   });
   assertEquals(r.surface, true);
   assertEquals(r.setPending, true);
-  assertEquals(r.willClassify, false);
+  assertEquals(r.willClassify, true);
 });
 
 Deno.test("normalizeIsoMs aligns precision", () => {
@@ -180,3 +180,28 @@ Deno.test("existing watermark newer than incoming: no surface, no seed", () => {
   assertEquals(r.seedWatermark, null);
 });
 
+// willClassify is surfaced && fresh; the 24h boundary itself is still fresh
+// (stale means strictly older than the threshold); one second past it (the
+// decision compares at whole-second precision) is stale.
+Deno.test("willClassify: exactly 24h old is fresh, 24h + 1s is stale", () => {
+  const now = new Date("2026-09-30T12:00:00.000Z").getTime();
+  const at24h = new Date(now - 24 * 60 * 60 * 1000).toISOString();
+  const past24h = new Date(now - 24 * 60 * 60 * 1000 - 1000).toISOString();
+  const a = decideSurfaceAndClassify({ dispositionTag: null, isExistingLead: false, newestProspectTimestamp: at24h, priorWatermark: null, nowMs: now });
+  const b = decideSurfaceAndClassify({ dispositionTag: null, isExistingLead: false, newestProspectTimestamp: past24h, priorWatermark: null, nowMs: now });
+  assertEquals([a.surface, a.isStale, a.willClassify], [true, false, true]);
+  assertEquals([b.surface, b.isStale, b.willClassify], [true, true, false]);
+});
+
+Deno.test("willClassify: fresh but not surfaced (opted_out existing lead) → false", () => {
+  const now = new Date("2026-09-30T12:00:00Z").getTime();
+  const r = decideSurfaceAndClassify({
+    dispositionTag: "opted_out",
+    isExistingLead: true,
+    newestProspectTimestamp: "2026-09-30T11:30:00.000Z",
+    priorWatermark: "2026-09-29T11:30:00.000Z",
+    nowMs: now,
+  });
+  assertEquals(r.surface, false);
+  assertEquals(r.willClassify, false);
+});
