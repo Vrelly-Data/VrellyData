@@ -24,6 +24,7 @@ export interface SurfaceDecisionResult {
   newWatermark: string | null; // normalized ISO or null when unknown
   setPending: boolean;    // whether to set inbox_status='pending' (respects opted_out only for existing)
   isStale: boolean;
+  seedWatermark: string | null; // when non-surface seeding is allowed (existing + null prior + ts present)
 }
 
 /**
@@ -76,7 +77,25 @@ export function decideSurfaceAndClassify(input: SurfaceDecisionInput): SurfaceDe
   const setPending = surface && (!isExistingLead || !SUPPRESSED_TAGS.includes(String(dispositionTag ?? "")));
   const willClassify = surface && !stale;
   const newWatermark = tsNorm;
+  const seedWatermark = (!surface && isExistingLead && !priorNorm && tsNorm) ? tsNorm : null;
 
-  return { surface, willClassify, newWatermark, setPending, isStale: stale };
+  return { surface, willClassify, newWatermark, setPending, isStale: stale, seedWatermark };
+}
+
+// Build DB update fields from the decision. Does NOT include last_reply_* or reply_thread.
+export function buildSurfaceUpdateFields(
+  decision: SurfaceDecisionResult,
+  opts: { isExistingLead: boolean; alreadyPending?: boolean },
+): Record<string, unknown> {
+  if (decision.surface) {
+    const f: Record<string, unknown> = {};
+    if (decision.newWatermark) f.last_surfaced_reply_at = decision.newWatermark;
+    if (decision.setPending && !opts.alreadyPending) f.inbox_status = "pending";
+    return f;
+  }
+  if (decision.seedWatermark) {
+    return { last_surfaced_reply_at: decision.seedWatermark };
+  }
+  return {};
 }
 

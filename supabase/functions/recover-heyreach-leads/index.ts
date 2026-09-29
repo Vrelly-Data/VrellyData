@@ -110,7 +110,7 @@ Deno.serve(async (req) => {
       campaign: string | null;
       reply_time: string | null;
       reply_snippet: string;
-      action: "insert_lead" | "update_reply" | "skip_up_to_date" | "skip_empty";
+      action: "insert_lead" | "update_reply" | "skip_up_to_date" | "skip_empty" | "seed_watermark";
     }> = [];
 
     let offset = 0;
@@ -305,12 +305,32 @@ Deno.serve(async (req) => {
                   : {
                       last_reply_text: replySnippet,
                       last_reply_at: latestProspectTs,
-                      ...(decision.newWatermark ? { last_surfaced_reply_at: decision.newWatermark } : {}),
+                      ...(decision.seedWatermark ? { last_surfaced_reply_at: decision.seedWatermark } : {}),
                     }
               )
               .eq("id", existing.id);
             if (updErr) {
               console.error(`[recover-heyreach-leads] UPDATE failed for ${conversationId}:`, updErr);
+            }
+          }
+        } else if (decision.seedWatermark) {
+          actions.push({
+            conversationId,
+            prospectName: fullName,
+            linkedin_url: linkedinUrl,
+            campaign: campaignName,
+            reply_time: latestProspectTs,
+            reply_snippet: replySnippet,
+            action: "seed_watermark",
+          });
+          if (!dryRun && existing) {
+            mutatedCount++;
+            const { error: updErr2 } = await supabase
+              .from("agent_leads")
+              .update({ last_surfaced_reply_at: decision.seedWatermark })
+              .eq("id", existing.id);
+            if (updErr2) {
+              console.error(`[recover-heyreach-leads] SEED failed for ${conversationId}:`, updErr2);
             }
           }
         } else {

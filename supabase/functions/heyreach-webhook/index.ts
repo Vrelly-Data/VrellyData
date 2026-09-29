@@ -4,7 +4,7 @@ import { cleanReplyPreview } from "../_shared/reply-text.ts";
 import { detectLanguageCode } from "../_shared/language.ts";
 import { sanitizeLinkedinUrlForStorage } from "../_shared/normalize.ts";
 import { findLeadByNormalizedLinkedIn } from "../_shared/agent-leads-lookup.ts";
-import { decideSurfaceAndClassify } from "../_shared/surface.ts";
+import { decideSurfaceAndClassify, buildSurfaceUpdateFields } from "../_shared/surface.ts";
 
 const allowedOrigins = [
   Deno.env.get("ALLOWED_ORIGIN") || "https://vrelly.com",
@@ -550,6 +550,11 @@ Deno.serve(async (req) => {
 
     const replyAt = newestProspectTs ?? newestThreadTimestamp(replyThread) ?? null;
     // Deterministic save: lookup-then-update-or-insert with 23505 retry
+    const surfaceFields = buildSurfaceUpdateFields(decision, {
+      isExistingLead: !!existingLead,
+      alreadyPending: (existingLead as any)?.inbox_status === "pending",
+    });
+
     const baseRow: Record<string, unknown> = {
       user_id: integration.created_by,
       external_id: externalId,
@@ -560,15 +565,7 @@ Deno.serve(async (req) => {
       last_reply_text: cleanReplyPreview(replyText),
       ...(replyAt ? { last_reply_at: replyAt } : {}),
       reply_thread: replyThread,
-      ...(surface
-        ? {
-            ...(existingLead?.inbox_status === "pending" ? {} : { inbox_status: "pending" }),
-            ...(decision.newWatermark ? { last_surfaced_reply_at: decision.newWatermark } : {}),
-          }
-        : {
-            // Seed-only rule: existing lead, null watermark, stale → write watermark only when present
-            ...(existingLead && decision.newWatermark ? { last_surfaced_reply_at: decision.newWatermark } : {})
-          }),
+      ...surfaceFields,
       channel: "linkedin",
       source: "heyreach",
       heyreach_conversation_id: conversationId,

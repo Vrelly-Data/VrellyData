@@ -1,5 +1,43 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { decideSurfaceAndClassify, normalizeIsoMs } from "./surface.ts";
+import { decideSurfaceAndClassify, normalizeIsoMs, buildSurfaceUpdateFields } from "./surface.ts";
+Deno.test("buildSurfaceUpdateFields: surface → pending+watermark (when not already pending)", () => {
+  const decision = {
+    surface: true,
+    willClassify: true,
+    newWatermark: "2026-09-30T12:00:00.000Z",
+    setPending: true,
+    isStale: false,
+    seedWatermark: null,
+  };
+  const f = buildSurfaceUpdateFields(decision, { isExistingLead: true, alreadyPending: false });
+  assertEquals(f, { last_surfaced_reply_at: "2026-09-30T12:00:00.000Z", inbox_status: "pending" });
+});
+
+Deno.test("buildSurfaceUpdateFields: seed → watermark only", () => {
+  const decision = {
+    surface: false,
+    willClassify: false,
+    newWatermark: null,
+    setPending: false,
+    isStale: true,
+    seedWatermark: "2026-09-28T09:00:00.000Z",
+  };
+  const f = buildSurfaceUpdateFields(decision, { isExistingLead: true, alreadyPending: true });
+  assertEquals(f, { last_surfaced_reply_at: "2026-09-28T09:00:00.000Z" });
+});
+
+Deno.test("buildSurfaceUpdateFields: other → empty", () => {
+  const decision = {
+    surface: false,
+    willClassify: false,
+    newWatermark: null,
+    setPending: false,
+    isStale: false,
+    seedWatermark: null,
+  };
+  const f = buildSurfaceUpdateFields(decision, { isExistingLead: false });
+  assertEquals(f, {});
+});
 
 Deno.test("stale: surface pending, no classify, watermark advanced", () => {
   const now = new Date("2026-09-30T12:00:00Z").getTime();
@@ -124,5 +162,21 @@ Deno.test("normalizeIsoMs aligns precision", () => {
   const b = "2026-09-30T12:00:00.000Z"; // ms
   assertEquals(normalizeIsoMs(a), "2026-09-30T12:00:00.000Z");
   assertEquals(normalizeIsoMs(b), "2026-09-30T12:00:00.000Z");
+});
+
+// Existing T2 watermark, older T1 incoming: no surface, no seed
+Deno.test("existing watermark newer than incoming: no surface, no seed", () => {
+  const now = new Date("2026-09-30T12:00:00Z").getTime();
+  const prior = "2026-09-30T12:00:22.000Z";
+  const incomingOlder = "2026-09-30T12:00:21.000Z";
+  const r = decideSurfaceAndClassify({
+    dispositionTag: null,
+    isExistingLead: true,
+    newestProspectTimestamp: incomingOlder,
+    priorWatermark: prior,
+    nowMs: now,
+  });
+  assertEquals(r.surface, false);
+  assertEquals(r.seedWatermark, null);
 });
 

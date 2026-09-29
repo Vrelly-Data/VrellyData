@@ -11,7 +11,7 @@ import { cleanReplyPreview } from '../_shared/reply-text.ts';
 import { sanitizeLinkedinUrlForStorage } from '../_shared/normalize.ts';
 import { findLeadByNormalizedLinkedIn } from '../_shared/agent-leads-lookup.ts';
 import { isStaleProspectMessage } from '../_shared/stale.ts';
-import { decideSurfaceAndClassify } from '../_shared/surface.ts';
+import { decideSurfaceAndClassify, buildSurfaceUpdateFields } from '../_shared/surface.ts';
 
 const allowedOrigins = [
   'https://vrelly.com',
@@ -397,6 +397,11 @@ Deno.serve(async (req) => {
               const surface = decision.surface;
               const stale = decision.isStale;
 
+              const surfaceFields = buildSurfaceUpdateFields(decision, {
+                isExistingLead: !!existingLead,
+                alreadyPending: existingLead?.inbox_status === 'pending',
+              });
+
               const upsertPayload: Record<string, unknown> = {
                 user_id: userId,
                 agent_config_id: agentConfig.id,
@@ -406,19 +411,7 @@ Deno.serve(async (req) => {
                 last_reply_text: cleanReplyPreview(lastMessageText),
                 ...(newestProspectTs ? { last_reply_at: newestProspectTs } : {}),
                 reply_thread: replyThread.length > 0 ? replyThread : undefined,
-                // Omitted entirely for an existing lead we are not surfacing —
-                // an omitted column is preserved on conflict, so a dismissal is
-                // not silently undone. A brand-new lead needs an explicit value.
-                ...(surface
-                  ? {
-                      ...(existingLead?.inbox_status === 'pending' ? {} : { inbox_status: 'pending' }),
-                      ...(decision.newWatermark ? { last_surfaced_reply_at: decision.newWatermark } : {}),
-                    }
-                  : existingLead
-                    // Seed-only rule: existing lead, null watermark, stale → write watermark only when present
-                    ? ({ ...(decision.newWatermark ? { last_surfaced_reply_at: decision.newWatermark } : {}) })
-                    // New lead (non-surface path should not happen): ensure pending and watermark when known
-                    : { inbox_status: 'pending', ...(newestProspectTs ? { last_surfaced_reply_at: newestProspectTs } : {}) }),
+                ...surfaceFields,
                 channel: 'linkedin',
                 source: 'heyreach',
                 heyreach_conversation_id: conversationId,
