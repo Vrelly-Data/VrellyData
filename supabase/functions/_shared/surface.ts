@@ -75,8 +75,10 @@ export function decideSurfaceAndClassify(input: SurfaceDecisionInput): SurfaceDe
   }
 
   const setPending = surface && (!isExistingLead || !SUPPRESSED_TAGS.includes(String(dispositionTag ?? "")));
-  // HeyReach drafting kill switch: never classify from ingestion.
-  const willClassify = false;
+  // Surfaced and fresh. This is the shared decision only; the HeyReach
+  // ingestion paths additionally require HEYREACH_DRAFTING_ENABLED === 'true'
+  // (see heyreach-drafting.ts) before calling classify-reply.
+  const willClassify = surface && !stale;
   const newWatermark = tsNorm;
   const seedWatermark = (!surface && isExistingLead && !priorNorm && tsNorm) ? tsNorm : null;
 

@@ -12,6 +12,11 @@
 // counted on perIntegration[].headScan, writes nothing for that item, and leaves
 // the persisted walk state exactly as it was. No /functions/v1/ call is made.
 //
+// Drafting gate (DR-idx): classify-reply is called (fire-and-forget, channel
+// 'linkedin') only for a fresh (<24h) surfaced reply of a capture-enabled
+// campaign AND only when HEYREACH_DRAFTING_ENABLED is exactly 'true'. Flag
+// unset/other values, stale replies and capture-scope skips never call it.
+//
 // Also: Capture Scope keying (S-idx), the fail-closed Capture Scope skip
 // (S-idx fail-closed: lookup error, timeout, no rows, none enabled → no
 // HeyReach call, no lead write, no state write), per-item DB timeouts with a
@@ -61,6 +66,8 @@ type Scenario = {
   // When set, GetConversationsV2 at any offset other than 0 returns HTTP 500.
   walkPagesFail?: boolean;
   convoTs?: string;
+  // createdAt of the GetChatroom message (default CONVO_TS, which is stale).
+  chatroomTs?: string;
   // synced_campaigns rows (default DEFAULT_CAMPAIGNS); "error" makes the lookup
   // fail (HTTP 500). The fake honours integration_id / capture_enabled filters.
   campaigns?: { external_campaign_id: string; capture_enabled: boolean; integration_id?: string }[] | "error";
@@ -78,6 +85,9 @@ type Recorded = {
   convOffsets: number[];
   convCampaignIds: unknown[];
   functionCalls: string[];
+  // deno-lint-ignore no-explicit-any
+  functionBodies: any[];
+  functionAgentKeyOk: boolean[];
   scopeQueries: string[];
   logs: string[];
   activityWrites: number;
@@ -106,6 +116,8 @@ function installFetch(sc: Scenario, rec: Recorded) {
 
     if (url.origin === SUPA && url.pathname.startsWith("/functions/v1/")) {
       rec.functionCalls.push(url.pathname);
+      rec.functionAgentKeyOk.push(req.headers.get("x-agent-key") === AGENT_KEY);
+      rec.functionBodies.push(JSON.parse(await req.text()));
       return json({ ok: true });
     }
     if (url.origin === SUPA && url.pathname.startsWith("/rest/v1/")) {
@@ -172,7 +184,7 @@ function installFetch(sc: Scenario, rec: Recorded) {
         rec.order.push("chatroom");
         if (sc.chatroom === "throw") throw new TypeError("network down");
         if (sc.chatroom === "500") return json({ error: "boom" }, 500);
-        return json({ messages: [{ sender: "CORRESPONDENT", body: "a brand new inbound reply", createdAt: CONVO_TS }] });
+        return json({ messages: [{ sender: "CORRESPONDENT", body: "a brand new inbound reply", createdAt: sc.chatroomTs ?? CONVO_TS }] });
       }
     }
     throw new Error(`unexpected fetch in test: ${method} ${req.url}`);
@@ -181,7 +193,7 @@ function installFetch(sc: Scenario, rec: Recorded) {
 }
 
 async function run(sc: Scenario) {
-  const rec: Recorded = { leadWrites: [], states: [], chatroomCalls: 0, order: [], convOffsets: [], convCampaignIds: [], functionCalls: [], scopeQueries: [], logs: [], activityWrites: 0 };
+  const rec: Recorded = { leadWrites: [], states: [], chatroomCalls: 0, order: [], convOffsets: [], convCampaignIds: [], functionCalls: [], functionBodies: [], functionAgentKeyOk: [], scopeQueries: [], logs: [], activityWrites: 0 };
   const restore = installFetch(sc, rec);
   const realLog = console.log;
   console.log = (...args: unknown[]) => { rec.logs.push(args.map(String).join(" ")); };
@@ -301,7 +313,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "(H4c) index head scan positive control: GetChatroom 200 → write after chatroom, 0 head-scan failures, walk state unchanged, 0 function calls (kill switch)",
+  name: "(H4c) index head scan positive control: GetChatroom 200 → write after chatroom, 0 head-scan failures, walk state unchanged, 0 function calls (stale reply)",
   ...opts,
   async fn() {
     const r = await run({ chatroom: "ok", existingLead: true, state: deepState(), walkPagesFail: true });
@@ -311,8 +323,10 @@ Deno.test({
     assertEquals([hs.items, hs.failures, hs.stopReason], [1, 0, "complete"]);
     assertEquals(r.body.headScan.items, 1);
     assertEquals(r.finalState.walk, DEEP_WALK);
-    // The surfaced reply reached the kill-switch branch, and nothing was invoked.
-    assert(r.rec.logs.some((l) => l.includes("HeyReach drafting disabled (kill switch)")), "kill-switch branch not reached");
+    // The reply surfaced but is stale (>24h): no classify, even with the flag
+    // unset there is no "drafting off" line because staleness decides first.
+    assert(r.rec.logs.some((l) => l.includes("gate: stale=true") && l.includes("willClassify=false")), r.rec.logs.join("\n"));
+    assert(!r.rec.logs.some((l) => l.includes("(HeyReach drafting off)")));
     assertEquals(r.rec.functionCalls, []);
   },
 });
@@ -519,5 +533,122 @@ Deno.test({
     assertEquals(r.body.headScan.counts.polled, 1);
     assertEquals(r.body.headScan.items, 1);
     assert(r.rec.logs.some((l) => l.includes("Done. polled=1") && l.includes("| headScan seen=1 polled=1")), r.rec.logs.join("\n"));
+  },
+});
+
+// ---- Drafting gate through the real handler (DR-idx) ------------------------
+// Fresh = the newest prospect message (GetChatroom createdAt) is minutes old.
+const FLAG = "HEYREACH_DRAFTING_ENABLED";
+async function withDraftingFlag<T>(value: string | undefined, f: () => Promise<T>): Promise<T> {
+  const prev = Deno.env.get(FLAG);
+  if (value === undefined) Deno.env.delete(FLAG);
+  else Deno.env.set(FLAG, value);
+  try {
+    return await f();
+  } finally {
+    if (prev === undefined) Deno.env.delete(FLAG);
+    else Deno.env.set(FLAG, prev);
+  }
+}
+const freshTs = () => new Date(Date.now() - 5 * 60_000).toISOString();
+const freshScenario = (extra: Partial<Scenario> = {}): Scenario => {
+  const ts = freshTs();
+  return { chatroom: "ok", existingLead: true, convoTs: ts, chatroomTs: ts, ...extra };
+};
+
+Deno.test({
+  name: "(DR-idx off) index: flag unset + fresh surfaced reply (enabled campaign) → lead written, NO classify-reply call, reason logged",
+  ...opts,
+  async fn() {
+    const r = await withDraftingFlag(undefined, () => run(freshScenario()));
+    assertEquals(r.status, 200);
+    assertEquals(r.rec.leadWrites, ["PATCH"], "reply still captured and surfaced");
+    assertEquals(r.rec.functionCalls, []);
+    assert(r.rec.logs.some((l) => l.includes("gate: stale=false") && l.includes("willClassify=true") && l.includes("drafting=off")), r.rec.logs.join("\n"));
+    assert(
+      r.rec.logs.some((l) => l.includes("fresh surfaced reply for lead lead-1 not classified") && l.includes("HEYREACH_DRAFTING_ENABLED is not 'true'")),
+      r.rec.logs.join("\n"),
+    );
+  },
+});
+
+for (const value of ["", "TRUE", "True", "1", "yes", " true", "false"]) {
+  Deno.test({
+    name: `(DR-idx off) index: flag=${JSON.stringify(value)} is OFF → no classify-reply call`,
+    ...opts,
+    async fn() {
+      const r = await withDraftingFlag(value, () => run(freshScenario()));
+      assertEquals(r.rec.leadWrites, ["PATCH"]);
+      assertEquals(r.rec.functionCalls, []);
+      assert(r.rec.logs.some((l) => l.includes("(HeyReach drafting off)")));
+    },
+  });
+}
+
+for (const existingLead of [true, false]) {
+  Deno.test({
+    name: `(DR-idx on) index: flag 'true' + fresh surfaced reply (${existingLead ? "existing" : "new"} lead, enabled campaign) → exactly one classify-reply call with channel linkedin`,
+    ...opts,
+    async fn() {
+      const r = await withDraftingFlag("true", () => run(freshScenario({ existingLead })));
+      assertEquals(r.status, 200);
+      assertEquals(r.rec.leadWrites, [existingLead ? "PATCH" : "POST"]);
+      assertEquals(r.rec.convCampaignIds[0], [518402], "request scoped to the enabled campaign");
+      assertEquals(r.rec.functionCalls, ["/functions/v1/classify-reply"]);
+      assertEquals(r.rec.functionAgentKeyOk, [true], "service auth header set");
+      const b = r.rec.functionBodies[0];
+      assertEquals(b.channel, "linkedin");
+      assertEquals(b.lead_id, existingLead ? "lead-1" : "lead-new");
+      assertEquals(b.user_id, USER_ID);
+      assertEquals(b.reply_text, "a brand new inbound reply");
+      assertEquals(b.thread_history.length, 1);
+      assertEquals(b.thread_history[0].role, "prospect");
+      assertEquals(typeof b.agent_context, "object");
+      // fireClassifyReply's exact body shape (shared with the Reply.io paths).
+      assertEquals(Object.keys(b).sort(), ["agent_context", "channel", "lead_id", "reply_text", "thread_history", "user_id"]);
+      assert(!r.rec.logs.some((l) => l.includes("(HeyReach drafting off)")));
+    },
+  });
+}
+
+Deno.test({
+  name: "(DR-idx on) index: flag 'true' + stale (>=24h) surfaced reply → no classify-reply call",
+  ...opts,
+  async fn() {
+    const old = new Date(Date.now() - 25 * 60 * 60_000).toISOString();
+    const r = await withDraftingFlag("true", () => run({ chatroom: "ok", existingLead: true, convoTs: old, chatroomTs: old }));
+    assertEquals(r.status, 200);
+    assertEquals(r.rec.leadWrites, ["PATCH"], "stale reply is still surfaced/recorded");
+    assertEquals(r.rec.functionCalls, []);
+    assert(r.rec.logs.some((l) => l.includes("gate: stale=true") && l.includes("willClassify=false") && l.includes("drafting=on")), r.rec.logs.join("\n"));
+  },
+});
+
+for (const [label, campaigns, reason] of [
+  ["every campaign capture-disabled", [{ external_campaign_id: "518402", capture_enabled: false }], "none_enabled"],
+  ["no synced rows", [], "none_enabled"],
+  ["scope lookup error", "error", "lookup_error"],
+  ["enabled row only under another integration", [{ external_campaign_id: "518402", capture_enabled: true, integration_id: "00000000-0000-0000-0000-0000000000ff" }], "none_enabled"],
+] as const) {
+  Deno.test({
+    name: `(DR-idx on) index: flag 'true' + fresh reply but capture scope skipped (${label}) → no HeyReach call, no lead write, no classify-reply call`,
+    ...opts,
+    async fn() {
+      const r = await withDraftingFlag("true", () => run(freshScenario({ campaigns: campaigns as Scenario["campaigns"] })));
+      assertSkippedClosed(r, reason);
+      assertEquals(r.rec.functionBodies, []);
+    },
+  });
+}
+
+Deno.test({
+  name: "(DR-idx toggle) index: flag read per request — 'true' classifies, then unset on the same handler instance stops it (instant off)",
+  ...opts,
+  async fn() {
+    const on = await withDraftingFlag("true", () => run(freshScenario()));
+    assertEquals(on.rec.functionCalls, ["/functions/v1/classify-reply"]);
+    const off = await withDraftingFlag(undefined, () => run(freshScenario()));
+    assertEquals(off.rec.functionCalls, []);
+    assert(off.rec.logs.some((l) => l.includes("(HeyReach drafting off)")));
   },
 });
