@@ -73,8 +73,8 @@ const REPLY_API_V3 = "https://api.reply.io/v3";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 function redact(s: string): string {
   return String(s ?? "")
-    .replace(/api_key=[^&\\s)]+/gi, "api_key=***")
-    .replace(/Bearer\\s+[A-Za-z0-9._-]+/gi, "Bearer ***");
+    .replace(/api_key=[^&\s)]+/gi, "api_key=***")
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, "Bearer ***");
 }
 function parseMaybeJsonOrBase64(str: string): unknown {
   try {
