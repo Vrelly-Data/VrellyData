@@ -287,7 +287,7 @@ Deno.serve(async (req) => {
                 existingLead = found
                   ? {
                       id: found.id,
-                      last_reply_text: null,
+                      last_reply_text: found.last_reply_text ?? null,
                       disposition_tag: found.disposition_tag,
                       last_surfaced_reply_at: found.last_surfaced_reply_at,
                     }
