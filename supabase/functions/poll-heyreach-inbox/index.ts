@@ -12,6 +12,7 @@ import { sanitizeLinkedinUrlForStorage } from '../_shared/normalize.ts';
 import { findLeadByNormalizedLinkedIn } from '../_shared/agent-leads-lookup.ts';
 import { isStaleProspectMessage } from '../_shared/stale.ts';
 import { decideSurfaceAndClassify, buildSurfaceUpdateFields } from '../_shared/surface.ts';
+import { walkWithState, type StopReason, type WalkState } from './paging.ts';
 
 const allowedOrigins = [
   'https://vrelly.com',
@@ -27,6 +28,12 @@ function getCorsHeaders(req: Request) {
 }
 
 const HEYREACH_API = 'https://api.heyreach.io/api/public';
+// Budgets and timeouts (ms)
+const RUN_BUDGET_MS = 110_000;
+const MIN_NEXT_PAGE_MS = 40_000;
+const MIN_NEXT_ITEM_MS = 10_000;
+const PAGE_FETCH_TIMEOUT_MS = 35_000; // capped by remaining - 5_000
+const CHATROOM_TIMEOUT_MS = 8_000;
 
 Deno.serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
@@ -77,10 +84,10 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Fetch active HeyReach integrations
+    // Fetch active HeyReach integrations (include persistent state)
     let query = supabase
       .from('outbound_integrations')
-      .select('id, created_by, api_key_encrypted')
+      .select('id, created_by, api_key_encrypted, heyreach_poll_state')
       .eq('is_active', true)
       .eq('platform', 'heyreach');
 
@@ -115,7 +122,33 @@ Deno.serve(async (req) => {
     let integrationsSkippedAllDisabled = 0;
     let integrationsSkippedNoAgentConfig = 0;
 
-    for (const integration of integrations ?? []) {
+    // Order integrations by lastTick.at ascending, nulls first
+    const ordered = (integrations ?? []).slice().sort((a: any, b: any) => {
+      const aAt = Date.parse((a?.heyreach_poll_state?.lastTick?.at as string) || '');
+      const bAt = Date.parse((b?.heyreach_poll_state?.lastTick?.at as string) || '');
+      const aVal = Number.isFinite(aAt) ? aAt : Number.NEGATIVE_INFINITY;
+      const bVal = Number.isFinite(bAt) ? bAt : Number.NEGATIVE_INFINITY;
+      return aVal - bVal;
+    });
+
+    const startedAtMs = Date.now();
+    const deadline = startedAtMs + RUN_BUDGET_MS;
+    const remaining = () => Math.max(0, deadline - Date.now());
+
+    type PerIntegrationSummary = {
+      integrationId: string;
+      stopReason: StopReason;
+      pagesFetched: number;
+      conversationsProcessed: number;
+      failures: number;
+      walkStartedAt: string | null;
+      walkOffset: number | null;
+      baselineStartedAt: string | null;
+    };
+    const perIntegration: PerIntegrationSummary[] = [];
+    let overallStop: StopReason | null = null;
+
+    for (const integration of ordered) {
       try {
         const apiKey = integration.api_key_encrypted;
         if (!apiKey) {
@@ -125,6 +158,20 @@ Deno.serve(async (req) => {
         }
 
         const userId = integration.created_by;
+        // Skip starting when not enough remaining budget
+        if (remaining() < MIN_NEXT_PAGE_MS) {
+          perIntegration.push({
+            integrationId: integration.id,
+            stopReason: 'time_budget',
+            pagesFetched: 0,
+            conversationsProcessed: 0,
+            failures: 0,
+            walkStartedAt: (integration?.heyreach_poll_state?.walk?.startedAt as string) ?? null,
+            walkOffset: (integration?.heyreach_poll_state?.walk?.offset as number) ?? null,
+            baselineStartedAt: (integration?.heyreach_poll_state?.baselineStartedAt as string) ?? null,
+          });
+          continue;
+        }
 
         // Check for active agent config
         const { data: agentConfig } = await supabase
@@ -203,325 +250,348 @@ Deno.serve(async (req) => {
           );
         }
 
-        // Paginate through conversations using POST /inbox/GetConversationsV2
-        let offset = 0;
-        const limit = 100;
-        let hasMore = true;
-
-        while (hasMore) {
-          const res = await fetch(`${HEYREACH_API}/inbox/GetConversationsV2`, {
-            method: 'POST',
-            headers: {
-              'X-API-KEY': apiKey,
-              'Content-Type': 'application/json',
-              'Accept': 'application/json',
+        // ==== Budgeted walk with persistent state ============================
+        const stateIn: WalkState = (integration?.heyreach_poll_state as WalkState) ?? { version: 1, baselineStartedAt: null, walk: null };
+        const walker = await walkWithState<any>(
+          {
+            async fetchPage(offset, limit, signal) {
+              if (remaining() < MIN_NEXT_PAGE_MS) {
+                throw new Error('budget_exhausted_before_page');
+              }
+              const res = await fetch(`${HEYREACH_API}/inbox/GetConversationsV2`, {
+                method: 'POST',
+                headers: {
+                  'X-API-KEY': apiKey,
+                  'Content-Type': 'application/json',
+                  'Accept': 'application/json',
+                },
+                body: JSON.stringify({
+                  filters: {
+                    linkedInAccountIds: [],
+                    campaignIds: campaignIdFilter,
+                    searchString: '',
+                  },
+                  offset,
+                  limit,
+                }),
+                signal: AbortSignal.timeout(Math.max(1_000, Math.min(PAGE_FETCH_TIMEOUT_MS, Math.max(0, remaining() - 5_000)))),
+              });
+              if (!res.ok) {
+                const t = await res.text().catch(() => '');
+                console.error(`[poll-heyreach-inbox] HeyReach API error for integration ${integration.id}: ${res.status} ${t.slice(0, 160)}`);
+                throw new Error(`fetch_error_${res.status}`);
+              }
+              const data = await res.json();
+              const conversations = Array.isArray(data?.items) ? data.items : [];
+              const totalCount = Number.isFinite(Number(data?.totalCount)) ? Number(data.totalCount) : 0;
+              console.log(`[poll-heyreach-inbox] Fetched ${conversations.length} conversations (offset=${offset}, total=${totalCount})`);
+              totalConversationsSeen += conversations.length;
+              return { items: conversations, totalCount };
             },
-            body: JSON.stringify({
-              filters: {
-                linkedInAccountIds: [],
-                // Capture Scope: [] means "all campaigns". Populated only in
-                // case B above; cases A and the fail-open path deliberately
-                // leave it empty, and case C never reaches this call.
-                campaignIds: campaignIdFilter,
-                searchString: '',
-              },
-              offset,
-              limit,
-            }),
-          });
-
-          if (!res.ok) {
-            console.error(`[poll-heyreach-inbox] HeyReach API error for integration ${integration.id}: ${res.status}`);
-            break;
-          }
-
-          const data = await res.json();
-          const conversations = data.items || [];
-          const totalCount = data.totalCount || 0;
-
-          console.log(`[poll-heyreach-inbox] Fetched ${conversations.length} conversations (offset=${offset}, total=${totalCount})`);
-
-          totalConversationsSeen += conversations.length;
-
-          for (const convo of conversations) {
-            try {
-              const conversationId = convo.id;
-              const linkedInAccountId = convo.linkedInAccountId;
-              const lastMessageText = convo.lastMessageText || '';
-
-              if (!lastMessageText) {
-                skippedNoText++;
-                continue;
+            async processItem(convo: any, signal) {
+              // Guard: do not start an item too close to budget end
+              if (remaining() < MIN_NEXT_ITEM_MS) {
+                throw new Error('budget_exhausted_before_item');
               }
-
-              if (convo.lastMessageSender === 'ME') {
-                skippedSenderMe++;
-                continue;
-              }
-
-              const profile = convo.correspondentProfile || {};
-              const fullName = [profile.firstName, profile.lastName].filter(Boolean).join(' ') || 'Unknown';
-              const linkedinUrlRaw = profile.profileUrl || '';
-              const linkedinUrl = sanitizeLinkedinUrlForStorage(linkedinUrlRaw);
-              const externalId = conversationId;
-
-              // Without a linkedin_url we have no dedup key (the unique
-              // index would let every poll create a new row). Skip and
-              // log so we can investigate malformed correspondentProfile
-              // payloads in the field.
-              if (!linkedinUrl) {
-                console.warn(
-                  `[poll-heyreach-inbox] Skipping conversation ${conversationId} — no profileUrl on correspondentProfile`,
-                );
-                continue;
-              }
-
-              // Existing-lead lookup on (user_id, normalized linkedin_url).
-              // If linkedin_url is missing we fall back to external_id so legacy rows still resolve.
-              let existingLead: {
-                id: string;
-                last_reply_text: string | null;
-                disposition_tag: string | null;
-                last_surfaced_reply_at: string | null;
-                inbox_status?: string | null;
-              } | null = null;
-              if (linkedinUrl) {
-                const found = await findLeadByNormalizedLinkedIn(supabase, userId, linkedinUrl);
-                existingLead = found
-                  ? {
-                      id: found.id,
-                      last_reply_text: found.last_reply_text ?? null,
-                      disposition_tag: found.disposition_tag,
-                      last_surfaced_reply_at: found.last_surfaced_reply_at,
-                      // @ts-ignore extend shape locally for pending-check
-                      inbox_status: (found as any).inbox_status ?? null,
-                    } as any
-                  : null;
-              }
-              if (!existingLead && externalId) {
-                const { data } = await supabase
-                  .from('agent_leads')
-                  .select('id, last_reply_text, disposition_tag, last_surfaced_reply_at')
-                  .eq('user_id', userId)
-                  .eq('external_id', externalId)
-                  .maybeSingle();
-                existingLead = data ?? null;
-              }
-
-              if (existingLead && existingLead.last_reply_text === lastMessageText) {
-                skippedSameText++;
-                continue;
-              }
-
-              totalPolled++;
-
-              // Fetch full chatroom messages
-              let replyThread: { role: string; content: string; timestamp: string; channel: string }[] = [];
               try {
-                const chatroomRes = await fetch(
-                  `${HEYREACH_API}/inbox/GetChatroom/${linkedInAccountId}/${conversationId}`,
-                  {
-                    headers: {
-                      'X-API-KEY': apiKey,
-                      'Accept': 'application/json',
+                const conversationId = convo.id;
+                const linkedInAccountId = convo.linkedInAccountId;
+                const lastMessageText = convo.lastMessageText || '';
+
+                if (!lastMessageText) {
+                  skippedNoText++;
+                  return;
+                }
+
+                if (convo.lastMessageSender === 'ME') {
+                  skippedSenderMe++;
+                  return;
+                }
+
+                const profile = convo.correspondentProfile || {};
+                const fullName = [profile.firstName, profile.lastName].filter(Boolean).join(' ') || 'Unknown';
+                const linkedinUrlRaw = profile.profileUrl || '';
+                const linkedinUrl = sanitizeLinkedinUrlForStorage(linkedinUrlRaw);
+                const externalId = conversationId;
+
+                // Without a linkedin_url we have no dedup key (the unique
+                // index would let every poll create a new row). Skip and
+                // log so we can investigate malformed correspondentProfile
+                // payloads in the field.
+                if (!linkedinUrl) {
+                  console.warn(
+                    `[poll-heyreach-inbox] Skipping conversation ${conversationId} — no profileUrl on correspondentProfile`,
+                  );
+                  return;
+                }
+
+                // Existing-lead lookup on (user_id, normalized linkedin_url).
+                // If linkedin_url is missing we fall back to external_id so legacy rows still resolve.
+                let existingLead: {
+                  id: string;
+                  last_reply_text: string | null;
+                  disposition_tag: string | null;
+                  last_surfaced_reply_at: string | null;
+                  inbox_status?: string | null;
+                } | null = null;
+                if (linkedinUrl) {
+                  const found = await findLeadByNormalizedLinkedIn(supabase, userId, linkedinUrl);
+                  existingLead = found
+                    ? {
+                        id: found.id,
+                        last_reply_text: found.last_reply_text ?? null,
+                        disposition_tag: found.disposition_tag,
+                        last_surfaced_reply_at: found.last_surfaced_reply_at,
+                        // @ts-ignore extend shape locally for pending-check
+                        inbox_status: (found as any).inbox_status ?? null,
+                      } as any
+                    : null;
+                }
+                if (!existingLead && externalId) {
+                  const { data } = await supabase
+                    .from('agent_leads')
+                    .select('id, last_reply_text, disposition_tag, last_surfaced_reply_at')
+                    .eq('user_id', userId)
+                    .eq('external_id', externalId)
+                    .maybeSingle();
+                  existingLead = data ?? null;
+                }
+
+                if (existingLead && existingLead.last_reply_text === lastMessageText) {
+                  skippedSameText++;
+                  return;
+                }
+
+                totalPolled++;
+
+                // Fetch full chatroom messages
+                let replyThread: { role: string; content: string; timestamp: string; channel: string }[] = [];
+                try {
+                  const chatroomRes = await fetch(
+                    `${HEYREACH_API}/inbox/GetChatroom/${linkedInAccountId}/${conversationId}`,
+                    {
+                      headers: {
+                        'X-API-KEY': apiKey,
+                        'Accept': 'application/json',
+                      },
+                      signal: AbortSignal.timeout(CHATROOM_TIMEOUT_MS),
                     },
-                  },
-                );
+                  );
 
-                if (chatroomRes.ok) {
-                  const chatroom = await chatroomRes.json();
-                  const messages = chatroom.messages || [];
+                  if (chatroomRes.ok) {
+                    const chatroom = await chatroomRes.json();
+                    const messages = chatroom.messages || [];
 
-                  replyThread = messages.map((msg: { sender?: string; body?: string; createdAt?: string }) => ({
-                    role: msg.sender === 'ME' ? 'sender' : 'prospect',
-                    content: msg.body || '',
-                    // Keep raw timestamp; missing stays empty (treated as stale in gate)
-                    timestamp: msg.createdAt || '',
-                    channel: 'linkedin',
-                  }));
-                } else {
-                  console.warn(`[poll-heyreach-inbox] GetChatroom ${chatroomRes.status} for ${conversationId}`);
-                }
-              } catch (chatroomErr) {
-                console.error(`[poll-heyreach-inbox] Failed to fetch chatroom for ${conversationId}:`, chatroomErr);
-              }
-
-              // ---- Surface gate -------------------------------------------
-              // This upsert used to hard-code inbox_status:'pending', so EVERY
-              // conversation it wrote became actionable — including history it
-              // was seeing for the first time. When the poller's stale-key 401
-              // was fixed it ingested 257 previously-invisible conversations for
-              // one client, 204 of them over 90 days old and the oldest from
-              // 2024, straight into Pending Approval. Backfilled history is not
-              // work to do today.
-              //
-              // Mirrors poll-reply-inbox exactly (shared shouldResurface for the
-              // existing-lead case, a 24h recency gate for first sight) so the
-              // two pollers agree on what "actionable" means:
-              //   existing lead → resurface only on a genuinely NEW inbound that
-              //                   is newer than the surface watermark and not
-              //                   suppressed by disposition; otherwise LEAVE THE
-              //                   STATUS ALONE (omitted from the payload, so a
-              //                   dismissal sticks).
-              //   new lead      → 'pending' only if the newest message is an
-              //                   inbound reply from the last 24h; else
-              //                   'mirrored' (in neither inbox tab, still fully
-              //                   readable and still resurfaceable later).
-              // Newest PROSPECT message timestamp (raw, no fallback to now)
-              const newestProspect = replyThread
-                .filter((e) => e.role === 'prospect')
-                .reduce<{ timestamp: string | null } | null>(
-                  (a, b) => {
-                    const bt = b?.timestamp ? Date.parse(b.timestamp) : NaN;
-                    if (!Number.isFinite(bt)) return a;
-                    if (!a) return { timestamp: b.timestamp };
-                    const at = a.timestamp ? Date.parse(a.timestamp) : NaN;
-                    return (!Number.isFinite(at) || bt > at) ? { timestamp: b.timestamp } : a;
-                  },
-                  null
-                );
-              const newestProspectTs = newestProspect?.timestamp ?? null;
-              const newestMs = newestProspectTs ? Date.parse(newestProspectTs) : NaN;
-              const priorMs = existingLead?.last_surfaced_reply_at
-                ? Date.parse(existingLead.last_surfaced_reply_at)
-                : 0;
-              const newerThanPrior = Number.isFinite(newestMs) && newestMs > priorMs;
-              // Surface/classify decision (centralized)
-              const decision = decideSurfaceAndClassify({
-                dispositionTag: existingLead?.disposition_tag ?? null,
-                isExistingLead: !!existingLead,
-                newestProspectTimestamp: newestProspectTs,
-                priorWatermark: existingLead?.last_surfaced_reply_at ?? null,
-                nowMs: Date.now(),
-              });
-              const surface = decision.surface;
-              const stale = decision.isStale;
-
-              const surfaceFields = buildSurfaceUpdateFields(decision, {
-                isExistingLead: !!existingLead,
-                alreadyPending: existingLead?.inbox_status === 'pending',
-              });
-
-              const upsertPayload: Record<string, unknown> = {
-                user_id: userId,
-                agent_config_id: agentConfig.id,
-                external_id: externalId,
-                full_name: fullName,
-                linkedin_url: linkedinUrl,
-                last_reply_text: cleanReplyPreview(lastMessageText),
-                ...(newestProspectTs ? { last_reply_at: newestProspectTs } : {}),
-                reply_thread: replyThread.length > 0 ? replyThread : undefined,
-                ...surfaceFields,
-                channel: 'linkedin',
-                source: 'heyreach',
-                heyreach_conversation_id: conversationId,
-                heyreach_account_id: linkedInAccountId,
-              };
-
-              // Deterministic save: update-or-insert with 23505 retry
-              let savedRow: Record<string, unknown> | null = null;
-              if (existingLead?.id) {
-                const { data: updated, error: updateErr } = await supabase
-                  .from('agent_leads')
-                  .update(upsertPayload)
-                  .eq('id', existingLead.id)
-                  .select()
-                  .single();
-                if (updateErr) {
-                  console.error(`[poll-heyreach-inbox] UPDATE error for ${externalId}:`, updateErr.message);
-                  continue;
-                }
-                savedRow = updated as Record<string, unknown>;
-              } else {
-                const { data: inserted, error: insertErr } = await supabase
-                  .from('agent_leads')
-                  .insert(upsertPayload)
-                  .select()
-                  .single();
-                if (insertErr && (insertErr as { code?: string }).code === '23505') {
-                  // Race: another writer created the row — reselect and update
-                  const raced = await findLeadByNormalizedLinkedIn(supabase, userId, linkedinUrl);
-                  if (raced?.id) {
-                    const { data: updated2, error: updateErr2 } = await supabase
-                      .from('agent_leads')
-                      .update(upsertPayload)
-                      .eq('id', raced.id)
-                      .select()
-                      .single();
-                    if (updateErr2) {
-                      console.error(`[poll-heyreach-inbox] UPDATE-after-23505 failed for ${externalId}:`, updateErr2.message);
-                      continue;
-                    }
-                    savedRow = updated2 as Record<string, unknown>;
+                    replyThread = messages.map((msg: { sender?: string; body?: string; createdAt?: string }) => ({
+                      role: msg.sender === 'ME' ? 'sender' : 'prospect',
+                      content: msg.body || '',
+                      // Keep raw timestamp; missing stays empty (treated as stale in gate)
+                      timestamp: msg.createdAt || '',
+                      channel: 'linkedin',
+                    }));
                   } else {
-                    console.error(`[poll-heyreach-inbox] 23505 on INSERT but reselect found no row for ${externalId}`);
-                    continue;
+                    console.warn(`[poll-heyreach-inbox] GetChatroom ${chatroomRes.status} for ${conversationId}`);
                   }
-                } else if (insertErr) {
-                  console.error(`[poll-heyreach-inbox] INSERT error for ${externalId}:`, insertErr.message);
-                  continue;
-                } else {
-                  savedRow = inserted as Record<string, unknown>;
+                } catch (chatroomErr) {
+                  console.error(`[poll-heyreach-inbox] Failed to fetch chatroom for ${conversationId}:`, chatroomErr);
                 }
-              }
 
-              // Trigger a draft, exactly as poll-reply-inbox does — same shared
-              // helper, same gate. This poller previously NEVER drafted, so a
-              // reply the webhook missed surfaced to Pending Approval with an
-              // empty draft.
-              //
-              // Gated on `surface`, which is what makes this safe against
-              // double-drafting alongside heyreach-webhook. Both paths write
-              // last_surfaced_reply_at now, so for a reply the webhook already
-              // handled the gate computes newestMs > priorMs with the two equal
-              // → false → no second call. The skippedSameText guard above is
-              // NOT the interlock: it compares our stored text against
-              // GetConversationsV2's lastMessageText, and misses whenever a
-              // sibling conversation for the same profile holds different text
-              // (73 such profiles in prod — see the collision note).
-              // Log the gate decision for observability
-              console.log(`[poll-heyreach-inbox] gate: stale=${stale} ts=${newestProspectTs ?? 'null'} willClassify=${decision.willClassify}`);
+                // ---- Surface gate (VERBATIM from main) ---------------------
+                // Newest PROSPECT message timestamp (raw, no fallback to now)
+                const newestProspect = replyThread
+                  .filter((e) => e.role === 'prospect')
+                  .reduce<{ timestamp: string | null } | null>(
+                    (a, b) => {
+                      const bt = b?.timestamp ? Date.parse(b.timestamp) : NaN;
+                      if (!Number.isFinite(bt)) return a;
+                      if (!a) return { timestamp: b.timestamp };
+                      const at = a.timestamp ? Date.parse(a.timestamp) : NaN;
+                      return (!Number.isFinite(at) || bt > at) ? { timestamp: b.timestamp } : a;
+                    },
+                    null
+                  );
+                const newestProspectTs = newestProspect?.timestamp ?? null;
+                const newestMs = newestProspectTs ? Date.parse(newestProspectTs) : NaN;
+                const priorMs = existingLead?.last_surfaced_reply_at
+                  ? Date.parse(existingLead.last_surfaced_reply_at)
+                  : 0;
+                const newerThanPrior = Number.isFinite(newestMs) && newestMs > priorMs;
+                // Surface/classify decision (centralized)
+                const decision = decideSurfaceAndClassify({
+                  dispositionTag: existingLead?.disposition_tag ?? null,
+                  isExistingLead: !!existingLead,
+                  newestProspectTimestamp: newestProspectTs,
+                  priorWatermark: existingLead?.last_surfaced_reply_at ?? null,
+                  nowMs: Date.now(),
+                });
+                const surface = decision.surface;
+                const stale = decision.isStale;
 
-              if (surface && savedRow) {
-                // Drafting kill switch: HeyReach drafting disabled.
-                // Re-enable later only behind an explicit flag that defaults OFF.
-                console.log("[poll-heyreach-inbox] HeyReach drafting disabled (kill switch)");
-              }
+                const surfaceFields = buildSurfaceUpdateFields(decision, {
+                  isExistingLead: !!existingLead,
+                  alreadyPending: existingLead?.inbox_status === 'pending',
+                });
 
-              if (savedRow && !existingLead) {
-                totalNew++;
-
-                // Log activity
-                await supabase.from('agent_activity').insert({
+                const upsertPayload: Record<string, unknown> = {
                   user_id: userId,
                   agent_config_id: agentConfig.id,
-                  // deno-lint-ignore no-explicit-any
-                  lead_id: (savedRow as any).id,
-                  lead_name: fullName,
-                  lead_company: profile.companyName || '',
-                  activity_type: 'reply_received',
-                  description: `LinkedIn reply detected via HeyReach polling from ${fullName}${profile.companyName ? ' at ' + profile.companyName : ''}`,
-                  metadata: { channel: 'linkedin', intent: 'pending', source: 'heyreach_poll' },
-                });
+                  external_id: externalId,
+                  full_name: fullName,
+                  linkedin_url: linkedinUrl,
+                  last_reply_text: cleanReplyPreview(lastMessageText),
+                  ...(newestProspectTs ? { last_reply_at: newestProspectTs } : {}),
+                  reply_thread: replyThread.length > 0 ? replyThread : undefined,
+                  ...surfaceFields,
+                  channel: 'linkedin',
+                  source: 'heyreach',
+                  heyreach_conversation_id: conversationId,
+                  heyreach_account_id: linkedInAccountId,
+                };
+
+                // Deterministic save: update-or-insert with 23505 retry
+                let savedRow: Record<string, unknown> | null = null;
+                if (existingLead?.id) {
+                  const { data: updated, error: updateErr } = await supabase
+                    .from('agent_leads')
+                    .update(upsertPayload)
+                    .eq('id', existingLead.id)
+                    .select()
+                    .single();
+                  if (updateErr) {
+                    console.error(`[poll-heyreach-inbox] UPDATE error for ${externalId}:`, updateErr.message);
+                    return;
+                  }
+                  savedRow = updated as Record<string, unknown>;
+                } else {
+                  const { data: inserted, error: insertErr } = await supabase
+                    .from('agent_leads')
+                    .insert(upsertPayload)
+                    .select()
+                    .single();
+                  if (insertErr && (insertErr as { code?: string }).code === '23505') {
+                    // Race: another writer created the row — reselect and update
+                    const raced = await findLeadByNormalizedLinkedIn(supabase, userId, linkedinUrl);
+                    if (raced?.id) {
+                      const { data: updated2, error: updateErr2 } = await supabase
+                        .from('agent_leads')
+                        .update(upsertPayload)
+                        .eq('id', raced.id)
+                        .select()
+                        .single();
+                      if (updateErr2) {
+                        console.error(`[poll-heyreach-inbox] UPDATE-after-23505 failed for ${externalId}:`, updateErr2.message);
+                        return;
+                      }
+                      savedRow = updated2 as Record<string, unknown>;
+                    } else {
+                      console.error(`[poll-heyreach-inbox] 23505 on INSERT but reselect found no row for ${externalId}`);
+                      return;
+                    }
+                  } else if (insertErr) {
+                    console.error(`[poll-heyreach-inbox] INSERT error for ${externalId}:`, insertErr.message);
+                    return;
+                  } else {
+                    savedRow = inserted as Record<string, unknown>;
+                  }
+                }
+
+                // Log the gate decision for observability
+                console.log(`[poll-heyreach-inbox] gate: stale=${stale} ts=${newestProspectTs ?? 'null'} willClassify=${decision.willClassify}`);
+
+                if (surface && savedRow) {
+                  // Drafting is disabled for HeyReach; nothing to trigger here.
+                  console.log("[poll-heyreach-inbox] HeyReach drafting is disabled by policy");
+                }
+
+                if (savedRow && !existingLead) {
+                  totalNew++;
+
+                  // Log activity
+                  await supabase.from('agent_activity').insert({
+                    user_id: userId,
+                    agent_config_id: agentConfig.id,
+                    // deno-lint-ignore no-explicit-any
+                    lead_id: (savedRow as any).id,
+                    lead_name: fullName,
+                    lead_company: profile.companyName || '',
+                    activity_type: 'reply_received',
+                    description: `LinkedIn reply detected via HeyReach polling from ${fullName}${profile.companyName ? ' at ' + profile.companyName : ''}`,
+                    metadata: { channel: 'linkedin', intent: 'pending', source: 'heyreach_poll' },
+                  });
+                }
+
+                // Rate limit between chatroom fetches
+                await new Promise(resolve => setTimeout(resolve, 200));
+
+              } catch (convoErr) {
+                console.error(`[poll-heyreach-inbox] Error processing conversation ${convo.id}:`, convoErr);
+                // failures counted inside walker via thrown error in processItem
+                throw convoErr;
               }
+            },
+            nowMs: () => Date.now(),
+            sleepMs: (ms: number) => new Promise((r) => setTimeout(r, ms)),
+            async saveState(next: WalkState) {
+              await supabase
+                .from('outbound_integrations')
+                .update({ heyreach_poll_state: next as any })
+                .eq('id', integration.id);
+            },
+          },
+          stateIn,
+          {
+            runBudgetMs: remaining(),
+            pageLimit: 100,
+            minRemainingForNextPageMs: MIN_NEXT_PAGE_MS,
+            pageFetchTimeoutMs: PAGE_FETCH_TIMEOUT_MS,
+            itemFetchTimeoutMs: CHATROOM_TIMEOUT_MS,
+            minRemainingForNextItemMs: MIN_NEXT_ITEM_MS,
+            resumeBackstepInitial: 25,
+            resumeBackstepStep: 100,
+          },
+        );
 
-              // Rate limit between chatroom fetches
-              await new Promise(resolve => setTimeout(resolve, 200));
+        // Persist final state from walker (already saved in-page and on stop)
+        await supabase
+          .from('outbound_integrations')
+          .update({ heyreach_poll_state: walker.state as any })
+          .eq('id', integration.id);
 
-            } catch (convoErr) {
-              console.error(`[poll-heyreach-inbox] Error processing conversation ${convo.id}:`, convoErr);
-            }
-          }
-
-          offset += conversations.length;
-          hasMore = conversations.length === limit && offset < totalCount;
-
-          if (hasMore) {
-            await new Promise(resolve => setTimeout(resolve, 300));
-          }
+        // Summarize
+        perIntegration.push({
+          integrationId: integration.id,
+          stopReason: walker.stopReason,
+          pagesFetched: walker.pagesFetched,
+          conversationsProcessed: walker.itemsProcessed,
+          failures: walker.failures,
+          walkStartedAt: walker.state.walk?.startedAt ?? null,
+          walkOffset: walker.state.walk?.offset ?? null,
+          baselineStartedAt: walker.state.baselineStartedAt ?? null,
+        });
+        // Precedence: fetch_error > time_budget > others
+        if (walker.stopReason === 'fetch_error') {
+          overallStop = 'fetch_error';
+        } else if (walker.stopReason === 'time_budget' && overallStop !== 'fetch_error') {
+          overallStop = 'time_budget';
+        } else if (!overallStop) {
+          overallStop = walker.stopReason;
         }
+        console.log(
+          `[poll-heyreach-inbox] integration ${integration.id} summary: pages=${walker.pagesFetched}, items=${walker.itemsProcessed}, failures=${walker.failures}, stop=${walker.stopReason}`,
+        );
       } catch (integrationErr) {
         console.error(`[poll-heyreach-inbox] Error processing integration ${integration.id}:`, integrationErr);
+        perIntegration.push({
+          integrationId: integration.id,
+          stopReason: 'fetch_error',
+          pagesFetched: 0,
+          conversationsProcessed: 0,
+          failures: 0,
+          walkStartedAt: (integration?.heyreach_poll_state?.walk?.startedAt as string) ?? null,
+          walkOffset: (integration?.heyreach_poll_state?.walk?.offset as number) ?? null,
+          baselineStartedAt: (integration?.heyreach_poll_state?.baselineStartedAt as string) ?? null,
+        });
+        if (overallStop !== 'fetch_error') overallStop = 'fetch_error';
       }
     }
 
@@ -537,6 +607,9 @@ Deno.serve(async (req) => {
         polled: totalPolled,
         new: totalNew,
         seen: totalConversationsSeen,
+        stopReason: overallStop ?? 'end_of_list',
+        elapsedMs: Date.now() - startedAtMs,
+        perIntegration,
         integrations: integrations?.length ?? 0,
         skipped: {
           noText: skippedNoText,
