@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { cleanReplyPreview } from '../_shared/reply-text.ts';
+import { decideAuth } from "./gate.ts";
 
 const allowedOrigins = [
   Deno.env.get("ALLOWED_ORIGIN") || "https://vrelly.com",
@@ -11,7 +12,7 @@ function getCorsHeaders(req: Request) {
   return {
     "Access-Control-Allow-Origin": allowedOrigins.includes(origin) ? origin : allowedOrigins[0],
     "Access-Control-Allow-Headers":
-      "authorization, x-client-info, apikey, content-type, x-agent-key",
+      "authorization, x-client-info, apikey, content-type, x-agent-key, x-supabase-api-key, sb_api_key_compatibility",
   };
 }
 
@@ -688,49 +689,56 @@ Deno.serve(async (req) => {
   unmappedCustomFieldKeys.clear();
 
   try {
-    const authHeader = req.headers.get("Authorization");
-    if (!authHeader) {
-      throw new Error("Missing authorization header");
-    }
+    const body = await req.json().catch(() => ({}));
+    const { campaignId, integrationId, userId: bodyUserId } = body as Record<string, unknown>;
 
-    const body = await req.json();
-    const { campaignId, integrationId, userId: bodyUserId } = body;
-
-    if (!campaignId || !integrationId) {
-      throw new Error("Missing campaignId or integrationId");
-    }
-
-    // Check for internal service-role call via x-agent-key
-    const agentKey = req.headers.get("x-agent-key");
-    const expectedAgentKey = Deno.env.get("AGENT_API_KEY");
-    const isInternalCall = !!(agentKey && expectedAgentKey && agentKey === expectedAgentKey);
-
-    let queryClient;
-    if (isInternalCall) {
-      // Internal call from auto-sync: use service role client (bypasses RLS)
-      queryClient = createClient(
-        Deno.env.get("SUPABASE_URL") ?? "",
-        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
-      );
-      console.log("Using service role client (internal auto-sync call)");
-    } else {
-      // Frontend call: use user JWT (RLS enforced)
-      queryClient = createClient(
+    // Decide auth path BEFORE any DB lookups. Garbage Bearer tokens must 401.
+    const authHeader = req.headers.get("Authorization") || "";
+    const decision = await decideAuth(req.headers, async () => {
+      if (!authHeader) return false;
+      const userClient = createClient(
         Deno.env.get("SUPABASE_URL") ?? "",
         Deno.env.get("SUPABASE_ANON_KEY") ?? "",
-        { global: { headers: { Authorization: authHeader } } }
+        { global: { headers: { Authorization: authHeader } } },
       );
+      const { data: { user }, error } = await userClient.auth.getUser();
+      return Boolean(user) && !error;
+    });
+    if (decision === "unauthorized") {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
+
+    if (!campaignId || !integrationId) {
+      return new Response(JSON.stringify({ error: "Missing campaignId or integrationId" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // Frontend path: use user token with RLS; Service path: use service role (bypass RLS).
+    const queryClient = decision === "service"
+      ? createClient(Deno.env.get("SUPABASE_URL") ?? "", Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "")
+      : createClient(
+          Deno.env.get("SUPABASE_URL") ?? "",
+          Deno.env.get("SUPABASE_ANON_KEY") ?? "",
+          { global: { headers: { Authorization: authHeader } } },
+        );
 
     // Fetch the integration (RLS enforced for frontend calls, bypassed for internal)
     const { data: integration, error: integrationError } = await queryClient
       .from("outbound_integrations")
-      .select("id, team_id, api_key_encrypted, reply_team_id")
+      .select("id, team_id, api_key_encrypted, reply_team_id, created_by")
       .eq("id", integrationId)
       .single();
 
     if (integrationError || !integration) {
-      throw new Error("Integration not found or access denied");
+      return new Response(JSON.stringify({ error: "Integration not found or access denied" }), {
+        status: 404,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     // Fetch the campaign
@@ -741,7 +749,18 @@ Deno.serve(async (req) => {
       .single();
 
     if (campaignError || !campaign) {
-      throw new Error("Campaign not found");
+      return new Response(JSON.stringify({ error: "Campaign not found" }), {
+        status: 404,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // Service path integrity: campaign must belong to the same team as the integration.
+    if (decision === "service" && String(campaign.team_id) !== String(integration.team_id)) {
+      return new Response(JSON.stringify({ error: "Campaign does not belong to the integration's team" }), {
+        status: 403,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     // Service role for bulk operations
@@ -760,17 +779,32 @@ Deno.serve(async (req) => {
     // is FROM "throws on missing bodyUserId" TO "actually resolves user
     // from JWT" — the obviously-intended behavior. Required for deno check
     // to pass on this file (was failing in the original too).
-    let userId = bodyUserId;
+    let userId = bodyUserId as string | undefined;
     if (!userId) {
-      const { data: { user }, error: userError } = await queryClient.auth.getUser();
-      if (userError || !user) {
-        throw new Error("Unable to resolve authenticated user");
+      if (decision === "service") {
+        if (integration?.created_by) {
+          userId = String(integration.created_by);
+        } else {
+          return new Response(JSON.stringify({ error: "Unable to resolve user for service auth (provide body.userId or ensure integration has created_by)" }), {
+            status: 400,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+      } else {
+        // At this point decideAuth already validated the token, so get the id.
+        const { data: { user } } = await queryClient.auth.getUser();
+        userId = user?.id as string | undefined;
+        if (!userId) {
+          return new Response(JSON.stringify({ error: "Unable to resolve authenticated user" }), {
+            status: 401,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
       }
-      userId = user.id;
     }
 
     const apiKey = integration.api_key_encrypted;
-    const teamId = integration.team_id;
+    const teamId = String(integration.team_id);
     const externalCampaignId = campaign.external_campaign_id;
 
     console.log(`Syncing contacts for campaign ${externalCampaignId} via v3`);
@@ -915,7 +949,7 @@ Deno.serve(async (req) => {
     // contacts this run actually enriched are touched, and only with the
     // fields that came back non-empty — nothing is ever nulled, so a partial
     // workspace pull enriches fewer contacts rather than erasing any.
-    const firmoResult = await applyFirmographics(serviceClient, campaignId, teamId, contacts);
+    const firmoResult = await applyFirmographics(serviceClient, String(campaignId), String(teamId), contacts);
     console.log(
       `[sync-reply-contacts] firmographics written: ${firmoResult.updated} updated, ` +
       `${firmoResult.skipped} skipped (nothing to write), ${firmoResult.failed} failed` +
