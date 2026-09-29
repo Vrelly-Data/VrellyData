@@ -8,6 +8,7 @@ import { htmlToText } from '../_shared/html-to-text.ts';
 import { isSuppressed, fireClassifyReply } from '../_shared/inbox-reply.ts';
 import { cleanReplyPreview } from '../_shared/reply-text.ts';
 import { detectLanguageCode } from '../_shared/language.ts';
+import { checkCaptureGate } from '../_shared/capture-scope.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -580,6 +581,12 @@ Deno.serve(async (req) => {
         // the same lead instead of racing it into a duplicate. Awaiting it also
         // guarantees inbox-routing sees this row when it resolves.
         if (normalizedType === 'email_replied' && engagement.lastReplyText && integration.created_by) {
+          // Fail-closed capture gate for legacy write as well
+          const gateLegacy = await checkCaptureGate(supabase as any, integration.id, campaignId || null);
+          if (!gateLegacy.allowed) {
+            console.log(`[reply-webhook] legacy path skip (${gateLegacy.reason}) campaign=${campaignId ?? 'null'}`);
+            // Still proceed to fire-and-forget sync-reply-contacts below
+          } else {
           const legacyUserId = integration.created_by;
           const externalId = contact.external_contact_id ||
             event.contactId || event.contact?.id || event.data?.contactId || contactEmail;
@@ -621,6 +628,7 @@ Deno.serve(async (req) => {
           } catch (legacyErr) {
             console.error('agent_leads legacy write error:', legacyErr);
           }
+          }
 
           // Fire-and-forget: trigger full sync so agent_leads stays consistent
           if (campaign) {
@@ -646,6 +654,15 @@ Deno.serve(async (req) => {
     console.log(`[inbox-routing] isReplyEvent=${isReplyEvent} eventType=${eventType} created_by=${integration.created_by}`);
 
     if (isReplyEvent && integration.created_by) {
+      // Fail-closed capture gate BEFORE any agent_leads write
+      const gate = await checkCaptureGate(supabase as any, integration.id, campaignId || null);
+      if (!gate.allowed) {
+        console.log(`[inbox-routing] skip (${gate.reason}) for integration=${integration.id} campaign=${campaignId ?? 'null'} event=${eventType}`);
+        return new Response(JSON.stringify({ success: true, skipped: gate.reason, campaignId }), {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
       const agentUserId = integration.created_by;
       console.log(`[inbox-routing] agentUserId=${agentUserId}`);
 
@@ -873,7 +890,7 @@ Deno.serve(async (req) => {
                 (externalId ?? '');
               const stableId = externalId && replyAt ? `${externalId}:${replyAt}` : null;
               if (personKey && stableId) {
-                const writes: Array<Promise<unknown>> = [];
+                const writes: Array<PromiseLike<unknown>> = [];
             // Extract external message id when present (v3 carries sent_email_id / linkedin_message_id)
             const externalMessageId = String(
               pick(
