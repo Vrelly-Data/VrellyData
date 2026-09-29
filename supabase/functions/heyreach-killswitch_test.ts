@@ -11,6 +11,7 @@ function containsAny(hay: string, needles: (string | RegExp)[]): boolean {
 Deno.test("kill switch: no classify/draft/send invocations in HeyReach ingestion", () => {
   const files = [
     new URL("./poll-heyreach-inbox/index.ts", import.meta.url),
+    new URL("./poll-heyreach-inbox/paging.ts", import.meta.url),
     new URL("./heyreach-webhook/index.ts", import.meta.url),
     new URL("./recover-heyreach-leads/index.ts", import.meta.url),
   ];
@@ -20,6 +21,9 @@ Deno.test("kill switch: no classify/draft/send invocations in HeyReach ingestion
     /functions\.invoke\(/,
     /send-agent-reply/,
     /send-heyreach-message/,
+    // Draft columns: HeyReach ingestion must not write or read drafts.
+    /draft_response/,
+    /draft_audit/,
   ];
   for (const url of files) {
     const src = read(url);
@@ -29,5 +33,8 @@ Deno.test("kill switch: no classify/draft/send invocations in HeyReach ingestion
   // Negative self-check: ensure the matcher would flag a sample classify string
   const sample = "POST /functions/v1/classify-reply";
   assertEquals(containsAny(sample, forbidden), true);
+  // ...and the draft columns, so dropping either pattern fails this test.
+  assertEquals(containsAny("update({ draft_response: text })", forbidden), true);
+  assertEquals(containsAny("insert into draft_audit", forbidden), true);
 });
 

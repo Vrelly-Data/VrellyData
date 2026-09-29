@@ -1,0 +1,523 @@
+// Index-side checks for poll-heyreach-inbox: drives the REAL index.ts handler
+// (Deno.serve is stubbed to capture it) against a fake PostgREST + fake HeyReach
+// via a global fetch stub, and spies on every agent_leads write.
+//
+// Proves: a GetChatroom failure (non-2xx or network error) and an agent_leads
+// write error each throw out of processItem, so the walker counts a failure and
+// the baseline does NOT advance, and a GetChatroom failure happens before any
+// agent_leads write. A positive control proves the spy does see writes.
+//
+// Head-scan cases (H4): with a walk in progress deep in the list, the handler
+// re-processes page 1 first. A head-scan GetChatroom or agent_leads failure is
+// counted on perIntegration[].headScan, writes nothing for that item, and leaves
+// the persisted walk state exactly as it was. No /functions/v1/ call is made.
+//
+// Also: Capture Scope keying (S-idx), the fail-closed Capture Scope skip
+// (S-idx fail-closed: lookup error, timeout, no rows, none enabled → no
+// HeyReach call, no lead write, no state write), per-item DB timeouts with a
+// hanging fake DB (D-idx), and walk vs head-scan counters (N-idx).
+import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { DEFAULT_PAGER_OPTIONS } from "./paging.ts";
+
+const SUPA = "http://supabase.test";
+const AGENT_KEY = "test-agent-key";
+const INTEGRATION_ID = "00000000-0000-0000-0000-0000000000a1";
+const USER_ID = "00000000-0000-0000-0000-0000000000b1";
+const BASELINE = "2026-09-20T00:00:00.000Z";
+const CONVO_TS = "2026-09-20T06:00:00.000Z"; // newer than baseline-1h → must be processed
+// synced_campaigns holds one capture-enabled campaign by default; state written
+// by this version records that scope. (There is no unfiltered mode: with no
+// enabled campaign the integration is skipped, fail closed.)
+const DEFAULT_CAMPAIGNS = [{ external_campaign_id: "518402", capture_enabled: true }];
+const SCOPED = { campaignIds: [518402] };
+
+Deno.env.set("SUPABASE_URL", SUPA);
+Deno.env.set("SUPABASE_SERVICE_ROLE_KEY", "test-service-role");
+Deno.env.set("AGENT_API_KEY", AGENT_KEY);
+
+type Handler = (req: Request) => Response | Promise<Response>;
+let handler: Handler | null = null;
+const realServe = Deno.serve;
+// deno-lint-ignore no-explicit-any
+(Deno as any).serve = (h: Handler) => {
+  handler = h;
+  return { finished: Promise.resolve(), shutdown: async () => {}, ref() {}, unref() {}, addr: { hostname: "x", port: 0, transport: "tcp" } };
+};
+// Variable specifier on purpose: `deno test` in this repo picks up the Vite
+// tsconfig (lib "node") and would try to type-check supabase-js against
+// @types/node. index.ts itself is covered by `deno check`.
+const indexModule = "./index.ts";
+await import(indexModule);
+// deno-lint-ignore no-explicit-any
+(Deno as any).serve = realServe;
+assert(handler, "index.ts did not register a Deno.serve handler");
+
+type Scenario = {
+  chatroom: "500" | "throw" | "ok";
+  existingLead: boolean;
+  leadWriteError?: boolean;
+  // Persisted poll state to start from (default: baseline known, no walk in progress).
+  state?: Record<string, unknown>;
+  // When set, GetConversationsV2 at any offset other than 0 returns HTTP 500.
+  walkPagesFail?: boolean;
+  convoTs?: string;
+  // synced_campaigns rows (default DEFAULT_CAMPAIGNS); "error" makes the lookup
+  // fail (HTTP 500). The fake honours integration_id / capture_enabled filters.
+  campaigns?: { external_campaign_id: string; capture_enabled: boolean; integration_id?: string }[] | "error";
+  // A PostgREST call that never answers (it only rejects if its request is
+  // aborted, like real fetch): the agent_leads lookup GET or write, or the
+  // synced_campaigns scope lookup.
+  hang?: "lookup" | "write" | "scope";
+};
+
+type Recorded = {
+  leadWrites: string[];
+  states: Record<string, unknown>[];
+  chatroomCalls: number;
+  order: string[];
+  convOffsets: number[];
+  convCampaignIds: unknown[];
+  functionCalls: string[];
+  scopeQueries: string[];
+  logs: string[];
+  activityWrites: number;
+};
+
+function json(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+}
+
+function installFetch(sc: Scenario, rec: Recorded) {
+  const lead = {
+    id: "lead-1",
+    linkedin_url: "https://www.linkedin.com/in/test-prospect",
+    disposition_tag: null,
+    last_surfaced_reply_at: "2026-09-01T00:00:00.000Z",
+    last_reply_at: "2026-09-01T00:00:00.000Z",
+    last_reply_text: "older stored text",
+    inbox_status: "mirrored",
+  };
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (input: Request | URL | string, init?: RequestInit) => {
+    const req = input instanceof Request ? input : new Request(String(input), init);
+    const url = new URL(req.url);
+    const method = req.method.toUpperCase();
+    const wantsObject = (req.headers.get("Accept") ?? "").includes("vnd.pgrst.object");
+
+    if (url.origin === SUPA && url.pathname.startsWith("/functions/v1/")) {
+      rec.functionCalls.push(url.pathname);
+      return json({ ok: true });
+    }
+    if (url.origin === SUPA && url.pathname.startsWith("/rest/v1/")) {
+      const table = url.pathname.replace("/rest/v1/", "");
+      if (table === "synced_campaigns") rec.scopeQueries.push(url.search);
+      const hangs = (table === "agent_leads" && ((sc.hang === "lookup" && method === "GET") || (sc.hang === "write" && method !== "GET"))) ||
+        (table === "synced_campaigns" && sc.hang === "scope");
+      if (hangs) {
+        if (method !== "GET") { rec.leadWrites.push(method); rec.order.push(`lead_${method}`); }
+        return new Promise<Response>((_, reject) => {
+          req.signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+        });
+      }
+      const rows = (r: unknown[]) => wantsObject ? (r.length ? json(r[0]) : json({ code: "PGRST116", message: "no rows" }, 406)) : json(r);
+      if (table === "outbound_integrations" && method === "GET") {
+        return rows([{ id: INTEGRATION_ID, created_by: USER_ID, api_key_encrypted: "dummy", heyreach_poll_state: sc.state ?? { version: 1, baselineStartedAt: BASELINE, walk: null, scope: SCOPED } }]);
+      }
+      if (table === "outbound_integrations" && method === "PATCH") {
+        const body = JSON.parse(await req.text());
+        rec.states.push(structuredClone(body.heyreach_poll_state));
+        return new Response(null, { status: 204 });
+      }
+      if (table === "agent_configs") return rows([{ id: "cfg-1", user_id: USER_ID, is_active: true }]);
+      if (table === "synced_campaigns") {
+        if (sc.campaigns === "error") return json({ code: "XX000", message: "simulated scope lookup error", details: null, hint: null }, 500);
+        const intEq = url.searchParams.get("integration_id");
+        const capEq = url.searchParams.get("capture_enabled");
+        const all = (sc.campaigns ?? DEFAULT_CAMPAIGNS).map((c, i) => ({ id: `sc-${i}`, integration_id: INTEGRATION_ID, ...c }));
+        return rows(all.filter((c) =>
+          (!intEq || intEq === `eq.${c.integration_id}`) && (!capEq || capEq === `eq.${c.capture_enabled}`)
+        ));
+      }
+      if (table === "agent_activity") { rec.activityWrites++; return rows([]); }
+      if (table === "agent_leads" && method === "GET") return rows(sc.existingLead ? [lead] : []);
+      if (table === "agent_leads") {
+        rec.leadWrites.push(method);
+        rec.order.push(`lead_${method}`);
+        if (sc.leadWriteError) return json({ code: "XX000", message: "simulated db error", details: null, hint: null }, 500);
+        return rows([{ ...lead, id: sc.existingLead ? lead.id : "lead-new" }]);
+      }
+      return rows([]);
+    }
+    if (url.hostname === "api.heyreach.io") {
+      if (url.pathname.endsWith("/inbox/GetConversationsV2")) {
+        const reqBody = JSON.parse(await req.text());
+        const offset = Number(reqBody?.offset ?? 0);
+        rec.convOffsets.push(offset);
+        rec.convCampaignIds.push(reqBody?.filters?.campaignIds);
+        if (sc.walkPagesFail && offset !== 0) return json({ error: "walk page unavailable" }, 500);
+        return json({
+          totalCount: 1,
+          items: [{
+            id: "conv-1",
+            linkedInAccountId: 111,
+            lastMessageAt: sc.convoTs ?? CONVO_TS,
+            lastMessageText: "a brand new inbound reply",
+            lastMessageSender: "CORRESPONDENT",
+            correspondentProfile: { firstName: "Test", lastName: "Prospect", profileUrl: "https://www.linkedin.com/in/test-prospect" },
+          }],
+        });
+      }
+      if (url.pathname.includes("/inbox/GetChatroom/")) {
+        rec.chatroomCalls++;
+        rec.order.push("chatroom");
+        if (sc.chatroom === "throw") throw new TypeError("network down");
+        if (sc.chatroom === "500") return json({ error: "boom" }, 500);
+        return json({ messages: [{ sender: "CORRESPONDENT", body: "a brand new inbound reply", createdAt: CONVO_TS }] });
+      }
+    }
+    throw new Error(`unexpected fetch in test: ${method} ${req.url}`);
+  };
+  return () => { globalThis.fetch = realFetch; };
+}
+
+async function run(sc: Scenario) {
+  const rec: Recorded = { leadWrites: [], states: [], chatroomCalls: 0, order: [], convOffsets: [], convCampaignIds: [], functionCalls: [], scopeQueries: [], logs: [], activityWrites: 0 };
+  const restore = installFetch(sc, rec);
+  const realLog = console.log;
+  console.log = (...args: unknown[]) => { rec.logs.push(args.map(String).join(" ")); };
+  try {
+    const res = await handler!(new Request("http://local/poll-heyreach-inbox", {
+      method: "POST",
+      headers: { "x-agent-key": AGENT_KEY, "Content-Type": "application/json" },
+      body: "{}",
+    }));
+    const body = await res.json();
+    return { status: res.status, body, rec, finalState: rec.states[rec.states.length - 1] as { baselineStartedAt: string | null; walk: unknown; scope?: unknown; lastTick?: { headScan?: unknown; fetchError?: string } } };
+  } finally {
+    console.log = realLog;
+    restore();
+  }
+}
+
+const opts = { sanitizeOps: false, sanitizeResources: false };
+
+for (const chatroom of ["500", "throw"] as const) {
+  for (const existingLead of [true, false]) {
+    Deno.test({
+      name: `(9) index: GetChatroom ${chatroom} (${existingLead ? "existing" : "new"} lead) → 0 agent_leads writes, failure counted, baseline unchanged`,
+      ...opts,
+      async fn() {
+        const r = await run({ chatroom, existingLead });
+        assertEquals(r.status, 200);
+        assertEquals(r.rec.chatroomCalls, 1);
+        assertEquals(r.rec.leadWrites, []);
+        assertEquals(r.body.perIntegration[0].failures, 1);
+        assertEquals(r.body.perIntegration[0].conversationsProcessed, 1);
+        assertEquals(r.finalState.baselineStartedAt, BASELINE);
+      },
+    });
+  }
+}
+
+Deno.test({
+  name: "(9c) index positive control: GetChatroom 200 → agent_leads write observed after chatroom, 0 failures, baseline advances",
+  ...opts,
+  async fn() {
+    const r = await run({ chatroom: "ok", existingLead: true });
+    assertEquals(r.status, 200);
+    assertEquals(r.rec.leadWrites, ["PATCH"]);
+    assertEquals(r.rec.order, ["chatroom", "lead_PATCH"]);
+    assertEquals(r.body.perIntegration[0].failures, 0);
+    assert(r.finalState.baselineStartedAt !== BASELINE, "baseline should advance on a clean completed walk");
+  },
+});
+
+for (const existingLead of [true, false]) {
+  Deno.test({
+    name: `(9d) index: agent_leads ${existingLead ? "UPDATE" : "INSERT"} error → failure counted, baseline unchanged`,
+    ...opts,
+    async fn() {
+      const r = await run({ chatroom: "ok", existingLead, leadWriteError: true });
+      assertEquals(r.status, 200);
+      assertEquals(r.rec.leadWrites.length, 1);
+      assertEquals(r.body.perIntegration[0].failures, 1);
+      assertEquals(r.finalState.baselineStartedAt, BASELINE);
+    },
+  });
+}
+
+// ---- Head scan through the real handler (H4) --------------------------------
+// Walk in progress deep in the list (cursor at 900); page 1 holds conv-1. Walk
+// pages (offset != 0) fail so the head scan is the only item work this tick.
+const DEEP_WALK = {
+  startedAt: "2026-09-19T00:00:00.000Z",
+  cutoff: "2026-09-19T23:00:00.000Z",
+  offset: 900,
+  lastTs: "2026-09-18T00:00:00.000Z",
+  lastId: "conv-deep-899",
+  failures: 0,
+};
+const deepState = () => ({ version: 1, baselineStartedAt: BASELINE, walk: structuredClone(DEEP_WALK), scope: SCOPED });
+
+for (const chatroom of ["500", "throw"] as const) {
+  Deno.test({
+    name: `(H4) index head scan: GetChatroom ${chatroom} → 0 agent_leads writes, head-scan failure counted, walk state unchanged, 0 function calls`,
+    ...opts,
+    async fn() {
+      const r = await run({ chatroom, existingLead: true, state: deepState(), walkPagesFail: true });
+      assertEquals(r.status, 200);
+      assertEquals(r.rec.convOffsets[0], 0, "head scan fetches page 1 first");
+      assert(r.rec.convOffsets.slice(1).every((o) => o > 0), "walk resumes deep, not at page 1");
+      assertEquals(r.rec.chatroomCalls, 1);
+      assertEquals(r.rec.leadWrites, []);
+      assertEquals(r.rec.functionCalls, []);
+      const pi = r.body.perIntegration[0];
+      assertEquals(pi.headScan.items, 1);
+      assertEquals(pi.headScan.failures, 1);
+      assertEquals(pi.headScan.stopReason, "complete");
+      assertEquals(pi.failures, 0, "walk-level failures untouched");
+      assertEquals(pi.stopReason, "fetch_error");
+      assertEquals(r.body.headScan.failures, 1);
+      assertEquals(r.finalState.walk, DEEP_WALK);
+      assertEquals(r.finalState.baselineStartedAt, BASELINE);
+      assertEquals(r.finalState.lastTick?.headScan, pi.headScan);
+    },
+  });
+}
+
+Deno.test({
+  name: "(H4) index head scan: agent_leads write error → head-scan failure counted, walk state unchanged",
+  ...opts,
+  async fn() {
+    const r = await run({ chatroom: "ok", existingLead: true, leadWriteError: true, state: deepState(), walkPagesFail: true });
+    assertEquals(r.status, 200);
+    assertEquals(r.rec.leadWrites.length, 1);
+    assertEquals(r.body.perIntegration[0].headScan.failures, 1);
+    assertEquals(r.body.perIntegration[0].failures, 0);
+    assertEquals(r.finalState.walk, DEEP_WALK);
+    assertEquals(r.finalState.baselineStartedAt, BASELINE);
+    assertEquals(r.rec.functionCalls, []);
+  },
+});
+
+Deno.test({
+  name: "(H4c) index head scan positive control: GetChatroom 200 → write after chatroom, 0 head-scan failures, walk state unchanged, 0 function calls (kill switch)",
+  ...opts,
+  async fn() {
+    const r = await run({ chatroom: "ok", existingLead: true, state: deepState(), walkPagesFail: true });
+    assertEquals(r.status, 200);
+    assertEquals(r.rec.order, ["chatroom", "lead_PATCH"]);
+    const hs = r.body.perIntegration[0].headScan;
+    assertEquals([hs.items, hs.failures, hs.stopReason], [1, 0, "complete"]);
+    assertEquals(r.body.headScan.items, 1);
+    assertEquals(r.finalState.walk, DEEP_WALK);
+    // The surfaced reply reached the kill-switch branch, and nothing was invoked.
+    assert(r.rec.logs.some((l) => l.includes("HeyReach drafting disabled (kill switch)")), "kill-switch branch not reached");
+    assertEquals(r.rec.functionCalls, []);
+  },
+});
+
+// ---- Capture Scope keying through the real handler (S-idx) ------------------
+// Conversation older than the stored baseline - 1h: with the stored scope it is
+// caught_up and skipped; when a campaign is enabled (scope changed) the baseline
+// is reset and it is walked.
+const OLD_TS = "2026-09-10T00:00:00.000Z";
+
+Deno.test({
+  name: "(S-idx) index: capture scope changed (campaign enabled) → baseline and walk reset, older conversation walked, new scope stored, change logged",
+  ...opts,
+  async fn() {
+    const r = await run({
+      chatroom: "ok",
+      existingLead: true,
+      convoTs: OLD_TS,
+      campaigns: [{ external_campaign_id: "518402", capture_enabled: true }, { external_campaign_id: "508828", capture_enabled: true }],
+      state: { version: 1, baselineStartedAt: BASELINE, walk: null, scope: { campaignIds: [508828] } },
+    });
+    assertEquals(r.status, 200);
+    assertEquals(r.rec.convCampaignIds[0], [518402, 508828]);
+    assertEquals(r.rec.chatroomCalls, 1, "the older conversation is processed after the reset");
+    assertEquals(r.rec.leadWrites, ["PATCH"]);
+    assertEquals(r.finalState.scope, { campaignIds: [508828, 518402] });
+    assert(r.finalState.baselineStartedAt !== BASELINE, "a fresh walk completed and set a new baseline");
+    assert(r.rec.logs.some((l) => l.includes("capture scope changed") && l.includes("campaigns[508828] -> campaigns[508828,518402]")), r.rec.logs.join("\n"));
+  },
+});
+
+Deno.test({
+  name: "(S-idx control) index: same capture scope (different row order) → no reset, older conversation caught_up without processing",
+  ...opts,
+  async fn() {
+    const r = await run({
+      chatroom: "ok",
+      existingLead: true,
+      convoTs: OLD_TS,
+      campaigns: [{ external_campaign_id: "518402", capture_enabled: true }, { external_campaign_id: "508828", capture_enabled: true }, { external_campaign_id: "1", capture_enabled: false }],
+      state: { version: 1, baselineStartedAt: BASELINE, walk: null, scope: { unfiltered: false, campaignIds: [508828, 518402] } },
+    });
+    assertEquals(r.body.perIntegration[0].stopReason, "caught_up");
+    assertEquals(r.rec.chatroomCalls, 0);
+    assertEquals(r.rec.leadWrites, []);
+    // Scope as stored by the previous version (explicit unfiltered:false) is kept as is.
+    assertEquals(r.finalState.scope, { unfiltered: false, campaignIds: [508828, 518402] });
+    assert(!r.rec.logs.some((l) => l.includes("capture scope changed")));
+  },
+});
+
+// ---- Fail-closed Capture Scope skip (S-idx fail-closed) ---------------------
+// Any scope outcome other than "at least one enabled integer campaign id" skips
+// the integration for this tick: no GetConversationsV2 (no walk, no head scan),
+// no GetChatroom, no agent_leads write, no poll-state write, and the reason is
+// logged and returned in skipped.captureScope. The deep walk state proves the
+// head scan would otherwise have run.
+function assertSkippedClosed(r: Awaited<ReturnType<typeof run>>, reason: string) {
+  assertEquals(r.status, 200);
+  assertEquals(r.rec.convOffsets, [], "no HeyReach inbox call at all (no unfiltered poll, no head scan)");
+  assertEquals(r.rec.convCampaignIds, []);
+  assertEquals(r.rec.chatroomCalls, 0);
+  assertEquals(r.rec.leadWrites, []);
+  assertEquals(r.rec.activityWrites, 0);
+  assertEquals(r.rec.states, [], "no poll-state write");
+  assertEquals(r.rec.functionCalls, []);
+  assertEquals(r.body.perIntegration, []);
+  assertEquals(r.body.skipped.captureScope, [{ integrationId: INTEGRATION_ID, reason }]);
+  assert(
+    r.rec.logs.some((l) => l.includes(`skip integration ${INTEGRATION_ID}`) && l.includes(`capture scope ${reason}`)),
+    r.rec.logs.join("\n"),
+  );
+  assert(r.rec.logs.some((l) => l.includes("intSkipCaptureScope=1")), "summary line counts the skip");
+}
+
+for (const [label, campaigns, reason] of [
+  ["scope lookup error", "error", "lookup_error"],
+  ["no synced rows", [], "none_enabled"],
+  ["every campaign capture-disabled", [{ external_campaign_id: "518402", capture_enabled: false }, { external_campaign_id: "508828", capture_enabled: false }], "none_enabled"],
+  ["enabled rows with no integer id", [{ external_campaign_id: "abc", capture_enabled: true }, { external_campaign_id: "0", capture_enabled: true }], "none_enabled"],
+  ["enabled rows only under another integration", [{ external_campaign_id: "518402", capture_enabled: true, integration_id: "00000000-0000-0000-0000-0000000000ff" }], "none_enabled"],
+] as const) {
+  Deno.test({
+    name: `(S-idx fail-closed) index: ${label} → integration skipped (${reason}): no HeyReach call, no lead write, no state write, reason logged and returned`,
+    ...opts,
+    async fn() {
+      const r = await run({
+        chatroom: "ok",
+        existingLead: true,
+        campaigns: campaigns as Scenario["campaigns"],
+        state: { ...deepState(), scope: { campaignIds: [508828] } },
+      });
+      assertSkippedClosed(r, reason);
+      assertEquals(r.rec.scopeQueries.length, 1);
+      const q = new URLSearchParams(r.rec.scopeQueries[0]);
+      assertEquals(q.get("integration_id"), `eq.${INTEGRATION_ID}`, "scope keyed by integration_id");
+      assertEquals(q.get("capture_enabled"), "eq.true");
+    },
+  });
+}
+
+Deno.test({
+  name: "(S-idx fail-closed) index: scope lookup hangs → aborted at DB_TIMEOUT_MS, integration skipped (lookup_error), nothing polled or written",
+  ...opts,
+  async fn() {
+    const t0 = Date.now();
+    let guard: ReturnType<typeof setTimeout> | undefined;
+    const r = await Promise.race([
+      run({ chatroom: "ok", existingLead: true, hang: "scope", state: deepState() }),
+      new Promise<never>((_, reject) => { guard = setTimeout(() => reject(new Error("scope lookup not bounded")), 9_000); }),
+    ]).finally(() => clearTimeout(guard));
+    assertSkippedClosed(r, "lookup_error");
+    assert(Date.now() - t0 < 8_000, "bounded by DB_TIMEOUT_MS (5s)");
+  },
+});
+
+Deno.test({
+  name: "(S-idx legacy) index: stored { unfiltered: true } scope + enabled campaigns → reset once, scoped request, older conversation walked, scope stored; next tick keeps it",
+  ...opts,
+  async fn() {
+    const campaigns = [{ external_campaign_id: "518402", capture_enabled: true }, { external_campaign_id: "508828", capture_enabled: false }];
+    const r = await run({
+      chatroom: "ok",
+      existingLead: true,
+      convoTs: OLD_TS,
+      campaigns,
+      state: { version: 1, baselineStartedAt: BASELINE, walk: structuredClone(DEEP_WALK), scope: { unfiltered: true, campaignIds: [] } },
+    });
+    assertEquals(r.status, 200);
+    assert(r.rec.convCampaignIds.length > 0 && r.rec.convCampaignIds.every((c) => JSON.stringify(c) === "[518402]"), JSON.stringify(r.rec.convCampaignIds));
+    assertEquals(r.rec.convOffsets[0], 0, "walk restarts from the top after the reset");
+    assertEquals(r.rec.chatroomCalls, 1, "the older conversation is processed after the reset");
+    assertEquals(r.finalState.scope, { campaignIds: [518402] });
+    assert(r.rec.logs.some((l) => l.includes("capture scope changed") && l.includes("unfiltered (legacy) -> campaigns[518402]")), r.rec.logs.join("\n"));
+    assertEquals(r.body.skipped.captureScope, []);
+
+    // Second tick from the state the first one stored: same scope, no reset.
+    const r2 = await run({ chatroom: "ok", existingLead: true, convoTs: OLD_TS, campaigns, state: structuredClone(r.finalState) as Record<string, unknown> });
+    assert(!r2.rec.logs.some((l) => l.includes("capture scope changed")));
+    assertEquals(r2.body.perIntegration[0].stopReason, "caught_up");
+    assertEquals(r2.rec.chatroomCalls, 0);
+    assertEquals(r2.finalState.scope, { campaignIds: [518402] });
+  },
+});
+
+// ---- Per-item DB timeout with a hanging fake DB (D-idx) ---------------------
+// The per-item deadline is DEFAULT_PAGER_OPTIONS.itemFetchTimeoutMs (8s in
+// production); shortened here so the test is fast. index.ts reads the same object.
+async function withItemTimeout<T>(ms: number, f: () => Promise<T>): Promise<T> {
+  const prev = DEFAULT_PAGER_OPTIONS.itemFetchTimeoutMs;
+  DEFAULT_PAGER_OPTIONS.itemFetchTimeoutMs = ms;
+  let guard: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      f(),
+      new Promise<never>((_, reject) => { guard = setTimeout(() => reject(new Error("handler hung: DB call not bounded")), 5_000); }),
+    ]);
+  } finally {
+    clearTimeout(guard);
+    DEFAULT_PAGER_OPTIONS.itemFetchTimeoutMs = prev;
+  }
+}
+
+Deno.test({
+  name: "(D-idx write) index: agent_leads UPDATE hangs → aborted at the item deadline, failure counted, nothing more written, baseline unchanged",
+  ...opts,
+  async fn() {
+    const t0 = Date.now();
+    const r = await withItemTimeout(300, () => run({ chatroom: "ok", existingLead: true, hang: "write" }));
+    assertEquals(r.status, 200);
+    assertEquals(r.rec.order, ["chatroom", "lead_PATCH"]);
+    assertEquals(r.rec.activityWrites, 0);
+    assertEquals(r.body.perIntegration[0].failures, 1);
+    assertEquals(r.finalState.baselineStartedAt, BASELINE);
+    assert(Date.now() - t0 < 4_000, "bounded by the item deadline");
+  },
+});
+
+Deno.test({
+  name: "(D-idx lookup) index: lead lookup hangs (helper ignores abort) → item fails at the deadline, no chatroom call, 0 writes, baseline unchanged",
+  ...opts,
+  async fn() {
+    const r = await withItemTimeout(300, () => run({ chatroom: "ok", existingLead: false, hang: "lookup" }));
+    assertEquals(r.status, 200);
+    assertEquals(r.rec.chatroomCalls, 0);
+    assertEquals(r.rec.leadWrites, []);
+    assertEquals(r.rec.activityWrites, 0);
+    assertEquals(r.body.perIntegration[0].failures, 1);
+    assertEquals(r.finalState.baselineStartedAt, BASELINE);
+  },
+});
+
+// ---- Walk vs head-scan counters (N-idx) --------------------------------------
+Deno.test({
+  name: "(N-idx) index: page-1 work done by the head scan is reported under headScan.counts, not added to top-level polled/seen",
+  ...opts,
+  async fn() {
+    // Walk resumes deep and its page also holds conv-1 (the fake returns it at every offset).
+    const r = await run({ chatroom: "ok", existingLead: true, state: deepState() });
+    assertEquals(r.status, 200);
+    assertEquals(r.rec.chatroomCalls, 2, "processed once by the head scan and once by the walk");
+    assertEquals([r.body.seen, r.body.polled], [1, 1], "walk only");
+    assertEquals(r.body.headScan.counts.seen, 1);
+    assertEquals(r.body.headScan.counts.polled, 1);
+    assertEquals(r.body.headScan.items, 1);
+    assert(r.rec.logs.some((l) => l.includes("Done. polled=1") && l.includes("| headScan seen=1 polled=1")), r.rec.logs.join("\n"));
+  },
+});
