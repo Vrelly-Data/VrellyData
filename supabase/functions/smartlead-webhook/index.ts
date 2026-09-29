@@ -53,6 +53,7 @@ import { cleanReplyPreview } from "../_shared/reply-text.ts";
 import { detectLanguageCode } from "../_shared/language.ts";
 import { sanitizeLinkedinUrlForStorage } from "../_shared/normalize.ts";
 import { upsertAgentLeadWithLinkedinRecovery } from "../_shared/agent-leads.ts";
+import { checkCaptureGate } from "../_shared/capture-scope.ts";
 
 const allowedOrigins = [
   Deno.env.get("ALLOWED_ORIGIN") || "https://vrelly.com",
@@ -454,48 +455,19 @@ Deno.serve(async (req) => {
       },
     ];
 
-    // === Capture Scope gate =================================================
-    // Enforcement point 3 of 4, and the one that actually makes the feature
-    // safe. Points 1 and 2 stop us CREATING a registration; this stops us
-    // ACTING on an event, which still arrives when a deregistration failed,
-    // when a webhook was added in Smartlead's own UI, or in the window before
-    // a disable propagates.
-    //
-    // Placed immediately before the first write to agent_leads and after the
-    // integration lookup, so a disabled campaign produces NO lead row at all —
-    // not a mirrored one. That was the explicit product decision: capture off
-    // means full silence, not quiet record-keeping.
-    //
-    // Fail OPEN on a missing row or a lookup error: an unknown campaign is one
-    // the sync has not caught up with yet, and dropping a real reply is worse
-    // than capturing one the operator may later switch off. Only an explicit
-    // capture_enabled === false suppresses.
-    if (smartleadCampaignId) {
-      const { data: scopeRow, error: scopeErr } = await supabase
-        .from("synced_campaigns")
-        .select("capture_enabled, name")
-        .eq("integration_id", integration.id)
-        .eq("external_campaign_id", String(smartleadCampaignId))
-        .maybeSingle();
-
-      if (scopeErr) {
-        console.warn(
-          `[smartlead-webhook v2] capture scope lookup failed for campaign ` +
-          `${smartleadCampaignId} (${scopeErr.message}) — proceeding (fail-open)`,
-        );
-      } else if (scopeRow && scopeRow.capture_enabled === false) {
+    // === Capture Scope gate (FAIL-CLOSED) ===================================
+    // Only capture when the campaign id exists AND synced_campaigns has a row
+    // for this integration with capture_enabled === true. Everything else is
+    // a SKIP with an explicit reason.
+    {
+      const gate = await checkCaptureGate(supabase as any, integration.id, smartleadCampaignId);
+      if (!gate.allowed) {
         console.log(
-          `[smartlead-webhook v2] capture disabled for campaign ` +
-          `${smartleadCampaignId} ("${scopeRow.name}") — dropping ${eventType} ` +
-          `without creating a lead`,
+          `[smartlead-webhook v2] skip (${gate.reason}) for integration=${integration.id} ` +
+            `campaign=${smartleadCampaignId ?? "null"} event=${eventType}`,
         );
         return new Response(
-          JSON.stringify({
-            success: true,
-            skipped: "capture_disabled",
-            campaignId: String(smartleadCampaignId),
-            eventType,
-          }),
+          JSON.stringify({ success: true, skipped: gate.reason, campaignId: smartleadCampaignId, eventType }),
           { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
         );
       }
@@ -827,7 +799,7 @@ Deno.serve(async (req) => {
               (externalId ?? "");
             if (personKey && replyMessageId) {
               const lang = detectLanguageCode(replyText);
-              const writes: Array<Promise<unknown>> = [];
+            const writes: Array<PromiseLike<unknown>> = [];
               writes.push(
                 supabase.from("inference_events").upsert(
                   {
