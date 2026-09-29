@@ -1,0 +1,32 @@
+{
+  "eventType": "EVERY_MESSAGE_REPLY_RECEIVED",
+  "campaignId": "518402",
+  "conversation_id": "987654321",
+  "lead": {
+    "first_name": "Jane",
+    "last_name": "Doe",
+    "full_name": "Jane Doe",
+    "email_address": "jane.doe@example.com",
+    "profile_url": "https://www.linkedin.com/in/janedoe/",
+    "position": "Head of Growth",
+    "company_name": "Acme Corp"
+  },
+  "sender": {
+    "linkedInAccount": { "id": 112233 }
+  },
+  "recent_messages": [
+    {
+      "id": "m1",
+      "message": "Hey Jane, would love to connect about improving your SDR pipeline.",
+      "creation_time": "2026-09-14T14:12:33Z",
+      "is_reply": false
+    },
+    {
+      "id": "m2",
+      "message": "Hi! Sounds interesting — can you share more details?",
+      "creation_time": "2026-09-16T09:01:22Z",
+      "is_reply": true
+    }
+  ]
+}
+

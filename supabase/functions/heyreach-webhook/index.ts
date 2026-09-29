@@ -2,6 +2,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { shouldResurface } from "../_shared/inbox-reply.ts";
 import { cleanReplyPreview } from "../_shared/reply-text.ts";
 import { detectLanguageCode } from "../_shared/language.ts";
+import { sanitizeLinkedinUrlForStorage } from "../_shared/normalize.ts";
+import { findLeadByNormalizedLinkedIn } from "../_shared/agent-leads-lookup.ts";
 
 const allowedOrigins = [
   Deno.env.get("ALLOWED_ORIGIN") || "https://vrelly.com",
@@ -416,7 +418,7 @@ Deno.serve(async (req) => {
     // don't claim a unique slot (Postgres treats multiple NULLs as distinct).
     // Without a linkedin_url we have no dedup key, so skip rather than
     // create runaway rows on every redelivery.
-    const linkedinUrlForKey = linkedinUrl && linkedinUrl.trim() ? linkedinUrl.trim() : null;
+    const linkedinUrlForKey = sanitizeLinkedinUrlForStorage(linkedinUrl);
     if (!linkedinUrlForKey) {
       console.warn(
         `[heyreach-webhook] Skipping upsert — no linkedin_url on payload (conversation_id=${conversationId})`,
@@ -496,12 +498,11 @@ Deno.serve(async (req) => {
     //                   operator's dismissal stands.
     //   new lead      → surface, unchanged. There is no watermark to compare
     //                   against, and a first-sight inbound reply is actionable.
-    const { data: existingLead } = await supabase
-      .from("agent_leads")
-      .select("id, disposition_tag, last_surfaced_reply_at")
-      .eq("user_id", integration.created_by)
-      .eq("linkedin_url", linkedinUrlForKey)
-      .maybeSingle();
+    const existingLead = await findLeadByNormalizedLinkedIn(
+      supabase,
+      integration.created_by,
+      linkedinUrlForKey,
+    );
 
     const newestEntry = replyThread.length > 0
       ? replyThread.reduce((a, b) =>
@@ -532,60 +533,97 @@ Deno.serve(async (req) => {
         `prior=${existingLead?.last_surfaced_reply_at ?? "null"} disposition=${existingLead?.disposition_tag ?? "null"}`,
     );
 
-    const { data: upsertedLead, error: upsertError } = await supabase
-      .from("agent_leads")
-      .upsert(
-        {
-          user_id: integration.created_by,
-          external_id: externalId,
-          full_name: fullName,
-          email,
-          job_title: jobTitle,
-          company,
-          last_reply_text: cleanReplyPreview(replyText),
-          last_reply_at: new Date().toISOString(),
-          reply_thread: replyThread,
-          // inbox_status + the surface watermark are written ONLY when we are
-          // actually surfacing. Omitting a key means it is absent from
-          // PostgREST's ON CONFLICT DO UPDATE SET clause, so the stored value
-          // survives — which is what makes a dismissal stick.
-          //
-          // The watermark is the shared interlock with poll-heyreach-inbox:
-          // whichever path surfaces first records the message it surfaced FOR,
-          // and the other path's `newestMs > priorMs` then reads false and
-          // declines to act. Before it was written here, 285 of 291 HeyReach
-          // leads carried a NULL watermark, making priorMs 0 and every
-          // webhook-handled reply look permanently "new" to the poller.
-          ...(surface
-            ? {
-              inbox_status: "pending",
-              last_surfaced_reply_at: newestThreadTimestamp(replyThread) ??
-                new Date().toISOString(),
-            }
-            : {}),
-          channel: "linkedin",
-          source: "heyreach",
-          heyreach_conversation_id: conversationId,
-          heyreach_account_id: accountId ? Number(accountId) : null,
-          linkedin_url: linkedinUrlForKey,
-          ...(campaignExternalId
-            ? { campaign_external_id: campaignExternalId }
-            : {}),
-        },
-        { onConflict: "user_id,linkedin_url" },
-      )
-      .select("id")
-      .single();
+    // Deterministic save: lookup-then-update-or-insert with 23505 retry
+    const baseRow: Record<string, unknown> = {
+      user_id: integration.created_by,
+      external_id: externalId,
+      full_name: fullName,
+      email,
+      job_title: jobTitle,
+      company,
+      last_reply_text: cleanReplyPreview(replyText),
+      last_reply_at: new Date().toISOString(),
+      reply_thread: replyThread,
+      ...(surface
+        ? {
+          inbox_status: "pending",
+          last_surfaced_reply_at: newestThreadTimestamp(replyThread) ??
+            new Date().toISOString(),
+        }
+        : {}),
+      channel: "linkedin",
+      source: "heyreach",
+      heyreach_conversation_id: conversationId,
+      heyreach_account_id: accountId ? Number(accountId) : null,
+      linkedin_url: linkedinUrlForKey,
+      ...(campaignExternalId ? { campaign_external_id: campaignExternalId } : {}),
+    };
 
-    if (upsertError) {
-      console.error("agent_leads upsert error:", upsertError);
-      return new Response(JSON.stringify({ error: "Failed to save lead" }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+    let savedLeadId: string | null = null;
+    if (existingLead?.id) {
+      const { data: updated, error: updateErr } = await supabase
+        .from("agent_leads")
+        .update(baseRow)
+        .eq("id", existingLead.id)
+        .select("id")
+        .single();
+      if (updateErr) {
+        console.error("[heyreach-webhook] UPDATE failed:", updateErr);
+        return new Response(JSON.stringify({ error: "Failed to save lead" }), {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      savedLeadId = (updated as { id: string } | null)?.id ?? null;
+    } else {
+      const { data: inserted, error: insertErr } = await supabase
+        .from("agent_leads")
+        .insert(baseRow)
+        .select("id")
+        .single();
+      if (insertErr && (insertErr as { code?: string }).code === "23505") {
+        // Unique violation race — reselect and update
+        const raced = await findLeadByNormalizedLinkedIn(
+          supabase,
+          integration.created_by,
+          linkedinUrlForKey,
+        );
+        if (raced?.id) {
+          const { data: updated2, error: updateErr2 } = await supabase
+            .from("agent_leads")
+            .update(baseRow)
+            .eq("id", raced.id)
+            .select("id")
+            .single();
+          if (updateErr2) {
+            console.error("[heyreach-webhook] UPDATE-after-23505 failed:", updateErr2);
+            return new Response(JSON.stringify({ error: "Failed to save lead" }), {
+              status: 500,
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
+            });
+          }
+          savedLeadId = (updated2 as { id: string } | null)?.id ?? null;
+        } else {
+          console.error("[heyreach-webhook] 23505 on INSERT but reselect found no row");
+          return new Response(JSON.stringify({ error: "Failed to save lead" }), {
+            status: 500,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+      } else if (insertErr) {
+        console.error("[heyreach-webhook] INSERT failed:", insertErr);
+        return new Response(JSON.stringify({ error: "Failed to save lead" }), {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      } else {
+        savedLeadId = (inserted as { id: string } | null)?.id ?? null;
+      }
     }
 
-    console.log(`Upserted agent_lead ${upsertedLead?.id} for ${fullName || externalId} (linkedin)`);
+    console.log(
+      `Saved agent_lead ${savedLeadId ?? "(unknown)"} for ${fullName || externalId} (linkedin)`,
+    );
 
     // Best-effort full-thread sync: the webhook payload's recent_messages
     // can be a partial slice (real conversations have shown up with only the
@@ -594,7 +632,7 @@ Deno.serve(async (req) => {
     // proven shape. Errors are logged and non-fatal — we keep the partial
     // thread written above rather than failing the webhook.
     let fullReplyThread: typeof replyThread | null = null;
-    if (upsertedLead?.id && accountId && conversationId && integration.api_key_encrypted) {
+    if (savedLeadId && accountId && conversationId && integration.api_key_encrypted) {
       try {
         const chatroomRes = await fetch(
           `https://api.heyreach.io/api/public/inbox/GetChatroom/${accountId}/${conversationId}`,
@@ -624,7 +662,7 @@ Deno.serve(async (req) => {
             }),
           );
 
-          if (fullReplyThread.length > 0) {
+          if (fullReplyThread && fullReplyThread.length > 0) {
             // STRICTLY-ADDITIVE MERGE (bug fix).
             //
             // Previously this branch did `.update({ reply_thread:
@@ -639,9 +677,9 @@ Deno.serve(async (req) => {
             // role + timestamps within MERGE_TS_TOLERANCE_MS). Result is
             // sorted chronologically. A lagging GetChatroom can no longer
             // drop a reply — every entry from `replyThread` survives.
-            const canonicalLen = fullReplyThread.length;
+            const canonicalLen = fullReplyThread!.length;
             const mergedThread = mergeReplyThreads(
-              fullReplyThread,
+              fullReplyThread!,
               replyThread,
             );
 
@@ -658,11 +696,11 @@ Deno.serve(async (req) => {
                   ? { last_surfaced_reply_at: newestThreadTimestamp(mergedThread) }
                   : {}),
               })
-              .eq("id", upsertedLead.id);
+              .eq("id", savedLeadId);
 
             if (threadUpdateErr) {
               console.warn(
-                `[heyreach-webhook] Merged-thread UPDATE failed for lead ${upsertedLead.id}:`,
+                `[heyreach-webhook] Merged-thread UPDATE failed for lead ${savedLeadId}:`,
                 threadUpdateErr,
               );
               // Keep the partial that's already in the row from the upsert.
@@ -674,7 +712,7 @@ Deno.serve(async (req) => {
               fullReplyThread = mergedThread;
               const addedFromPartial = mergedThread.length - canonicalLen;
               console.log(
-                `[heyreach-webhook] Merged thread written for lead ${upsertedLead.id} (canonical=${canonicalLen}, partial=${replyThread.length}, added_from_partial=${addedFromPartial}, merged=${mergedThread.length})`,
+                `[heyreach-webhook] Merged thread written for lead ${savedLeadId} (canonical=${canonicalLen}, partial=${replyThread.length}, added_from_partial=${addedFromPartial}, merged=${mergedThread.length})`,
               );
             }
           } else {
@@ -700,7 +738,7 @@ Deno.serve(async (req) => {
     // silently and must NOT produce a draft. This is the specific gate that
     // stops the 2026-08-16 case — a re-sent 08-04 event that generated a draft
     // (22,589 input tokens) for a message already handled.
-    if (surface && upsertedLead?.id) {
+    if (surface && savedLeadId) {
       const { data: agentConfig } = await supabase
         .from("agent_configs")
         .select("*")
@@ -724,7 +762,7 @@ Deno.serve(async (req) => {
               // best-effort fetch succeeded; fall back to the partial
               // payload-derived thread otherwise.
               thread_history: fullReplyThread ?? replyThread,
-              lead_id: upsertedLead.id,
+              lead_id: savedLeadId,
               user_id: integration.created_by,
               channel: "linkedin",
               agent_context: {
@@ -779,7 +817,7 @@ Deno.serve(async (req) => {
           if (personKey && stableId) {
             const writes: Array<Promise<unknown>> = [];
             writes.push(
-              supabase.from("inference_events").upsert(
+              (supabase.from("inference_events").upsert(
                 {
                   team_id: integration.team_id,
                   agent_config_id: agentConfig.id,
@@ -822,7 +860,7 @@ Deno.serve(async (req) => {
                 if (error) {
                   console.warn("[heyreach-webhook] inference_events upsert error (non-fatal):", error);
                 }
-              })
+              })) as unknown as Promise<unknown>
             );
             // Optional additive people upsert (non-fatal)
             writes.push(
@@ -861,12 +899,12 @@ Deno.serve(async (req) => {
           `No active agent_config for user ${integration.created_by} — skipping classify-reply`,
         );
       }
-    } else if (upsertedLead?.id) {
+    } else if (savedLeadId) {
       // Reply recorded, status and watermark left alone, no draft. Logged so a
       // suppressed re-delivery is visible rather than looking like a dropped
       // webhook.
       console.log(
-        `[heyreach-webhook] reply recorded without surfacing (surface=false) for lead ${upsertedLead.id} — no draft generated`,
+        `[heyreach-webhook] reply recorded without surfacing (surface=false) for lead ${savedLeadId} — no draft generated`,
       );
     }
 
