@@ -3,6 +3,7 @@ import { htmlToText } from '../_shared/html-to-text.ts';
 import { preprocessEmailReply } from '../_shared/reply-text.ts';
 import { computeCopyFingerprint } from '../_shared/copy-fingerprint.ts';
 import { isPlaceholderReplyText, pickLastProspectContentFromThread } from './utils.ts';
+import { shouldSuppressHeyreachDrafting, HEYREACH_DRAFTING_ENABLED } from '../_shared/flags.ts';
 
 console.log('classify-reply starting');
 
@@ -572,6 +573,7 @@ Use this campaign data to:
     let leadLastCampaignName: string | null = null;
     let leadCampaignExternalId: string | null = null;
     let leadDispositionTag: string | null = null;
+    let leadSource: string | null = null;
     // Most recent role:'sender' fromName in the thread — identifies which sender
     // owns this conversation, for multi-sender voice matching below.
     let threadSenderName: string | null = null;
@@ -592,6 +594,7 @@ Use this campaign data to:
           leadLastCampaignName = leadRow.last_campaign_name ?? null;
           leadCampaignExternalId = leadRow.campaign_external_id ?? null;
           leadDispositionTag = leadRow.disposition_tag ?? null;
+          leadSource = (leadRow as any).source ?? null;
           const rt = Array.isArray(leadRow.reply_thread) ? leadRow.reply_thread : [];
           for (let i = rt.length - 1; i >= 0; i--) {
             const m = rt[i] as { role?: string; fromName?: string };
@@ -605,6 +608,9 @@ Use this campaign data to:
         console.warn('[classify-reply] lead context fetch failed (continuing):', e);
       }
     }
+
+    // HeyReach/LinkedIn drafting kill switch — default OFF (no drafts/sends on LinkedIn path)
+    const suppressDrafting = shouldSuppressHeyreachDrafting(channel, leadSource);
 
     // Effective sender identity for the draft voice. Defaults to the client's
     // single agent_configs sender_* fields (no regression for single-sender
@@ -1055,7 +1061,7 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
           intent_confidence: intentConfidence,
           prospect_read: prospectRead,
         };
-        if (!call2Failed) {
+        if (!call2Failed && !suppressDrafting) {
           update.draft_response = suggestedResponse;
           update.inbox_status = 'draft_ready';
         }
@@ -1067,37 +1073,39 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
           .eq('id', lead_id)
           .eq('user_id', user_id);
 
-        await supabase.from('agent_activity').insert(
-          !call2Failed
-            ? {
-                user_id,
-                lead_id,
-                activity_type: 'draft_created',
-                description: `Draft response created — classified as ${intent} (${Math.round(intentConfidence * 100)}% confidence)`,
-                metadata: {
-                  intent,
-                  confidence: intentConfidence,
-                  channel,
-                  auto_handled: shouldAutoSend,
-                  matched_persona: matchedTitle,
-                  is_objection: isObjection,
+        if (!suppressDrafting) {
+          await supabase.from('agent_activity').insert(
+            !call2Failed
+              ? {
+                  user_id,
+                  lead_id,
+                  activity_type: 'draft_created',
+                  description: `Draft response created — classified as ${intent} (${Math.round(intentConfidence * 100)}% confidence)`,
+                  metadata: {
+                    intent,
+                    confidence: intentConfidence,
+                    channel,
+                    auto_handled: shouldAutoSend,
+                    matched_persona: matchedTitle,
+                    is_objection: isObjection,
+                  },
+                }
+              : {
+                  user_id,
+                  lead_id,
+                  activity_type: 'draft_created',
+                  description: 'Draft generation failed — needs manual review',
+                  metadata: {
+                    parse_failed: true,
+                    prompt_version: promptVersion,
+                    channel,
+                    intent,
+                    matched_persona: matchedTitle,
+                    call2_failed: true,
+                  },
                 },
-              }
-            : {
-                user_id,
-                lead_id,
-                activity_type: 'draft_created',
-                description: 'Draft generation failed — needs manual review',
-                metadata: {
-                  parse_failed: true,
-                  prompt_version: promptVersion,
-                  channel,
-                  intent,
-                  matched_persona: matchedTitle,
-                  call2_failed: true,
-                },
-              },
-        );
+          );
+        }
 
         console.log(`[classify-reply] wrote classification to agent_leads ${lead_id} +${Date.now() - t0}ms`);
       } catch (writeErr) {
@@ -1110,38 +1118,40 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
     try {
       const c1 = call1.usage;
       const c2 = call2?.usage ?? { input_tokens: 0, output_tokens: 0 };
-      await supabase.from('draft_audit').insert({
-        user_id,
-        lead_id: lead_id ?? null,
-        lead_name: leadName,
-        lead_company: leadCompany,
-        channel,
-        model: MODEL,
-        prompt_version: promptVersion,
-        temperature: 0.5,
-        system_prompt_hash: call2SystemPromptHash,
-        input_tokens: c1.input_tokens + c2.input_tokens,
-        output_tokens: c1.output_tokens + c2.output_tokens,
-        generation_ms: call2?.ms ?? null,
-        intent_classified: intent,
-        intent_confidence: intentConfidence,
-        draft_response: suggestedResponse || null,
-        metadata: {
-          two_call: true,
-          call1_intent: intent,
-          call1_matched_persona: matchedTitle,
-          call1_tokens: c1.input_tokens + c1.output_tokens,
-          call2_tokens: c2.input_tokens + c2.output_tokens,
-          parse_retried_call1: call1.retried,
-          parse_retried_call2: call2?.retried ?? false,
-          is_objection: isObjection,
-          first_touch: isFirstTouch,
-          learnings_count: learnings.length,
-          call1_failed: false,
-          call2_failed: call2Failed,
-          call1_system_prompt_hash: call1SystemPromptHash,
-        },
-      });
+      if (!suppressDrafting) {
+        await supabase.from('draft_audit').insert({
+          user_id,
+          lead_id: lead_id ?? null,
+          lead_name: leadName,
+          lead_company: leadCompany,
+          channel,
+          model: MODEL,
+          prompt_version: promptVersion,
+          temperature: 0.5,
+          system_prompt_hash: call2SystemPromptHash,
+          input_tokens: c1.input_tokens + c2.input_tokens,
+          output_tokens: c1.output_tokens + c2.output_tokens,
+          generation_ms: call2?.ms ?? null,
+          intent_classified: intent,
+          intent_confidence: intentConfidence,
+          draft_response: suggestedResponse || null,
+          metadata: {
+            two_call: true,
+            call1_intent: intent,
+            call1_matched_persona: matchedTitle,
+            call1_tokens: c1.input_tokens + c1.output_tokens,
+            call2_tokens: c2.input_tokens + c2.output_tokens,
+            parse_retried_call1: call1.retried,
+            parse_retried_call2: call2?.retried ?? false,
+            is_objection: isObjection,
+            first_touch: isFirstTouch,
+            learnings_count: learnings.length,
+            call1_failed: false,
+            call2_failed: call2Failed,
+            call1_system_prompt_hash: call1SystemPromptHash,
+          },
+        });
+      }
     } catch (auditErr) {
       console.error('[classify-reply] draft_audit write failed (non-fatal):', auditErr);
     }
@@ -1207,7 +1217,7 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
             reply_text,
           },
         };
-        const writes: Array<Promise<unknown>> = [];
+        const writes: Array<PromiseLike<unknown>> = [];
         writes.push(
           supabase
             .from('inference_events')
@@ -1277,7 +1287,7 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
               .eq('id', lead_id)
               .eq('user_id', user_id);
           })();
-        } else if (isAllowed && hasDraft && !isOptedOut) {
+        } else if (isAllowed && hasDraft && !isOptedOut && !suppressDrafting) {
           // Fire-and-forget correct sender by channel/source
           const fire = async () => {
             const headers = { 'Content-Type': 'application/json', 'x-agent-key': svcKey };

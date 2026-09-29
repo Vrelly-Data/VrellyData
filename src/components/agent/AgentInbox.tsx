@@ -10,6 +10,7 @@ import {
   type AgentLead,
   type InboxStatusGroup,
 } from '@/hooks/useAgentInbox';
+import { shouldAutoClassifyOnLeadSelect } from '@/lib/inbox-guards';
 import { useAgentConfig } from '@/hooks/useAgent';
 import { useHeyReachAccountNames } from '@/hooks/useHeyReachAccounts';
 import { useCampaignNames, resolveCampaignName } from '@/hooks/useCampaignNames';
@@ -91,7 +92,7 @@ export function AgentInbox() {
     setSelectedLead(lead);
 
     // Trigger classification if lead has no intent and no draft
-    const needsClassification = !lead.intent && !lead.draft_response;
+    const needsClassification = shouldAutoClassifyOnLeadSelect(lead);
     if (needsClassification && agentConfig && !classifyLead.isPending) {
       setClassifyingLeadId(lead.id);
       classifyLead.mutate(
