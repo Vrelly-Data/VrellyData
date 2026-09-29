@@ -334,7 +334,7 @@ Deno.serve(async (req) => {
                     channel: 'linkedin',
                   }));
                 } else {
-                  console.warn(`[poll-heyreach-inbox] GetChatroom ${res.status} for ${conversationId}`);
+                  console.warn(`[poll-heyreach-inbox] GetChatroom ${chatroomRes.status} for ${conversationId}`);
                 }
               } catch (chatroomErr) {
                 console.error(`[poll-heyreach-inbox] Failed to fetch chatroom for ${conversationId}:`, chatroomErr);
