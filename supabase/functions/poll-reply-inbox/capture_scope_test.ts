@@ -2,9 +2,14 @@
 // index.ts, fake PostgREST + fake Reply.io v3; synthetic data only).
 //
 // Proves: an integration with no enabled sequence, or whose scope lookup
-// errors, is SKIPPED for the run (no inbox fetch, no agent_leads write, reason
-// in the response); otherwise only threads whose sequence is capture-enabled
-// are processed, and threads with no sequence id are dropped (fail closed).
+// errors, captures NOTHING for the run (no agent_leads write, reason in the
+// response); otherwise only threads whose sequence is capture-enabled are
+// captured, and threads with no sequence id are not captured (fail closed).
+//
+// Warehouse (main parity): main had no capture gate on Reply.io, so every
+// polled reply recorded its 'replied' inference_events row. Threads outside
+// capture scope are still read and recorded warehouse-only (no agent_leads,
+// no activity, no classify-reply).
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { AGENT_KEY, FakeSupabase, json, loadHandler, testOpts, withFakes, type Row } from "../_shared/testing/fake_platform.ts";
 
@@ -65,18 +70,27 @@ const skipCases: Array<{ name: string; rows: Row[]; fail?: boolean; reason: stri
 
 for (const c of skipCases) {
   Deno.test({
-    name: `poll-reply-inbox scope: ${c.name} → integration skipped (${c.reason}), no inbox fetch, no agent_leads write`,
+    name: `poll-reply-inbox scope: ${c.name} → integration not captured (${c.reason}), no agent_leads write, every reply recorded warehouse-only`,
     ...testOpts,
     async fn() {
       const db = new FakeSupabase({ outbound_integrations: [integ(INT, USER, "k1")], agent_configs: [{ id: "cfg-1", user_id: USER, is_active: true }], synced_campaigns: c.rows });
       if (c.fail) db.fail["synced_campaigns:GET"] = "error";
       const r = await run(db);
       assertEquals(r.status, 200);
-      assertEquals(r.threadListCalls.length, 0, "no Reply.io inbox fetch for a skipped integration");
       assertEquals(db.writes("agent_leads").length, 0);
+      assertEquals(db.writes("agent_activity").length, 0);
+      assert(!r.rec.functionCalls.some((f) => f.path.endsWith("/classify-reply")), "no classify-reply");
       assertEquals(r.body.processed, 0);
       assertEquals(r.body.captureScope.skippedIntegrations, [{ integrationId: INT, reason: c.reason }]);
       assert(r.rec.logs.some((l) => l.includes(`skip integration ${INT} — capture scope ${c.reason}`)), "skip is logged");
+      // Warehouse: all five recent replies recorded, tagged with the scope reason.
+      assertEquals(r.threadListCalls.length, 1);
+      assertEquals(r.body.captureScope.warehouseOnlyThreads, 5);
+      assertEquals(r.body.captureScope.warehouseOnlyRecorded, 5);
+      const inf = db.writes("inference_events").map((w) => w.body as Row);
+      assertEquals(inf.map((e) => String(e.source_row_id).split(":")[0]).sort(), ["701", "702", "703", "704", "705"]);
+      assert(inf.every((e) => e.source === "poll_reply_inbox" && e.event_type === "replied" && e.agent_config_id === "cfg-1"));
+      assert(inf.every((e) => (e.metadata as Row).capture_skipped === c.reason));
     },
   });
 }
@@ -92,13 +106,24 @@ Deno.test({
     });
     const r = await run(db);
     assertEquals(r.status, 200);
-    assertEquals(r.messageCalls.sort(), ["701", "702"], "messages fetched only for enabled-sequence threads");
     assertEquals(r.body.processed, 2);
     const inserted = db.writes("agent_leads").filter((w) => w.method === "POST").map((w) => String((w.body as Row).external_id));
-    assertEquals(inserted.sort(), ["701", "702"]);
+    assertEquals(inserted.sort(), ["701", "702"], "only enabled-sequence threads are captured");
+    assertEquals(db.writes("agent_leads").length, 2, "no agent_leads write for out-of-scope threads");
+    assertEquals(db.writes("agent_activity").length, 2);
     assertEquals(r.body.captureScope.threadsDroppedNoSequence, 1);
     assertEquals(r.body.captureScope.threadsDroppedNotEnabled, 2);
     assertEquals(r.body.captureScope.skippedIntegrations, []);
+    // Warehouse: every reply recorded; the three out-of-scope ones tagged.
+    assertEquals(r.body.captureScope.warehouseOnlyThreads, 3);
+    assertEquals(r.body.captureScope.warehouseOnlyRecorded, 3);
+    const inf = db.writes("inference_events").map((w) => w.body as Row);
+    const byThread = new Map(inf.map((e) => [String(e.source_row_id).split(":")[0], (e.metadata as Row).capture_skipped]));
+    assertEquals([...byThread.keys()].sort(), ["701", "702", "703", "704", "705"]);
+    assertEquals(byThread.get("701"), undefined);
+    assertEquals(byThread.get("702"), undefined);
+    assertEquals(byThread.get("703"), "not_in_capture_scope");
+    assertEquals(byThread.get("705"), "not_in_capture_scope");
   },
 });
 
@@ -113,8 +138,10 @@ Deno.test({
     });
     const r = await run(db);
     assertEquals(r.body.captureScope.skippedIntegrations, [{ integrationId: INT, reason: "none_enabled" }]);
-    assertEquals(r.threadListCalls.length, 1);
-    assertEquals(r.messageCalls, ["701"]);
     assertEquals(r.body.processed, 1);
+    const inserted = db.writes("agent_leads").filter((w) => w.method === "POST").map((w) => (w.body as Row).user_id);
+    assertEquals(inserted, [USER2], "only the in-scope integration captures");
+    // INT's replies are warehouse-only (5), INT2's out-of-scope ones too (4).
+    assertEquals(r.body.captureScope.warehouseOnlyThreads, 9);
   },
 });

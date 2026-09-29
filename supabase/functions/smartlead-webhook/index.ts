@@ -458,18 +458,30 @@ Deno.serve(async (req) => {
     // === Capture Scope gate (FAIL-CLOSED) ===================================
     // Only capture when the campaign id exists AND synced_campaigns has a row
     // for this integration with capture_enabled === true. Everything else is
-    // a SKIP with an explicit reason.
+    // a SKIP with an explicit reason: no agent_leads write, 200 to Smartlead.
+    //
+    // The warehouse (inference_events) is NOT gated. Main failed OPEN on a
+    // missing id, a missing row and a lookup error (the reply was captured and
+    // its inference event recorded), so those skips continue as warehouse-only
+    // below: same reads (existing lead, enrichment) and the same inference
+    // event, no agent_leads write. capture_disabled was already full silence
+    // on main (no lead, no inference event), so it still returns here.
+    let captureSkipReason: string | null = null;
     {
       const gate = await checkCaptureGate(supabase as any, integration.id, smartleadCampaignId);
       if (!gate.allowed) {
+        captureSkipReason = gate.reason;
         console.log(
           `[smartlead-webhook v2] skip (${gate.reason}) for integration=${integration.id} ` +
-            `campaign=${smartleadCampaignId ?? "null"} event=${eventType}`,
+            `campaign=${smartleadCampaignId ?? "null"} event=${eventType}` +
+            (gate.reason === "capture_disabled" ? "" : " — no agent_leads write; warehouse event still recorded"),
         );
-        return new Response(
-          JSON.stringify({ success: true, skipped: gate.reason, campaignId: smartleadCampaignId, eventType }),
-          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-        );
+        if (gate.reason === "capture_disabled") {
+          return new Response(
+            JSON.stringify({ success: true, skipped: gate.reason, campaignId: smartleadCampaignId, eventType }),
+            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+          );
+        }
       }
     }
 
@@ -590,6 +602,133 @@ Deno.serve(async (req) => {
       } finally {
         clearTimeout(enrichTimeout);
       }
+    }
+
+    // Warehouse write ('replied' inference event + additive people row),
+    // shared by the captured path below and the warehouse-only skip path.
+    const recordRepliedInference = async (
+      agentConfigId: string,
+      extraMetadata: Record<string, unknown> = {},
+    ): Promise<void> => {
+      // Best-effort: record 'replied' inference event (non-blocking)
+      try {
+        const personKey =
+          (emailForKey && emailForKey.trim() ? emailForKey.trim().toLowerCase() : "") ||
+          (externalId ?? "");
+        if (personKey && replyMessageId) {
+          const lang = detectLanguageCode(replyText);
+          const writes: Array<PromiseLike<unknown>> = [];
+          writes.push(
+            supabase.from("inference_events").upsert(
+              {
+                team_id: integration.team_id,
+                agent_config_id: agentConfigId,
+                person_key: personKey,
+                email: emailForKey ? emailForKey.trim().toLowerCase() : null,
+                linkedin_url: sanitizeLinkedinUrlForStorage(enrichedLinkedin ?? null),
+                full_name: fullName || null,
+                job_title: (enrichedJobTitle ?? existingLead?.job_title) || null,
+                company_name: (enrichedCompany ?? existingLead?.company) || null,
+                industry: enrichedIndustry ?? null,
+                city: enrichedCity ?? null,
+                state: enrichedState ?? null,
+                country: enrichedCountry ?? null,
+                company_size: enrichedCompanySize ?? null,
+                company_phone: enrichedCompanyPhone ?? null,
+                channel: "email",
+                campaign_external_id: smartleadCampaignId || null,
+                campaign_name: lastCampaignName || null,
+                sequence_step_type: null,
+                copy_fingerprint: null,
+                subject: null,
+                event_type: "replied",
+                intent: null,
+                is_objection: null,
+                pipeline_stage: "replied",
+                disposition_tag: null,
+                occurred_at: replyTimestamp || new Date().toISOString(),
+                source: "smartlead_webhook",
+                source_row_id: replyMessageId,
+                metadata: {
+                  provider: "smartlead",
+                  mail_sender: fromEmail,
+                  reply_text: replyText,
+                  reply_language_code: lang.code,
+                  reply_language_method: lang.method,
+                  external_message_id: replyMessageId,
+                  // Normalized provider ids
+                  provider_thread_id: smartleadEmailStatsId ?? null,
+                  provider_message_id: replyMessageId,
+                  ...extraMetadata,
+                }
+              },
+              // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
+              { onConflict: "source,source_row_id,event_type" }
+            ).then(({ error }) => {
+              if (error) {
+                console.warn("[smartlead-webhook v2] inference_events upsert error (non-fatal):", error);
+              }
+            })
+          );
+          // Optional additive people upsert (non-fatal)
+          writes.push(
+            // @ts-ignore onConflict supports column-list
+            supabase.from("people").upsert(
+              {
+                team_id: integration.team_id,
+                person_key: personKey,
+                email: emailForKey ? emailForKey.trim().toLowerCase() : null,
+                linkedin_url: sanitizeLinkedinUrlForStorage(enrichedLinkedin ?? null),
+                full_name: fullName || null,
+                // Coalesce/write-only: include ONLY non-empty values to avoid overwriting good stored data with null/blank.
+                ...(enrichedJobTitle ? { job_title: enrichedJobTitle } : {}),
+                ...(enrichedCompany ? { company_name: enrichedCompany } : {}),
+                ...(enrichedIndustry ? { industry: enrichedIndustry } : {}),
+                ...(enrichedCity ? { city: enrichedCity } : {}),
+                ...(enrichedState ? { state: enrichedState } : {}),
+                ...(enrichedCountry ? { country: enrichedCountry } : {}),
+                ...(enrichedCompanySize ? { company_size: enrichedCompanySize } : {}),
+                ...(enrichedCompanyPhone ? { company_phone: enrichedCompanyPhone } : {}),
+                ...(enrichedPersonPhone ? { phone: enrichedPersonPhone } : {}),
+              } as any,
+              { onConflict: "team_id,person_key" }
+            )
+          );
+          // @ts-ignore EdgeRuntime is injected by Supabase runtime
+          if (typeof EdgeRuntime !== "undefined" && typeof EdgeRuntime.waitUntil === "function") {
+            // @ts-ignore
+            EdgeRuntime.waitUntil(Promise.allSettled(writes));
+          } else {
+            await Promise.allSettled(writes);
+          }
+        } // else skip when no stable id
+      } catch (e) {
+        console.warn("[smartlead-webhook v2] inference_events write failed (non-fatal):", e);
+      }
+    };
+
+    // Warehouse-only skip (no_campaign_id / no_synced_row / lookup_error):
+    // nothing is written to agent_leads and no message-history call is made.
+    // The inference event is recorded under main's conditions (non-empty reply
+    // text + active agent config).
+    if (captureSkipReason) {
+      let warehouseRecorded = false;
+      if (replyText && replyText.trim().length > 0) {
+        const { data: agentConfig } = await supabase
+          .from("agent_configs")
+          .select("*")
+          .eq("user_id", integration.created_by)
+          .eq("is_active", true)
+          .maybeSingle();
+        if (agentConfig) {
+          await recordRepliedInference(agentConfig.id, { capture_skipped: captureSkipReason });
+          warehouseRecorded = true;
+        }
+      }
+      return new Response(
+        JSON.stringify({ success: true, skipped: captureSkipReason, campaignId: smartleadCampaignId, eventType, warehouseRecorded }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
     }
 
     // Build the upsert row. Only include the enrichment columns when a fetch
@@ -792,100 +931,7 @@ Deno.serve(async (req) => {
           } else {
             await classifyPromise;
           }
-          // Best-effort: record 'replied' inference event (non-blocking)
-          try {
-            const personKey =
-              (emailForKey && emailForKey.trim() ? emailForKey.trim().toLowerCase() : "") ||
-              (externalId ?? "");
-            if (personKey && replyMessageId) {
-              const lang = detectLanguageCode(replyText);
-              const writes: Array<PromiseLike<unknown>> = [];
-              writes.push(
-                supabase.from("inference_events").upsert(
-                  {
-                    team_id: integration.team_id,
-                    agent_config_id: agentConfig.id,
-                    person_key: personKey,
-                    email: emailForKey ? emailForKey.trim().toLowerCase() : null,
-                    linkedin_url: sanitizeLinkedinUrlForStorage(enrichedLinkedin ?? null),
-                    full_name: fullName || null,
-                    job_title: (enrichedJobTitle ?? existingLead?.job_title) || null,
-                    company_name: (enrichedCompany ?? existingLead?.company) || null,
-                    industry: enrichedIndustry ?? null,
-                    city: enrichedCity ?? null,
-                    state: enrichedState ?? null,
-                    country: enrichedCountry ?? null,
-                    company_size: enrichedCompanySize ?? null,
-                    company_phone: enrichedCompanyPhone ?? null,
-                    channel: "email",
-                    campaign_external_id: smartleadCampaignId || null,
-                    campaign_name: lastCampaignName || null,
-                    sequence_step_type: null,
-                    copy_fingerprint: null,
-                    subject: null,
-                    event_type: "replied",
-                    intent: null,
-                    is_objection: null,
-                    pipeline_stage: "replied",
-                    disposition_tag: null,
-                    occurred_at: replyTimestamp || new Date().toISOString(),
-                    source: "smartlead_webhook",
-                    source_row_id: replyMessageId,
-                    metadata: {
-                      provider: "smartlead",
-                      mail_sender: fromEmail,
-                      reply_text: replyText,
-                      reply_language_code: lang.code,
-                      reply_language_method: lang.method,
-                      external_message_id: replyMessageId,
-                      // Normalized provider ids
-                      provider_thread_id: smartleadEmailStatsId ?? null,
-                      provider_message_id: replyMessageId
-                    }
-                  },
-                  // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
-                  { onConflict: "source,source_row_id,event_type" }
-                ).then(({ error }) => {
-                  if (error) {
-                    console.warn("[smartlead-webhook v2] inference_events upsert error (non-fatal):", error);
-                  }
-                })
-              );
-              // Optional additive people upsert (non-fatal)
-              writes.push(
-                // @ts-ignore onConflict supports column-list
-                supabase.from("people").upsert(
-                  {
-                    team_id: integration.team_id,
-                    person_key: personKey,
-                    email: emailForKey ? emailForKey.trim().toLowerCase() : null,
-                    linkedin_url: sanitizeLinkedinUrlForStorage(enrichedLinkedin ?? null),
-                    full_name: fullName || null,
-                    // Coalesce/write-only: include ONLY non-empty values to avoid overwriting good stored data with null/blank.
-                    ...(enrichedJobTitle ? { job_title: enrichedJobTitle } : {}),
-                    ...(enrichedCompany ? { company_name: enrichedCompany } : {}),
-                    ...(enrichedIndustry ? { industry: enrichedIndustry } : {}),
-                    ...(enrichedCity ? { city: enrichedCity } : {}),
-                    ...(enrichedState ? { state: enrichedState } : {}),
-                    ...(enrichedCountry ? { country: enrichedCountry } : {}),
-                    ...(enrichedCompanySize ? { company_size: enrichedCompanySize } : {}),
-                    ...(enrichedCompanyPhone ? { company_phone: enrichedCompanyPhone } : {}),
-                    ...(enrichedPersonPhone ? { phone: enrichedPersonPhone } : {}),
-                  } as any,
-                  { onConflict: "team_id,person_key" }
-                )
-              );
-              // @ts-ignore EdgeRuntime is injected by Supabase runtime
-              if (typeof EdgeRuntime !== "undefined" && typeof EdgeRuntime.waitUntil === "function") {
-                // @ts-ignore
-                EdgeRuntime.waitUntil(Promise.allSettled(writes));
-              } else {
-                await Promise.allSettled(writes);
-              }
-            } // else skip when no stable id
-          } catch (e) {
-            console.warn("[smartlead-webhook v2] inference_events write failed (non-fatal):", e);
-          }
+          await recordRepliedInference(agentConfig.id);
         } else {
           console.log(
             `[smartlead-webhook v2] No active agent_config for user ${integration.created_by} — skipping classify-reply`,

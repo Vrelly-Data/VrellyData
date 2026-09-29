@@ -8,6 +8,12 @@
 // and string sequence ids gate identically. Stats / webhook_events /
 // synced_contacts updates still happen on a skip (not capture), and the gate
 // lookup runs at most once per event.
+//
+// Warehouse (main parity): main had no capture gate on Reply.io at all, so
+// every reply recorded its 'replied' inference_events row. A skip on the
+// INBOX-ROUTING path still records it (same reads, same resurface decision),
+// for EVERY reason including capture_disabled; only agent_leads,
+// agent_activity and classify-reply are suppressed.
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { FakeSupabase, json, loadHandler, testOpts, withFakes, type Row } from "../_shared/testing/fake_platform.ts";
 
@@ -91,7 +97,7 @@ for (const c of skipCases) {
 // with an active agent config, so only inbox-routing could write.
 for (const c of skipCases) {
   Deno.test({
-    name: `reply-webhook INBOX-ROUTING gate: ${c.name} → 200 skipped=${c.reason}, no agent_leads write`,
+    name: `reply-webhook INBOX-ROUTING gate: ${c.name} → 200 skipped=${c.reason}, no agent_leads write, inference_events still recorded`,
     ...testOpts,
     async fn() {
       const db = new FakeSupabase({ outbound_integrations: [integration], synced_campaigns: c.rows, synced_contacts: [syncedContact], agent_configs: [agentConfig] });
@@ -99,12 +105,52 @@ for (const c of skipCases) {
       const r = await post(db, payload("linkedin", c.seq));
       assertEquals(r.status, 200);
       assertEquals(r.body.skipped, c.reason);
+      assertEquals(r.body.warehouseRecorded, true);
       assertEquals(db.writes("agent_leads").length, 0, "inbox-routing writer must not write on skip");
-      assertEquals(db.reads("agent_configs").length, 0, "gate runs before the agent-config lookup");
+      assertEquals(db.writes("agent_activity").length, 0, "no activity row on skip");
+      assert(!r.rec.functionCalls.some((f) => f.path.endsWith("/classify-reply")), "no classify-reply on skip");
       assert(r.rec.logs.some((l) => l.includes(`[inbox-routing] skip (${c.reason})`)), "skip is logged");
+      const inf = db.writes("inference_events");
+      assertEquals(inf.length, 1, "skipped reply still records its inference event");
+      const ev = inf[0].body as Row;
+      assertEquals(ev.event_type, "replied");
+      assertEquals(ev.source, "reply_webhook");
+      assertEquals(ev.agent_config_id, agentConfig.id);
+      assert(String(ev.source_row_id).startsWith("555001:"), "stable id is thread:reply_at");
+      assertEquals((ev.metadata as Row).capture_skipped, c.reason);
     },
   });
 }
+
+Deno.test({
+  name: "reply-webhook INBOX-ROUTING gate: skip without an active agent config → 200 skipped, no inference event (main's condition)",
+  ...testOpts,
+  async fn() {
+    const db = new FakeSupabase({ outbound_integrations: [integration], synced_campaigns: [], synced_contacts: [syncedContact] });
+    const r = await post(db, payload("linkedin", SEQ));
+    assertEquals(r.status, 200);
+    assertEquals(r.body.skipped, "no_synced_row");
+    assertEquals(r.body.warehouseRecorded, false);
+    assertEquals(db.writes("agent_leads").length, 0);
+    assertEquals(db.writes("inference_events").length, 0);
+  },
+});
+
+Deno.test({
+  name: "reply-webhook INBOX-ROUTING gate: skip for an already-surfaced reply (re-delivery) → no duplicate inference event",
+  ...testOpts,
+  async fn() {
+    const future = new Date(Date.now() + 3_600_000).toISOString();
+    const db = new FakeSupabase({
+      outbound_integrations: [integration], synced_campaigns: [], synced_contacts: [syncedContact], agent_configs: [agentConfig],
+      agent_leads: [{ id: "lead-1", user_id: USER, source: "reply_io", external_id: "555001", email: EMAIL, reply_thread: [], inbox_status: "pending", disposition_tag: null, last_surfaced_reply_at: future }],
+    });
+    const r = await post(db, payload("linkedin", SEQ));
+    assertEquals(r.body.skipped, "no_synced_row");
+    assertEquals(db.writes("agent_leads").length, 0);
+    assertEquals(db.writes("inference_events").length, 0, "resurface=false → no inference event, as on main");
+  },
+});
 
 Deno.test({
   name: "reply-webhook: both paths on one event → one gate lookup, zero agent_leads writes, stats + synced_contacts still updated",

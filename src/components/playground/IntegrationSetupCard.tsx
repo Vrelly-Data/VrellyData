@@ -58,8 +58,9 @@ interface IntegrationRowProps {
   onEdit: (integration: OutboundIntegration) => void;
   onResetSync: (id: string) => void;
   onManageCampaigns: (integration: OutboundIntegration) => void;
-  // Capture Scope (Smartlead/HeyReach). Separate from onManageCampaigns, which
-  // stays Reply.io-only and unchanged.
+  // Capture Scope (Smartlead/HeyReach/Reply.io — capture_enabled). Separate
+  // from onManageCampaigns, which stays Reply.io-only and unchanged (is_linked,
+  // Data Analysis reporting scope).
   onCaptureScope: (integration: OutboundIntegration) => void;
   isSyncing: boolean;
   elapsedSeconds?: number;
@@ -72,9 +73,10 @@ function IntegrationRow({ integration, onToggle, onDelete, onSync, onEdit, onRes
   const replyTeamId = (integration as OutboundIntegration & { reply_team_id?: string }).reply_team_id;
   const isReplyIo = integration.platform.toLowerCase() === 'reply.io';
   const isHeyReach = integration.platform.toLowerCase() === 'heyreach';
-  // Platforms Capture Scope manages. Reply.io is deliberately absent: its
-  // capture scope is unmanaged by design and fetch-capture-scope rejects it.
-  const isCaptureScopePlatform = ['smartlead', 'heyreach'].includes(integration.platform.toLowerCase());
+  // Platforms Capture Scope manages. Capture is enforced fail-closed on all
+  // three, so Reply.io is included: its sequences are listed by
+  // fetch-capture-scope from synced_campaigns (no Reply.io API call).
+  const isCaptureScopePlatform = ['smartlead', 'heyreach', 'reply.io'].includes(integration.platform.toLowerCase());
   
   // Check if sync is stuck (syncing for more than 5 minutes)
   const isStuck = integration.sync_status === 'syncing' && integration.updated_at && 
@@ -146,7 +148,10 @@ function IntegrationRow({ integration, onToggle, onDelete, onSync, onEdit, onRes
             className="h-8"
           >
             <Settings2 className="h-4 w-4" />
-            <span className="ml-1.5">Manage Campaigns</span>
+            {/* Reply.io rows also show the existing "Manage Campaigns" button
+                (is_linked, reporting scope), so its capture button needs a
+                distinct label. Smartlead/HeyReach keep theirs. */}
+            <span className="ml-1.5">{isReplyIo ? 'Capture Scope' : 'Manage Campaigns'}</span>
           </Button>
         )}
         {isStuck ? (
@@ -381,6 +386,7 @@ export function IntegrationSetupCard() {
         onOpenChange={setCaptureScopeOpen}
         integrationId={managingIntegration?.id ?? null}
         platformLabel={managingIntegration?.platform}
+        title={managingIntegration?.platform.toLowerCase() === 'reply.io' ? 'Capture Scope' : undefined}
       />
     </>
   );

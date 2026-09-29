@@ -277,6 +277,8 @@ Deno.serve(async (req) => {
     const captureScopeSkips: Array<{ integrationId: string; reason: string }> = [];
     let threadsDroppedNoSequence = 0;
     let threadsDroppedNotEnabled = 0;
+    let warehouseOnlyThreads = 0;
+    let warehouseOnlyRecorded = 0;
 
     for (const integration of integrations ?? []) {
       try {
@@ -302,15 +304,19 @@ Deno.serve(async (req) => {
         }
 
         // Fail-closed capture scope (synced_campaigns.capture_enabled keyed by
-        // integration): no enabled sequence or a lookup error skips the whole
-        // integration for this run: no inbox fetch, no agent_leads writes.
+        // integration): no enabled sequence or a lookup error means NO thread
+        // of this integration is captured this run (no agent_leads writes, no
+        // activity, no draft).
+        //
+        // The warehouse is NOT gated: on main every polled reply recorded its
+        // 'replied' inference event, so threads outside capture scope are still
+        // read and recorded warehouse-only (see captureAllowed below).
         const scope = await listEnabledCampaignIds(supabase as any, String(integration.id));
         if (!scope.ok) {
-          console.log(`[poll-reply-inbox] skip integration ${integration.id} — capture scope ${scope.reason}`);
+          console.log(`[poll-reply-inbox] skip integration ${integration.id} — capture scope ${scope.reason}; threads recorded warehouse-only`);
           captureScopeSkips.push({ integrationId: String(integration.id), reason: scope.reason });
-          continue;
         }
-        const enabledSet = new Set(scope.ids);
+        const enabledSet = new Set(scope.ok ? scope.ids : []);
 
         // Fetch the inbox threads (the correct reply source — see
         // fetchInboxThreads). Newest-first, capped at maxPages so each poll is
@@ -324,26 +330,30 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        // Filter to capture-enabled sequences ONLY. A thread with no sequence
-        // id cannot be attributed, so it is dropped (fail closed).
-        {
-          const before = inboxThreads.length;
+        // Capture only capture-enabled sequences. A thread with no sequence id
+        // cannot be attributed, so it is not captured (fail closed). Threads
+        // not captured stay in the loop as warehouse-only (inference event, no
+        // agent_leads write). The "dropped" counters count threads dropped from
+        // CAPTURE.
+        const captureAllowedFor = (t: InboxThread): boolean => {
+          const seqId = normalizeCampaignId(t?.sequence?.id);
+          return !!seqId && enabledSet.has(seqId);
+        };
+        if (scope.ok) {
           let noSeq = 0;
-          inboxThreads = inboxThreads.filter((t) => {
+          let notEnabled = 0;
+          for (const t of inboxThreads) {
             const seqId = normalizeCampaignId(t?.sequence?.id);
-            if (!seqId) {
-              noSeq++;
-              return false;
-            }
-            return enabledSet.has(seqId);
-          });
-          const notEnabled = before - noSeq - inboxThreads.length;
+            if (!seqId) noSeq++;
+            else if (!enabledSet.has(seqId)) notEnabled++;
+          }
           threadsDroppedNoSequence += noSeq;
           threadsDroppedNotEnabled += notEnabled;
           if (noSeq || notEnabled) {
             console.log(
               `[poll-reply-inbox] capture scope dropped ${noSeq} thread(s) with no sequence id and ` +
-              `${notEnabled} in capture-disabled/unknown sequences for integration ${integration.id}; ${inboxThreads.length} kept`,
+              `${notEnabled} in capture-disabled/unknown sequences for integration ${integration.id}; ` +
+              `${inboxThreads.length - noSeq - notEnabled} captured, the rest warehouse-only`,
             );
           }
         }
@@ -371,6 +381,7 @@ Deno.serve(async (req) => {
         for (const thread of inboxThreads) {
           try {
             const contact = thread.contact ?? null;
+            const captureAllowed = captureAllowedFor(thread);
             const externalId = String(thread.id);
             const threadActivity = thread.lastActivityDate || null;
 
@@ -463,8 +474,6 @@ Deno.serve(async (req) => {
               targetInboxStatus = (latestIsInbound && isRecentReply) ? 'pending' : 'mirrored';
             }
 
-            totalProcessed++;
-
             const fullName = contact?.fullName || latestInbound.fromName || 'Unknown';
             const company = contact?.companyName || '';
             // Reply.io channel is "linkedIn" | "email"; normalize to the
@@ -485,6 +494,120 @@ Deno.serve(async (req) => {
                 fromName: m.fromName ?? null,
               };
             });
+
+            // Warehouse write ('replied' inference event + additive people row),
+            // shared by the captured path and the warehouse-only path.
+            const recordRepliedInference = async (
+              agentConfigId: string,
+              extraMetadata: Record<string, unknown> = {},
+            ): Promise<void> => {
+            // Best-effort: record 'replied' inference event (non-blocking)
+            try {
+              const personKey =
+                (contact?.email && contact.email.trim()
+                  ? contact.email.trim().toLowerCase()
+                  : '') ||
+                (contact?.linkedInProfileUrl && contact.linkedInProfileUrl.trim()
+                  ? contact.linkedInProfileUrl.trim()
+                  : '') ||
+                externalId;
+              const stableId = thread?.id && lastReplyDate ? `${thread.id}:${lastReplyDate}` : null;
+              // Inbound reply text from latest inbound message (already computed above)
+              const inboundText = replyText;
+              const externalMessageId = null; // Reply.io v3 messages endpoint used here does not return per-message id
+              const lang = detectLanguageCode(inboundText);
+              if (personKey && stableId) {
+                const writes: Array<PromiseLike<unknown>> = [];
+                writes.push(
+                  supabase.from('inference_events').upsert(
+                    {
+                      team_id: integration.team_id,
+                      agent_config_id: agentConfigId,
+                      person_key: personKey,
+                      email: contact?.email ? contact.email.trim().toLowerCase() : null,
+                      linkedin_url: contact?.linkedInProfileUrl ?? null,
+                      full_name: fullName || null,
+                      job_title: contact?.title || null,
+                      company_name: company || null,
+                      channel,
+                      campaign_external_id: thread.sequence?.id ? String(thread.sequence.id) : null,
+                      campaign_name: thread.sequence?.name ?? null,
+                      sequence_step_type: null,
+                      copy_fingerprint: null,
+                      subject: null,
+                      event_type: 'replied',
+                      intent: null,
+                      is_objection: null,
+                      pipeline_stage: 'replied',
+                      disposition_tag: null,
+                      occurred_at: lastReplyDate,
+                      source: 'poll_reply_inbox',
+                      source_row_id: stableId,
+                      metadata: {
+                        source: 'poll',
+                        provider: 'reply_io',
+                        reply_text: inboundText,
+                        reply_language_code: lang.code,
+                        reply_language_method: lang.method,
+                        external_message_id: externalMessageId,
+                        subject: thread.subject ?? null,
+                        // Normalized provider ids
+                        provider_thread_id: String(thread.id),
+                        provider_message_id: externalMessageId,
+                        ...extraMetadata,
+                      }
+                    },
+                    // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
+                    { onConflict: 'source,source_row_id,event_type' }
+                  ).then(({ error }) => {
+                    if (error) {
+                      console.warn('[poll-reply-inbox] inference_events upsert error (non-fatal):', error);
+                    }
+                  })
+                );
+                // Optional additive people upsert (non-fatal)
+                writes.push(
+                  // @ts-ignore onConflict supports column-list
+                  supabase.from('people').upsert(
+                    {
+                      team_id: integration.team_id,
+                      person_key: personKey,
+                      email: contact?.email ? contact.email.trim().toLowerCase() : null,
+                      linkedin_url: contact?.linkedInProfileUrl ?? null,
+                      full_name: fullName || null,
+                      job_title: contact?.title || null,
+                      company_name: company || null,
+                      industry: null,
+                      city: null,
+                      state: null,
+                      country: null,
+                      company_size: null,
+                    } as any,
+                    { onConflict: 'team_id,person_key' }
+                  )
+                );
+                // Just await here — this is a poller
+                await Promise.allSettled(writes);
+              } // else skip when no stable id
+            } catch (e) {
+              console.warn('[poll-reply-inbox] inference_events write failed (non-fatal):', e);
+            }
+            };
+
+            // Warehouse-only (outside capture scope): no agent_leads write, no
+            // activity, no draft. The inference event is recorded under main's
+            // condition (the reply would surface as 'pending'); the upsert is
+            // keyed on thread:reply date, so re-polls are idempotent.
+            if (!captureAllowed) {
+              if (targetInboxStatus === 'pending') {
+                await recordRepliedInference(agentConfig.id, { capture_skipped: scope.ok ? 'not_in_capture_scope' : scope.reason });
+                warehouseOnlyRecorded++;
+              }
+              warehouseOnlyThreads++;
+              continue;
+            }
+
+            totalProcessed++;
 
             const nowIso = new Date().toISOString();
             let writtenLeadId: string | null = null;
@@ -670,96 +793,7 @@ Deno.serve(async (req) => {
                 channel,
                 userId,
               });
-              // Best-effort: record 'replied' inference event (non-blocking)
-              try {
-                const personKey =
-                  (contact?.email && contact.email.trim()
-                    ? contact.email.trim().toLowerCase()
-                    : '') ||
-                  (contact?.linkedInProfileUrl && contact.linkedInProfileUrl.trim()
-                    ? contact.linkedInProfileUrl.trim()
-                    : '') ||
-                  externalId;
-                const stableId = thread?.id && lastReplyDate ? `${thread.id}:${lastReplyDate}` : null;
-                // Inbound reply text from latest inbound message (already computed above)
-                const inboundText = replyText;
-                const externalMessageId = null; // Reply.io v3 messages endpoint used here does not return per-message id
-                const lang = detectLanguageCode(inboundText);
-                if (personKey && stableId) {
-                  const writes: Array<PromiseLike<unknown>> = [];
-                  writes.push(
-                    supabase.from('inference_events').upsert(
-                      {
-                        team_id: integration.team_id,
-                        agent_config_id: agentConfig.id,
-                        person_key: personKey,
-                        email: contact?.email ? contact.email.trim().toLowerCase() : null,
-                        linkedin_url: contact?.linkedInProfileUrl ?? null,
-                        full_name: fullName || null,
-                        job_title: contact?.title || null,
-                        company_name: company || null,
-                        channel,
-                        campaign_external_id: thread.sequence?.id ? String(thread.sequence.id) : null,
-                        campaign_name: thread.sequence?.name ?? null,
-                        sequence_step_type: null,
-                        copy_fingerprint: null,
-                        subject: null,
-                        event_type: 'replied',
-                        intent: null,
-                        is_objection: null,
-                        pipeline_stage: 'replied',
-                        disposition_tag: null,
-                        occurred_at: lastReplyDate,
-                        source: 'poll_reply_inbox',
-                        source_row_id: stableId,
-                        metadata: {
-                          source: 'poll',
-                          provider: 'reply_io',
-                          reply_text: inboundText,
-                          reply_language_code: lang.code,
-                          reply_language_method: lang.method,
-                          external_message_id: externalMessageId,
-                          subject: thread.subject ?? null,
-                          // Normalized provider ids
-                          provider_thread_id: String(thread.id),
-                          provider_message_id: externalMessageId
-                        }
-                      },
-                      // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
-                      { onConflict: 'source,source_row_id,event_type' }
-                    ).then(({ error }) => {
-                      if (error) {
-                        console.warn('[poll-reply-inbox] inference_events upsert error (non-fatal):', error);
-                      }
-                    })
-                  );
-                  // Optional additive people upsert (non-fatal)
-                  writes.push(
-                    // @ts-ignore onConflict supports column-list
-                    supabase.from('people').upsert(
-                      {
-                        team_id: integration.team_id,
-                        person_key: personKey,
-                        email: contact?.email ? contact.email.trim().toLowerCase() : null,
-                        linkedin_url: contact?.linkedInProfileUrl ?? null,
-                        full_name: fullName || null,
-                        job_title: contact?.title || null,
-                        company_name: company || null,
-                        industry: null,
-                        city: null,
-                        state: null,
-                        country: null,
-                        company_size: null,
-                      } as any,
-                      { onConflict: 'team_id,person_key' }
-                    )
-                  );
-                  // Just await here — this is a poller
-                  await Promise.allSettled(writes);
-                } // else skip when no stable id
-              } catch (e) {
-                console.warn('[poll-reply-inbox] inference_events write failed (non-fatal):', e);
-              }
+              await recordRepliedInference(agentConfig.id);
             }
           } catch (threadErr) {
             console.error(`[poll-reply-inbox] Error processing thread ${thread.id}:`, threadErr);
@@ -781,6 +815,8 @@ Deno.serve(async (req) => {
         skippedIntegrations: captureScopeSkips,
         threadsDroppedNoSequence,
         threadsDroppedNotEnabled,
+        warehouseOnlyThreads,
+        warehouseOnlyRecorded,
       },
     }), {
       status: 200,

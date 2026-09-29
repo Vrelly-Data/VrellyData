@@ -1,11 +1,10 @@
 // Capture Scope — data hook. Stage 3 of 5.
 //
-// Serves Smartlead + HeyReach (and any future platform whose adapter is
-// registered in fetch-capture-scope). It is a FORK of useAvailableCampaigns,
-// not an extension of it: that hook and its dialog serve Reply.io, most
-// clients are on Reply.io, and reshaping the object it returns would change
-// what the Reply.io dialog consumes. Nothing here imports it, and Reply.io
-// integrations are rejected by fetch-capture-scope itself.
+// Serves Smartlead, HeyReach and Reply.io (capture_enabled), via
+// fetch-capture-scope. It is a FORK of useAvailableCampaigns, not an extension
+// of it: that hook serves Reply.io's is_linked (reporting scope) dialog, and
+// reshaping the object it returns would change what that dialog consumes.
+// Nothing here imports it.
 //
 // The Reply.io team-filter machinery (skipTeamFilter, discoveredTeamIds,
 // multi-team views) is deliberately absent — no other platform has the

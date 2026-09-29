@@ -452,20 +452,36 @@ Deno.serve(async (req) => {
     // === Capture Scope gate (FAIL-CLOSED) ===================================
     // Only capture when the campaign id exists AND synced_campaigns has a row
     // for this integration with capture_enabled === true. Everything else is
-    // a SKIP with an explicit reason.
+    // a SKIP with an explicit reason: no agent_leads write, 200 to HeyReach.
+    //
+    // The warehouse (inference_events) is NOT gated. It is still written for a
+    // skipped reply exactly where main wrote it: main failed OPEN on a missing
+    // id, a missing row and a lookup error (the reply was captured and the
+    // inference event recorded), so those skips continue as warehouse-only
+    // below. capture_disabled was already full silence on main (no lead, no
+    // inference event), so it still returns here.
+    //
+    // Replies with no campaign id are, in prod payloads, conversations HeyReach
+    // does not attribute to any campaign (no `campaign` key at all); the
+    // conversation id is logged (not PII) so a skip can be traced.
     let gateCampaignName: string | null = null;
+    let captureSkipReason: string | null = null;
     {
       const gate = await checkCaptureGate(supabase as any, integration.id, campaignExternalId);
       gateCampaignName = gate.campaignName ?? null;
       if (!gate.allowed) {
+        captureSkipReason = gate.reason;
         console.log(
           `[heyreach-webhook] skip (${gate.reason}) for integration=${integration.id} ` +
-            `campaign=${campaignExternalId ?? "null"} event=${eventType}`,
+            `campaign=${campaignExternalId ?? "null"} conversation=${conversationId ?? "null"} event=${eventType}` +
+            (gate.reason === "capture_disabled" ? "" : " — no agent_leads write; warehouse event still recorded"),
         );
-        return new Response(
-          JSON.stringify({ success: true, skipped: gate.reason, campaignId: campaignExternalId, eventType }),
-          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-        );
+        if (gate.reason === "capture_disabled") {
+          return new Response(
+            JSON.stringify({ success: true, skipped: gate.reason, campaignId: campaignExternalId, eventType, conversationId: conversationId ?? null }),
+            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+          );
+        }
       }
     }
 
@@ -553,6 +569,136 @@ Deno.serve(async (req) => {
       isExistingLead: !!existingLead,
       alreadyPending: (existingLead as any)?.inbox_status === "pending",
     });
+
+    // Warehouse write ('replied' inference event + additive people row),
+    // shared by the captured path below and the warehouse-only skip path.
+    const recordRepliedInference = async (
+      agentConfigId: string,
+      thread: typeof replyThread,
+      extraMetadata: Record<string, unknown> = {},
+    ): Promise<void> => {
+      // Best-effort: record 'replied' inference event (non-blocking)
+      try {
+        const personKey =
+          (email && email.trim() ? email.trim().toLowerCase() : "") ||
+          (linkedinUrlForKey && linkedinUrlForKey.trim() ? linkedinUrlForKey.trim() : "") ||
+          (externalId ?? "");
+        const occurredAt = newestThreadTimestamp(thread);
+        const stableId = conversationId && occurredAt ? `${conversationId}:${occurredAt}` : null;
+        // Inbound reply text — last message content from recent_messages (already normalized above)
+        const lastMsg = (Array.isArray((event as { recent_messages?: unknown }).recent_messages)
+          ? ((event as { recent_messages: any[] }).recent_messages)
+          : []);
+        const inboundText = lastMsg?.length ? String(lastMsg[lastMsg.length - 1]?.message ?? "") : "";
+        const externalMessageId = lastMsg?.length ? (lastMsg[lastMsg.length - 1]?.id ?? null) : null;
+        const lang = detectLanguageCode(inboundText);
+        if (personKey && stableId) {
+          const writes: Array<Promise<unknown>> = [];
+          writes.push(
+            (supabase.from("inference_events").upsert(
+              {
+                team_id: integration.team_id,
+                agent_config_id: agentConfigId,
+                person_key: personKey,
+                email: email ? email.trim().toLowerCase() : null,
+                linkedin_url: linkedinUrlForKey ?? null,
+                full_name: fullName || null,
+                job_title: jobTitle || null,
+                company_name: company || null,
+                channel: "linkedin",
+                campaign_external_id: campaignExternalId || null,
+                campaign_name: null,
+                sequence_step_type: null,
+                copy_fingerprint: null,
+                subject: null,
+                event_type: "replied",
+                intent: null,
+                is_objection: null,
+                pipeline_stage: "replied",
+                disposition_tag: null,
+                occurred_at: occurredAt,
+                source: "heyreach_webhook",
+                source_row_id: stableId,
+                metadata: {
+                  provider: "heyreach",
+                  lead_category: leadCategory,
+                  reply_text: inboundText,
+                  reply_language_code: lang.code,
+                  reply_language_method: lang.method,
+                  external_message_id: externalMessageId,
+                  conversation_id: conversationId,
+                  // Normalized provider ids
+                  provider_thread_id: conversationId,
+                  provider_message_id: externalMessageId,
+                  ...extraMetadata,
+                }
+              },
+              // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
+              { onConflict: "source,source_row_id,event_type" }
+            ).then(({ error }) => {
+              if (error) {
+                console.warn("[heyreach-webhook] inference_events upsert error (non-fatal):", error);
+              }
+            })) as unknown as Promise<unknown>
+          );
+          // Optional additive people upsert (non-fatal)
+          writes.push(
+            // @ts-ignore onConflict supports column-list
+            supabase.from("people").upsert(
+              {
+                team_id: integration.team_id,
+                person_key: personKey,
+                email: email ? email.trim().toLowerCase() : null,
+                linkedin_url: linkedinUrlForKey ?? null,
+                full_name: fullName || null,
+                job_title: jobTitle || null,
+                company_name: company || null,
+                industry: null,
+                city: null,
+                state: null,
+                country: null,
+                company_size: null,
+              } as any,
+              { onConflict: "team_id,person_key" }
+            )
+          );
+          // @ts-ignore EdgeRuntime is injected by Supabase runtime
+          if (typeof EdgeRuntime !== "undefined" && typeof EdgeRuntime.waitUntil === "function") {
+            // @ts-ignore
+            EdgeRuntime.waitUntil(Promise.allSettled(writes));
+          } else {
+            await Promise.allSettled(writes);
+          }
+        } // else skip when no stable source id
+      } catch (e) {
+        console.warn("[heyreach-webhook] inference_events write failed (non-fatal):", e);
+      }
+    };
+
+    // Warehouse-only skip (no_campaign_id / no_synced_row / lookup_error): the
+    // reads and the surface decision above are exactly main's; nothing is
+    // written to agent_leads and no GetChatroom call is made. The inference
+    // event is recorded under main's conditions (surface + active agent config),
+    // from the payload thread.
+    if (captureSkipReason) {
+      let warehouseRecorded = false;
+      if (surface) {
+        const { data: agentConfig } = await supabase
+          .from("agent_configs")
+          .select("*")
+          .eq("user_id", integration.created_by)
+          .eq("is_active", true)
+          .maybeSingle();
+        if (agentConfig) {
+          await recordRepliedInference(agentConfig.id, replyThread, { capture_skipped: captureSkipReason });
+          warehouseRecorded = true;
+        }
+      }
+      return new Response(
+        JSON.stringify({ success: true, skipped: captureSkipReason, campaignId: campaignExternalId, eventType, conversationId: conversationId ?? null, warehouseRecorded }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
 
     const lastCampaignName = payloadCampaignName ?? gateCampaignName;
     const baseRow: Record<string, unknown> = {
@@ -761,101 +907,7 @@ Deno.serve(async (req) => {
 
       if (agentConfig) {
         console.log("[heyreach-webhook] HeyReach drafting disabled (kill switch)");
-        // Best-effort: record 'replied' inference event (non-blocking)
-        try {
-          const personKey =
-            (email && email.trim() ? email.trim().toLowerCase() : "") ||
-            (linkedinUrlForKey && linkedinUrlForKey.trim() ? linkedinUrlForKey.trim() : "") ||
-            (externalId ?? "");
-          const occurredAt = newestThreadTimestamp(fullReplyThread ?? replyThread);
-          const stableId = conversationId && occurredAt ? `${conversationId}:${occurredAt}` : null;
-          // Inbound reply text — last message content from recent_messages (already normalized above)
-          const lastMsg = (Array.isArray((event as { recent_messages?: unknown }).recent_messages)
-            ? ((event as { recent_messages: any[] }).recent_messages)
-            : []);
-          const inboundText = lastMsg?.length ? String(lastMsg[lastMsg.length - 1]?.message ?? "") : "";
-          const externalMessageId = lastMsg?.length ? (lastMsg[lastMsg.length - 1]?.id ?? null) : null;
-          const lang = detectLanguageCode(inboundText);
-          if (personKey && stableId) {
-            const writes: Array<Promise<unknown>> = [];
-            writes.push(
-              (supabase.from("inference_events").upsert(
-                {
-                  team_id: integration.team_id,
-                  agent_config_id: agentConfig.id,
-                  person_key: personKey,
-                  email: email ? email.trim().toLowerCase() : null,
-                  linkedin_url: linkedinUrlForKey ?? null,
-                  full_name: fullName || null,
-                  job_title: jobTitle || null,
-                  company_name: company || null,
-                  channel: "linkedin",
-                  campaign_external_id: campaignExternalId || null,
-                  campaign_name: null,
-                  sequence_step_type: null,
-                  copy_fingerprint: null,
-                  subject: null,
-                  event_type: "replied",
-                  intent: null,
-                  is_objection: null,
-                  pipeline_stage: "replied",
-                  disposition_tag: null,
-                  occurred_at: occurredAt,
-                  source: "heyreach_webhook",
-                  source_row_id: stableId,
-                  metadata: {
-                    provider: "heyreach",
-                    lead_category: leadCategory,
-                    reply_text: inboundText,
-                    reply_language_code: lang.code,
-                    reply_language_method: lang.method,
-                    external_message_id: externalMessageId,
-                    conversation_id: conversationId,
-                    // Normalized provider ids
-                    provider_thread_id: conversationId,
-                    provider_message_id: externalMessageId
-                  }
-                },
-                // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
-                { onConflict: "source,source_row_id,event_type" }
-              ).then(({ error }) => {
-                if (error) {
-                  console.warn("[heyreach-webhook] inference_events upsert error (non-fatal):", error);
-                }
-              })) as unknown as Promise<unknown>
-            );
-            // Optional additive people upsert (non-fatal)
-            writes.push(
-              // @ts-ignore onConflict supports column-list
-              supabase.from("people").upsert(
-                {
-                  team_id: integration.team_id,
-                  person_key: personKey,
-                  email: email ? email.trim().toLowerCase() : null,
-                  linkedin_url: linkedinUrlForKey ?? null,
-                  full_name: fullName || null,
-                  job_title: jobTitle || null,
-                  company_name: company || null,
-                  industry: null,
-                  city: null,
-                  state: null,
-                  country: null,
-                  company_size: null,
-                } as any,
-                { onConflict: "team_id,person_key" }
-              )
-            );
-            // @ts-ignore EdgeRuntime is injected by Supabase runtime
-            if (typeof EdgeRuntime !== "undefined" && typeof EdgeRuntime.waitUntil === "function") {
-              // @ts-ignore
-              EdgeRuntime.waitUntil(Promise.allSettled(writes));
-            } else {
-              await Promise.allSettled(writes);
-            }
-          } // else skip when no stable source id
-        } catch (e) {
-          console.warn("[heyreach-webhook] inference_events write failed (non-fatal):", e);
-        }
+        await recordRepliedInference(agentConfig.id, fullReplyThread ?? replyThread);
       } else {
         console.log(
           `No active agent_config for user ${integration.created_by} — drafting disabled`,

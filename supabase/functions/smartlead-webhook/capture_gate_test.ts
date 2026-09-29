@@ -3,8 +3,14 @@
 //
 // Proves: missing campaign_id / missing synced row / capture disabled / lookup
 // error each return 200 { success:true, skipped:<reason> } with ZERO
-// agent_leads access; an enabled campaign (numeric or string campaign_id)
+// agent_leads writes; an enabled campaign (numeric or string campaign_id)
 // writes agent_leads.
+//
+// Warehouse (main parity): main failed OPEN on no_campaign_id / no_synced_row /
+// lookup_error, so those skips still record the 'replied' inference_events row
+// (no agent_leads write, no classify-reply, no message-history call).
+// capture_disabled was full silence on main and stays silent: no agent_leads
+// access and no inference event.
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { FakeSupabase, json, loadHandler, testOpts, withFakes, type Row } from "../_shared/testing/fake_platform.ts";
 
@@ -52,32 +58,87 @@ async function post(db: FakeSupabase, body: unknown) {
   return { ...result, rec };
 }
 
-const skipCases: Array<{ name: string; campaignId: unknown; rows: Row[]; fail?: boolean; reason: string }> = [
+const AGENT_CONFIG: Row = { id: "00000000-0000-4000-8000-0000000000e1", user_id: USER, is_active: true };
+
+const warehouseOnlyCases: Array<{ name: string; campaignId: unknown; rows: Row[]; fail?: boolean; reason: string }> = [
   { name: "missing campaign_id", campaignId: undefined, rows: [campaignRow(true)], reason: "no_campaign_id" },
   { name: "null campaign_id", campaignId: null, rows: [campaignRow(true)], reason: "no_campaign_id" },
   { name: "missing synced row", campaignId: CAMPAIGN, rows: [], reason: "no_synced_row" },
   { name: "row for another integration only", campaignId: CAMPAIGN, rows: [campaignRow(true, INT2)], reason: "no_synced_row" },
-  { name: "capture disabled", campaignId: CAMPAIGN, rows: [campaignRow(false)], reason: "capture_disabled" },
   { name: "lookup error", campaignId: CAMPAIGN, rows: [campaignRow(true)], fail: true, reason: "lookup_error" },
 ];
 
-for (const c of skipCases) {
+for (const c of warehouseOnlyCases) {
   Deno.test({
-    name: `smartlead-webhook gate: ${c.name} → 200 skipped=${c.reason}, no agent_leads write`,
+    name: `smartlead-webhook gate: ${c.name} → 200 skipped=${c.reason}, no agent_leads write, inference_events still recorded`,
     ...testOpts,
     async fn() {
-      const db = new FakeSupabase({ outbound_integrations: [integration], synced_campaigns: c.rows });
+      const db = new FakeSupabase({ outbound_integrations: [integration], synced_campaigns: c.rows, agent_configs: [AGENT_CONFIG] });
       if (c.fail) db.fail["synced_campaigns:GET"] = "error";
       const r = await post(db, payload(c.campaignId));
       assertEquals(r.status, 200);
       assertEquals(r.body.success, true);
       assertEquals(r.body.skipped, c.reason);
+      assertEquals(r.body.warehouseRecorded, true);
       assertEquals(db.writes("agent_leads").length, 0);
-      assertEquals(db.reads("agent_leads").length, 0, "gate runs before any agent_leads access");
       assert(r.rec.logs.some((l) => l.includes(`skip (${c.reason})`)), "skip is logged");
+      const inf = db.writes("inference_events");
+      assertEquals(inf.length, 1, "skipped reply still records its inference event");
+      const ev = inf[0].body as Row;
+      assertEquals(ev.event_type, "replied");
+      assertEquals(ev.source, "smartlead_webhook");
+      assertEquals(ev.source_row_id, "<msg-test-1@example.test>");
+      assertEquals(ev.agent_config_id, AGENT_CONFIG.id);
+      assertEquals((ev.metadata as Row).capture_skipped, c.reason);
+      // No classify-reply on the skip path.
+      assertEquals(r.rec.functionCalls.length, 0);
     },
   });
 }
+
+Deno.test({
+  name: "smartlead-webhook gate: warehouse-only skip with no active agent config → no inference event (main's condition)",
+  ...testOpts,
+  async fn() {
+    const db = new FakeSupabase({ outbound_integrations: [integration], synced_campaigns: [] });
+    const r = await post(db, payload(CAMPAIGN));
+    assertEquals(r.body.skipped, "no_synced_row");
+    assertEquals(r.body.warehouseRecorded, false);
+    assertEquals(db.writes("agent_leads").length, 0);
+    assertEquals(db.writes("inference_events").length, 0);
+  },
+});
+
+Deno.test({
+  name: "smartlead-webhook gate: capture disabled → 200 skipped=capture_disabled, full silence (no agent_leads access, no inference event)",
+  ...testOpts,
+  async fn() {
+    const db = new FakeSupabase({ outbound_integrations: [integration], synced_campaigns: [campaignRow(false)], agent_configs: [AGENT_CONFIG] });
+    const r = await post(db, payload(CAMPAIGN));
+    assertEquals(r.status, 200);
+    assertEquals(r.body.success, true);
+    assertEquals(r.body.skipped, "capture_disabled");
+    assertEquals(db.writes("agent_leads").length, 0);
+    assertEquals(db.reads("agent_leads").length, 0, "gate runs before any agent_leads access");
+    assertEquals(db.writes("inference_events").length, 0, "capture_disabled stays silent, as on main");
+    assertEquals(db.writes("people").length, 0);
+    assert(r.rec.logs.some((l) => l.includes("skip (capture_disabled)")), "skip is logged");
+  },
+});
+
+Deno.test({
+  name: "smartlead-webhook gate: allowed campaign still records exactly one inference event (captured path unchanged)",
+  ...testOpts,
+  async fn() {
+    const db = new FakeSupabase({ outbound_integrations: [integration], synced_campaigns: [campaignRow(true)], agent_configs: [AGENT_CONFIG] });
+    const r = await post(db, payload(CAMPAIGN));
+    assertEquals(r.body.skipped, undefined, JSON.stringify(r.body));
+    assert(db.writes("agent_leads").length >= 1);
+    const inf = db.writes("inference_events");
+    assertEquals(inf.length, 1);
+    assertEquals(((inf[0].body as Row).metadata as Row).capture_skipped, undefined);
+  },
+});
 
 for (const id of [CAMPAIGN, String(CAMPAIGN)]) {
   Deno.test({

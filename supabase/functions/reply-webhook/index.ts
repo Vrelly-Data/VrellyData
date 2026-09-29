@@ -664,20 +664,26 @@ Deno.serve(async (req) => {
     }
 
     // ── Agent inbox routing ──────────────────────────────────
+    let captureSkipReason: string | null = null;
+    let warehouseRecorded = false;
     const isReplyEvent = eventType === 'email_replied' || eventType === 'linkedin_message_replied';
     console.log(`[inbox-routing] isReplyEvent=${isReplyEvent} eventType=${eventType} created_by=${integration.created_by}`);
 
     if (isReplyEvent && integration.created_by) {
       // Fail-closed capture gate BEFORE any agent_leads write. A skip is a 200
       // (Reply.io must not retry) with the reason in the body.
+      //
+      // A skip does NOT gate the warehouse: on main every Reply.io reply
+      // recorded its 'replied' inference event, so a skipped reply still does
+      // (same reads, same resurface decision, same event). Only the
+      // agent_leads update/insert, the agent_activity row and classify-reply
+      // are suppressed.
       const gate = await getCaptureGate();
       if (!gate.allowed) {
-        console.log(`[inbox-routing] skip (${gate.reason}) for integration=${integration.id} campaign=${campaignId || 'null'} event=${eventType}`);
-        return new Response(JSON.stringify({ success: true, skipped: gate.reason, campaignId: campaignId || null, eventType }), {
-          status: 200,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
+        captureSkipReason = gate.reason;
+        console.log(`[inbox-routing] skip (${gate.reason}) for integration=${integration.id} campaign=${campaignId || 'null'} event=${eventType} — no agent_leads write; warehouse event still recorded`);
       }
+      const skipCapture = captureSkipReason !== null;
       const agentUserId = integration.created_by;
       console.log(`[inbox-routing] agentUserId=${agentUserId}`);
 
@@ -792,40 +798,42 @@ Deno.serve(async (req) => {
               hasReplyBody && !isSuppressed(existing?.disposition_tag) && !alreadyRecorded && newerThanSurfaced;
             updatedThread = alreadyRecorded ? existingThread : [...existingThread, newMsg];
 
-            const { data: updated, error: updateError } = await supabase
-              .from('agent_leads')
-              .update({
-                agent_config_id: agentConfig.id,
-                full_name: (fullName && fullName !== 'Unknown') ? fullName : undefined,
-                email: (contactEmail && !isGenmailEmail(contactEmail)) ? contactEmail : undefined,
-                linkedin_url: linkedinUrl || undefined,
-                company: company || undefined,
-                job_title: jobTitle || undefined,
-                channel,
-                last_reply_at: replyAt,
-                last_reply_text: hasReplyBody ? cleanReplyPreview(replyText) : undefined,
-                // reply_thread DELIBERATELY NOT WRITTEN. poll-reply-inbox is the
-                // sole owner: it builds the thread from Reply.io's PER-MESSAGE
-                // bodies (GET /v3/inbox/threads/{id}/messages), which arrive
-                // already separated. The webhook only ever sees the raw email
-                // body (`email_text`), quoted chain included, so appending here
-                // produced a near-duplicate entry the poll's clean one collided
-                // with. Split ownership removes the collision structurally
-                // rather than by heuristic. last_reply_text stays best-effort
-                // for real-time freshness; the next poll re-cleans it (<=15 min).
-                // Only (re)surface a genuinely-new, non-opted-out reply — leave
-                // pipeline_stage / inbox_status untouched otherwise. Advance the
-                // surface watermark ONLY here (when we set pending), so the
-                // unconditional last_reply_at write above can't poison the guard.
-                ...(resurface
-                  ? { pipeline_stage: 'replied', inbox_status: 'pending', last_surfaced_reply_at: newMsg.timestamp }
-                  : {}),
-              })
-              .eq('id', match.id)
-              .select('id')
-              .single();
-            if (updateError) console.error('[inbox-routing] agent_leads update error:', updateError.message);
-            upsertedLead = updated ?? { id: match.id };
+            if (!skipCapture) {
+              const { data: updated, error: updateError } = await supabase
+                .from('agent_leads')
+                .update({
+                  agent_config_id: agentConfig.id,
+                  full_name: (fullName && fullName !== 'Unknown') ? fullName : undefined,
+                  email: (contactEmail && !isGenmailEmail(contactEmail)) ? contactEmail : undefined,
+                  linkedin_url: linkedinUrl || undefined,
+                  company: company || undefined,
+                  job_title: jobTitle || undefined,
+                  channel,
+                  last_reply_at: replyAt,
+                  last_reply_text: hasReplyBody ? cleanReplyPreview(replyText) : undefined,
+                  // reply_thread DELIBERATELY NOT WRITTEN. poll-reply-inbox is the
+                  // sole owner: it builds the thread from Reply.io's PER-MESSAGE
+                  // bodies (GET /v3/inbox/threads/{id}/messages), which arrive
+                  // already separated. The webhook only ever sees the raw email
+                  // body (`email_text`), quoted chain included, so appending here
+                  // produced a near-duplicate entry the poll's clean one collided
+                  // with. Split ownership removes the collision structurally
+                  // rather than by heuristic. last_reply_text stays best-effort
+                  // for real-time freshness; the next poll re-cleans it (<=15 min).
+                  // Only (re)surface a genuinely-new, non-opted-out reply — leave
+                  // pipeline_stage / inbox_status untouched otherwise. Advance the
+                  // surface watermark ONLY here (when we set pending), so the
+                  // unconditional last_reply_at write above can't poison the guard.
+                  ...(resurface
+                    ? { pipeline_stage: 'replied', inbox_status: 'pending', last_surfaced_reply_at: newMsg.timestamp }
+                    : {}),
+                })
+                .eq('id', match.id)
+                .select('id')
+                .single();
+              if (updateError) console.error('[inbox-routing] agent_leads update error:', updateError.message);
+              upsertedLead = updated ?? { id: match.id };
+            }
           } else {
             // INSERT — nothing matched any key. Plain insert (not upsert; the
             // partial (user_id, external_id) index makes onConflict inference
@@ -833,70 +841,51 @@ Deno.serve(async (req) => {
             updatedThread = [newMsg];
             // Only surface a brand-new lead when webhook carries a real body
             resurface = hasReplyBody;
-            const { data: inserted, error: insertError } = await supabase
-              .from('agent_leads')
-              .insert({
-                user_id: agentUserId,
-                agent_config_id: agentConfig.id,
-                external_id: externalId,
-                full_name: fullName || 'Unknown',
-                email: contactEmail,
-                linkedin_url: linkedinUrl,
-                company,
-                job_title: jobTitle,
-                channel,
-                source: 'reply_io',
-                pipeline_stage: 'replied',
-                inbox_status: hasReplyBody ? 'pending' : 'mirrored',
-                last_reply_at: replyAt,
-                // New lead lands actionable → seed the surface watermark.
-                last_surfaced_reply_at: hasReplyBody ? newMsg.timestamp : null,
-                last_reply_text: hasReplyBody ? cleanReplyPreview(replyText) : null,
-                // reply_thread NOT written here either — same ownership split.
-                // A webhook-created lead therefore has an empty thread until the
-                // next poll (<=15 min) populates it. Verified safe: the inbox
-                // and pipeline previews read last_reply_text, and LeadDetailPanel
-                // renders the thread only when non-empty.
-                // Record the source campaign at capture so the inbox shows it for
-                // pending leads (not just after Add to Campaign). Set on INSERT
-                // only — a later Add to Campaign overwrites with the follow-up.
-                last_campaign_name: campaign?.name ?? null,
-              })
-              .select('id')
-              .single();
-            if (insertError) console.error('[inbox-routing] agent_leads insert error:', insertError.message);
-            upsertedLead = inserted ?? null;
+            if (!skipCapture) {
+              const { data: inserted, error: insertError } = await supabase
+                .from('agent_leads')
+                .insert({
+                  user_id: agentUserId,
+                  agent_config_id: agentConfig.id,
+                  external_id: externalId,
+                  full_name: fullName || 'Unknown',
+                  email: contactEmail,
+                  linkedin_url: linkedinUrl,
+                  company,
+                  job_title: jobTitle,
+                  channel,
+                  source: 'reply_io',
+                  pipeline_stage: 'replied',
+                  inbox_status: hasReplyBody ? 'pending' : 'mirrored',
+                  last_reply_at: replyAt,
+                  // New lead lands actionable → seed the surface watermark.
+                  last_surfaced_reply_at: hasReplyBody ? newMsg.timestamp : null,
+                  last_reply_text: hasReplyBody ? cleanReplyPreview(replyText) : null,
+                  // reply_thread NOT written here either — same ownership split.
+                  // A webhook-created lead therefore has an empty thread until the
+                  // next poll (<=15 min) populates it. Verified safe: the inbox
+                  // and pipeline previews read last_reply_text, and LeadDetailPanel
+                  // renders the thread only when non-empty.
+                  // Record the source campaign at capture so the inbox shows it for
+                  // pending leads (not just after Add to Campaign). Set on INSERT
+                  // only — a later Add to Campaign overwrites with the follow-up.
+                  last_campaign_name: campaign?.name ?? null,
+                })
+                .select('id')
+                .single();
+              if (insertError) console.error('[inbox-routing] agent_leads insert error:', insertError.message);
+              upsertedLead = inserted ?? null;
+            }
           }
 
           console.log(`[inbox-routing] upsertedLead=${upsertedLead ? 'ok (id=' + upsertedLead.id + ')' : 'null'}`);
 
-          // Log activity + fire classify-reply ONLY when the reply resurfaces the
-          // lead (genuinely-new, non-suppressed). A re-delivery or an opted_out /
-          // not_relevant lead records the reply silently without a draft.
-          if (resurface && upsertedLead) {
-            const { error: activityError } = await supabase.from('agent_activity').insert({
-              user_id: agentUserId,
-              agent_config_id: agentConfig.id,
-              lead_id: upsertedLead.id,
-              lead_name: fullName || 'Unknown',
-              lead_company: company,
-              activity_type: 'reply_received',
-              description: `${channel === 'linkedin' ? 'LinkedIn' : 'Email'} reply received from ${fullName || 'Unknown'}${company ? ' at ' + company : ''}`,
-              metadata: { channel, intent: 'pending' },
-            });
-            console.log(`[inbox-routing] activity insert error=${activityError?.message || 'none'}`);
-
-            console.log(`[inbox-routing] firing classify-reply for lead_id=${upsertedLead.id}`);
-            fireClassifyReply({
-              supabaseUrl,
-              agentKey: Deno.env.get('AGENT_API_KEY') || '',
-              leadId: upsertedLead.id,
-              replyText,
-              threadHistory: updatedThread,
-              agentConfig,
-              channel,
-              userId: agentUserId,
-            });
+          // Warehouse write ('replied' inference event + additive people row),
+          // shared by the captured path and the capture-skip path.
+          const recordRepliedInference = async (
+            agentConfigId: string,
+            extraMetadata: Record<string, unknown> = {},
+          ): Promise<void> => {
             // Best-effort: record 'replied' inference event (non-blocking)
             try {
               const personKey =
@@ -922,7 +911,7 @@ Deno.serve(async (req) => {
                   supabase.from('inference_events').upsert(
                     {
                       team_id: integration.team_id,
-                      agent_config_id: agentConfig.id,
+                      agent_config_id: agentConfigId,
                       person_key: personKey,
                       email: contactEmail ? contactEmail.trim().toLowerCase() : null,
                       linkedin_url: linkedinUrl ?? null,
@@ -954,6 +943,7 @@ Deno.serve(async (req) => {
                         // Normalized provider ids
                         provider_thread_id: externalId ?? null,
                         provider_message_id: externalMessageId,
+                        ...extraMetadata,
                       }
                     },
                     // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
@@ -997,6 +987,40 @@ Deno.serve(async (req) => {
             } catch (e) {
               console.warn('[reply-webhook] inference_events write failed (non-fatal):', e);
             }
+          };
+
+
+          // Log activity + fire classify-reply ONLY when the reply resurfaces the
+          // lead (genuinely-new, non-suppressed). A re-delivery or an opted_out /
+          // not_relevant lead records the reply silently without a draft.
+          if (resurface && upsertedLead && !skipCapture) {
+            const { error: activityError } = await supabase.from('agent_activity').insert({
+              user_id: agentUserId,
+              agent_config_id: agentConfig.id,
+              lead_id: upsertedLead.id,
+              lead_name: fullName || 'Unknown',
+              lead_company: company,
+              activity_type: 'reply_received',
+              description: `${channel === 'linkedin' ? 'LinkedIn' : 'Email'} reply received from ${fullName || 'Unknown'}${company ? ' at ' + company : ''}`,
+              metadata: { channel, intent: 'pending' },
+            });
+            console.log(`[inbox-routing] activity insert error=${activityError?.message || 'none'}`);
+
+            console.log(`[inbox-routing] firing classify-reply for lead_id=${upsertedLead.id}`);
+            fireClassifyReply({
+              supabaseUrl,
+              agentKey: Deno.env.get('AGENT_API_KEY') || '',
+              leadId: upsertedLead.id,
+              replyText,
+              threadHistory: updatedThread,
+              agentConfig,
+              channel,
+              userId: agentUserId,
+            });
+            await recordRepliedInference(agentConfig.id);
+          } else if (resurface && skipCapture) {
+            await recordRepliedInference(agentConfig.id, { capture_skipped: captureSkipReason });
+            warehouseRecorded = true;
           } else {
             console.log(`[inbox-routing] reply recorded without resurfacing (resurface=${resurface}) for lead_id=${upsertedLead?.id}`);
           }
@@ -1006,6 +1030,13 @@ Deno.serve(async (req) => {
       }
     }
     // ── End agent inbox routing ─────────────────────────────
+
+    if (captureSkipReason) {
+      return new Response(JSON.stringify({ success: true, skipped: captureSkipReason, campaignId: campaignId || null, eventType, warehouseRecorded }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
 
     return new Response(JSON.stringify({ success: true }), {
       status: 200,
