@@ -3,7 +3,6 @@ import {
   applyScope,
   canonicalScope,
   checkPage,
-  tickHeadScanOnly,
   tickWithHeadScan,
   walkWithState,
   type WalkState,
@@ -856,76 +855,76 @@ Deno.test("(BH) Head scan: page 1 empty (total > 0) / short / non-array / bad to
 // ---------------------------------------------------------------------------
 // Capture Scope keying (S*)
 // ---------------------------------------------------------------------------
-Deno.test("(S1) applyScope: same set (any order) keeps state; changed set, scoped<->unfiltered, or unrecorded scope resets baseline and walk", () => {
+Deno.test("(S1) applyScope: same set (any order) keeps state; changed set, legacy unfiltered, or unrecorded scope resets baseline and walk", () => {
   const walk = { startedAt: "2026-09-19T00:00:00.000Z", cutoff: null, offset: 400, lastTs: null, lastId: "c399", failures: 0 };
   const base = (scope?: WalkState["scope"]): WalkState => ({ version: 1, baselineStartedAt: "2026-09-10T00:00:00.000Z", walk: { ...walk }, ...(scope ? { scope } : {}) });
-  assertEquals(canonicalScope([508828, 518402, 508828]), { unfiltered: false, campaignIds: [508828, 518402] });
-  assertEquals(canonicalScope([]), { unfiltered: true, campaignIds: [] });
+  assertEquals(canonicalScope([508828, 518402, 508828]), { campaignIds: [508828, 518402] });
+  const scope = (ids: number[]) => canonicalScope(ids)!;
 
-  const same = applyScope(base({ unfiltered: false, campaignIds: [508828, 518402] }), canonicalScope([518402, 508828]));
+  const same = applyScope(base({ campaignIds: [508828, 518402] }), scope([518402, 508828]));
   assertEquals([same.changed, same.reset], [false, false]);
   assertEquals(same.state.walk!.offset, 400);
   assertEquals(same.state.baselineStartedAt, "2026-09-10T00:00:00.000Z");
+  // A scoped state written by the previous version (explicit unfiltered:false) is the same scope: no reset.
+  const legacyScoped = applyScope(base({ unfiltered: false, campaignIds: [508828, 518402] }), scope([518402, 508828]));
+  assertEquals([legacyScoped.changed, legacyScoped.reset], [false, false]);
 
   for (const [prev, next] of [
-    [{ unfiltered: false, campaignIds: [508828] }, canonicalScope([508828, 518402])], // campaign enabled
-    [{ unfiltered: false, campaignIds: [508828, 518402] }, canonicalScope([508828])], // campaign disabled
-    [{ unfiltered: true, campaignIds: [] }, canonicalScope([508828])],               // unfiltered -> scoped
-    [{ unfiltered: false, campaignIds: [508828] }, canonicalScope([])],              // scoped -> unfiltered
-    [undefined, canonicalScope([])],                                                // unrecorded (pre-patch state)
+    [{ campaignIds: [508828] }, scope([508828, 518402])],         // campaign enabled
+    [{ campaignIds: [508828, 518402] }, scope([508828])],         // campaign disabled
+    [{ unfiltered: true, campaignIds: [] }, scope([508828])],     // legacy unfiltered -> scoped (reset once)
+    [{ campaignIds: [] }, scope([508828])],                       // malformed empty scope
+    [undefined, scope([508828])],                                 // unrecorded (pre-scope state)
   ] as const) {
     const r = applyScope(base(prev as WalkState["scope"]), next);
     assertEquals([r.changed, r.reset], [true, true], JSON.stringify(prev));
     assertEquals(r.state.baselineStartedAt, null);
     assertEquals(r.state.walk, null);
     assertEquals(r.state.scope, next);
+    assert(!("unfiltered" in r.state.scope!), "the rewritten scope never carries `unfiltered`");
   }
   // Fresh state: scope recorded, nothing to reset.
-  const fresh = applyScope({ version: 1, baselineStartedAt: null, walk: null }, canonicalScope([7]));
+  const fresh = applyScope({ version: 1, baselineStartedAt: null, walk: null }, scope([7]));
   assertEquals([fresh.changed, fresh.reset], [true, false]);
-  assertEquals(fresh.state.scope, { unfiltered: false, campaignIds: [7] });
+  assertEquals(fresh.state.scope, { campaignIds: [7] });
 });
 
 Deno.test("(S2) Scope change end to end: a newly enabled campaign's conversations older than the old baseline are walked after the reset", async () => {
   const T0 = Date.parse("2026-09-20T00:00:00Z");
   const all = makeList(150, "c", T0 - 30 * 24 * 3600_000); // all 30+ days older than the baseline
-  const oldState: WalkState = { version: 1, baselineStartedAt: new Date(T0).toISOString(), walk: null, scope: { unfiltered: false, campaignIds: [1] } };
+  const oldState: WalkState = { version: 1, baselineStartedAt: new Date(T0).toISOString(), walk: null, scope: { campaignIds: [1] } };
   // Without a reset, the old baseline makes the first page caught_up with nothing processed.
-  const kept = await walkScripted(applyScope(structuredClone(oldState), canonicalScope([1])).state, healthy(all));
+  const kept = await walkScripted(applyScope(structuredClone(oldState), canonicalScope([1])!).state, healthy(all));
   assertEquals(kept.res.stopReason, "caught_up");
   assertEquals(kept.visited, []);
   // Campaign 2 enabled: reset → every conversation of the new scope is walked.
-  const reset = await walkScripted(applyScope(structuredClone(oldState), canonicalScope([1, 2])).state, healthy(all));
+  const reset = await walkScripted(applyScope(structuredClone(oldState), canonicalScope([1, 2])!).state, healthy(all));
   assertEquals(reset.res.stopReason, "end_of_list");
   assertEquals(reset.visited.length, 150);
-  assertEquals(reset.res.state.scope, { unfiltered: false, campaignIds: [1, 2] });
+  assertEquals(reset.res.state.scope, { campaignIds: [1, 2] });
 });
 
-Deno.test("(S3) tickHeadScanOnly (scope lookup failed): page 1 processed even with no walk, baseline/walk/scope untouched, lastTick fetch_error", async () => {
-  const all = makeList(300, "h");
-  for (const walk of [null, { startedAt: "2026-09-19T00:00:00.000Z", cutoff: null, offset: 200, lastTs: all[199].lastMessageAt, lastId: all[199].id, failures: 1 }]) {
-    const state: WalkState = { version: 1, baselineStartedAt: "2026-09-10T00:00:00.000Z", walk: structuredClone(walk), scope: { unfiltered: false, campaignIds: [9] } };
-    const before = structuredClone(state);
-    const clock = makeClock(0);
-    const offsets: number[] = [];
-    const visited: string[] = [];
-    let saved: WalkState | null = null;
-    const r = await tickHeadScanOnly<Item>({
-      async fetchPage(offset, limit, _s) { offsets.push(offset); await clock.sleepMs(1_000); return { items: all.slice(offset, offset + limit), totalCount: all.length }; },
-      async processItem(it, _s) { await clock.sleepMs(100); visited.push(it.id); },
-      nowMs: clock.nowMs,
-      async saveState(st) { saved = structuredClone(st); },
-    }, state, { ...DEFAULT_PAGER_OPTIONS }, "scope_lookup_failed");
-    assertEquals(offsets, [0]);
-    assertEquals(visited.length, 100);
-    assertEquals(r.headScan.stopReason, "complete");
-    assertEquals(r.stopReason, "fetch_error");
-    assertEquals(r.state.walk, before.walk);
-    assertEquals(r.state.baselineStartedAt, before.baselineStartedAt);
-    assertEquals(r.state.scope, before.scope);
-    assertEquals(r.state.lastTick?.fetchError, "scope_lookup_failed");
-    assertEquals(saved!.walk, before.walk);
+Deno.test("(S3) canonicalScope is fail closed: no usable id → null (never an empty, i.e. all-campaigns, filter); legacy unfiltered state resets exactly once", async () => {
+  // HeyReach reads campaignIds [] as "every campaign", so there is no empty scope.
+  for (const ids of [[], [0], [-5], [1.5], [Number.NaN], [Number.MAX_SAFE_INTEGER + 2]]) {
+    assertEquals(canonicalScope(ids as number[]), null, JSON.stringify(ids));
   }
+  assertEquals(canonicalScope([0, 42, -1, 42]), { campaignIds: [42] });
+
+  // Legacy { unfiltered: true } state (written by the fail-open version) with a deep walk:
+  // first tick with a real scope resets and walks from the top; the next tick keeps state.
+  const T0 = Date.parse("2026-09-20T00:00:00Z");
+  const all = makeList(150, "u", T0 - 30 * 24 * 3600_000);
+  const legacy: WalkState = { version: 1, baselineStartedAt: new Date(T0).toISOString(), walk: null, scope: { unfiltered: true, campaignIds: [] } };
+  const first = applyScope(structuredClone(legacy), canonicalScope([518402])!);
+  assertEquals([first.changed, first.reset], [true, true]);
+  const walked = await walkScripted(first.state, healthy(all));
+  assertEquals(walked.res.stopReason, "end_of_list");
+  assertEquals(walked.visited.length, 150);
+  assertEquals(walked.res.state.scope, { campaignIds: [518402] });
+  const second = applyScope(structuredClone(walked.res.state), canonicalScope([518402])!);
+  assertEquals([second.changed, second.reset], [false, false]);
+  assertEquals(second.state.baselineStartedAt, walked.res.state.baselineStartedAt);
 });
 
 // ---------------------------------------------------------------------------

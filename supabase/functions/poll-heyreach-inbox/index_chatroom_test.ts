@@ -12,9 +12,10 @@
 // counted on perIntegration[].headScan, writes nothing for that item, and leaves
 // the persisted walk state exactly as it was. No /functions/v1/ call is made.
 //
-// Also: Capture Scope keying (S-idx), head-scan-only tick on a scope lookup
-// failure, per-item DB timeouts with a hanging fake DB (D-idx), and walk vs
-// head-scan counters (N-idx).
+// Also: Capture Scope keying (S-idx), the fail-closed Capture Scope skip
+// (S-idx fail-closed: lookup error, timeout, no rows, none enabled → no
+// HeyReach call, no lead write, no state write), per-item DB timeouts with a
+// hanging fake DB (D-idx), and walk vs head-scan counters (N-idx).
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { DEFAULT_PAGER_OPTIONS } from "./paging.ts";
 
@@ -24,9 +25,11 @@ const INTEGRATION_ID = "00000000-0000-0000-0000-0000000000a1";
 const USER_ID = "00000000-0000-0000-0000-0000000000b1";
 const BASELINE = "2026-09-20T00:00:00.000Z";
 const CONVO_TS = "2026-09-20T06:00:00.000Z"; // newer than baseline-1h → must be processed
-// synced_campaigns returns no rows by default (case A → unfiltered); state written
-// by this version records that scope.
-const UNFILTERED = { unfiltered: true, campaignIds: [] as number[] };
+// synced_campaigns holds one capture-enabled campaign by default; state written
+// by this version records that scope. (There is no unfiltered mode: with no
+// enabled campaign the integration is skipped, fail closed.)
+const DEFAULT_CAMPAIGNS = [{ external_campaign_id: "518402", capture_enabled: true }];
+const SCOPED = { campaignIds: [518402] };
 
 Deno.env.set("SUPABASE_URL", SUPA);
 Deno.env.set("SUPABASE_SERVICE_ROLE_KEY", "test-service-role");
@@ -58,11 +61,13 @@ type Scenario = {
   // When set, GetConversationsV2 at any offset other than 0 returns HTTP 500.
   walkPagesFail?: boolean;
   convoTs?: string;
-  // synced_campaigns rows; "error" makes the lookup fail (HTTP 500).
-  campaigns?: { external_campaign_id: string; capture_enabled: boolean }[] | "error";
-  // A PostgREST call on agent_leads that never answers (it only rejects if its
-  // request is aborted, like real fetch): the lookup GET or the write.
-  hang?: "lookup" | "write";
+  // synced_campaigns rows (default DEFAULT_CAMPAIGNS); "error" makes the lookup
+  // fail (HTTP 500). The fake honours integration_id / capture_enabled filters.
+  campaigns?: { external_campaign_id: string; capture_enabled: boolean; integration_id?: string }[] | "error";
+  // A PostgREST call that never answers (it only rejects if its request is
+  // aborted, like real fetch): the agent_leads lookup GET or write, or the
+  // synced_campaigns scope lookup.
+  hang?: "lookup" | "write" | "scope";
 };
 
 type Recorded = {
@@ -73,6 +78,7 @@ type Recorded = {
   convOffsets: number[];
   convCampaignIds: unknown[];
   functionCalls: string[];
+  scopeQueries: string[];
   logs: string[];
   activityWrites: number;
 };
@@ -104,7 +110,9 @@ function installFetch(sc: Scenario, rec: Recorded) {
     }
     if (url.origin === SUPA && url.pathname.startsWith("/rest/v1/")) {
       const table = url.pathname.replace("/rest/v1/", "");
-      const hangs = table === "agent_leads" && ((sc.hang === "lookup" && method === "GET") || (sc.hang === "write" && method !== "GET"));
+      if (table === "synced_campaigns") rec.scopeQueries.push(url.search);
+      const hangs = (table === "agent_leads" && ((sc.hang === "lookup" && method === "GET") || (sc.hang === "write" && method !== "GET"))) ||
+        (table === "synced_campaigns" && sc.hang === "scope");
       if (hangs) {
         if (method !== "GET") { rec.leadWrites.push(method); rec.order.push(`lead_${method}`); }
         return new Promise<Response>((_, reject) => {
@@ -113,7 +121,7 @@ function installFetch(sc: Scenario, rec: Recorded) {
       }
       const rows = (r: unknown[]) => wantsObject ? (r.length ? json(r[0]) : json({ code: "PGRST116", message: "no rows" }, 406)) : json(r);
       if (table === "outbound_integrations" && method === "GET") {
-        return rows([{ id: INTEGRATION_ID, created_by: USER_ID, api_key_encrypted: "dummy", heyreach_poll_state: sc.state ?? { version: 1, baselineStartedAt: BASELINE, walk: null, scope: UNFILTERED } }]);
+        return rows([{ id: INTEGRATION_ID, created_by: USER_ID, api_key_encrypted: "dummy", heyreach_poll_state: sc.state ?? { version: 1, baselineStartedAt: BASELINE, walk: null, scope: SCOPED } }]);
       }
       if (table === "outbound_integrations" && method === "PATCH") {
         const body = JSON.parse(await req.text());
@@ -123,7 +131,12 @@ function installFetch(sc: Scenario, rec: Recorded) {
       if (table === "agent_configs") return rows([{ id: "cfg-1", user_id: USER_ID, is_active: true }]);
       if (table === "synced_campaigns") {
         if (sc.campaigns === "error") return json({ code: "XX000", message: "simulated scope lookup error", details: null, hint: null }, 500);
-        return rows(sc.campaigns ?? []);
+        const intEq = url.searchParams.get("integration_id");
+        const capEq = url.searchParams.get("capture_enabled");
+        const all = (sc.campaigns ?? DEFAULT_CAMPAIGNS).map((c, i) => ({ id: `sc-${i}`, integration_id: INTEGRATION_ID, ...c }));
+        return rows(all.filter((c) =>
+          (!intEq || intEq === `eq.${c.integration_id}`) && (!capEq || capEq === `eq.${c.capture_enabled}`)
+        ));
       }
       if (table === "agent_activity") { rec.activityWrites++; return rows([]); }
       if (table === "agent_leads" && method === "GET") return rows(sc.existingLead ? [lead] : []);
@@ -168,7 +181,7 @@ function installFetch(sc: Scenario, rec: Recorded) {
 }
 
 async function run(sc: Scenario) {
-  const rec: Recorded = { leadWrites: [], states: [], chatroomCalls: 0, order: [], convOffsets: [], convCampaignIds: [], functionCalls: [], logs: [], activityWrites: 0 };
+  const rec: Recorded = { leadWrites: [], states: [], chatroomCalls: 0, order: [], convOffsets: [], convCampaignIds: [], functionCalls: [], scopeQueries: [], logs: [], activityWrites: 0 };
   const restore = installFetch(sc, rec);
   const realLog = console.log;
   console.log = (...args: unknown[]) => { rec.logs.push(args.map(String).join(" ")); };
@@ -244,7 +257,7 @@ const DEEP_WALK = {
   lastId: "conv-deep-899",
   failures: 0,
 };
-const deepState = () => ({ version: 1, baselineStartedAt: BASELINE, walk: structuredClone(DEEP_WALK), scope: UNFILTERED });
+const deepState = () => ({ version: 1, baselineStartedAt: BASELINE, walk: structuredClone(DEEP_WALK), scope: SCOPED });
 
 for (const chatroom of ["500", "throw"] as const) {
   Deno.test({
@@ -319,13 +332,13 @@ Deno.test({
       existingLead: true,
       convoTs: OLD_TS,
       campaigns: [{ external_campaign_id: "518402", capture_enabled: true }, { external_campaign_id: "508828", capture_enabled: true }],
-      state: { version: 1, baselineStartedAt: BASELINE, walk: null, scope: { unfiltered: false, campaignIds: [508828] } },
+      state: { version: 1, baselineStartedAt: BASELINE, walk: null, scope: { campaignIds: [508828] } },
     });
     assertEquals(r.status, 200);
     assertEquals(r.rec.convCampaignIds[0], [518402, 508828]);
     assertEquals(r.rec.chatroomCalls, 1, "the older conversation is processed after the reset");
     assertEquals(r.rec.leadWrites, ["PATCH"]);
-    assertEquals(r.finalState.scope, { unfiltered: false, campaignIds: [508828, 518402] });
+    assertEquals(r.finalState.scope, { campaignIds: [508828, 518402] });
     assert(r.finalState.baselineStartedAt !== BASELINE, "a fresh walk completed and set a new baseline");
     assert(r.rec.logs.some((l) => l.includes("capture scope changed") && l.includes("campaigns[508828] -> campaigns[508828,518402]")), r.rec.logs.join("\n"));
   },
@@ -345,29 +358,103 @@ Deno.test({
     assertEquals(r.body.perIntegration[0].stopReason, "caught_up");
     assertEquals(r.rec.chatroomCalls, 0);
     assertEquals(r.rec.leadWrites, []);
+    // Scope as stored by the previous version (explicit unfiltered:false) is kept as is.
     assertEquals(r.finalState.scope, { unfiltered: false, campaignIds: [508828, 518402] });
     assert(!r.rec.logs.some((l) => l.includes("capture scope changed")));
   },
 });
 
+// ---- Fail-closed Capture Scope skip (S-idx fail-closed) ---------------------
+// Any scope outcome other than "at least one enabled integer campaign id" skips
+// the integration for this tick: no GetConversationsV2 (no walk, no head scan),
+// no GetChatroom, no agent_leads write, no poll-state write, and the reason is
+// logged and returned in skipped.captureScope. The deep walk state proves the
+// head scan would otherwise have run.
+function assertSkippedClosed(r: Awaited<ReturnType<typeof run>>, reason: string) {
+  assertEquals(r.status, 200);
+  assertEquals(r.rec.convOffsets, [], "no HeyReach inbox call at all (no unfiltered poll, no head scan)");
+  assertEquals(r.rec.convCampaignIds, []);
+  assertEquals(r.rec.chatroomCalls, 0);
+  assertEquals(r.rec.leadWrites, []);
+  assertEquals(r.rec.activityWrites, 0);
+  assertEquals(r.rec.states, [], "no poll-state write");
+  assertEquals(r.rec.functionCalls, []);
+  assertEquals(r.body.perIntegration, []);
+  assertEquals(r.body.skipped.captureScope, [{ integrationId: INTEGRATION_ID, reason }]);
+  assert(
+    r.rec.logs.some((l) => l.includes(`skip integration ${INTEGRATION_ID}`) && l.includes(`capture scope ${reason}`)),
+    r.rec.logs.join("\n"),
+  );
+  assert(r.rec.logs.some((l) => l.includes("intSkipCaptureScope=1")), "summary line counts the skip");
+}
+
+for (const [label, campaigns, reason] of [
+  ["scope lookup error", "error", "lookup_error"],
+  ["no synced rows", [], "none_enabled"],
+  ["every campaign capture-disabled", [{ external_campaign_id: "518402", capture_enabled: false }, { external_campaign_id: "508828", capture_enabled: false }], "none_enabled"],
+  ["enabled rows with no integer id", [{ external_campaign_id: "abc", capture_enabled: true }, { external_campaign_id: "0", capture_enabled: true }], "none_enabled"],
+  ["enabled rows only under another integration", [{ external_campaign_id: "518402", capture_enabled: true, integration_id: "00000000-0000-0000-0000-0000000000ff" }], "none_enabled"],
+] as const) {
+  Deno.test({
+    name: `(S-idx fail-closed) index: ${label} → integration skipped (${reason}): no HeyReach call, no lead write, no state write, reason logged and returned`,
+    ...opts,
+    async fn() {
+      const r = await run({
+        chatroom: "ok",
+        existingLead: true,
+        campaigns: campaigns as Scenario["campaigns"],
+        state: { ...deepState(), scope: { campaignIds: [508828] } },
+      });
+      assertSkippedClosed(r, reason);
+      assertEquals(r.rec.scopeQueries.length, 1);
+      const q = new URLSearchParams(r.rec.scopeQueries[0]);
+      assertEquals(q.get("integration_id"), `eq.${INTEGRATION_ID}`, "scope keyed by integration_id");
+      assertEquals(q.get("capture_enabled"), "eq.true");
+    },
+  });
+}
+
 Deno.test({
-  name: "(S-idx fail-open) index: scope lookup error → head scan only (page 1, unfiltered), baseline/walk/scope untouched, lastTick fetchError",
+  name: "(S-idx fail-closed) index: scope lookup hangs → aborted at DB_TIMEOUT_MS, integration skipped (lookup_error), nothing polled or written",
   ...opts,
   async fn() {
-    const state = { ...deepState(), scope: { unfiltered: false, campaignIds: [508828] } };
-    const r = await run({ chatroom: "ok", existingLead: true, campaigns: "error", state });
+    const t0 = Date.now();
+    let guard: ReturnType<typeof setTimeout> | undefined;
+    const r = await Promise.race([
+      run({ chatroom: "ok", existingLead: true, hang: "scope", state: deepState() }),
+      new Promise<never>((_, reject) => { guard = setTimeout(() => reject(new Error("scope lookup not bounded")), 9_000); }),
+    ]).finally(() => clearTimeout(guard));
+    assertSkippedClosed(r, "lookup_error");
+    assert(Date.now() - t0 < 8_000, "bounded by DB_TIMEOUT_MS (5s)");
+  },
+});
+
+Deno.test({
+  name: "(S-idx legacy) index: stored { unfiltered: true } scope + enabled campaigns → reset once, scoped request, older conversation walked, scope stored; next tick keeps it",
+  ...opts,
+  async fn() {
+    const campaigns = [{ external_campaign_id: "518402", capture_enabled: true }, { external_campaign_id: "508828", capture_enabled: false }];
+    const r = await run({
+      chatroom: "ok",
+      existingLead: true,
+      convoTs: OLD_TS,
+      campaigns,
+      state: { version: 1, baselineStartedAt: BASELINE, walk: structuredClone(DEEP_WALK), scope: { unfiltered: true, campaignIds: [] } },
+    });
     assertEquals(r.status, 200);
-    assertEquals(r.rec.convOffsets, [0], "only page 1 is fetched");
-    assertEquals(r.rec.convCampaignIds[0], [], "fail-open: unfiltered, as on main");
-    assertEquals(r.rec.chatroomCalls, 1);
-    const pi = r.body.perIntegration[0];
-    assertEquals(pi.stopReason, "fetch_error");
-    assertEquals([pi.headScan.items, pi.headScan.failures, pi.headScan.stopReason], [1, 0, "complete"]);
-    assertEquals(r.finalState.walk, DEEP_WALK);
-    assertEquals(r.finalState.baselineStartedAt, BASELINE);
-    assertEquals(r.finalState.scope, { unfiltered: false, campaignIds: [508828] });
-    assertEquals(r.finalState.lastTick?.fetchError, "scope_lookup_failed");
-    assertEquals(r.rec.functionCalls, []);
+    assert(r.rec.convCampaignIds.length > 0 && r.rec.convCampaignIds.every((c) => JSON.stringify(c) === "[518402]"), JSON.stringify(r.rec.convCampaignIds));
+    assertEquals(r.rec.convOffsets[0], 0, "walk restarts from the top after the reset");
+    assertEquals(r.rec.chatroomCalls, 1, "the older conversation is processed after the reset");
+    assertEquals(r.finalState.scope, { campaignIds: [518402] });
+    assert(r.rec.logs.some((l) => l.includes("capture scope changed") && l.includes("unfiltered (legacy) -> campaigns[518402]")), r.rec.logs.join("\n"));
+    assertEquals(r.body.skipped.captureScope, []);
+
+    // Second tick from the state the first one stored: same scope, no reset.
+    const r2 = await run({ chatroom: "ok", existingLead: true, convoTs: OLD_TS, campaigns, state: structuredClone(r.finalState) as Record<string, unknown> });
+    assert(!r2.rec.logs.some((l) => l.includes("capture scope changed")));
+    assertEquals(r2.body.perIntegration[0].stopReason, "caught_up");
+    assertEquals(r2.rec.chatroomCalls, 0);
+    assertEquals(r2.finalState.scope, { campaignIds: [518402] });
   },
 });
 

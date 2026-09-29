@@ -21,8 +21,8 @@ export type WalkState = {
     conversationsProcessed: number;
     elapsedMs: number;
     headScan?: HeadScanResult;
-    // Why the walk stopped with fetch_error (HTTP status, invalid page, scope
-    // lookup failure). Diagnostic only; absent on other stop reasons.
+    // Why the walk stopped with fetch_error (HTTP status, invalid page).
+    // Diagnostic only; absent on other stop reasons.
     fetchError?: string;
     // Items on pages fetched this tick with no parseable lastMessageAt (> 0 only).
     missingLastMessageAt?: number;
@@ -31,10 +31,16 @@ export type WalkState = {
   scope?: CaptureScope;
 };
 
-// The request-level campaign filter the poller walks. `unfiltered` covers both
-// "no campaigns synced" and an empty allow-list (HeyReach treats [] as all).
-// campaignIds is sorted ascending and de-duplicated so equal sets compare equal.
-export type CaptureScope = { unfiltered: boolean; campaignIds: number[] };
+// The request-level campaign filter the poller walks: the capture-enabled
+// HeyReach campaign ids, sorted ascending and de-duplicated so equal sets
+// compare equal. Always NON-EMPTY: there is no "unfiltered" mode any more
+// (HeyReach treats campaignIds [] as every campaign, so an empty scope is never
+// walked; the poller skips the integration instead, fail closed).
+//
+// `unfiltered` is only READ, from state written by earlier versions; a stored
+// { unfiltered: true } never equals a real scope, so applyScope resets the
+// baseline and walk once and rewrites the scope without the field.
+export type CaptureScope = { campaignIds: number[]; unfiltered?: boolean };
 
 // Head scan: page 1 (offset 0) re-processed at the start of every tick that
 // resumes a cursor, so a reply the webhook missed surfaces on the next tick
@@ -216,25 +222,29 @@ function errReason(e: unknown): string {
 // ---------------------------------------------------------------------------
 // Capture Scope keying
 // ---------------------------------------------------------------------------
-export function canonicalScope(campaignIds: number[]): CaptureScope {
-  const ids = [...new Set(campaignIds.filter((n) => Number.isFinite(n)))].sort((a, b) => a - b);
-  return ids.length === 0 ? { unfiltered: true, campaignIds: [] } : { unfiltered: false, campaignIds: ids };
+// null when no usable id remains: the caller must skip the integration
+// (never poll with an empty filter, which HeyReach reads as "all campaigns").
+export function canonicalScope(campaignIds: number[]): CaptureScope | null {
+  const ids = [...new Set(campaignIds.filter((n) => Number.isSafeInteger(n) && n > 0))].sort((a, b) => a - b);
+  return ids.length === 0 ? null : { campaignIds: ids };
 }
 
 function sameScope(a: CaptureScope | undefined | null, b: CaptureScope): boolean {
   if (!a || typeof a !== 'object' || !Array.isArray(a.campaignIds)) return false;
-  return a.unfiltered === b.unfiltered && a.campaignIds.length === b.campaignIds.length &&
+  // Legacy unfiltered (or empty) scopes from earlier versions never match.
+  if (a.unfiltered === true || a.campaignIds.length === 0) return false;
+  return a.campaignIds.length === b.campaignIds.length &&
     a.campaignIds.every((v, i) => v === b.campaignIds[i]);
 }
 
 // The baseline and the walk cursor only mean something for the list they were
 // built from. If the campaign filter changes (a campaign enabled or disabled,
-// scoped <-> unfiltered), offsets point into a different list and conversations
-// of a newly enabled campaign may be older than the baseline, so both are reset
-// and the next walk covers the new scope from the top (as v44 did every run).
-// State without a recorded scope (written before this field existed) is treated
-// as a different scope. Returns the state to use; `reset` is true when a
-// baseline or walk was discarded.
+// or a legacy unfiltered scope written by an earlier version), offsets point
+// into a different list and conversations of a newly enabled campaign may be
+// older than the baseline, so both are reset and the next walk covers the new
+// scope from the top (as v44 did every run). State without a recorded scope
+// (written before this field existed) is treated as a different scope. Returns
+// the state to use; `reset` is true when a baseline or walk was discarded.
 export function applyScope(
   state: WalkState,
   scope: CaptureScope,
@@ -244,7 +254,7 @@ export function applyScope(
   const reset = state.baselineStartedAt != null || state.walk != null;
   state.baselineStartedAt = null;
   state.walk = null;
-  state.scope = { unfiltered: scope.unfiltered, campaignIds: [...scope.campaignIds] };
+  state.scope = { campaignIds: [...scope.campaignIds] };
   return { state, changed: true, reset, previous };
 }
 
@@ -616,46 +626,4 @@ export async function tickWithHeadScan<Item extends { id?: unknown; lastMessageA
     };
   }
   return { ...walk, headScan };
-}
-
-// Head scan only, walk skipped: used when the Capture Scope lookup failed. The
-// poller then fails open like main (page 1 of the unfiltered inbox is still
-// processed, so capture does not silently stop), but the persisted baseline,
-// walk and scope are left exactly as they are: an unfiltered walk would move a
-// cursor that belongs to the scoped list, and resetting on a transient lookup
-// error would throw the baseline away. Only lastTick is updated (stopReason
-// fetch_error, fetchError = reason).
-export async function tickHeadScanOnly<Item extends { id?: unknown; lastMessageAt?: unknown }>(
-  deps: PagerDeps<Item>,
-  initialState: WalkState | null | undefined,
-  opts: PagerOptions,
-  reason: string,
-): Promise<TickResult> {
-  const tickStartMs = deps.nowMs();
-  const minNextPage = opts.minRemainingForNextPageMs ?? 40_000;
-  const share = Math.min(opts.headScanBudgetMs ?? 40_000, opts.runBudgetMs);
-  const state: WalkState = initialState && typeof initialState === 'object'
-    ? (initialState as WalkState)
-    : { version: 1, baselineStartedAt: null, walk: null };
-  const diag = newDiagnostics();
-  const headScan: HeadScanResult = (opts.runBudgetMs < minNextPage || share <= 0)
-    ? { items: 0, failures: 0, elapsedMs: 0, stopReason: 'skipped_budget' }
-    : await runHeadScan(deps, share, opts, diag);
-  logDiagnostics(diag);
-  state.lastTick = {
-    at: new Date(tickStartMs).toISOString(),
-    stopReason: 'fetch_error',
-    pagesFetched: 0,
-    conversationsProcessed: 0,
-    elapsedMs: deps.nowMs() - tickStartMs,
-    headScan,
-    fetchError: reason,
-    ...(diag.missingTs > 0 ? { missingLastMessageAt: diag.missingTs } : {}),
-  };
-  try {
-    await deps.saveState(state);
-  } catch (e) {
-    console.error('[pager] saveState failed (head-scan-only tick):', e);
-  }
-  return { pagesFetched: 0, itemsProcessed: 0, failures: 0, stopReason: 'fetch_error', state, headScan };
 }

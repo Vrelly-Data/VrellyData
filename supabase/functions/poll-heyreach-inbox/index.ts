@@ -12,10 +12,10 @@ import { sanitizeLinkedinUrlForStorage } from '../_shared/normalize.ts';
 import { findLeadByNormalizedLinkedIn } from '../_shared/agent-leads-lookup.ts';
 import { isStaleProspectMessage } from '../_shared/stale.ts';
 import { decideSurfaceAndClassify, buildSurfaceUpdateFields } from '../_shared/surface.ts';
+import { listEnabledCampaignIds, numericCampaignIds } from '../_shared/capture-scope.ts';
 import {
   applyScope,
   canonicalScope,
-  tickHeadScanOnly,
   tickWithHeadScan,
   type HeadScanResult,
   type HeadScanStopReason,
@@ -160,7 +160,8 @@ Deno.serve(async (req) => {
     const walkCounts = newCounts();
     const headCounts = newCounts();
     let integrationsSkippedNoKey = 0;
-    let integrationsSkippedAllDisabled = 0;
+    // Fail-closed Capture Scope skips (integration id + reason only).
+    const captureScopeSkips: Array<{ integrationId: string; reason: 'none_enabled' | 'lookup_error' }> = [];
     let integrationsSkippedNoAgentConfig = 0;
 
     // Order integrations by lastTick.at ascending, nulls first
@@ -273,60 +274,33 @@ Deno.serve(async (req) => {
         // 518402 alone = 49, 508828 alone = 39, both = 88; all three with
         // 507230 = 129. It is a true multi-value allow-list, not first-id-wins.
         //
-        // THE TRAP: campaignIds: [] means "every campaign", so "nothing is
-        // enabled" and "nothing is synced yet" must not produce the same
-        // request. They are handled as three distinct cases below.
-        const { data: scopeRows, error: scopeErr } = await supabase
-          .from('synced_campaigns')
-          .select('external_campaign_id, capture_enabled')
-          .eq('integration_id', integration.id)
-          .abortSignal(AbortSignal.timeout(DB_TIMEOUT_MS));
-
-        let campaignIdFilter: number[] = [];
-        let scopeKnown = true;
-        if (scopeErr) {
-          // Fail open — a transient lookup failure must not silently stop
-          // capture for a whole integration.
-          // With persistent walk state this tick is head-scan only (page 1,
-          // unfiltered): see tickHeadScanOnly in paging.ts.
-          scopeKnown = false;
-          console.warn(
-            `[poll-heyreach-inbox] capture scope lookup failed for integration ` +
-            `${integration.id} (${scopeErr.message}) — polling unfiltered (fail-open)`,
-          );
-        } else if (!scopeRows || scopeRows.length === 0) {
-          // Case A: campaigns have never been synced for this integration.
-          // Filtering on an empty allow-list would mean "all" anyway, and this
-          // is indistinguishable from a brand-new integration, so poll
-          // unfiltered exactly as before.
+        // THE TRAP: campaignIds: [] means "every campaign". So the scope is
+        // FAIL CLOSED via the shared helper (synced_campaigns.capture_enabled
+        // keyed by integration_id, the single source of truth for capture):
+        //   - lookup error (incl. timeout)         → skip this integration
+        //   - no synced rows / none enabled / no   → skip this integration
+        //     integer id among the enabled rows
+        // A skip means: no HeyReach call (no walk, no head scan), no
+        // agent_leads write and NO state write, so the persisted baseline,
+        // walk and scope are exactly as they were. It is logged and reported
+        // in skipped.captureScope. There is no unfiltered mode.
+        const scopeResult = await listEnabledCampaignIds(supabase, String(integration.id), { timeoutMs: DB_TIMEOUT_MS });
+        // HeyReach filters on INTEGER campaign ids (row order kept for the request).
+        const campaignIdFilter: number[] = scopeResult.ok ? numericCampaignIds(scopeResult.ids) : [];
+        const scope = canonicalScope(campaignIdFilter);
+        if (!scope) {
+          const reason = scopeResult.ok ? 'none_enabled' : scopeResult.reason;
           console.log(
-            `[poll-heyreach-inbox] No synced campaigns for integration ${integration.id} — ` +
-            `polling unfiltered (run sync-heyreach-campaigns to enable scoping)`,
+            `[poll-heyreach-inbox] skip integration ${integration.id} — capture scope ${reason}: ` +
+              `no poll, no head scan, no state write this tick`,
           );
-        } else {
-          const enabled = scopeRows
-            .filter((r) => r.capture_enabled === true)
-            .map((r) => Number(r.external_campaign_id))
-            .filter((n) => Number.isFinite(n));
-
-          if (enabled.length === 0) {
-            // Case C: campaigns exist and the operator has disabled ALL of
-            // them. Passing [] here would poll everything — the exact opposite
-            // of what was asked for. Skip the integration instead.
-            console.log(
-              `[poll-heyreach-inbox] All ${scopeRows.length} campaign(s) have capture disabled ` +
-              `for integration ${integration.id} — skipping entirely`,
-            );
-            integrationsSkippedAllDisabled++;
-            continue;
-          }
-          // Case B: scope to the enabled campaigns.
-          campaignIdFilter = enabled;
-          console.log(
-            `[poll-heyreach-inbox] Scoping to ${enabled.length} of ${scopeRows.length} ` +
-            `campaign(s) with capture enabled for integration ${integration.id}`,
-          );
+          captureScopeSkips.push({ integrationId: String(integration.id), reason });
+          continue;
         }
+        console.log(
+          `[poll-heyreach-inbox] Scoping to ${campaignIdFilter.length} capture-enabled campaign(s) ` +
+            `for integration ${integration.id}`,
+        );
 
         // ==== Head scan + budgeted walk with persistent state =================
         // tickWithHeadScan first re-processes page 1 (when a cursor is being
@@ -337,14 +311,14 @@ Deno.serve(async (req) => {
           ? rawState as WalkState
           : { version: 1, baselineStartedAt: null, walk: null };
         // Key the state to the Capture Scope: a changed campaign filter resets
-        // the baseline and walk (applyScope in paging.ts).
-        if (scopeKnown) {
-          const scope = canonicalScope(campaignIdFilter);
+        // the baseline and walk (applyScope in paging.ts). A legacy stored
+        // { unfiltered: true } scope is a change, so it resets exactly once.
+        {
           const scoped = applyScope(stateIn, scope);
           stateIn = scoped.state;
           if (scoped.changed && (scoped.reset || scoped.previous)) {
-            const fmt = (s: { unfiltered: boolean; campaignIds: number[] } | null) =>
-              !s ? 'unrecorded' : s.unfiltered ? 'unfiltered' : `campaigns[${s.campaignIds.join(',')}]`;
+            const fmt = (s: { unfiltered?: boolean; campaignIds: number[] } | null) =>
+              !s ? 'unrecorded' : (s.unfiltered === true || !s.campaignIds?.length) ? 'unfiltered (legacy)' : `campaigns[${s.campaignIds.join(',')}]`;
             console.log(
               `[poll-heyreach-inbox] capture scope changed for integration ${integration.id}: ` +
                 `${fmt(scoped.previous)} -> ${fmt(scope)} — baseline and walk reset`,
@@ -363,9 +337,9 @@ Deno.serve(async (req) => {
                 body: JSON.stringify({
                   filters: {
                     linkedInAccountIds: [],
-                    // Capture Scope: [] means "all campaigns". Populated only in
-                    // case B above; cases A and the fail-open path deliberately
-                    // leave it empty, and case C never reaches this call.
+                    // Capture Scope: always the non-empty list of enabled
+                    // integer ids ([] would mean "all campaigns"; an empty
+                    // scope skips the integration above and never gets here).
                     campaignIds: campaignIdFilter,
                     searchString: '',
                   },
@@ -683,11 +657,8 @@ Deno.serve(async (req) => {
             },
         };
         const tickOpts = { ...DEFAULT_PAGER_OPTIONS, runBudgetMs: remaining() };
-        const walker = scopeKnown
-          // deno-lint-ignore no-explicit-any
-          ? await tickWithHeadScan<any>(deps, stateIn, tickOpts)
-          // deno-lint-ignore no-explicit-any
-          : await tickHeadScanOnly<any>(deps, stateIn, tickOpts, 'scope_lookup_failed');
+        // deno-lint-ignore no-explicit-any
+        const walker = await tickWithHeadScan<any>(deps, stateIn, tickOpts);
 
         // Persist final state from walker (already saved in-page and on stop)
         const { error: finalSaveErr } = await supabase
@@ -746,7 +717,7 @@ Deno.serve(async (req) => {
     console.log(
       `[poll-heyreach-inbox] Done. polled=${walkCounts.polled} new=${walkCounts.new} seen=${walkCounts.seen} ` +
         `skippedNoText=${walkCounts.skippedNoText} skippedSenderMe=${walkCounts.skippedSenderMe} skippedSameText=${walkCounts.skippedSameText} ` +
-        `intSkipNoKey=${integrationsSkippedNoKey} intSkipNoAgentConfig=${integrationsSkippedNoAgentConfig}` +
+        `intSkipNoKey=${integrationsSkippedNoKey} intSkipNoAgentConfig=${integrationsSkippedNoAgentConfig} intSkipCaptureScope=${captureScopeSkips.length}` +
         ` | headScan seen=${headCounts.seen} polled=${headCounts.polled} new=${headCounts.new}`,
     );
 
@@ -767,6 +738,7 @@ Deno.serve(async (req) => {
           sameText: walkCounts.skippedSameText,
           integrationsNoKey: integrationsSkippedNoKey,
           integrationsNoAgentConfig: integrationsSkippedNoAgentConfig,
+          captureScope: captureScopeSkips,
         },
       }),
       {
