@@ -4,7 +4,9 @@ export function normalizeIsoMs(iso: string | null | undefined): string | null {
   if (!iso) return null;
   const ts = new Date(iso).getTime();
   if (!Number.isFinite(ts)) return null;
-  return new Date(ts).toISOString();
+  // Compare at whole-second precision to avoid sub-second flaps
+  const sec = Math.floor(ts / 1000) * 1000;
+  return new Date(sec).toISOString();
 }
 
 export interface SurfaceDecisionInput {

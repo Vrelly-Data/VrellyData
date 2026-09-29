@@ -335,7 +335,8 @@ Deno.serve(async (req) => {
                   replyThread = messages.map((msg: { sender?: string; body?: string; createdAt?: string }) => ({
                     role: msg.sender === 'ME' ? 'sender' : 'prospect',
                     content: msg.body || '',
-                    timestamp: msg.createdAt || new Date().toISOString(),
+                    // Keep raw timestamp; missing stays empty (treated as stale in gate)
+                    timestamp: msg.createdAt || '',
                     channel: 'linkedin',
                   }));
                 } else {

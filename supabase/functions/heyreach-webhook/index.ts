@@ -4,7 +4,7 @@ import { cleanReplyPreview } from "../_shared/reply-text.ts";
 import { detectLanguageCode } from "../_shared/language.ts";
 import { sanitizeLinkedinUrlForStorage } from "../_shared/normalize.ts";
 import { findLeadByNormalizedLinkedIn } from "../_shared/agent-leads-lookup.ts";
-import { isStaleProspectMessage } from "../_shared/stale.ts";
+import { decideSurfaceAndClassify } from "../_shared/surface.ts";
 
 const allowedOrigins = [
   Deno.env.get("ALLOWED_ORIGIN") || "https://vrelly.com",
@@ -383,7 +383,8 @@ Deno.serve(async (req) => {
     }> = recentMessages.map((msg) => ({
       role: msg.is_reply === true ? "prospect" : "sender",
       content: msg.message || "",
-      timestamp: msg.creation_time || new Date().toISOString(),
+      // Keep raw timestamp; missing stays empty (treated as stale in gate)
+      timestamp: msg.creation_time || "",
       channel: "linkedin",
     }));
 
@@ -529,15 +530,16 @@ Deno.serve(async (req) => {
     // would silently swallow a real reply.
     const newerThanPrior = Number.isFinite(newestMs) && newestMs > priorMs;
 
-    const surface = existingLead
-      ? shouldResurface({
-        dispositionTag: existingLead.disposition_tag,
-        newestRole: newestProspectTs ? "prospect" : null,
-        newerThanPrior,
-      })
-      : true;
+    const decision = decideSurfaceAndClassify({
+      dispositionTag: existingLead?.disposition_tag ?? null,
+      isExistingLead: !!existingLead,
+      newestProspectTimestamp: newestProspectTs,
+      priorWatermark: existingLead?.last_surfaced_reply_at ?? null,
+      nowMs: Date.now(),
+    });
+    const surface = decision.surface;
     const messageTs = newestProspectTs;
-    const stale = isStaleProspectMessage(messageTs, Date.now());
+    const stale = decision.isStale;
 
     console.log(
       `[heyreach-webhook] surface=${surface} existing=${!!existingLead} ` +
@@ -561,7 +563,7 @@ Deno.serve(async (req) => {
       ...(surface
         ? {
             ...(existingLead?.inbox_status === "pending" ? {} : { inbox_status: "pending" }),
-            ...(messageTs ? { last_surfaced_reply_at: messageTs } : {}),
+            ...(decision.newWatermark ? { last_surfaced_reply_at: decision.newWatermark } : {}),
           }
         : {}),
       channel: "linkedin",

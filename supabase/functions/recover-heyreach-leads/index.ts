@@ -25,6 +25,7 @@ import { sanitizeLinkedinUrlForStorage } from "../_shared/normalize.ts";
 import { findLeadByNormalizedLinkedIn } from "../_shared/agent-leads-lookup.ts";
 import { cleanReplyPreview } from "../_shared/reply-text.ts";
 import { isSuppressed } from "../_shared/inbox-reply.ts";
+import { decideSurfaceAndClassify } from "../_shared/surface.ts";
 
 type Json = Record<string, unknown>;
 
@@ -214,11 +215,14 @@ Deno.serve(async (req) => {
 
         // Determine existing lead and whether it's up-to-date
         const existing = await findLeadByNormalizedLinkedIn(supabase, userId, linkedinUrl);
-        const priorMs = existing?.last_reply_at
-          ? new Date(existing.last_reply_at).getTime()
-          : 0;
-        const newestMs = new Date(latestProspectTs).getTime();
-        const isNewer = Number.isFinite(newestMs) && newestMs > priorMs;
+        const decision = decideSurfaceAndClassify({
+          dispositionTag: existing?.disposition_tag ?? null,
+          isExistingLead: !!existing,
+          newestProspectTimestamp: latestProspectTs,
+          priorWatermark: existing?.last_surfaced_reply_at ?? null,
+          nowMs: Date.now(),
+        });
+        const isNewer = decision.surface && !!decision.newWatermark || (!existing && decision.surface);
         const replySnippet = cleanReplyPreview(latestProspectText);
 
         if (!existing) {
@@ -263,7 +267,7 @@ Deno.serve(async (req) => {
                 await supabase.from("agent_leads").update({
                   last_reply_text: replySnippet,
                   last_reply_at: latestProspectTs,
-                  inbox_status: "pending",
+                  ...(isSuppressed(raced.disposition_tag) ? {} : { inbox_status: "pending" }),
                   last_surfaced_reply_at: latestProspectTs,
                 }).eq("id", raced.id);
               } else {
