@@ -8,26 +8,33 @@ type Lead = {
   draft_response?: string | null;
 };
 
-Deno.test("handleSelectLead guard: blocks LinkedIn/HeyReach when drafting disabled", () => {
+Deno.test("handleSelectLead guard: blocks HeyReach-source leads when drafting disabled", () => {
   const liLead: Lead = { channel: "linkedin", source: "heyreach", intent: "", draft_response: "" };
   const emailLead: Lead = { channel: "email", source: "reply_io", intent: "", draft_response: "" };
   const hrEmailLead: Lead = { channel: "email", source: "heyreach", intent: "", draft_response: "" };
 
-  // OFF → do not auto-classify LinkedIn/HeyReach leads
+  // OFF → do not auto-classify HeyReach-source leads
   assertEquals(shouldAutoClassifyOnLeadSelect(liLead as any, { heyreachDraftingEnabled: false }), false);
   assertEquals(shouldAutoClassifyOnLeadSelect(hrEmailLead as any, { heyreachDraftingEnabled: false }), false);
   // Email (non-HeyReach) unchanged
   assertEquals(shouldAutoClassifyOnLeadSelect(emailLead as any, { heyreachDraftingEnabled: false }), true);
 
-  // ON → LinkedIn allowed again
+  // ON → HeyReach allowed again
   assertEquals(shouldAutoClassifyOnLeadSelect(liLead as any, { heyreachDraftingEnabled: true }), true);
 });
 
-Deno.test("handleSelectLead guard: channel-only and source-only paths each block when OFF", () => {
+Deno.test("handleSelectLead guard: source-only — Reply.io LinkedIn auto-classifies, HeyReach does not (OFF)", () => {
   const liReplyIo: Lead = { channel: "linkedin", source: "reply_io", intent: null, draft_response: null };
   const liNoSource: Lead = { channel: "linkedin", source: null, intent: null, draft_response: null };
+  const liHeyreach: Lead = { channel: "linkedin", source: "heyreach", intent: null, draft_response: null };
   const emailHeyreach: Lead = { channel: "email", source: "heyreach", intent: null, draft_response: null };
-  for (const lead of [liReplyIo, liNoSource, emailHeyreach]) {
+  // Reply.io LinkedIn-step leads (and source-less rows) are not gated: behave as on main.
+  for (const lead of [liReplyIo, liNoSource]) {
+    assertEquals(shouldAutoClassifyOnLeadSelect(lead as any, { heyreachDraftingEnabled: false }), true);
+    assertEquals(shouldAutoClassifyOnLeadSelect(lead as any, { heyreachDraftingEnabled: true }), true);
+  }
+  // source=heyreach blocked on any channel while OFF; allowed when ON.
+  for (const lead of [liHeyreach, emailHeyreach]) {
     assertEquals(shouldAutoClassifyOnLeadSelect(lead as any, { heyreachDraftingEnabled: false }), false);
     assertEquals(shouldAutoClassifyOnLeadSelect(lead as any, { heyreachDraftingEnabled: true }), true);
   }

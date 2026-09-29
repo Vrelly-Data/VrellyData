@@ -3,7 +3,7 @@ import { htmlToText } from '../_shared/html-to-text.ts';
 import { preprocessEmailReply } from '../_shared/reply-text.ts';
 import { computeCopyFingerprint } from '../_shared/copy-fingerprint.ts';
 import { isPlaceholderReplyText, pickLastProspectContentFromThread } from './utils.ts';
-import { shouldSuppressHeyreachDrafting, HEYREACH_DRAFTING_ENABLED } from '../_shared/flags.ts';
+import { shouldSuppressHeyreachDrafting } from '../_shared/flags.ts';
 
 console.log('classify-reply starting');
 
@@ -611,8 +611,10 @@ Use this campaign data to:
       }
     }
 
-    // HeyReach/LinkedIn drafting kill switch — default OFF (no drafts/sends on LinkedIn path)
-    const suppressDrafting = shouldSuppressHeyreachDrafting(channel, leadSource);
+    // HeyReach drafting kill switch — default OFF. Keyed on the lead's STORED
+    // source only (channel is irrelevant: Reply.io LinkedIn leads keep drafting).
+    // No lead_id / no row → source unknown → not suppressed.
+    const suppressDrafting = shouldSuppressHeyreachDrafting(leadSource);
 
     // Effective sender identity for the draft voice. Defaults to the client's
     // single agent_configs sender_* fields (no regression for single-sender
@@ -1017,17 +1019,23 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
     const call2SystemPromptHash = await sha256Hex(call2SystemPrompt);
 
     let call2: { json: any; retried: boolean; usage: { input_tokens: number; output_tokens: number }; ms: number } | null = null;
-    try {
-      call2 = await callAnthropicJSON({
-        apiKey: anthropicApiKey,
-        systemPrompt: call2SystemPrompt,
-        messages,
-        temperature: 0.5,
-        maxTokens: 1000,
-      });
-      console.log(`[classify-reply] Call 2 done +${Date.now() - t0}ms (retried=${call2.retried})`);
-    } catch (call2Err) {
-      console.error('[classify-reply] Call 2 (generate) failed:', (call2Err as Error)?.message);
+    // HeyReach kill switch: classify only. Skip draft generation entirely; call2
+    // stays null, so every draft write below takes its (also gated) no-draft path.
+    if (!suppressDrafting) {
+      try {
+        call2 = await callAnthropicJSON({
+          apiKey: anthropicApiKey,
+          systemPrompt: call2SystemPrompt,
+          messages,
+          temperature: 0.5,
+          maxTokens: 1000,
+        });
+        console.log(`[classify-reply] Call 2 done +${Date.now() - t0}ms (retried=${call2.retried})`);
+      } catch (call2Err) {
+        console.error('[classify-reply] Call 2 (generate) failed:', (call2Err as Error)?.message);
+      }
+    } else {
+      console.log('[classify-reply] Call 2 skipped: HeyReach drafting disabled (classify only)');
     }
     const call2Failed = !call2;
 
@@ -1051,9 +1059,9 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
       intent_confidence: intentConfidence,
       is_objection: isObjection,
       prospect_read: prospectRead,
-      suggested_response: suggestedResponse,
-      should_auto_send: shouldAutoSend,
-      reasoning,
+      suggested_response: suppressDrafting ? null : suggestedResponse,
+      should_auto_send: suppressDrafting ? false : shouldAutoSend,
+      reasoning: suppressDrafting ? 'HeyReach drafting disabled - classification only' : reasoning,
       next_pipeline_stage: nextPipelineStage,
     };
 

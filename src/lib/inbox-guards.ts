@@ -25,8 +25,8 @@ export function shouldAutoClassifyOnLeadSelect(
   const enabled = typeof opts?.heyreachDraftingEnabled !== 'undefined'
     ? isHeyreachDraftingEnabled(opts.heyreachDraftingEnabled)
     : isHeyreachDraftingEnabled();
-  const isHeyreachOrLinkedIn = lead.channel === 'linkedin' || lead.source === 'heyreach';
-  if (isHeyreachOrLinkedIn && !enabled) return false;
+  // Keyed on source only: Reply.io LinkedIn leads (source 'reply_io') still auto-classify.
+  if (lead.source === 'heyreach' && !enabled) return false;
   return !lead.intent && !lead.draft_response;
 }
 

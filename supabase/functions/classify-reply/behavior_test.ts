@@ -361,25 +361,71 @@ function assertSuppressed(logs: LoggedCall[]) {
   assertEquals(sendCalls(logs).length, 0, "no send function may be invoked when suppressed");
 }
 
-Deno.test("LinkedIn lead with non-HeyReach source (channel-only path) suppressed in auto mode", async () => {
-  // Reply.io LinkedIn threads land as channel='linkedin', source='reply_io'.
-  for (const leadSource of ["reply_io", null] as const) {
-    const { logs } = makeFetchStub({ supabaseUrl: "http://supabase.test", leadSource, agentMode: "auto", classificationIntent: "interested", generationAutoSend: true });
-    const res = await callHandler({ reply_text: "Hi there", thread_history: [], agent_context: CTX, channel: "linkedin", user_id: "u1", lead_id: "lead5" }, envWith(""));
+function anthropicCalls(logs: LoggedCall[]): LoggedCall[] {
+  return findLog(logs, (l) => l.url.startsWith("https://api.anthropic.com/v1/messages"));
+}
+
+function draftCreatedPosts(logs: LoggedCall[]): unknown[] {
+  return findLog(logs, (l) => l.method === "POST" && l.url.includes("/rest/v1/agent_activity"))
+    .map((l) => decodeBody(l.bodyText))
+    .flat()
+    .filter((b: any) => b?.activity_type === "draft_created");
+}
+
+Deno.test("source=heyreach lead of ANY channel is suppressed: Call 1 only, no draft writes, no send, null draft in response", async () => {
+  for (const channel of ["linkedin", "email"] as const) {
+    const { logs } = makeFetchStub({ supabaseUrl: "http://supabase.test", leadSource: "heyreach", agentMode: "auto", classificationIntent: "interested", generationAutoSend: true });
+    const res = await callHandler({ reply_text: "Hi there", thread_history: [], agent_context: CTX, channel, user_id: "u1", lead_id: "lead5" }, envWith(""));
     assertEquals(res.status, 200);
     assertSuppressed(logs);
+    // Call 1 classification still written exactly as before.
+    const patch = decodeBody(findAgentLeadsPatch(logs)[0].bodyText);
+    assertEquals(patch.intent, "interested");
+    assertEquals(patch.intent_confidence, 0.92);
+    assert(patch.prospect_read && typeof patch.prospect_read === "object");
+    // Call 2 (draft generation) skipped: exactly one LLM call.
+    assertEquals(anthropicCalls(logs).length, 1, `expected exactly 1 LLM call, got ${anthropicCalls(logs).length}`);
+    const out = await res.json();
+    assertEquals(out.intent, "interested");
+    assertEquals(out.suggested_response, null);
+    assertEquals(out.should_auto_send, false);
   }
 });
 
+Deno.test("Reply.io LinkedIn-step lead (channel=linkedin, source=reply_io) is NOT gated: drafts and auto-sends as on main", async () => {
+  const { logs } = makeFetchStub({ supabaseUrl: "http://supabase.test", leadSource: "reply_io", agentMode: "auto", classificationIntent: "interested", generationAutoSend: true });
+  const res = await callHandler({ reply_text: "Hi there", thread_history: [], agent_context: CTX, channel: "linkedin", user_id: "u1", lead_id: "lead10" }, envWith(""));
+  assertEquals(res.status, 200);
+  assertEquals(anthropicCalls(logs).length, 2, "classify + generate");
+  assertDraftInLeadPatch(logs);
+  assert(hasPostTo(logs, "draft_audit"), "draft_audit written");
+  assertEquals(draftCreatedPosts(logs).length, 1, "agent_activity draft_created written");
+  const out = await res.json();
+  assert(typeof out.suggested_response === "string" && out.suggested_response.length > 0);
+  // Same auto-send as main: linkedin channel routes to send-heyreach-message
+  // regardless of source (pre-existing routing, tracked separately; unchanged here).
+  const sends = sendCalls(logs);
+  assertEquals(sends.length, 1);
+  assert(sends[0].url.endsWith("/functions/v1/send-heyreach-message"), sends[0].url);
+});
+
 Deno.test("Suppressed lead: Call 1 failure path writes no draft_audit / draft_created", async () => {
-  for (const [channel, leadSource] of [["linkedin", null], ["email", "heyreach"]] as const) {
-    const { logs } = makeFetchStub({ supabaseUrl: "http://supabase.test", leadSource, agentMode: "auto", call1Fail: true });
+  for (const channel of ["linkedin", "email"] as const) {
+    const { logs } = makeFetchStub({ supabaseUrl: "http://supabase.test", leadSource: "heyreach", agentMode: "auto", call1Fail: true });
     const res = await callHandler({ reply_text: "Hi there", thread_history: [], agent_context: CTX, channel, user_id: "u1", lead_id: "lead6" }, envWith(""));
     assertEquals(res.status, 200);
     assert(!hasPostTo(logs, "draft_audit"), "no draft_audit insert when suppressed (call1 fail)");
     assert(!hasPostTo(logs, "agent_activity"), "no agent_activity draft_created when suppressed (call1 fail)");
     assertEquals(sendCalls(logs).length, 0);
   }
+});
+
+Deno.test("Reply.io LinkedIn Call 1 failure path still logs draft_audit + draft_created (unchanged)", async () => {
+  const { logs } = makeFetchStub({ supabaseUrl: "http://supabase.test", leadSource: "reply_io", agentMode: "auto", call1Fail: true });
+  const res = await callHandler({ reply_text: "Hi there", thread_history: [], agent_context: CTX, channel: "linkedin", user_id: "u1", lead_id: "lead11" }, envWith(""));
+  assertEquals(res.status, 200);
+  assert(hasPostTo(logs, "draft_audit"));
+  assertEquals(draftCreatedPosts(logs).length, 1);
 });
 
 Deno.test("Email/Smartlead Call 1 failure path still logs draft_audit + draft_created (unchanged)", async () => {
@@ -406,6 +452,7 @@ Deno.test("Flag ON: LinkedIn auto mode drafts and auto-sends via send-heyreach-m
   const { logs } = makeFetchStub({ supabaseUrl: "http://supabase.test", leadSource: "heyreach", agentMode: "auto", classificationIntent: "interested", generationAutoSend: true });
   const res = await callHandler({ reply_text: "Hi there", thread_history: [], agent_context: CTX, channel: "linkedin", user_id: "u1", lead_id: "lead9" }, envWith("true"));
   assertEquals(res.status, 200);
+  assertEquals(anthropicCalls(logs).length, 2, "flag ON: classify + generate");
   assertDraftInLeadPatch(logs);
   assert(hasPostTo(logs, "draft_audit"));
   assert(hasPostTo(logs, "agent_activity"));
