@@ -565,7 +565,10 @@ Deno.serve(async (req) => {
             ...(existingLead?.inbox_status === "pending" ? {} : { inbox_status: "pending" }),
             ...(decision.newWatermark ? { last_surfaced_reply_at: decision.newWatermark } : {}),
           }
-        : {}),
+        : {
+            // Seed-only rule: existing lead, null watermark, stale → write watermark only when present
+            ...(existingLead && decision.newWatermark ? { last_surfaced_reply_at: decision.newWatermark } : {})
+          }),
       channel: "linkedin",
       source: "heyreach",
       heyreach_conversation_id: conversationId,

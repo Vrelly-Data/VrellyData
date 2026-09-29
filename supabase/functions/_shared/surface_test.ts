@@ -31,14 +31,15 @@ Deno.test("fresh: classify invoked", () => {
   assertEquals(r.willClassify, true);
 });
 
-Deno.test("handled lead + stale: pending only", () => {
+Deno.test("handled lead + stale with older non-null watermark: pending only", () => {
   const now = new Date("2026-09-30T12:00:00Z").getTime();
   const ts = "2026-09-28T10:00:00.000Z";
+  const prior = "2026-09-27T10:00:00.000Z";
   const r = decideSurfaceAndClassify({
     dispositionTag: "dismissed",
     isExistingLead: true,
     newestProspectTimestamp: ts,
-    priorWatermark: null,
+    priorWatermark: prior,
     nowMs: now,
   });
   assertEquals(r.surface, true);
@@ -72,6 +73,50 @@ Deno.test("missing timestamp: stale", () => {
   });
   assertEquals(r.isStale, true);
   assertEquals(r.willClassify, false);
+});
+
+Deno.test("null watermark + stale seed-only: existing, no surface; watermark set", () => {
+  const now = new Date("2026-09-30T12:00:00Z").getTime();
+  const ts = "2026-09-28T09:00:00.000Z";
+  const r = decideSurfaceAndClassify({
+    dispositionTag: null,
+    isExistingLead: true,
+    newestProspectTimestamp: ts,
+    priorWatermark: null,
+    nowMs: now,
+  });
+  assertEquals(r.surface, false);
+  assertEquals(r.setPending, false);
+  assertEquals(r.willClassify, false);
+  assertEquals(r.newWatermark, ts);
+});
+
+Deno.test("null watermark + missing timestamp: existing, no surface; no watermark", () => {
+  const now = new Date("2026-09-30T12:00:00Z").getTime();
+  const r = decideSurfaceAndClassify({
+    dispositionTag: null,
+    isExistingLead: true,
+    newestProspectTimestamp: null,
+    priorWatermark: null,
+    nowMs: now,
+  });
+  assertEquals(r.surface, false);
+  assertEquals(r.newWatermark, null);
+});
+
+Deno.test("null watermark + fresh surfaces", () => {
+  const now = new Date("2026-09-30T12:00:00Z").getTime();
+  const ts = "2026-09-30T11:30:00.000Z";
+  const r = decideSurfaceAndClassify({
+    dispositionTag: null,
+    isExistingLead: true,
+    newestProspectTimestamp: ts,
+    priorWatermark: null,
+    nowMs: now,
+  });
+  assertEquals(r.surface, true);
+  assertEquals(r.setPending, true);
+  assertEquals(r.willClassify, true);
 });
 
 Deno.test("normalizeIsoMs aligns precision", () => {

@@ -50,11 +50,24 @@ export function decideSurfaceAndClassify(input: SurfaceDecisionInput): SurfaceDe
 
   let surface = false;
   if (isExistingLead) {
-    surface = shouldResurface({
-      dispositionTag,
-      newestRole: tsNorm ? "prospect" : null,
-      newerThanPrior,
-    });
+    if (!priorNorm) {
+      if (stale) {
+        // Seed-only: do not surface; allow callers to write watermark if tsNorm exists
+        surface = false;
+      } else {
+        surface = shouldResurface({
+          dispositionTag,
+          newestRole: tsNorm ? "prospect" : null,
+          newerThanPrior,
+        });
+      }
+    } else {
+      surface = shouldResurface({
+        dispositionTag,
+        newestRole: tsNorm ? "prospect" : null,
+        newerThanPrior,
+      });
+    }
   } else {
     // New lead: always surface to 'pending' (product decision), even if stale or ts missing
     surface = true;

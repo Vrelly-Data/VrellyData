@@ -414,8 +414,11 @@ Deno.serve(async (req) => {
                       ...(existingLead?.inbox_status === 'pending' ? {} : { inbox_status: 'pending' }),
                       ...(decision.newWatermark ? { last_surfaced_reply_at: decision.newWatermark } : {}),
                     }
-                  : // New-lead non-surface path is not used anymore; new leads always surface to pending
-                    existingLead ? {} : { inbox_status: 'pending', ...(newestProspectTs ? { last_surfaced_reply_at: newestProspectTs } : {}) }),
+                  : existingLead
+                    // Seed-only rule: existing lead, null watermark, stale → write watermark only when present
+                    ? ({ ...(decision.newWatermark ? { last_surfaced_reply_at: decision.newWatermark } : {}) })
+                    // New lead (non-surface path should not happen): ensure pending and watermark when known
+                    : { inbox_status: 'pending', ...(newestProspectTs ? { last_surfaced_reply_at: newestProspectTs } : {}) }),
                 channel: 'linkedin',
                 source: 'heyreach',
                 heyreach_conversation_id: conversationId,

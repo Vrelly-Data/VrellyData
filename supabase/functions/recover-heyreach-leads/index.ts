@@ -294,12 +294,20 @@ Deno.serve(async (req) => {
             mutatedCount++;
             const { error: updErr } = await supabase
               .from("agent_leads")
-              .update({
-                last_reply_text: replySnippet,
-                last_reply_at: latestProspectTs,
-                last_surfaced_reply_at: latestProspectTs,
-                ...(existing && !isSuppressed(existing.disposition_tag) ? { inbox_status: "pending" } : {}),
-              })
+              .update(
+                decision.surface
+                  ? {
+                      last_reply_text: replySnippet,
+                      last_reply_at: latestProspectTs,
+                      last_surfaced_reply_at: latestProspectTs,
+                      ...(existing && !isSuppressed(existing.disposition_tag) ? { inbox_status: "pending" } : {}),
+                    }
+                  : {
+                      last_reply_text: replySnippet,
+                      last_reply_at: latestProspectTs,
+                      ...(decision.newWatermark ? { last_surfaced_reply_at: decision.newWatermark } : {}),
+                    }
+              )
               .eq("id", existing.id);
             if (updErr) {
               console.error(`[recover-heyreach-leads] UPDATE failed for ${conversationId}:`, updErr);

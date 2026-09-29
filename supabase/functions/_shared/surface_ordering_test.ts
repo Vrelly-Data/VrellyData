@@ -42,6 +42,20 @@ Deno.test("ordering: poller then recover (same ts) second path no-op", () => {
   assertEquals(b.surface, false);
 });
 
+Deno.test("ordering: recover then webhook (same ts) second path no-op", () => {
+  const ts = "2026-09-29T12:00:00Z";
+  const a = firstPath(ts, null, false);
+  const b = firstPath(ts, a.newWatermark, true);
+  assertEquals(b.surface, false);
+});
+
+Deno.test("ordering: webhook then recover (same ts) second path no-op", () => {
+  const ts = "2026-09-29T12:00:00Z";
+  const a = firstPath(ts, null, false);
+  const b = firstPath(ts, a.newWatermark, true);
+  assertEquals(b.surface, false);
+});
+
 Deno.test("ordering: sub-second precision difference is a no-op on second path", () => {
   const prior = "2026-09-30T12:00:22Z";
   const incoming = "2026-09-30T12:00:22.123Z";
