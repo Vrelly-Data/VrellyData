@@ -9,6 +9,7 @@ import { htmlToText } from '../_shared/html-to-text.ts';
 import { shouldResurface, fireClassifyReply } from '../_shared/inbox-reply.ts';
 import { cleanReplyPreview } from '../_shared/reply-text.ts';
 import { detectLanguageCode } from '../_shared/language.ts';
+import { listEnabledCampaignIds } from '../_shared/capture-scope.ts';
 
 const allowedOrigins = [
   'https://vrelly.com',
@@ -281,6 +282,17 @@ Deno.serve(async (req) => {
           continue;
         }
 
+        // Fail-closed capture scope: only process threads for ENABLED sequences
+        const scope = await listEnabledCampaignIds(supabase as any, String(integration.id));
+        if (!scope.ok) {
+          console.log(
+            `[poll-reply-inbox] skip integration ${integration.id} — ` +
+            (scope.reason === 'none_enabled' ? 'no enabled campaigns' : 'capture-scope lookup error'),
+          );
+          continue;
+        }
+        const enabledSet = new Set(scope.ids.map(String));
+
         const userId = integration.created_by;
 
         // Check for active agent config
@@ -307,6 +319,13 @@ Deno.serve(async (req) => {
           console.error(`[poll-reply-inbox] Reply.io inbox fetch failed for integration ${integration.id}:`, fetchErr);
           continue;
         }
+
+        // Filter to capture-enabled campaigns ONLY; drop threads with no sequence id
+        inboxThreads = inboxThreads.filter((t) => {
+          const seqId = t?.sequence?.id;
+          if (seqId === undefined || seqId === null) return false;
+          return enabledSet.has(String(seqId));
+        });
 
         const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
