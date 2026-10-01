@@ -1,8 +1,16 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { htmlToText } from '../_shared/html-to-text.ts';
 import { preprocessEmailReply } from '../_shared/reply-text.ts';
 import { computeCopyFingerprint } from '../_shared/copy-fingerprint.ts';
 import { isPlaceholderReplyText, pickLastProspectContentFromThread } from './utils.ts';
+import {
+  deriveSenderSignals,
+  normalizeThread,
+  pickLatestGenuineProspect,
+  buildAnthropicMessages,
+  detectSenderMislabel,
+  looksLikeOurSenderAtTop,
+  type RawThreadEntry,
+} from './thread-normalize.ts';
 
 console.log('classify-reply starting');
 
@@ -100,6 +108,7 @@ async function callAnthropicJSON(opts: {
   messages: Array<{ role: 'user' | 'assistant'; content: string }>;
   temperature: number;
   maxTokens?: number;
+  timeoutMs?: number;
 }): Promise<{
   json: any;
   retried: boolean;
@@ -107,6 +116,9 @@ async function callAnthropicJSON(opts: {
   ms: number;
 }> {
   const t0 = Date.now();
+  const controller = typeof AbortSignal !== 'undefined' && typeof (AbortSignal as any).timeout === 'function'
+    ? (AbortSignal as any).timeout(opts.timeoutMs ?? 60000)
+    : undefined;
   const base = {
     model: MODEL,
     max_tokens: opts.maxTokens ?? 1000,
@@ -123,6 +135,7 @@ async function callAnthropicJSON(opts: {
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify(body),
+      signal: controller,
     });
 
   const res = await post(base);
@@ -165,6 +178,52 @@ async function callAnthropicJSON(opts: {
       ms: Date.now() - t0,
     };
   }
+}
+
+// Cheap verification that a draft answers the latest genuine prospect message.
+// Prefers an LLM yes/no when a key is available; falls back to a deterministic heuristic.
+async function checkDraftAddressesLatest(opts: {
+  apiKey?: string | null;
+  latestProspectText: string;
+  draftText: string;
+  timeoutMs?: number;
+}): Promise<{ ok: boolean; reason: string }> {
+  const latest = String(opts.latestProspectText ?? '').trim();
+  const draft = String(opts.draftText ?? '').trim().toLowerCase();
+  if (!latest || !draft) return { ok: false, reason: 'missing_latest_or_draft' };
+  if (opts.apiKey) {
+    try {
+      const res = await callAnthropicJSON({
+        apiKey: opts.apiKey!,
+        systemPrompt:
+          'You are a precise evaluator. Decide if the DRAFT directly addresses the LATEST MESSAGE. Return ONLY {"addresses_latest": true|false, "reason": "why"}. Consider concrete asks, questions, refusals, or explicit paths (email/phone/link).',
+        messages: [
+          { role: 'user', content: `LATEST MESSAGE:\n"""\n${latest}\n"""\n\nDRAFT:\n"""\n${draft}\n"""` },
+        ],
+        temperature: 0,
+        maxTokens: 120,
+        timeoutMs: opts.timeoutMs ?? 15000,
+      });
+      const ok = res.json?.addresses_latest === true;
+      const reason = typeof res.json?.reason === 'string' ? res.json.reason : ok ? 'addresses_latest' : 'no';
+      return { ok, reason };
+    } catch {
+      // fall through to heuristic
+    }
+  }
+  // Heuristic: if latest contains concrete paths, draft must reference at least one.
+  const paths = extractProspectPaths(latest);
+  if (paths.emails.length || paths.phones.length || paths.urls.length) {
+    const mentionsEmail = paths.emails.some((e) => draft.includes(e.toLowerCase()));
+    const mentionsUrl = paths.urls.some((u) => draft.includes(u.toLowerCase()));
+    const mentionsPhone = paths.phones.some((p) => draft.includes(p.replace(/\D/g, '')));
+    if (mentionsEmail || mentionsUrl || mentionsPhone) return { ok: true, reason: 'matched_concrete_path' };
+    return { ok: false, reason: 'missed_concrete_path' };
+  }
+  // Else: share at least one 5+ char keyword overlap.
+  const words = Array.from(new Set(latest.toLowerCase().match(/[a-z0-9]{5,}/g) ?? []));
+  const hasOverlap = words.some((w) => draft.includes(w));
+  return { ok: hasOverlap, reason: hasOverlap ? 'keyword_overlap' : 'no_overlap' };
 }
 
 Deno.serve(async (req) => {
@@ -643,12 +702,27 @@ Use this campaign data to:
       console.warn('[classify-reply] sender_profiles fetch failed (using config sender):', e);
     }
 
+    // Known mailbox identities (best-effort; null-safe)
+    let mailboxEmails: string[] = [];
+    let mailboxFromNames: string[] = [];
+    try {
+      const { data: mboxes } = await supabase
+        .from('email_sender_mailboxes')
+        .select('mailbox_email, from_name, sender_name, source')
+        .eq('user_id', user_id);
+      const rows = mboxes ?? [];
+      mailboxEmails = rows.map((r: any) => r.mailbox_email).filter(Boolean);
+      mailboxFromNames = rows.map((r: any) => r.from_name ?? r.sender_name).filter(Boolean);
+    } catch (e) {
+      console.warn('[classify-reply] mailbox identities fetch failed (continuing):', e);
+    }
+
     // Render an optional sectioned line only when value is present, so empty
     // fields drop entire lines rather than rendering "Not specified".
     const line = (label: string, value: string | null | undefined) =>
       value && value.trim() ? `${label}${value}` : '';
 
-    const promptVersion = 'phase3-v3';
+    const promptVersion = 'phase3-v4';
 
     // Compact persona list for Call 1 (titles + tags only). Full content of the
     // matched persona is looked up after Call 1 from the same `personas` array.
@@ -659,71 +733,114 @@ Use this campaign data to:
           .join('\n')
       : 'No personas defined.';
 
-    // Convert thread_history into Anthropic-native messages.
-    // prospect → user, sender → assistant. Role values verified stable
-    // across all 4 ingestion writers (heyreach/smartlead webhooks,
-    // reply-webhook, sync-reply-contacts).
+    // === Build messages: normalized (preferred) with a v67 guard/fallback ===
+    // v67 baseline
     type ThreadEntry = { role?: string; content?: string };
     const rawThread: ThreadEntry[] = Array.isArray(thread_history) ? thread_history : [];
-
-    // Drop the trailing entry if it duplicates the inbound reply — webhooks
-    // update reply_thread BEFORE invoking classify-reply, so the latest
-    // prospect message is typically already at the tail.
-    const trimmedThread =
+    const trimmedV =
       rawThread.length > 0 &&
       rawThread[rawThread.length - 1].role === 'prospect' &&
       typeof rawThread[rawThread.length - 1].content === 'string' &&
       rawThread[rawThread.length - 1].content!.trim() === processed_reply_text.trim()
         ? rawThread.slice(0, -1)
         : rawThread;
-
-    const mapped: Array<{ role: 'user' | 'assistant'; content: string }> = trimmedThread
+    const mappedV: Array<{ role: 'user' | 'assistant'; content: string }> = trimmedV
       .map((e) => ({
         role: (e.role === 'prospect' ? 'user' : 'assistant') as 'user' | 'assistant',
         content: typeof e.content === 'string' ? e.content : '',
       }))
       .filter((m) => m.content.trim().length > 0);
-
-    // Anthropic requires the first message to be 'user', so the turns before
-    // the prospect's first reply cannot stay in the message array.
-    //
-    // They used to be DISCARDED here, which quietly threw away the single most
-    // relevant piece of context on cold outbound: our own pitch. Measured over
-    // production threads, that hit 99.7% of Smartlead leads, 78.9% of Reply.io
-    // and 77.5% of HeyReach — up to 8 turns and ~2.7k characters — and in the
-    // common shape (a sequence of outbound, then one reply) it left the model
-    // with NO conversation at all, while the Call 2 prompt was still telling it
-    // to "reference specifics from the thread". A reply like "Not interested"
-    // or "Not 5 mil" is answering the outbound; without it there is nothing to
-    // answer.
-    //
-    // So they are carried into the system prompt instead — preserved, and
-    // attributed to the sender rather than fabricated as prospect turns.
-    const firstUserIdx = mapped.findIndex((m) => m.role === 'user');
-    const leadingOutbound = firstUserIdx >= 0 ? mapped.slice(0, firstUserIdx) : mapped;
-    const userFirst = firstUserIdx >= 0 ? mapped.slice(firstUserIdx) : [];
-
-    // Collapse consecutive same-role turns with double-newline.
-    const collapsed: Array<{ role: 'user' | 'assistant'; content: string }> = [];
-    for (const m of userFirst) {
-      const tail = collapsed[collapsed.length - 1];
+    const firstUserIdxV = mappedV.findIndex((m) => m.role === 'user');
+    const leadingOutboundV = firstUserIdxV >= 0 ? mappedV.slice(0, firstUserIdxV) : mappedV;
+    const userFirstV = firstUserIdxV >= 0 ? mappedV.slice(firstUserIdxV) : [];
+    const collapsedV: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+    for (const m of userFirstV) {
+      const tail = collapsedV[collapsedV.length - 1];
       if (tail && tail.role === m.role) {
         tail.content = `${tail.content}\n\n${m.content}`;
       } else {
-        collapsed.push({ ...m });
+        collapsedV.push({ ...m });
       }
     }
-
-    // Append the inbound reply as the final user turn.
-    const finalUserContent = `[Channel: ${channel}]\n${processed_reply_text}\n\nAnalyze this reply and respond as instructed.`;
-    const finalTail = collapsed[collapsed.length - 1];
-    if (finalTail && finalTail.role === 'user') {
-      finalTail.content = `${finalTail.content}\n\n${finalUserContent}`;
+    const finalUserContentV =
+      `[Channel: ${channel}]\n${processed_reply_text}\n\nAnalyze this reply and respond as instructed.`;
+    const finalTailV = collapsedV[collapsedV.length - 1];
+    if (finalTailV && finalTailV.role === 'user') {
+      finalTailV.content = `${finalTailV.content}\n\n${finalUserContentV}`;
     } else {
-      collapsed.push({ role: 'user', content: finalUserContent });
+      collapsedV.push({ role: 'user', content: finalUserContentV });
     }
+    const isFirstTouchV = trimmedV.length === 0;
 
-    const messages = collapsed;
+    let relabelCount = 0;
+    let replyTextLooksSender = false;
+    let latestProspectText = processed_reply_text;
+    let usedV67Messages = false;
+    let messages: Array<{ role: 'user' | 'assistant'; content: string }> = collapsedV;
+    let leadingOutbound = leadingOutboundV.slice(0);
+    let isFirstTouch = isFirstTouchV;
+    try {
+      const signals = deriveSenderSignals({
+        agentSenderName: effSenderName,
+        profileNames: [],
+        mailboxEmails,
+        mailboxFromNames,
+        threadSenderNames: threadSenderName ? [threadSenderName] : [],
+      });
+      const norm = normalizeThread(thread_history, { channel, signals });
+      relabelCount = norm.relabelCount;
+      const { latest } = pickLatestGenuineProspect(norm.normalized);
+      // Strong signal: our sender appears at the TOP of the webhook reply text (pre-header)
+      const replyFromUsTop = looksLikeOurSenderAtTop(processed_reply_text, signals);
+      replyTextLooksSender = detectSenderMislabel(
+        { role: 'prospect', content: processed_reply_text, channel } as RawThreadEntry,
+        signals,
+      );
+      const latestNormalized = latest?.cleanContent?.trim()
+        ? latest.cleanContent.trim()
+        : processed_reply_text;
+      const built = buildAnthropicMessages(norm.normalized, latestNormalized, channel);
+      // Guard: if newest entry would be relabelled or selection disagrees with reply_text, use v67
+      const newest = rawThread[rawThread.length - 1] || null;
+      const newestIsProspectInbound =
+        !!newest &&
+        (newest as any).role === 'prospect' &&
+        typeof (newest as any).content === 'string' &&
+        ((newest as any).content as string).trim().length > 0;
+      const newestWasRelabelled =
+        newestIsProspectInbound &&
+        detectSenderMislabel(
+          { role: 'prospect', content: String((newest as any).content), channel } as RawThreadEntry,
+          signals,
+        );
+      const disagreeWithReplyText =
+        latestProspectText.trim() &&
+        processed_reply_text.trim() &&
+        latestProspectText.indexOf(processed_reply_text.trim()) === -1 &&
+        processed_reply_text.indexOf(latestProspectText.trim()) === -1;
+      if (newestWasRelabelled || disagreeWithReplyText) {
+        usedV67Messages = true;
+        latestProspectText = processed_reply_text;
+        replyTextLooksSender = false;
+        messages = collapsedV;
+        leadingOutbound = leadingOutboundV.slice(0);
+        isFirstTouch = isFirstTouchV;
+      } else {
+        latestProspectText = latestNormalized;
+        messages = built.messages;
+        leadingOutbound = built.leadingOutbound;
+        isFirstTouch = built.isFirstTouch;
+      }
+      if (replyFromUsTop) {
+        latestProspectText = latestNormalized;
+      }
+    } catch (e) {
+      console.warn('[classify-reply] normalization failed — using v67 build', e);
+      // keep baseline v67 messages already set
+      usedV67Messages = true;
+      latestProspectText = processed_reply_text;
+      replyTextLooksSender = false;
+    }
 
     // Anthropic key — required before either model call.
     const anthropicApiKey = Deno.env.get('ANTHROPIC_API_KEY');
@@ -734,8 +851,6 @@ Use this campaign data to:
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
-
-    const isFirstTouch = trimmedThread.length === 0;
 
     // The outbound that preceded the prospect's first reply, rendered for the
     // system prompt (see the note at `leadingOutbound`). Shared verbatim by
@@ -789,6 +904,13 @@ Classification rules:
 Return ONLY valid JSON. No markdown fences. No explanation.`;
 
     const call1SystemPromptHash = await sha256Hex(call1SystemPrompt);
+    const totalBudgetMs = 90000;
+    const regenBudgetMs = 60000;
+    const remainingMs = () => Math.max(5000, totalBudgetMs - (Date.now() - t0));
+    let extraCalls = 0;
+    let extraTokensIn = 0;
+    let extraTokensOut = 0;
+    let fallbackPromptHash: string | null = null;
 
     let call1: { json: any; retried: boolean; usage: { input_tokens: number; output_tokens: number }; ms: number } | null = null;
     try {
@@ -798,6 +920,7 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
         messages,
         temperature: 0,
         maxTokens: 500,
+        timeoutMs: Math.min(35000, remainingMs()),
       });
       console.log(`[classify-reply] Call 1 done +${Date.now() - t0}ms (intent=${call1.json?.intent}, persona=${call1.json?.prospect_read?.matched_persona ?? 'none'}, retried=${call1.retried})`);
     } catch (call1Err) {
@@ -942,6 +1065,10 @@ ${line('Communication style: ', effCommStyle)}
 ${avoid_phrases && avoid_phrases.length > 0 ? 'Never say or reference: ' + avoid_phrases.join(', ') : ''}
 ${sample_message ? 'Writing style example (match this tone exactly):\n' + sample_message : ''}
 
+## Latest Prospect Message (ANSWER THIS FIRST)
+${latestProspectText}
+${replyTextLooksSender ? '\nNote: The most recent message(s) in the thread were from our side. Do NOT repeat them — write only a short next step that acknowledges the latest prospect message above and moves the thread forward.' : ''}
+
 ## Grounding Rules (RANKED — follow IN THIS ORDER)
 1) Respond to the latest prospect message FIRST AND FOREMOST. Acknowledge/answer exactly what they said. If they gave a concrete path (email/phone/link or \"talk to X/department Y\"), confirm you will follow that path and prefer it over inventing a different referral.
 2) Then continue the conversation coherently using the FULL thread context (prior outbound and any prior replies). Avoid contradiction or repetition; do not re-introduce yourself or open like a cold outreach.
@@ -973,7 +1100,7 @@ ${personaSection ? '\n' + personaSection : ''}
 
 ## Concrete next step(s) the prospect provided
 ${(() => {
-  const paths = extractProspectPaths(processed_reply_text);
+  const paths = extractProspectPaths(latestProspectText);
   const bullets: string[] = [];
   if (paths.emails.length) bullets.push(`- Email address(es): ${paths.emails.join(', ')}`);
   if (paths.phones.length) bullets.push(`- Phone number(s): ${paths.phones.join(', ')}`);
@@ -1013,6 +1140,7 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
         messages,
         temperature: 0.5,
         maxTokens: 1000,
+        timeoutMs: Math.min(35000, remainingMs()),
       });
       console.log(`[classify-reply] Call 2 done +${Date.now() - t0}ms (retried=${call2.retried})`);
     } catch (call2Err) {
@@ -1026,6 +1154,10 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
     let reasoning = SAFE_FALLBACK.reasoning;
     let shouldAutoSend = false;
     let nextPipelineStage = 'replied';
+    let addressCheckOk: boolean | null = null;
+    let addressCheckReason: string | null = null;
+    let regenerated = false;
+    let fellBackV67 = false;
     if (call2) {
       suggestedResponse = typeof call2.json?.suggested_response === 'string'
         ? stripBraceWrapper(call2.json.suggested_response)
@@ -1033,6 +1165,212 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
       reasoning = call2.json?.reasoning ?? reasoning;
       shouldAutoSend = call2.json?.should_auto_send === true;
       nextPipelineStage = call2.json?.next_pipeline_stage ?? 'replied';
+      // Post-generation lightweight check
+      try {
+        const check = await checkDraftAddressesLatest({
+          apiKey: anthropicApiKey,
+          latestProspectText,
+          draftText: suggestedResponse,
+          timeoutMs: Math.min(15000, remainingMs()),
+        });
+        addressCheckOk = check.ok;
+        addressCheckReason = check.reason;
+        if (!check.ok && (Date.now() - t0) < regenBudgetMs) {
+          // Regenerate once with a sharper instruction
+          regenerated = true;
+          const regenMessages = [
+            ...messages,
+            {
+              role: 'user' as const,
+              content:
+                'The previous draft did not directly answer the prospect’s latest message above. Regenerate a corrected response that STARTS by answering it in the first sentence (2–4 sentences total). Return ONLY the JSON object.',
+            },
+          ];
+          try {
+            const call2b = await callAnthropicJSON({
+              apiKey: anthropicApiKey,
+              systemPrompt: call2SystemPrompt,
+              messages: regenMessages,
+              temperature: 0.4,
+              maxTokens: 900,
+              timeoutMs: Math.min(20000, remainingMs()),
+            });
+            extraCalls += 1;
+            extraTokensIn += call2b.usage.input_tokens;
+            extraTokensOut += call2b.usage.output_tokens;
+            const sr = typeof call2b.json?.suggested_response === 'string'
+              ? stripBraceWrapper(call2b.json.suggested_response)
+              : '';
+            if (sr) {
+              suggestedResponse = sr;
+              reasoning = call2b.json?.reasoning ?? reasoning;
+              shouldAutoSend = call2b.json?.should_auto_send === true;
+              nextPipelineStage = call2b.json?.next_pipeline_stage ?? nextPipelineStage;
+              const recheck = await checkDraftAddressesLatest({
+                apiKey: anthropicApiKey,
+                latestProspectText,
+                draftText: suggestedResponse,
+                timeoutMs: Math.min(15000, remainingMs()),
+              });
+              addressCheckOk = recheck.ok;
+              addressCheckReason = recheck.reason;
+            }
+          } catch {
+            // swallow — fallback below
+          }
+          if (addressCheckOk === false && (Date.now() - t0) < totalBudgetMs) {
+            // Fallback to CURRENT v67 behaviour & prompt (no normalization; use processed_reply_text)
+            try {
+              type ThreadEntry = { role?: string; content?: string };
+              const rawV: ThreadEntry[] = Array.isArray(thread_history) ? thread_history : [];
+              const trimmedV =
+                rawV.length > 0 &&
+                rawV[rawV.length - 1].role === 'prospect' &&
+                typeof rawV[rawV.length - 1].content === 'string' &&
+                rawV[rawV.length - 1].content!.trim() === processed_reply_text.trim()
+                  ? rawV.slice(0, -1)
+                  : rawV;
+              const mappedV: Array<{ role: 'user' | 'assistant'; content: string }> = trimmedV
+                .map((e) => ({
+                  role: (e.role === 'prospect' ? 'user' : 'assistant') as 'user' | 'assistant',
+                  content: typeof e.content === 'string' ? e.content : '',
+                }))
+                .filter((m) => m.content.trim().length > 0);
+              const firstUserIdxV = mappedV.findIndex((m) => m.role === 'user');
+              const leadingOutboundV =
+                firstUserIdxV >= 0 ? mappedV.slice(0, firstUserIdxV) : mappedV;
+              const userFirstV = firstUserIdxV >= 0 ? mappedV.slice(firstUserIdxV) : [];
+              const collapsedV: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+              for (const m of userFirstV) {
+                const tail = collapsedV[collapsedV.length - 1];
+                if (tail && tail.role === m.role) {
+                  tail.content = `${tail.content}\n\n${m.content}`;
+                } else {
+                  collapsedV.push({ ...m });
+                }
+              }
+              const finalUserContentV =
+                `[Channel: ${channel}]\n${processed_reply_text}\n\nAnalyze this reply and respond as instructed.`;
+              const finalTailV = collapsedV[collapsedV.length - 1];
+              if (finalTailV && finalTailV.role === 'user') {
+                finalTailV.content = `${finalTailV.content}\n\n${finalUserContentV}`;
+              } else {
+                collapsedV.push({ role: 'user', content: finalUserContentV });
+              }
+              const priorOutreachSectionV = leadingOutboundV.length > 0
+                ? `\n## Our outreach before their first reply
+These ${leadingOutboundV.length} message(s) were sent by ${effSenderName} to this prospect BEFORE the reply you are handling. The reply is very often answering the LAST one — read it in that light. Do not re-pitch points already made here.
+${leadingOutboundV
+                  .map((m, i) => `\n--- Outbound ${i + 1} of ${leadingOutboundV.length} ---\n${m.content}`)
+                  .join('')}\n`
+                : '';
+              const call2SystemPromptV67 = `You are an expert B2B sales agent operating on behalf of ${effSenderName}${effSenderTitle ? `, ${effSenderTitle}` : ''} at ${company_name}.
+
+## About ${effSenderName}
+${effSenderBio || ''}
+${line('LinkedIn: ', effSenderLinkedin)}
+${knowledgeSection}
+## The Offer
+Company: ${company_name}${company_url ? ` (${company_url})` : ''}
+What we sell: ${offer_description}
+${line("Who it's for: ", target_icp)}
+${line('Outcome we deliver: ', outcome_delivered)}
+${line('Desired prospect action: ', desired_action)}
+${line('Communication style: ', effCommStyle)}
+${avoid_phrases && avoid_phrases.length > 0 ? 'Never say or reference: ' + avoid_phrases.join(', ') : ''}
+${sample_message ? 'Writing style example (match this tone exactly):\n' + sample_message : ''}
+
+## Grounding Rules (RANKED — follow IN THIS ORDER)
+1) Respond to the latest prospect message FIRST AND FOREMOST. Acknowledge/answer exactly what they said. If they gave a concrete path (email/phone/link or \"talk to X/department Y\"), confirm you will follow that path and prefer it over inventing a different referral.
+2) Then continue the conversation coherently using the FULL thread context (prior outbound and any prior replies). Avoid contradiction or repetition; do not re-introduce yourself or open like a cold outreach.
+3) Then apply persona, suggested_angle, sales guidelines, templates, and campaign intelligence — only as a THIRD BEAT. They are guidance and must never override (1) or (2).
+Keep it concise (2–4 sentences), warm, and human.
+
+## Resources to Reference
+${line('Calendar booking link: ', calendar_link)}
+${case_studies || ''}
+
+## Pricing
+${pricing_summary || 'Pricing depends on use case — direct prospects to a call rather than quoting numbers.'}
+
+## When to Disqualify
+${disqualification_criteria || 'Use judgment — politely decline if the prospect is clearly outside ICP.'}
+
+## Objection Playbook
+${objection_handling_notes || 'Acknowledge the objection, validate it, then redirect to value.'}
+
+## About the Prospect
+${line('Name: ', leadName)}
+${line('Title: ', leadJobTitle)}
+${line('Company: ', leadCompany)}
+${line('LinkedIn: ', leadLinkedinUrl)}
+${line('First contacted in: ', leadLastCampaignName)}
+${priorOutreachSectionV}
+${prospectRead?.suggested_angle ? 'Suggested angle: ' + prospectRead.suggested_angle : ''}
+${personaSection ? '\n' + personaSection : ''}
+
+## Concrete next step(s) the prospect provided
+${(() => {
+  const paths = extractProspectPaths(processed_reply_text);
+  const bullets: string[] = [];
+  if (paths.emails.length) bullets.push(`- Email address(es): ${paths.emails.join(', ')}`);
+  if (paths.phones.length) bullets.push(`- Phone number(s): ${paths.phones.join(', ')}`);
+  if (paths.urls.length) bullets.push(`- Link(s): ${paths.urls.join(', ')}`);
+  return bullets.length ? bullets.join('\n') + "\n\nFollow these EXACTLY — confirm you're taking the path they offered before any sales tactics." : 'None detected.';
+})()}
+
+${stageSection}
+${intentSection ? '\n' + intentSection : ''}
+
+## Your Core Sales Guidelines
+${guidelinesText || 'No specific guidelines configured yet.'}
+${learningsSection ? '\n' + learningsSection : ''}
+
+## Relevant Templates & Frameworks
+${templatesText || 'No templates available.'}
+${campaignIntelligence}
+
+## Your Task
+The prospect's intent has been classified as: ${intent}${isObjection ? ' (objection-flavored)' : ''}. Generate the reply accordingly. Return ONLY this JSON object:
+- suggested_response: the ideal next message (2-4 sentences, matches ${effSenderName}'s voice, grounded in the resources above. Reference the prospect by name where natural. Use the calendar link if booking a meeting. Reference case studies if it strengthens credibility.)
+- reasoning: one sentence explaining your response
+- should_auto_send: boolean (true ONLY if the intent is one of 'interested', 'needs_more_info', 'not_interested', or 'referral'. For these intents, auto-send is allowed on BOTH email and LinkedIn. For 'out_of_office', 'bounce', or 'unknown', this must be false.)
+- next_pipeline_stage: one of 'replied', 'in_progress', 'call_scheduled'
+  Rules: explicit agreement to a call/meeting → call_scheduled; interested/needs_more_info/not_interested → in_progress; out_of_office or bounce → replied.
+  NEVER auto-close a lead: closes (Closed Won / Closed Lost), No Show, and Sent Proposal are set by the operator, not you. Leave a not-interested reply active (in_progress) — the intent field already flags the sentiment.
+
+Return ONLY valid JSON. No markdown fences. No explanation.`;
+              fallbackPromptHash = await sha256Hex(call2SystemPromptV67);
+              const call2V67 = await callAnthropicJSON({
+                apiKey: anthropicApiKey,
+                systemPrompt: call2SystemPromptV67,
+                messages: collapsedV,
+                temperature: 0.5,
+                maxTokens: 1000,
+                timeoutMs: Math.min(20000, remainingMs()),
+              });
+              extraCalls += 1;
+              extraTokensIn += call2V67.usage.input_tokens;
+              extraTokensOut += call2V67.usage.output_tokens;
+              const sr2 = typeof call2V67.json?.suggested_response === 'string'
+                ? stripBraceWrapper(call2V67.json.suggested_response)
+                : '';
+              if (sr2) {
+                suggestedResponse = sr2;
+                reasoning = call2V67.json?.reasoning ?? reasoning;
+                shouldAutoSend = call2V67.json?.should_auto_send === true;
+                nextPipelineStage = call2V67.json?.next_pipeline_stage ?? nextPipelineStage;
+                fellBackV67 = true;
+                addressCheckOk = null; // not applicable post-fallback
+              }
+            } catch {
+              // keep prior suggestedResponse even if imperfect
+            }
+          }
+        }
+      } catch {
+        // ignore check failures — never block on this
+      }
     }
 
     const classification = {
@@ -1140,6 +1478,16 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
           call1_failed: false,
           call2_failed: call2Failed,
           call1_system_prompt_hash: call1SystemPromptHash,
+          normalization_relabelled_count: relabelCount,
+          reply_text_from_sender: replyTextLooksSender,
+          address_check_ok: addressCheckOk,
+          address_check_reason: addressCheckReason,
+          regenerated,
+          fell_back_v67: fellBackV67,
+          extra_calls: extraCalls,
+          extra_tokens_in: extraTokensIn,
+          extra_tokens_out: extraTokensOut,
+          fallback_prompt_hash: fallbackPromptHash,
         },
       });
     } catch (auditErr) {
@@ -1207,7 +1555,7 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
             reply_text,
           },
         };
-        const writes: Array<Promise<unknown>> = [];
+        const writes: Array<Promise<unknown> | PromiseLike<unknown>> = [];
         writes.push(
           supabase
             .from('inference_events')
