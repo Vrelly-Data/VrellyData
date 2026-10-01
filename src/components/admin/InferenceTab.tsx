@@ -28,6 +28,7 @@ import { BarChartComponent } from '@/components/insights/charts/BarChartComponen
 import { SummaryCard } from '@/components/insights/charts/SummaryCard';
 import { Progress } from '@/components/ui/progress';
 import { ChartWithToggle } from '@/components/insights/charts/ChartWithToggle';
+import { PlatformTotalsCard } from '@/components/admin/PlatformTotalsCard';
 
 export function InferenceTab() {
   // Filters
@@ -59,7 +60,7 @@ export function InferenceTab() {
   const totalEventsCount = eventsResp?.total ?? events.length;
   const isCapped = eventsResp?.isCapped ?? false;
   const limit = eventsResp?.limit ?? events.length;
-  // Base KPIs (All Time, team/org filters where available)
+  // Vrelly-captured events, formerly "Base KPIs" (All Time, team/org filters where available)
   const baseFilters: InferenceFilters = {
     teamIds: filters.teamIds,
     // organizationIds intentionally omitted — base sources don't universally support it
@@ -184,11 +185,14 @@ export function InferenceTab() {
 
   return (
     <div className="space-y-6">
-      {/* Base KPIs — All Time */}
+      {/* Platform Totals — provider-reported, All Time */}
+      <PlatformTotalsCard />
+
+      {/* Vrelly-captured events — All Time */}
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-base flex items-center gap-2">
-            <BarChartIcon className="h-4 w-4" /> Base KPIs (All Time)
+            <BarChartIcon className="h-4 w-4" /> Vrelly-captured events (All Time)
           </CardTitle>
         </CardHeader>
         <CardContent>
