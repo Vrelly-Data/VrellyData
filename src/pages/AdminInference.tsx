@@ -583,10 +583,10 @@ export default function AdminInference() {
 
               {/* KPI cards */}
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                {/* Base KPIs (All Time) */}
+                {/* Vrelly-captured events (All Time) */}
                 <Card className="md:col-span-2 lg:col-span-4">
                   <CardHeader className="pb-2">
-                    <CardTitle className="text-sm">Base KPIs (All Time)</CardTitle>
+                    <CardTitle className="text-sm">Vrelly-captured events (All Time)</CardTitle>
                   </CardHeader>
                   <CardContent>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">

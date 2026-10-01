@@ -1003,3 +1003,67 @@ export function useExactInferencePeopleKpis(filters: InferenceFilters) {
   });
 }
 
+// -------- Platform totals (provider-reported, All-Time) --------
+export const PLATFORM_STAT_METRICS = [
+  'contacts_reached',
+  'emails_sent',
+  'li_messages_sent',
+  'li_connections_sent',
+  'li_connections_accepted',
+  'replies',
+  'interested',
+  'not_interested',
+  'ooo',
+] as const;
+export type PlatformStatMetric = (typeof PLATFORM_STAT_METRICS)[number];
+
+// null = the platform does not track the metric (NOT zero)
+export type PlatformStatsSnapshot = {
+  id: string;
+  snapshot_at: string;
+  platform: string;
+  account_label: string;
+  scope: string;
+  source: string;
+  notes: string | null;
+} & Record<PlatformStatMetric, number | null>;
+
+export type PlatformTotals = {
+  accounts: PlatformStatsSnapshot[];
+  // null total = no account tracks the metric; trackedBy = how many accounts contribute to the sum
+  totals: Record<PlatformStatMetric, { value: number | null; trackedBy: number }>;
+};
+
+export function usePlatformTotals() {
+  return useQuery({
+    queryKey: ['platform_stats_snapshots', 'all_time'],
+    queryFn: async (): Promise<PlatformTotals> => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase.from('platform_stats_snapshots' as any) as any)
+        .select(`id,snapshot_at,platform,account_label,scope,source,notes,${PLATFORM_STAT_METRICS.join(',')}`)
+        .eq('period', 'all_time')
+        .order('snapshot_at', { ascending: false })
+        .order('created_at', { ascending: false });
+      if (error) throw new Error(error.message);
+      // Latest snapshot per (platform, account_label) — rows arrive newest first
+      const latest = new Map<string, PlatformStatsSnapshot>();
+      for (const row of (data ?? []) as PlatformStatsSnapshot[]) {
+        const key = JSON.stringify([row.platform, row.account_label]);
+        if (!latest.has(key)) latest.set(key, row);
+      }
+      const accounts = Array.from(latest.values()).sort(
+        (a, b) => a.platform.localeCompare(b.platform) || a.account_label.localeCompare(b.account_label),
+      );
+      const totals = {} as PlatformTotals['totals'];
+      for (const metric of PLATFORM_STAT_METRICS) {
+        const tracked = accounts.map((a) => a[metric]).filter((v): v is number => v !== null && v !== undefined);
+        totals[metric] = {
+          value: tracked.length > 0 ? tracked.reduce((sum, v) => sum + v, 0) : null,
+          trackedBy: tracked.length,
+        };
+      }
+      return { accounts, totals };
+    },
+    staleTime: 60_000,
+  });
+}
