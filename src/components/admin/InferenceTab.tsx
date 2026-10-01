@@ -23,12 +23,15 @@ import {
   useOrganizationsLite,
   useTeams,
   useBaseInferenceKpis,
+  useCapturedContacts,
+  useLinkedinAcceptance,
 } from '@/hooks/useInferenceData';
 import { BarChartComponent } from '@/components/insights/charts/BarChartComponentEnhanced';
 import { SummaryCard } from '@/components/insights/charts/SummaryCard';
 import { Progress } from '@/components/ui/progress';
 import { ChartWithToggle } from '@/components/insights/charts/ChartWithToggle';
 import { PlatformTotalsCard } from '@/components/admin/PlatformTotalsCard';
+import { DataCoverageCard } from '@/components/admin/DataCoverageCard';
 
 export function InferenceTab() {
   // Filters
@@ -68,6 +71,11 @@ export function InferenceTab() {
     dateTo: undefined,
   };
   const { data: baseKpis, isLoading: loadingBase } = useBaseInferenceKpis(baseFilters);
+  // Contacts come from inference_events (admin-readable); the RPC's synced_contacts counts are
+  // RLS-scoped to the viewer's own team and so are wrong for a platform-wide view.
+  const { data: capturedContacts, isLoading: loadingContacts } = useCapturedContacts(filters.teamIds);
+  // null = RPC not available — shown as "not available", never 0
+  const { data: liAcceptance, isLoading: loadingAcceptance } = useLinkedinAcceptance(filters.teamIds);
 
   // Exact KPI totals and people-level intent mix — fetched via paged DB aggregates (not client samples)
   const { data: exactKpis, isLoading: loadingKpis } = useExactInferencePeopleKpis(filters);
@@ -198,13 +206,30 @@ export function InferenceTab() {
         <CardContent>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             {[
-              { title: 'Total LI Contacts', value: baseKpis?.totalContactsLinkedinDeduped, footnote: 'Unique contacts (LinkedIn)' },
-              { title: 'Total Email Contacts', value: baseKpis?.totalContactsEmailDeduped, footnote: 'Unique contacts (Email)' },
-              { title: 'Total LI Replies', value: baseKpis?.repliedPeopleLinkedin, footnote: 'People who replied on LinkedIn' },
-              { title: 'Total LI Acceptance', value: baseKpis?.linkedinConnectionsAccepted, footnote: 'LinkedIn connection accepts' },
-              { title: 'Total Email Replies', value: baseKpis?.repliedPeopleEmail, footnote: 'People who replied via Email' },
-              { title: 'Interested Email Replies', value: baseKpis?.interestedPeopleEmail, footnote: 'People classified as interested (Email)' },
-              { title: 'Interested LI Replies', value: baseKpis?.interestedPeopleLinkedin, footnote: 'People classified as interested (LinkedIn)' },
+              {
+                title: 'Total LI Contacts',
+                value: capturedContacts?.linkedin,
+                loading: loadingContacts,
+                footnote: 'People with a captured LinkedIn event',
+              },
+              {
+                title: 'Total Email Contacts',
+                value: capturedContacts?.email,
+                loading: loadingContacts,
+                footnote: 'People with a captured email event',
+              },
+              { title: 'Total LI Replies', value: baseKpis?.repliedPeopleLinkedin, loading: loadingBase, footnote: 'People who replied on LinkedIn' },
+              {
+                title: 'Total LI Acceptance',
+                value: liAcceptance ? liAcceptance.total : null,
+                loading: loadingAcceptance,
+                footnote: liAcceptance
+                  ? `Platform-reported: Reply.io team stats (${liAcceptance.replyIoAccepted.toLocaleString()}) + HeyReach overallStats (${liAcceptance.heyreachAccepted.toLocaleString()})`
+                  : 'Platform-reported (integration stats cache); needs the admin_linkedin_acceptance_stats migration',
+              },
+              { title: 'Total Email Replies', value: baseKpis?.repliedPeopleEmail, loading: loadingBase, footnote: 'People who replied via Email' },
+              { title: 'Interested Email Replies', value: baseKpis?.interestedPeopleEmail, loading: loadingBase, footnote: 'People classified as interested (Email)' },
+              { title: 'Interested LI Replies', value: baseKpis?.interestedPeopleLinkedin, loading: loadingBase, footnote: 'People classified as interested (LinkedIn)' },
             ].map((kpi) => (
               <Card key={kpi.title}>
                 <CardContent className="pt-6">
@@ -212,7 +237,13 @@ export function InferenceTab() {
                     <div>
                       <p className="text-sm text-muted-foreground">{kpi.title}</p>
                       <p className="text-2xl font-semibold mt-1">
-                        {loadingBase ? '…' : (kpi.value ?? 0).toLocaleString()}
+                        {kpi.loading ? (
+                          '…'
+                        ) : kpi.value === null ? (
+                          <span className="text-xs font-normal text-muted-foreground">not available</span>
+                        ) : (
+                          (kpi.value ?? 0).toLocaleString()
+                        )}
                       </p>
                       <p className="text-[10px] text-muted-foreground mt-1">{kpi.footnote}</p>
                     </div>
@@ -224,27 +255,8 @@ export function InferenceTab() {
         </CardContent>
       </Card>
 
-      {/* Email — campaign volume (aggregated across providers) */}
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base">Email — campaign volume</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <Card>
-              <CardContent className="pt-6">
-                <div>
-                  <p className="text-sm text-muted-foreground">Email Replies (campaign)</p>
-                  <p className="text-2xl font-semibold mt-1">
-                    {loadingBase ? '…' : (baseKpis?.emailRepliesCampaignTotal ?? 0).toLocaleString()}
-                  </p>
-                  <p className="text-[10px] text-muted-foreground mt-1">Campaign replies across providers</p>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        </CardContent>
-      </Card>
+      {/* Data coverage — health gauge of the moat */}
+      <DataCoverageCard teamIds={filters.teamIds} />
 
       {/* Filters */}
       <Card>
