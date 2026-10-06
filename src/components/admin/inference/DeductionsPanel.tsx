@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
@@ -40,8 +41,8 @@ function evidenceFor(stats: Stats, baselineRate: number, biased: Dimension[] = [
     replies: stats.replies,
     interested: stats.interested,
     not_interested: stats.notInterested,
-    interested_rate: stats.interestedRate,
-    baseline_interested_rate: baselineRate,
+    interested_share_of_replies: stats.interestedRate,
+    baseline_interested_share_of_replies: baselineRate,
     lift: baselineRate > 0 ? stats.interestedRate / baselineRate : null,
     median_hours_to_reply: stats.medianHoursToReply,
     hours_sample: stats.hoursSample,
@@ -62,8 +63,8 @@ function filterFor(segment: SegmentFilter, global: GlobalFilter): Deduction['seg
 
 function draftFromSuggestion(s: Suggestion, baselineRate: number, global: GlobalFilter, bias: Record<Dimension, DimensionBias>): Draft {
   return {
-    title: `${describeSegment(s.values)}: ${fmtLift(s.lift)} interested rate`,
-    body: `${pct(s.interestedRate)} of ${s.replies.toLocaleString()} replies were interested, vs ${pct(baselineRate)} across all replies in view (live ${s.live.toLocaleString()} · backfill ${s.backfill.toLocaleString()}).`,
+    title: `${describeSegment(s.values)}: ${fmtLift(s.lift)} interested share of replies`,
+    body: `${pct(s.interestedRate)} of ${s.replies.toLocaleString()} replies were interested (interested share of replies), vs ${pct(baselineRate)} across all replies in view (live ${s.live.toLocaleString()} · backfill ${s.backfill.toLocaleString()}).`,
     segment_filter: filterFor(s.values, global),
     evidence: evidenceFor(s, baselineRate, biasedDims(s.values, bias)),
     status: 'accepted',
@@ -76,7 +77,8 @@ function EvidenceLine({ evidence }: { evidence: Record<string, unknown> | null }
   const n = (k: string) => (typeof evidence[k] === 'number' ? (evidence[k] as number) : null);
   return (
     <p className="text-[11px] text-muted-foreground tabular-nums">
-      n = {(n('replies') ?? 0).toLocaleString()} · interested {pct(n('interested_rate'))} · {fmtLift(n('lift'))} ·
+      n = {(n('replies') ?? 0).toLocaleString()} · interested share of replies {pct(n('interested_share_of_replies'))} ·{' '}
+      {fmtLift(n('lift'))} ·
       median reply {fmtHours(n('median_hours_to_reply'))} · live {(n('live_n') ?? 0).toLocaleString()} · backfill{' '}
       {(n('backfill_n') ?? 0).toLocaleString()}
     </p>
@@ -103,14 +105,16 @@ export function DeductionsPanel({
   const { data: deductions = [], isLoading, error } = useDeductions();
   const save = useSaveDeduction();
   const [draft, setDraft] = useState<Draft | null>(null);
+  const [includeBiased, setIncludeBiased] = useState(false);
+  const flagged = useMemo(() => (Object.keys(bias) as Dimension[]).filter((d) => bias[d].biased), [bias]);
 
   const decided = useMemo(
     () => new Set(deductions.filter((d) => d.suggestion_key && d.status !== 'suggested').map((d) => d.suggestion_key as string)),
     [deductions],
   );
   const suggestions = useMemo(
-    () => suggestDeductions(rows, { baselineRate, keepTitles, exclude: decided }),
-    [rows, baselineRate, keepTitles, decided],
+    () => suggestDeductions(rows, { baselineRate, keepTitles, exclude: decided, excludeDims: includeBiased ? [] : flagged }),
+    [rows, baselineRate, keepTitles, decided, includeBiased, flagged],
   );
   const accepted = deductions.filter((d) => d.status === 'accepted');
   const rejected = deductions.filter((d) => d.status === 'rejected');
@@ -148,13 +152,24 @@ export function DeductionsPanel({
           </Button>
         </CardTitle>
         <p className="text-xs text-muted-foreground">
-          Suggestions rank segments by lift over the baseline interested rate ({pct(baselineRate)} across the replies in
-          view), n ≥ 30, single dimensions and pairs that beat both parents.
+          Suggestions rank segments by lift over the baseline interested share of replies ({pct(baselineRate)} across the
+          replies in view), n ≥ 30, single dimensions and pairs that beat both parents.
         </p>
       </CardHeader>
       <CardContent className="space-y-5">
         <div className="space-y-2">
-          <p className="text-sm font-medium">Suggested</p>
+          <div className="flex flex-wrap items-center gap-3">
+            <p className="text-sm font-medium">Suggested</p>
+            <div className="flex items-center gap-2">
+              <Checkbox id="include-biased" checked={includeBiased} onCheckedChange={(v) => setIncludeBiased(v === true)} />
+              <Label htmlFor="include-biased" className="text-xs font-normal">Include biased dimensions</Label>
+            </div>
+            {flagged.length > 0 && (
+              <span className="text-[11px] text-muted-foreground">
+                {includeBiased ? 'Including' : 'Excluding'} {flagged.map((d) => DIMENSION_LABELS[d]).join(', ')}
+              </span>
+            )}
+          </div>
           {suggestions.length === 0 ? (
             <p className="text-xs text-muted-foreground">No segment beats the baseline with n ≥ 30 in this selection.</p>
           ) : (
@@ -163,7 +178,8 @@ export function DeductionsPanel({
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium">{describeSegment(s.values)}</p>
                   <p className="text-xs text-muted-foreground tabular-nums">
-                    <span className="font-semibold text-foreground">{fmtLift(s.lift)}</span> · {pct(s.interestedRate)} interested ·
+                    <span className="font-semibold text-foreground">{fmtLift(s.lift)}</span> · {pct(s.interestedRate)} interested share
+                    of replies ·
                     n = {s.replies.toLocaleString()} · median reply {fmtHours(s.medianHoursToReply)}
                   </p>
                   <SourceSplit live={s.live} backfill={s.backfill} />

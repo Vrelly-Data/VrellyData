@@ -29,9 +29,9 @@ export type ReplyRow = {
   state: string | null;
   step: number | null;
   sendHour: number | null;
-  sendDow: number | null; // ISO weekday, 1 = Monday … 7 = Sunday
-  replyHour: number | null;
-  replyDow: number | null; // ISO weekday
+  sendDow: number | null; // ISO weekday, 1 = Monday … 7 = Sunday — Eastern Time
+  replyHour: number | null; // Eastern Time
+  replyDow: number | null; // ISO weekday, Eastern Time
   hoursToReply: number | null;
   copyKey: string | null; // copy_fingerprint, else variant id
   copyLabel: string | null; // subject with Re:/Fwd: removed
@@ -58,8 +58,8 @@ export const DIMENSION_LABELS: Record<Dimension, string> = {
   state: 'State',
   channel: 'Channel',
   step: 'Sequence step',
-  sendHour: 'Send hour (local)',
-  sendDow: 'Send weekday (local)',
+  sendHour: 'Send hour (ET)',
+  sendDow: 'Send weekday (ET)',
 };
 
 export const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -135,7 +135,7 @@ export type Stats = {
   replies: number;
   interested: number;
   notInterested: number;
-  interestedRate: number; // interested / all replies in the segment
+  interestedRate: number; // interested share of replies (no non-responder sends, so not a reply rate)
   medianHoursToReply: number | null;
   hoursSample: number; // replies that carry hours-to-reply
   live: number;
@@ -211,27 +211,36 @@ const SUGGESTION_DIMS: Dimension[] = ['industry', 'companySize', 'seniority', 's
 
 export type Suggestion = SegmentRow & { suggestionKey: string };
 
-// Top segments by lift over the baseline interested rate. Single dimensions and pairs; a pair
-// is only suggested when it beats both of its single-dimension parents, so it adds information.
+// Top segments by lift over the baseline interested share of replies. Single dimensions and
+// pairs; a pair is only suggested when it beats both of its single-dimension parents, so it adds
+// information. `excludeDims` (e.g. enrichment-biased ones) are left out entirely.
 export function suggestDeductions(
   rows: ReplyRow[],
-  opts: { baselineRate: number; keepTitles: Set<string>; exclude: Set<string>; limit?: number; minSample?: number },
+  opts: {
+    baselineRate: number;
+    keepTitles: Set<string>;
+    exclude: Set<string>;
+    excludeDims?: Dimension[];
+    limit?: number;
+    minSample?: number;
+  },
 ): Suggestion[] {
   const minSample = opts.minSample ?? MIN_SAMPLE;
+  const dims = SUGGESTION_DIMS.filter((d) => !opts.excludeDims?.includes(d));
   const common = { includeUnknown: false, baselineRate: opts.baselineRate, keepTitles: opts.keepTitles };
   const singleLift = new Map<string, number>();
   const candidates: Suggestion[] = [];
 
-  for (const d of SUGGESTION_DIMS) {
+  for (const d of dims) {
     for (const seg of aggregateSegments(rows, [d], common)) {
       if (seg.lift === null) continue;
       singleLift.set(suggestionKey(seg.values), seg.lift);
       if (seg.replies >= minSample && seg.lift > 1) candidates.push({ ...seg, suggestionKey: suggestionKey(seg.values) });
     }
   }
-  for (let i = 0; i < SUGGESTION_DIMS.length; i++) {
-    for (let j = i + 1; j < SUGGESTION_DIMS.length; j++) {
-      const pair: Dimension[] = [SUGGESTION_DIMS[i], SUGGESTION_DIMS[j]];
+  for (let i = 0; i < dims.length; i++) {
+    for (let j = i + 1; j < dims.length; j++) {
+      const pair: Dimension[] = [dims[i], dims[j]];
       for (const seg of aggregateSegments(rows, pair, common)) {
         if (seg.lift === null || seg.replies < minSample || seg.lift <= 1) continue;
         const parentLifts = pair.map((d) => singleLift.get(suggestionKey({ [d]: seg.values[d] })) ?? 0);
@@ -282,7 +291,7 @@ export function cleanSubject(subject: string | null | undefined): string | null 
   return s || null;
 }
 
-// Interested replies by local reply weekday (rows, ISO 1–7) × hour (0–23).
+// Interested replies by reply weekday (rows, ISO 1–7) × hour (0–23), Eastern Time.
 export function interestedHeatmap(rows: ReplyRow[]): { cells: number[][]; max: number; counted: number; missingTime: number } {
   const cells = Array.from({ length: 7 }, () => Array(24).fill(0) as number[]);
   let max = 0;

@@ -38,7 +38,7 @@ export function CopyLeaderboard({ rows, segmentLabel }: { rows: ReplyRow[]; segm
       <CardContent className="space-y-3">
         <ToggleGroup type="single" value={rankBy} onValueChange={(v) => v && setRankBy(v as 'count' | 'share')} className="justify-start">
           <ToggleGroupItem value="count" size="sm">By interested count</ToggleGroupItem>
-          <ToggleGroupItem value="share" size="sm">By interested share (n ≥ {MIN_SAMPLE})</ToggleGroupItem>
+          <ToggleGroupItem value="share" size="sm">By interested share of replies (n ≥ {MIN_SAMPLE})</ToggleGroupItem>
         </ToggleGroup>
         {ranked.length === 0 ? (
           <p className="text-sm text-muted-foreground">No copy with enough replies in this selection.</p>
@@ -51,7 +51,7 @@ export function CopyLeaderboard({ rows, segmentLabel }: { rows: ReplyRow[]; segm
                   <TableHead>Copy</TableHead>
                   <TableHead className="text-right">Interested</TableHead>
                   <TableHead className="text-right">Replies (n)</TableHead>
-                  <TableHead className="text-right whitespace-nowrap">Interested share</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Interested share of replies</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>

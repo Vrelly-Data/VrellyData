@@ -33,7 +33,7 @@ const COLUMNS: Array<{ key: SortKey; label: string }> = [
   { key: 'replies', label: 'Replies (n)' },
   { key: 'interested', label: 'Interested' },
   { key: 'notInterested', label: 'Not interested' },
-  { key: 'interestedRate', label: 'Interested rate' },
+  { key: 'interestedRate', label: 'Interested share of replies' },
   { key: 'lift', label: 'vs baseline' },
   { key: 'medianHoursToReply', label: 'Median time to reply' },
 ];
@@ -115,11 +115,11 @@ export function SegmentExplorer({
           <div className="flex gap-2 rounded-md border border-dashed p-3 text-xs">
             <AlertTriangle className="h-4 w-4 shrink-0" />
             <div>
-              <p className="font-medium">Enrichment bias — interested rates on {biased.map((d) => DIMENSION_LABELS[d]).join(', ')} are inflated</p>
+              <p className="font-medium">Enrichment bias — interested share of replies on {biased.map((d) => DIMENSION_LABELS[d]).join(', ')} is inflated</p>
               {biased.map((d) => (
                 <p key={d} className="text-muted-foreground">{describeBias(d, bias[d])}.</p>
               ))}
-              <p className="text-muted-foreground">Known values here mostly mean "this lead was enriched", which happened mainly for interested leads. Compare segments only on unbiased dimensions (e.g. send hour / weekday) or with live data.</p>
+              <p className="text-muted-foreground">Known values here mostly mean "this lead was enriched", which happened mainly for interested leads. Compare segments on unbiased dimensions or with live data.</p>
             </div>
           </div>
         )}

@@ -23,13 +23,13 @@ export function TimingHeatmap({ rows, segmentLabel }: { rows: ReplyRow[]; segmen
     <Card>
       <CardHeader className="pb-2">
         <CardTitle className="text-base flex flex-wrap items-center gap-2">
-          <Clock className="h-4 w-4" /> Timing — interested replies by local hour × weekday
+          <Clock className="h-4 w-4" /> Timing — interested replies by hour × weekday (ET)
           <span className="text-xs font-normal text-muted-foreground">{segmentLabel}</span>
           <SourceSplit live={interestedLive} backfill={interestedAll - interestedLive} className="ml-auto" />
         </CardTitle>
         <p className="text-xs text-muted-foreground">
-          The prospect's local time of the reply. {counted.toLocaleString()} interested replies plotted;{' '}
-          {missingTime.toLocaleString()} have no local reply time (live capture does not record it yet).
+          Time of the reply in Eastern Time (America/New_York). {counted.toLocaleString()} interested replies plotted;{' '}
+          {missingTime.toLocaleString()} have no reply time (live capture does not record it yet).
         </p>
       </CardHeader>
       <CardContent>

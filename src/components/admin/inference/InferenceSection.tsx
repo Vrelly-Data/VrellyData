@@ -88,11 +88,15 @@ export function InferenceSection() {
           )}
           <div className="ml-auto text-right">
             <p className="text-sm tabular-nums">
-              {rows.length.toLocaleString()} replies · {baseline.interested.toLocaleString()} interested · baseline{' '}
-              {pct(baseline.interestedRate)}
+              {rows.length.toLocaleString()} replies · {baseline.interested.toLocaleString()} interested · baseline interested share of
+              replies {pct(baseline.interestedRate)}
             </p>
             <SourceSplit live={baseline.live} backfill={baseline.backfill} />
           </div>
+          <p className="basis-full text-[11px] text-muted-foreground">
+            Rates here are the interested share of replies. There are no non-responder sends for the backfill, so they
+            are not reply or conversion rates.
+          </p>
         </CardContent>
         {segment && (
           <CardContent className="pt-0">

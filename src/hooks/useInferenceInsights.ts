@@ -44,8 +44,9 @@ const onlyLive = (q: AnyQuery) =>
 const REPLY_SELECT = [
   'id,team_id,person_key,channel,occurred_at,source,intent,job_title,seniority,industry,company_size,state,copy_fingerprint,subject',
   'hours_to_reply:metadata->hours_to_reply',
-  'reply_hour:metadata->reply_hour_local',
-  'reply_dow:metadata->reply_dow_local',
+  // Eastern Time for every row (the *_local fields were tz-skewed by enrichment)
+  'reply_hour:metadata->reply_hour_et',
+  'reply_dow:metadata->reply_dow_et',
   'step_number:metadata->sequence_step_number',
   'sequence_number:metadata->sequence_number',
   'variant_id:metadata->variant_id',
@@ -65,7 +66,7 @@ export function useInferenceDataset(enabled: boolean) {
         // Send time lives on the backfill's sent events; joined to replies by provider thread.
         fetchAll<RawSend>(
           'inference_events',
-          'thread_id:metadata->>provider_thread_id,send_hour:metadata->send_hour_local,send_dow:metadata->send_dow_local',
+          'thread_id:metadata->>provider_thread_id,send_hour:metadata->send_hour_et,send_dow:metadata->send_dow_et',
           (q) => q.eq('source', BACKFILL_SOURCE).eq('event_type', 'sent'),
         ),
         // Live replies mostly carry no intent; it is on the person's classification.
