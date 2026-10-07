@@ -279,3 +279,34 @@ export function useSaveDeduction() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['inference_deductions'] }),
   });
 }
+
+// -------- Capture Scope alert (admin Live Feed) --------
+// Replies dropped by Capture Scope (campaign not capturing) and recorded in
+// capture_scope_skips within the window, per team + integration. Comes from an
+// admin-gated RPC because team / integration names are not readable across
+// teams under RLS.
+export type CaptureSkipAlert = {
+  team_id: string;
+  team_name: string | null;
+  integration_id: string;
+  integration_name: string | null;
+  platform: string;
+  skipped: number;
+  campaigns: number;
+  last_reply_at: string | null;
+  last_detected_at: string | null;
+};
+
+export function useCaptureSkipAlerts(hours = 24) {
+  return useQuery({
+    // Under 'inference_live' so the Live Feed's Realtime/polling refresh covers it.
+    queryKey: ['inference_live', 'capture_skip_alerts', hours],
+    staleTime: 60_000,
+    queryFn: async (): Promise<CaptureSkipAlert[]> => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase.rpc as any)('admin_capture_scope_skip_alerts', { p_hours: hours });
+      if (error) throw new Error(error.message);
+      return (Array.isArray(data) ? data : []) as CaptureSkipAlert[];
+    },
+  });
+}

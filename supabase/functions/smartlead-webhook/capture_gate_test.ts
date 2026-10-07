@@ -80,6 +80,17 @@ for (const c of warehouseOnlyCases) {
       assertEquals(r.body.success, true);
       assertEquals(r.body.skipped, c.reason);
       assertEquals(r.body.warehouseRecorded, true);
+      // No silent drops: a known-but-off (or not yet synced) campaign records a skip row.
+      const skipRows = db.calls.filter((x) => x.table === "rpc:record_capture_scope_skips").flatMap((x) => (x.body as { p_rows: Row[] }).p_rows);
+      if (c.reason === "no_synced_row" || c.reason === "capture_disabled") {
+        assertEquals(skipRows.length, 1, "skip row recorded");
+        assertEquals(skipRows[0].reason, c.reason);
+        assertEquals(skipRows[0].platform, "smartlead");
+        assertEquals(skipRows[0].campaign_external_id, String(CAMPAIGN));
+        assertEquals(skipRows[0].contact_key, "prospect-0001@example.test");
+      } else {
+        assertEquals(skipRows, [], "no skip row when the campaign is unknown or the lookup failed");
+      }
       assertEquals(db.writes("agent_leads").length, 0);
       assert(r.rec.logs.some((l) => l.includes(`skip (${c.reason})`)), "skip is logged");
       const inf = db.writes("inference_events");
@@ -117,6 +128,13 @@ Deno.test({
     const r = await post(db, payload(CAMPAIGN));
     assertEquals(r.status, 200);
     assertEquals(r.body.success, true);
+    // Silent towards the inbox, but not a silent drop: recorded for Capture Scope.
+    const skipRows = db.calls.filter((x) => x.table === "rpc:record_capture_scope_skips").flatMap((x) => (x.body as { p_rows: Row[] }).p_rows);
+    assertEquals(skipRows.length, 1);
+    assertEquals(skipRows[0].reason, "capture_disabled");
+    assertEquals(skipRows[0].campaign_external_id, String(CAMPAIGN));
+    assertEquals(skipRows[0].contact_key, "prospect-0001@example.test");
+    assertEquals(skipRows[0].source, "smartlead-webhook");
     assertEquals(r.body.skipped, "capture_disabled");
     assertEquals(db.writes("agent_leads").length, 0);
     assertEquals(db.reads("agent_leads").length, 0, "gate runs before any agent_leads access");

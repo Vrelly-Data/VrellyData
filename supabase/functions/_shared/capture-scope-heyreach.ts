@@ -63,6 +63,8 @@ async function loadAccounts(apiKey: string | null): Promise<Map<string, CaptureS
 
 export const heyreachCaptureScopeAdapter: CaptureScopeAdapter = {
   platform: "heyreach",
+  // Re-reads recent replies for campaigns just switched on (mode 'recapture').
+  recaptureFunction: "poll-heyreach-inbox",
 
   async listCampaigns(db, integration): Promise<CaptureScopeCampaign[]> {
     const { data, error } = await db
@@ -101,6 +103,7 @@ export const heyreachCaptureScopeAdapter: CaptureScopeAdapter = {
         status: normalizeStatus(String(row.status ?? "")),
         rawStatus: (row.raw_status as string | null) ?? null,
         captureEnabled: row.capture_enabled === true,
+        channel: "linkedin",
         senders,
         volume: { sent: people, replies: null },
         // HeyReach has no sub-tenant/client concept equivalent to Smartlead's.

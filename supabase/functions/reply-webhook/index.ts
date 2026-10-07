@@ -8,7 +8,7 @@ import { htmlToText } from '../_shared/html-to-text.ts';
 import { isSuppressed, fireClassifyReply } from '../_shared/inbox-reply.ts';
 import { cleanReplyPreview } from '../_shared/reply-text.ts';
 import { detectLanguageCode } from '../_shared/language.ts';
-import { checkCaptureGate, type CaptureGateResult } from '../_shared/capture-scope.ts';
+import { checkCaptureGate, isRecordableSkip, recordCaptureScopeSkips, type CaptureGateResult } from '../_shared/capture-scope.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -1021,6 +1021,24 @@ Deno.serve(async (req) => {
           } else if (resurface && skipCapture) {
             await recordRepliedInference(agentConfig.id, { capture_skipped: captureSkipReason });
             warehouseRecorded = true;
+            // No silent drops: surface the skipped reply in Capture Scope.
+            if (isRecordableSkip(captureSkipReason)) {
+              await recordCaptureScopeSkips(supabase, [{
+                integrationId: integration.id,
+                teamId: integration.team_id,
+                platform: 'reply.io',
+                campaignExternalId: campaignId || null,
+                // captureGate is assigned inside getCaptureGate(); TS cannot see that.
+                campaignName: campaign?.name ?? (captureGate as CaptureGateResult | null)?.campaignName ?? null,
+                contactEmail,
+                contactLinkedinUrl: linkedinUrl,
+                contactName: fullName,
+                contactFallbackId: contactId ? String(contactId) : null,
+                occurredAt: replyAt,
+                reason: captureSkipReason,
+                source: 'reply-webhook',
+              }]);
+            }
           } else {
             console.log(`[inbox-routing] reply recorded without resurfacing (resurface=${resurface}) for lead_id=${upsertedLead?.id}`);
           }

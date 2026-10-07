@@ -4,20 +4,27 @@
 // capturing replies for them". Adding a 4th platform means implementing
 // CaptureScopeAdapter and registering it — no UI work, no new edge function.
 //
-// The ADAPTER REGISTRY below (campaign/sender listing for the Capture Scope
-// UI) does not cover Reply.io: Reply.io campaigns are listed by the
-// fetch-available-campaigns / ManageCampaignsDialog path, and migration
-// 20260822020000 left every reply_io row at the column default (false).
+// The ADAPTER REGISTRY below serves the Capture Scope UI for EVERY platform
+// that has a capture gate: Reply.io, Smartlead and HeyReach. A platform whose
+// capture is enforced must have an adapter here, otherwise its Capture Scope
+// button would open onto an error while the gate silently drops its replies.
+// (Reply.io's separate ManageCampaignsDialog / is_linked path is Data Analysis
+// reporting scope and has never gated capture.)
 //
-// The FAIL-CLOSED CAPTURE GATE at the bottom of this file is different: it is
-// the single source of truth for inbox capture on EVERY platform, Reply.io
-// included. A reply_io campaign captures nothing until its synced_campaigns
-// row has capture_enabled = true.
+// The FAIL-CLOSED CAPTURE GATE further down is the single source of truth for
+// inbox capture on every platform: a campaign captures nothing until its
+// synced_campaigns row has capture_enabled = true. New campaigns get their
+// initial capture_enabled from outbound_integrations.auto_capture_new_campaigns
+// (BEFORE INSERT trigger, migration 20261007210000); syncs never write the
+// column, so a sync can never undo a toggle.
+//
+// A reply dropped by the gate is recorded in capture_scope_skips
+// (recordCaptureScopeSkips below) so the UI can show it and offer to recapture.
 //
 // Keep this file dependency-free (no imports): it is shared byte-for-byte by
 // several functions and PRs.
 
-export type CaptureScopePlatform = "smartlead" | "heyreach";
+export type CaptureScopePlatform = "reply.io" | "smartlead" | "heyreach";
 
 export interface CaptureScopeSender {
   // What a human recognises — a persona name ("Ron Wade") or an inbox.
@@ -44,6 +51,9 @@ export interface CaptureScopeCampaign {
   // rendering nothing.
   volume: { sent: number | null; replies: number | null };
 
+  // email | linkedin | multichannel, when the platform knows it. Shown as a
+  // badge so a mixed Reply.io account can be told apart at a glance.
+  channel?: string | null;
   // Platform sub-tenant. Smartlead calls this a "client" and it is how a
   // separate business (captarget) ended up inside SourceCo's account. Any
   // platform with an equivalent surfaces it here so the UI can group by it.
@@ -92,10 +102,20 @@ export interface CaptureScopeAdapter {
   ): Promise<Record<string, CaptureScopeSender[]>>;
 
   // Stage 4/5. Present on webhook platforms only; poll-based capture needs no
-  // registration, so HeyReach will leave these undefined.
+  // registration, so HeyReach and Reply.io (polling + one account-level
+  // webhook) leave these undefined.
   onEnable?(integration: CaptureScopeIntegration, externalIds: string[]): Promise<void>;
   onDisable?(integration: CaptureScopeIntegration, externalIds: string[]): Promise<void>;
+
+  // Edge function that re-reads recent replies for specific campaigns after
+  // they are switched on, so replies skipped while they were off land in the
+  // inbox. Called by fetch-capture-scope (mode 'recapture') with x-agent-key
+  // and body { mode: 'recapture', integrationId, campaignIds, lookbackDays }.
+  recaptureFunction: string;
 }
+
+// How far back a recapture reads, and the window the UI counts skips over.
+export const RECAPTURE_LOOKBACK_DAYS = 14;
 
 // Ceiling for one listSenders call. 60 keeps a page comfortably inside the
 // 200/min budget even if the user pages quickly.
@@ -367,5 +387,90 @@ export async function listEnabledCampaignIds(
   } catch (e) {
     console.warn(`[capture-scope] listEnabledCampaignIds threw for integration ${integrationId}: ${e instanceof Error ? e.message : String(e)}`);
     return { ok: false, reason: "lookup_error" };
+  }
+}
+
+
+// ────────────────────────────────────────────────────────────────────────────
+// Skipped replies — no silent drops
+// ---------------------------------------------------------------------------
+// Every path that drops a reply because its campaign is not capture-enabled
+// records it here: one capture_scope_skips row per integration + campaign +
+// contact (upserted, newest reply time kept). The Capture Scope UI turns these
+// into a "N replies skipped" badge with one-click enable + recapture.
+//
+// Best-effort by design: recording a skip must never break or slow capture,
+// so errors are logged (counts only, no contact data) and swallowed.
+// ────────────────────────────────────────────────────────────────────────────
+
+export type CaptureSkipRecordReason = "capture_disabled" | "no_synced_row";
+
+export interface CaptureSkipRecord {
+  integrationId: string;
+  teamId: string;
+  platform: string;
+  campaignExternalId: unknown;
+  campaignName?: string | null;
+  contactEmail?: string | null;
+  contactLinkedinUrl?: string | null;
+  contactName?: string | null;
+  // Fallback identity when the contact has neither email nor LinkedIn URL.
+  contactFallbackId?: string | null;
+  occurredAt?: string | null;
+  reason: CaptureSkipRecordReason;
+  source: string;
+}
+
+/** Skip reasons worth showing to a user: the campaign is known but not on. */
+export function isRecordableSkip(reason: string | null | undefined): reason is CaptureSkipRecordReason {
+  return reason === "capture_disabled" || reason === "no_synced_row";
+}
+
+export function captureSkipContactKey(r: Pick<CaptureSkipRecord, "contactEmail" | "contactLinkedinUrl" | "contactFallbackId">): string | null {
+  const email = (r.contactEmail ?? "").trim().toLowerCase();
+  if (email) return email;
+  const li = (r.contactLinkedinUrl ?? "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").split("?")[0].replace(/\/+$/, "");
+  if (li) return li;
+  const fb = (r.contactFallbackId ?? "").trim();
+  return fb ? `id:${fb}` : null;
+}
+
+export async function recordCaptureScopeSkips(
+  // deno-lint-ignore no-explicit-any
+  db: any,
+  records: CaptureSkipRecord[],
+): Promise<number> {
+  const rows = [];
+  for (const r of records) {
+    const campaignId = normalizeCampaignId(r.campaignExternalId);
+    const contactKey = captureSkipContactKey(r);
+    if (!campaignId || !contactKey || !r.integrationId || !r.teamId) continue;
+    const ts = r.occurredAt ? Date.parse(r.occurredAt) : NaN;
+    rows.push({
+      integration_id: r.integrationId,
+      team_id: r.teamId,
+      platform: r.platform,
+      campaign_external_id: campaignId,
+      campaign_name: r.campaignName ?? null,
+      contact_key: contactKey,
+      contact_email: (r.contactEmail ?? "").trim().toLowerCase() || null,
+      contact_linkedin_url: (r.contactLinkedinUrl ?? "").trim() || null,
+      contact_name: (r.contactName ?? "").trim() || null,
+      occurred_at: Number.isFinite(ts) ? new Date(ts).toISOString() : new Date().toISOString(),
+      reason: r.reason,
+      source: r.source,
+    });
+  }
+  if (rows.length === 0) return 0;
+  try {
+    const { data, error } = await db.rpc("record_capture_scope_skips", { p_rows: rows });
+    if (error) {
+      console.warn(`[capture-scope] recordCaptureScopeSkips failed for ${rows.length} row(s): ${error.message}`);
+      return 0;
+    }
+    return typeof data === "number" ? data : rows.length;
+  } catch (e) {
+    console.warn(`[capture-scope] recordCaptureScopeSkips threw for ${rows.length} row(s): ${e instanceof Error ? e.message : String(e)}`);
+    return 0;
   }
 }

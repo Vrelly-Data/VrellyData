@@ -1,24 +1,21 @@
-// Capture Scope — Reply.io adapter (PR #91 follow-up).
+// Capture Scope — Reply.io adapter.
 //
 // Reply.io capture is enforced fail-closed by the shared gate in
 // capture-scope.ts (reply-webhook, poll-reply-inbox, sync-reply-contacts), so
-// the Capture Scope UI has to be able to show and toggle Reply.io sequences
-// too. This adapter serves that list.
+// Reply.io must be manageable from the Capture Scope UI exactly like Smartlead
+// and HeyReach. Registered in the shared registry by fetch-capture-scope.
 //
-// DB-ONLY: one synced_campaigns read, no Reply.io API call. The sequences are
-// already synced by fetch-available-campaigns / sync-reply-campaigns (which
-// never write capture_enabled, so a toggle made here is preserved by every
-// later sync).
+// DB-ONLY: one synced_campaigns read, no Reply.io API call. Sequences are
+// synced by sync-reply-campaigns / fetch-available-campaigns, which never
+// write capture_enabled (new rows take it from
+// outbound_integrations.auto_capture_new_campaigns), so a toggle made here is
+// preserved by every later sync.
 //
 // Senders: Reply.io's v3 sequence list carries no per-sequence mailbox /
-// LinkedIn account mapping in what we sync, so senders are empty and there is
-// no listSenders. Volume comes from the per-row stats the sync maintains.
-//
-// NOT REGISTERED in the capture-scope.ts registry: that file is shared
-// byte-for-byte with PR #90 and its CaptureScopePlatform type is
-// "smartlead" | "heyreach". fetch-capture-scope selects this adapter directly
-// for platform 'reply.io'. Folding it into the registry is a follow-up to make
-// identically in both PRs once they are merged.
+// LinkedIn account mapping in what we sync, so senders are empty (v1) and
+// there is no listSenders. No onEnable/onDisable either: Reply.io capture is
+// polling plus one account-level webhook, nothing to register per sequence.
+// Recapture re-runs poll-reply-inbox for the enabled sequences.
 //
 // Not to be confused with ManageCampaignsDialog / is_linked, which is Data
 // Analysis (reporting) scope and has never gated capture.
@@ -29,20 +26,24 @@ import {
   normalizeStatus,
 } from "./capture-scope.ts";
 
-export type ReplyIoCaptureScopeAdapter =
-  & Omit<CaptureScopeAdapter, "platform" | "listSenders" | "onEnable" | "onDisable">
-  & { platform: "reply.io" };
-
 const num = (v: unknown): number | null =>
   typeof v === "number" && Number.isFinite(v) ? v : null;
 
-export const replyioCaptureScopeAdapter: ReplyIoCaptureScopeAdapter = {
+// synced_campaigns.channel for Reply.io: email | linkedin | multichannel, or
+// null for sequences synced before the column existed.
+function normalizeChannel(raw: unknown): string | null {
+  const c = String(raw ?? "").trim().toLowerCase();
+  return c || null;
+}
+
+export const replyioCaptureScopeAdapter: CaptureScopeAdapter = {
   platform: "reply.io",
+  recaptureFunction: "poll-reply-inbox",
 
   async listCampaigns(db, integration): Promise<CaptureScopeCampaign[]> {
     const { data, error } = await db
       .from("synced_campaigns")
-      .select("external_campaign_id, name, status, raw_status, capture_enabled, stats")
+      .select("external_campaign_id, name, status, raw_status, capture_enabled, stats, channel")
       .eq("integration_id", integration.id)
       .order("name", { ascending: true });
     if (error) throw new Error(`synced_campaigns lookup failed: ${error.message}`);
@@ -56,6 +57,7 @@ export const replyioCaptureScopeAdapter: ReplyIoCaptureScopeAdapter = {
         status: normalizeStatus(String(row.status ?? "")),
         rawStatus: (row.raw_status as string | null) ?? null,
         captureEnabled: row.capture_enabled === true,
+        channel: normalizeChannel(row.channel),
         senders: [],
         // Unknown stays null rather than a misleading 0.
         volume: { sent: num(stats.sent), replies: num(stats.replies) },
@@ -65,7 +67,8 @@ export const replyioCaptureScopeAdapter: ReplyIoCaptureScopeAdapter = {
   },
 };
 
-// Platform string as stored on outbound_integrations.platform.
+// Platform string as stored on outbound_integrations.platform. fetch-capture-scope
+// resolves adapters with the same trim + lowercase normalisation.
 export function isReplyIoPlatform(platform: unknown): boolean {
   return String(platform ?? "").trim().toLowerCase() === "reply.io";
 }

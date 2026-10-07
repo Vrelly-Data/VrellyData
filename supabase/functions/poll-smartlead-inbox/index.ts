@@ -6,7 +6,7 @@ import {
 } from '../_shared/smartlead-thread.ts';
 import { detectLanguageCode } from '../_shared/language.ts';
 import { sanitizeLinkedinUrlForStorage } from '../_shared/normalize.ts';
-import { listEnabledCampaignIds } from '../_shared/capture-scope.ts';
+import { listEnabledCampaignIds, normalizeCampaignId, recordCaptureScopeSkips, type CaptureSkipRecord } from '../_shared/capture-scope.ts';
 
 const allowedOrigins = ['https://vrelly.com', 'https://www.vrelly.com'];
 
@@ -61,6 +61,112 @@ const ANALYTICS_PACE_MS = 150;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// ── Capture Scope: recapture + skip probe ───────────────────────────────────
+// This poller only asks Smartlead about capture-ENABLED campaigns, so on its
+// own it never sees a reply that capture dropped. The probe closes that gap:
+// each run checks a few capture-off campaigns (rotating, oldest-probed first)
+// for replies in the last 14 days and records them in capture_scope_skips.
+// Read-only towards Smartlead; at most PROBE_CAMPAIGNS_PER_RUN × 2 calls.
+const RECAPTURE_MAX_LOOKBACK_DAYS = 14;
+const PROBE_CAMPAIGNS_PER_RUN = 10;
+const PROBE_LOOKBACK_DAYS = 14;
+const SMARTLEAD_API = 'https://server.smartlead.ai/api/v1';
+
+const probeStatusWeight = (s: string | null) => {
+  const v = (s ?? '').toLowerCase();
+  if (v === 'in_progress') return 0;
+  if (v === 'paused') return 1;
+  return 2;
+};
+
+async function probeCaptureOffCampaigns(
+  // deno-lint-ignore no-explicit-any
+  supabase: any,
+  integration: { id: string; team_id: string },
+  apiKey: string,
+): Promise<{ probed: number; skips: number }> {
+  const { data, error } = await supabase
+    .from('synced_campaigns')
+    .select('external_campaign_id, name, status, capture_skip_probe_at')
+    .eq('integration_id', integration.id)
+    .eq('capture_enabled', false)
+    .neq('status', 'draft')
+    .order('capture_skip_probe_at', { ascending: true, nullsFirst: true })
+    .limit(200);
+  if (error) {
+    console.warn(`[poll-smartlead-inbox] probe: campaign lookup failed: ${error.message}`);
+    return { probed: 0, skips: 0 };
+  }
+  type Row = { external_campaign_id: string; name: string | null; status: string | null; capture_skip_probe_at: string | null };
+  const rows = ((data ?? []) as Row[]).slice().sort((a, b) => {
+    const w = probeStatusWeight(a.status) - probeStatusWeight(b.status);
+    if (w !== 0) return w;
+    const at = a.capture_skip_probe_at ? Date.parse(a.capture_skip_probe_at) : 0;
+    const bt = b.capture_skip_probe_at ? Date.parse(b.capture_skip_probe_at) : 0;
+    return at - bt;
+  }).slice(0, PROBE_CAMPAIGNS_PER_RUN);
+  if (rows.length === 0) return { probed: 0, skips: 0 };
+
+  const get = (path: string, params: Record<string, string>) => {
+    const u = new URL(`${SMARTLEAD_API}${path}`);
+    u.searchParams.set('api_key', apiKey);
+    for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v);
+    return fetch(u.toString(), { headers: { Accept: 'application/json' } });
+  };
+  const startYMD = new Date(Date.now() - PROBE_LOOKBACK_DAYS * 86400_000).toISOString().slice(0, 10);
+  const endYMD = new Date().toISOString().slice(0, 10);
+  const records: CaptureSkipRecord[] = [];
+  for (const row of rows) {
+    const id = String(row.external_campaign_id);
+    try {
+      // 1 call: any replies at all in the window? Most capture-off campaigns
+      // have none, so this is usually the only call.
+      const a = await get(`/campaigns/${encodeURIComponent(id)}/analytics-by-date`, { start_date: startYMD, end_date: endYMD });
+      if (!a.ok) { await sleep(ANALYTICS_PACE_MS); continue; }
+      const analytics = (await a.json().catch(() => ({}))) as Record<string, unknown>;
+      const replies = Number(analytics.replies ?? analytics.reply_count ?? analytics.unique_replies ?? analytics.replied ?? 0);
+      if (!(replies > 0)) { await sleep(ANALYTICS_PACE_MS); continue; }
+      // 2nd call: who replied (first page only — enough for a badge).
+      const l = await get(`/campaigns/${encodeURIComponent(id)}/lead-statistics`, {
+        limit: '100', offset: '0', status: 'REPLIED', replied_after: startYMD,
+      });
+      if (!l.ok) { await sleep(ANALYTICS_PACE_MS); continue; }
+      const body = (await l.json().catch(() => ({}))) as { data?: Array<Record<string, unknown>> };
+      for (const r of Array.isArray(body?.data) ? body.data : []) {
+        const lead = (r.lead as Record<string, unknown> | undefined) ?? undefined;
+        const email = String((lead?.email ?? r.email ?? '') as string).trim().toLowerCase();
+        if (!email) continue;
+        const name = [lead?.first_name ?? r.first_name, lead?.last_name ?? r.last_name].filter(Boolean).join(' ') ||
+          ((r.lead_name as string | undefined) ?? null);
+        records.push({
+          integrationId: integration.id,
+          teamId: integration.team_id,
+          platform: 'smartlead',
+          campaignExternalId: id,
+          campaignName: row.name,
+          contactEmail: email,
+          contactName: name || null,
+          occurredAt: ((lead?.reply_time ?? r.reply_time) as string | null) ?? null,
+          reason: 'capture_disabled',
+          source: 'smartlead-probe',
+        });
+      }
+    } catch (e) {
+      console.warn(`[poll-smartlead-inbox] probe: campaign ${id} failed (${e instanceof Error ? e.message : String(e)})`);
+    }
+    await sleep(ANALYTICS_PACE_MS);
+  }
+  // Advance the rotation cursor for every campaign we looked at.
+  const { error: cursorErr } = await supabase
+    .from('synced_campaigns')
+    .update({ capture_skip_probe_at: new Date().toISOString() })
+    .eq('integration_id', integration.id)
+    .in('external_campaign_id', rows.map((r) => String(r.external_campaign_id)));
+  if (cursorErr) console.warn(`[poll-smartlead-inbox] probe: cursor update failed: ${cursorErr.message}`);
+  const skips = await recordCaptureScopeSkips(supabase, records);
+  return { probed: rows.length, skips };
+}
+
 // Order-independent fingerprint of a thread, for change detection only.
 // Keys are read explicitly so jsonb's key reordering cannot make two identical
 // threads compare unequal.
@@ -95,11 +201,32 @@ Deno.serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
     );
 
-    const { data: integrations, error: intErr } = await supabase
+    // Recapture mode (fetch-capture-scope, x-agent-key only): ONE integration,
+    // only the new-lead sweep, only the given capture-enabled campaigns, with a
+    // lookback of up to 14 days. Lead creation and classify-reply are exactly
+    // the sweep's existing path.
+    const reqBody = await req.json().catch(() => ({})) as {
+      mode?: string; integrationId?: string; campaignIds?: unknown[]; lookbackDays?: number;
+    };
+    const recapture = isCron && reqBody?.mode === 'recapture' && reqBody.integrationId && Array.isArray(reqBody.campaignIds)
+      ? {
+          integrationId: String(reqBody.integrationId),
+          campaignIds: new Set(reqBody.campaignIds.map((id) => normalizeCampaignId(id)).filter((id): id is string => !!id)),
+          lookbackDays: Math.min(RECAPTURE_MAX_LOOKBACK_DAYS, Math.max(1, Number(reqBody.lookbackDays) || RECAPTURE_MAX_LOOKBACK_DAYS)),
+        }
+      : null;
+    if (recapture) {
+      console.log(`[poll-smartlead-inbox] RECAPTURE integration=${recapture.integrationId} campaigns=${recapture.campaignIds.size} lookbackDays=${recapture.lookbackDays}`);
+    }
+    const lookbackDaysForNew = recapture ? recapture.lookbackDays : LOOKBACK_DAYS_FOR_NEW;
+
+    let integrationsQuery = supabase
       .from('outbound_integrations')
       .select('id, created_by, team_id, api_key_encrypted')
       .eq('is_active', true)
       .eq('platform', 'smartlead');
+    if (recapture) integrationsQuery = integrationsQuery.eq('id', recapture.integrationId);
+    const { data: integrations, error: intErr } = await integrationsQuery;
     if (intErr) return json({ error: intErr.message }, 500);
 
     const since = new Date(Date.now() - ACTIVE_WINDOW_DAYS * 86400_000).toISOString();
@@ -108,7 +235,7 @@ Deno.serve(async (req) => {
     // 200-with-no-usable-body fell through as neither refresh nor error. That
     // silence is what hid a response-shape mismatch for the length of an
     // investigation — an empty result must be countable.
-    const result = { scanned: 0, refreshed: 0, unchanged: 0, flagged: 0, empty: 0, errors: 0, rateLimited: 0, webhooksEnsured: 0, newLeads: 0 };
+    const result = { scanned: 0, refreshed: 0, unchanged: 0, flagged: 0, empty: 0, errors: 0, rateLimited: 0, webhooksEnsured: 0, newLeads: 0, skipProbeCampaigns: 0, skipsRecorded: 0 };
     // Fail-closed capture scope for the new-lead sweep (integration ids + reason only).
     const captureScopeSkips: Array<{ integrationId: string; reason: string }> = [];
 
@@ -121,6 +248,10 @@ Deno.serve(async (req) => {
       // mailbox_email, so that could attribute one client's outbound to another
       // client's sender. Shared with smartlead-webhook so both scope alike.
       const senderNameFor = await loadSenderNameLookup(supabase, integration.created_by);
+
+      // Recapture skips the thread refresh and webhook upkeep below: it only
+      // runs Safety net B for the requested campaigns.
+      if (!recapture) {
 
       // Candidates: recently-active leads, UNION anything still awaiting action
       // regardless of age. The second half is the point of the job — a stale
@@ -253,6 +384,20 @@ Deno.serve(async (req) => {
       } catch (e) {
         console.warn('[poll-smartlead-inbox] ensure-webhooks threw (non-fatal):', e instanceof Error ? e.message : String(e));
       }
+      } // end !recapture
+
+      // ── Capture Scope probe: replies on capture-OFF campaigns ─────────────
+      // Runs regardless of whether any campaign is enabled (an integration with
+      // nothing enabled is exactly where replies vanish). Never in recapture.
+      if (!recapture) {
+        try {
+          const probe = await probeCaptureOffCampaigns(supabase, { id: String(integration.id), team_id: String(integration.team_id) }, apiKey);
+          result.skipProbeCampaigns += probe.probed;
+          result.skipsRecorded += probe.skips;
+        } catch (e) {
+          console.warn('[poll-smartlead-inbox] skip probe threw (non-fatal):', e instanceof Error ? e.message : String(e));
+        }
+      }
 
       // ── Safety net B: detect recent replies for leads NOT in agent_leads ───
       try {
@@ -285,7 +430,12 @@ Deno.serve(async (req) => {
         if (metaErr) console.warn(`[poll-smartlead-inbox] campaign metadata read failed (${metaErr.message}); using default ordering`);
         const metaById = new Map<string, CampRow>();
         for (const r of (enabledNamed ?? []) as CampRow[]) metaById.set(String(r.external_campaign_id), r);
-        const campaigns: CampRow[] = scope.ids.map((id) =>
+        const sweepIds = recapture ? scope.ids.filter((id) => recapture.campaignIds.has(id)) : scope.ids;
+        if (recapture && sweepIds.length === 0) {
+          console.log(`[poll-smartlead-inbox] recapture: none of the requested campaigns is capture-enabled for integration ${integration.id}`);
+          continue;
+        }
+        const campaigns: CampRow[] = sweepIds.map((id) =>
           metaById.get(id) ?? { external_campaign_id: id, name: null, status: null, capture_recent_reply_sweep_at: null }
         );
         // Prioritize active/running (in_progress), then paused, then others; within each bucket, oldest sweep first (NULLs first)
@@ -318,11 +468,13 @@ Deno.serve(async (req) => {
 
         // 3) Filter to campaigns with replies in the last LOOKBACK days via analytics-by-date (reduces lead scanning)
         const SMARTLEAD_API_BASE = 'https://server.smartlead.ai/api/v1';
-        const startYMD = new Date(Date.now() - LOOKBACK_DAYS_FOR_NEW * 86400_000).toISOString().slice(0, 10);
+        const startYMD = new Date(Date.now() - lookbackDaysForNew * 86400_000).toISOString().slice(0, 10);
         const endYMD = new Date().toISOString().slice(0, 10);
         const candidateCampaigns: string[] = [];
         let considered = 0;
-        for (const row of campaigns.slice(0, Math.max(MAX_CAMPAIGNS_FOR_SWEEP * 2, MAX_CAMPAIGNS_FOR_SWEEP + 4))) {
+        // Recapture sweeps exactly the requested campaigns (no analytics prefilter).
+        if (recapture) candidateCampaigns.push(...campaigns.map((c) => String(c.external_campaign_id)));
+        for (const row of recapture ? [] : campaigns.slice(0, Math.max(MAX_CAMPAIGNS_FOR_SWEEP * 2, MAX_CAMPAIGNS_FOR_SWEEP + 4))) {
           const id = String(row.external_campaign_id);
           if (considered >= MAX_CAMPAIGNS_FOR_SWEEP) break;
           try {
@@ -452,7 +604,7 @@ Deno.serve(async (req) => {
               const replyTimeHint = row.reply_time ?? null;
               const ts = Date.parse(lastProspectAt ?? replyTimeHint ?? '');
               if (Number.isFinite(ts)) {
-                const cutoff = Date.now() - LOOKBACK_DAYS_FOR_NEW * 86400_000;
+                const cutoff = Date.now() - lookbackDaysForNew * 86400_000;
                 if (ts < cutoff) {
                   await sleep(50);
                   continue;
