@@ -23,6 +23,7 @@ import {
   useToggleAudienceActive, useDeleteAudience,
   type AgentAudience as Audience, type AudienceInput, type ApolloAudienceFilters,
 } from '@/hooks/useAgentAudiences';
+import { useSyncedCampaigns } from '@/hooks/useSyncedCampaigns';
 
 // Apollo's own vocabulary, verbatim — these strings go straight into the
 // api_search body, so they must not be prettified.
@@ -80,6 +81,10 @@ export function AgentAudience() {
   const [previewing, setPreviewing] = useState<Audience | null>(null);
   const [form, setForm] = useState<AudienceInput>(EMPTY);
   const { data: campaigns = [] } = useAudienceCampaigns(form.default_platform ?? undefined);
+  // For the LIST view only: resolve destination names without opening the form.
+  // Pull all synced campaigns (any platform) and build an id -> name map.
+  const { data: allCampaigns = [] } = useSyncedCampaigns(false);
+  const nameById = new Map(allCampaigns.map((c) => [c.id, c.name]));
 
   const setFilter = <K extends keyof ApolloAudienceFilters>(
     key: K, value: ApolloAudienceFilters[K],
@@ -139,7 +144,7 @@ export function AgentAudience() {
   };
 
   const campaignName = (a: Audience) =>
-    campaigns.find((c) => c.id === a.default_synced_campaign_id)?.name ?? null;
+    nameById.get(a.default_synced_campaign_id ?? '') ?? null;
 
   return (
     <div className="p-6 space-y-6">
