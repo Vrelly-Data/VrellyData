@@ -24,7 +24,7 @@
     { "source": "/reset-password", "destination": "/api/marketing?name=private" },
     { "source": "/how-it-works", "destination": "/api/marketing?name=not-found" },
     { "source": "/faq", "destination": "/api/marketing?name=not-found" },
-    { "source": "/:path((?!api/).*)", "destination": "/index.html" }
+    { "source": "/:path((?!api/|_vercel/).*)", "destination": "/index.html" }
   ],
   "redirects": [
     {

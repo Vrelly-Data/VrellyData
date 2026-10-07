@@ -10,6 +10,8 @@ import { AuthProvider } from "@/components/AuthProvider";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { SubscriptionGuard } from "@/components/SubscriptionGuard";
 import { AdminRoute } from "@/components/AdminRoute";
+import { Analytics } from "@vercel/analytics/react";
+import { SpeedInsights } from "@vercel/speed-insights/react";
 import { AppErrorBoundary } from "@/components/AppErrorBoundary";
 import Landing from "./pages/Landing";
 import Resources from "./pages/Resources";
@@ -83,6 +85,8 @@ const App = () => (
                 <Route path="*" element={<NotFound />} />
               </Routes>
             </AuthProvider>
+            <Analytics />
+            <SpeedInsights />
           </BrowserRouter>
         </TooltipProvider>
       </ThemeProvider>
