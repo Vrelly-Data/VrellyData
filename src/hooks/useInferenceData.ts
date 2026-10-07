@@ -1068,46 +1068,6 @@ export function usePlatformTotals() {
   });
 }
 
-// -------- Vrelly-captured contacts (distinct people per channel, from inference_events) --------
-// synced_contacts / synced_campaigns are team-scoped by RLS, so a platform admin only ever
-// sees their own team's roster there. inference_events is admin-readable, and is what this
-// section is about: people Vrelly has captured at least one event for.
-export type CapturedContacts = { email: number; linkedin: number };
-
-async function countCapturedPeople(channel: 'email' | 'linkedin', teamIds?: string[]): Promise<number> {
-  const PAGE = 1000;
-  const people = new Set<string>();
-  for (let offset = 0; ; offset += PAGE) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let query = (supabase.from('inference_events' as any) as any)
-      .select('person_key')
-      .eq('channel', channel)
-      .order('id', { ascending: true })
-      .range(offset, offset + PAGE - 1);
-    if (teamIds && teamIds.length > 0) query = query.in('team_id', teamIds);
-    const { data, error } = await query;
-    if (error) throw new Error(error.message);
-    const rows = (data ?? []) as Array<{ person_key: string | null }>;
-    for (const r of rows) if (r.person_key) people.add(r.person_key);
-    if (rows.length < PAGE) break;
-  }
-  return people.size;
-}
-
-export function useCapturedContacts(teamIds?: string[]) {
-  return useQuery({
-    queryKey: ['inference_captured_contacts', { teamIds }],
-    queryFn: async (): Promise<CapturedContacts> => {
-      const [email, linkedin] = await Promise.all([
-        countCapturedPeople('email', teamIds),
-        countCapturedPeople('linkedin', teamIds),
-      ]);
-      return { email, linkedin };
-    },
-    staleTime: 60_000,
-  });
-}
-
 // -------- LinkedIn acceptance (platform-reported, outbound_integrations.stats_cache) --------
 export type LinkedinAcceptance = {
   total: number;
@@ -1140,70 +1100,6 @@ export function useLinkedinAcceptance(teamIds?: string[]) {
         heyreachIntegrations: Number(d['heyreachIntegrations'] ?? 0),
         oldestCachedAt: (d['oldestCachedAt'] as string | null) ?? null,
       };
-    },
-    staleTime: 60_000,
-  });
-}
-
-// -------- Data coverage (replied + interested events, per channel) --------
-export const COVERAGE_FIELDS = ['job_title', 'industry', 'company_size', 'city', 'campaign', 'sequence_step'] as const;
-export type CoverageField = (typeof COVERAGE_FIELDS)[number];
-// The three fields inference_events_enriched back-fills from public.people
-const PEOPLE_ENRICHED_FIELDS: CoverageField[] = ['job_title', 'industry', 'city'];
-
-export type ChannelCoverage = {
-  channel: 'email' | 'linkedin';
-  total: number; // replied + interested-classified events
-  // captured = present on the event row itself; enriched = present after the people join
-  // (null where the view does not enrich the field)
-  fields: Record<CoverageField, { captured: number; enriched: number | null }>;
-};
-
-async function countCoverage(
-  table: 'inference_events' | 'inference_events_enriched',
-  channel: 'email' | 'linkedin',
-  field: CoverageField | null,
-  teamIds?: string[],
-): Promise<number> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let query = (supabase.from(table as any) as any)
-    .select('id', { count: 'exact', head: true })
-    .eq('channel', channel)
-    .or('event_type.eq.replied,and(event_type.eq.classified,intent.eq.interested)');
-  if (teamIds && teamIds.length > 0) query = query.in('team_id', teamIds);
-  if (field === 'campaign') {
-    query = query.or('campaign_external_id.not.is.null,campaign_name.not.is.null');
-  } else if (field === 'sequence_step') {
-    query = query.not('sequence_step_type', 'is', null).neq('sequence_step_type', '');
-  } else if (field) {
-    query = query.not(field, 'is', null).neq(field, '');
-  }
-  const { count, error } = await query;
-  if (error) throw new Error(error.message);
-  return count ?? 0;
-}
-
-export function useInferenceCoverage(teamIds?: string[]) {
-  return useQuery({
-    queryKey: ['inference_data_coverage', { teamIds }],
-    queryFn: async (): Promise<ChannelCoverage[]> => {
-      return Promise.all(
-        (['email', 'linkedin'] as const).map(async (channel) => {
-          const [total, captured, enriched] = await Promise.all([
-            countCoverage('inference_events', channel, null, teamIds),
-            Promise.all(COVERAGE_FIELDS.map((f) => countCoverage('inference_events', channel, f, teamIds))),
-            Promise.all(
-              PEOPLE_ENRICHED_FIELDS.map((f) => countCoverage('inference_events_enriched', channel, f, teamIds)),
-            ),
-          ]);
-          const fields = {} as ChannelCoverage['fields'];
-          COVERAGE_FIELDS.forEach((f, i) => {
-            const enrichedIdx = PEOPLE_ENRICHED_FIELDS.indexOf(f);
-            fields[f] = { captured: captured[i], enriched: enrichedIdx >= 0 ? enriched[enrichedIdx] : null };
-          });
-          return { channel, total, fields };
-        }),
-      );
     },
     staleTime: 60_000,
   });
