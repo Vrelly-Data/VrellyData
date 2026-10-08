@@ -75,6 +75,8 @@ for (const c of warehouseOnlyCases) {
     async fn() {
       const db = new FakeSupabase({ outbound_integrations: [integration], synced_campaigns: c.rows, agent_configs: [AGENT_CONFIG] });
       if (c.fail) db.fail["synced_campaigns:GET"] = "error";
+      // Unknown campaign + discovery unavailable (row creation fails) → fail closed as no_synced_row.
+      if (c.reason === "no_synced_row") db.fail["synced_campaigns:WRITE"] = "error";
       const r = await post(db, payload(c.campaignId));
       assertEquals(r.status, 200);
       assertEquals(r.body.success, true);
@@ -112,6 +114,8 @@ Deno.test({
   ...testOpts,
   async fn() {
     const db = new FakeSupabase({ outbound_integrations: [integration], synced_campaigns: [] });
+    // Unknown campaign + discovery unavailable (row creation fails) → fail closed as no_synced_row.
+    db.fail["synced_campaigns:WRITE"] = "error";
     const r = await post(db, payload(CAMPAIGN));
     assertEquals(r.body.skipped, "no_synced_row");
     assertEquals(r.body.warehouseRecorded, false);
@@ -171,3 +175,41 @@ for (const id of [CAMPAIGN, String(CAMPAIGN)]) {
     },
   });
 }
+
+// ---- Unknown campaign follows auto_capture_new_campaigns (discovery) -------
+
+Deno.test({
+  name: "smartlead-webhook discovery: unknown campaign + auto ON → campaign row created capture-on, reply captured, no skip",
+  ...testOpts,
+  async fn() {
+    const db = new FakeSupabase({ outbound_integrations: [integration], synced_campaigns: [], agent_configs: [AGENT_CONFIG] });
+    const r = await post(db, payload(CAMPAIGN));
+    assertEquals(r.status, 200);
+    assertEquals(r.body.skipped, undefined, JSON.stringify(r.body));
+    assert(db.writes("agent_leads").length >= 1, "captured");
+    const created = (db.tables.synced_campaigns as Row[]).filter((x) => String(x.external_campaign_id) === String(CAMPAIGN));
+    assertEquals(created.length, 1, "exactly one campaign row created");
+    assertEquals(created[0].capture_enabled, true);
+    assertEquals(created[0].source, "smartlead");
+    assertEquals(db.calls.filter((x) => x.table === "rpc:record_capture_scope_skips").length, 0);
+  },
+});
+
+Deno.test({
+  name: "smartlead-webhook discovery: unknown campaign + auto OFF → campaign row created capture-off, reply skipped (capture_disabled) and recorded",
+  ...testOpts,
+  async fn() {
+    const db = new FakeSupabase({ outbound_integrations: [{ ...integration, auto_capture_new_campaigns: false }], synced_campaigns: [], agent_configs: [AGENT_CONFIG] });
+    const r = await post(db, payload(CAMPAIGN));
+    assertEquals(r.status, 200);
+    assertEquals(r.body.skipped, "capture_disabled");
+    assertEquals(db.writes("agent_leads").filter((w) => w.method !== "GET").length, 0, "not captured");
+    const created = (db.tables.synced_campaigns as Row[]).filter((x) => String(x.external_campaign_id) === String(CAMPAIGN));
+    assertEquals(created.length, 1);
+    assertEquals(created[0].capture_enabled, false);
+    const skipRows = db.calls.filter((x) => x.table === "rpc:record_capture_scope_skips").flatMap((x) => (x.body as { p_rows: Row[] }).p_rows);
+    assertEquals(skipRows.length, 1);
+    assertEquals(skipRows[0].reason, "capture_disabled");
+    assertEquals(skipRows[0].contact_key, "prospect-0001@example.test");
+  },
+});

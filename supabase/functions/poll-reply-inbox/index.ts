@@ -9,7 +9,7 @@ import { htmlToText } from '../_shared/html-to-text.ts';
 import { shouldResurface, fireClassifyReply } from '../_shared/inbox-reply.ts';
 import { cleanReplyPreview } from '../_shared/reply-text.ts';
 import { detectLanguageCode } from '../_shared/language.ts';
-import { listEnabledCampaignIds, normalizeCampaignId, recordCaptureScopeSkips, type CaptureSkipRecord } from '../_shared/capture-scope.ts';
+import { discoverCampaigns, listEnabledCampaignIds, normalizeCampaignId, recordCaptureScopeSkips, type CaptureSkipRecord } from '../_shared/capture-scope.ts';
 
 const allowedOrigins = [
   'https://vrelly.com',
@@ -391,6 +391,60 @@ Deno.serve(async (req) => {
           continue;
         }
 
+        // Unknown sequences: a sequence no sync has inserted yet (new sequence,
+        // stalled sync) used to be dropped as "not enabled". Create its row
+        // now so the integration's auto_capture_new_campaigns decides (BEFORE
+        // INSERT trigger), exactly as if a sync had found it. Sequences created
+        // capture-on here get a RECAPTURE_MAX_LOOKBACK_DAYS window this run,
+        // because their earlier replies were dropped while they were unknown.
+        // Skipped on a lookup error (we could not tell what is known).
+        const discoveredEnabled = new Set<string>();
+        if (!recapture && (scope.ok || scope.reason === 'none_enabled')) {
+          const unknown = new Map<string, string | null>();
+          for (const t of inboxThreads) {
+            const id = normalizeCampaignId(t?.sequence?.id);
+            if (id && !knownSequences.has(id) && !unknown.has(id)) unknown.set(id, t?.sequence?.name ?? null);
+          }
+          if (unknown.size > 0) {
+            try {
+              const created = await discoverCampaigns(
+                supabase,
+                String(integration.id),
+                { teamId: String(integration.team_id), platform: 'reply.io' },
+                [...unknown.entries()].map(([id, name]) => ({ id, name })),
+              );
+              if (created.length > 0) {
+                const { data: newRows, error: newErr } = await supabase
+                  .from('synced_campaigns')
+                  .select('external_campaign_id, name, capture_enabled')
+                  .eq('integration_id', integration.id)
+                  .in('external_campaign_id', created);
+                if (newErr) throw new Error(newErr.message);
+                for (const r of (newRows ?? []) as { external_campaign_id: string; name: string | null; capture_enabled: boolean }[]) {
+                  const id = normalizeCampaignId(r.external_campaign_id);
+                  if (!id) continue;
+                  knownSequences.set(id, r.name ?? null);
+                  if (r.capture_enabled === true) {
+                    enabledSet.add(id);
+                    discoveredEnabled.add(id);
+                  }
+                }
+                console.log(
+                  `[poll-reply-inbox] discovered ${created.length} unsynced sequence(s) for integration ${integration.id}: ` +
+                    `${discoveredEnabled.size} capture-on (auto_capture_new_campaigns), ${created.length - discoveredEnabled.size} capture-off`,
+                );
+                // The integration is no longer "nothing enabled" for this run.
+                if (!scope.ok && discoveredEnabled.size > 0) {
+                  const i = captureScopeSkips.findIndex((x) => x.integrationId === String(integration.id));
+                  if (i >= 0) captureScopeSkips.splice(i, 1);
+                }
+              }
+            } catch (e) {
+              console.warn(`[poll-reply-inbox] could not create unsynced sequences for integration ${integration.id} (they stay uncaptured this run): ${e instanceof Error ? e.message : String(e)}`);
+            }
+          }
+        }
+
         // Capture only capture-enabled sequences. A thread with no sequence id
         // cannot be attributed, so it is not captured (fail closed). Threads
         // not captured stay in the loop as warehouse-only (inference event, no
@@ -400,7 +454,7 @@ Deno.serve(async (req) => {
           const seqId = normalizeCampaignId(t?.sequence?.id);
           return !!seqId && enabledSet.has(seqId);
         };
-        if (scope.ok) {
+        if (scope.ok || discoveredEnabled.size > 0) {
           let noSeq = 0;
           let notEnabled = 0;
           for (const t of inboxThreads) {
@@ -424,6 +478,12 @@ Deno.serve(async (req) => {
         const oneDayAgo = new Date(
           Date.now() - (recapture ? recapture.lookbackDays * 24 : 24) * 60 * 60 * 1000,
         ).toISOString();
+        // Newly discovered capture-on sequences look back further (see above).
+        const discoveryWindowStart = new Date(Date.now() - RECAPTURE_MAX_LOOKBACK_DAYS * 86400_000).toISOString();
+        const windowStartFor = (t: InboxThread): string => {
+          const id = normalizeCampaignId(t?.sequence?.id);
+          return id && discoveredEnabled.has(id) ? discoveryWindowStart : oneDayAgo;
+        };
 
         const normalizeChannel = (c: unknown): string =>
           String(c).toLowerCase() === 'linkedin' ? 'linkedin' : 'email';
@@ -459,7 +519,8 @@ Deno.serve(async (req) => {
             // per-thread messages fetch is expensive. Older threads are skipped
             // here WITHOUT the messages call (the webhook is the primary capture
             // path; this poll is a 24h backstop). null date → treat as recent.
-            if (threadActivity && threadActivity < oneDayAgo) {
+            const threadWindowStart = windowStartFor(thread);
+            if (threadActivity && threadActivity < threadWindowStart) {
               continue;
             }
 
@@ -490,7 +551,7 @@ Deno.serve(async (req) => {
 
             // last_reply_* derive from the latest INBOUND message (FULL body).
             const lastReplyDate = latestInbound.date || threadActivity || null;
-            const isRecentReply = !lastReplyDate || lastReplyDate >= oneDayAgo;
+            const isRecentReply = !lastReplyDate || lastReplyDate >= threadWindowStart;
             // Email bodies arrive as HTML; LinkedIn as plain text. Normalize
             // email → readable text at capture (htmlToText is a no-op on text).
             const latestInboundChannel = normalizeChannel(latestInbound.channel ?? thread.channel);

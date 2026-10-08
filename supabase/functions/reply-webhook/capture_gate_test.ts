@@ -82,6 +82,8 @@ for (const c of skipCases) {
     async fn() {
       const db = new FakeSupabase({ outbound_integrations: [integration], synced_campaigns: c.rows, synced_contacts: [syncedContact] });
       if (c.fail) db.fail["synced_campaigns:GET"] = "error";
+      // Unknown campaign + discovery unavailable (row creation fails) → fail closed as no_synced_row.
+      if (c.reason === "no_synced_row") db.fail["synced_campaigns:WRITE"] = "error";
       const r = await post(db, payload("email", c.seq));
       assertEquals(r.status, 200);
       assertEquals(r.body.success, true);
@@ -102,6 +104,8 @@ for (const c of skipCases) {
     async fn() {
       const db = new FakeSupabase({ outbound_integrations: [integration], synced_campaigns: c.rows, synced_contacts: [syncedContact], agent_configs: [agentConfig] });
       if (c.fail) db.fail["synced_campaigns:GET"] = "error";
+      // Unknown campaign + discovery unavailable (row creation fails) → fail closed as no_synced_row.
+      if (c.reason === "no_synced_row") db.fail["synced_campaigns:WRITE"] = "error";
       const r = await post(db, payload("linkedin", c.seq));
       assertEquals(r.status, 200);
       assertEquals(r.body.skipped, c.reason);
@@ -138,6 +142,8 @@ Deno.test({
   ...testOpts,
   async fn() {
     const db = new FakeSupabase({ outbound_integrations: [integration], synced_campaigns: [], synced_contacts: [syncedContact] });
+    // Unknown campaign + discovery unavailable (row creation fails) → fail closed as no_synced_row.
+    db.fail["synced_campaigns:WRITE"] = "error";
     const r = await post(db, payload("linkedin", SEQ));
     assertEquals(r.status, 200);
     assertEquals(r.body.skipped, "no_synced_row");
@@ -156,6 +162,8 @@ Deno.test({
       outbound_integrations: [integration], synced_campaigns: [], synced_contacts: [syncedContact], agent_configs: [agentConfig],
       agent_leads: [{ id: "lead-1", user_id: USER, source: "reply_io", external_id: "555001", email: EMAIL, reply_thread: [], inbox_status: "pending", disposition_tag: null, last_surfaced_reply_at: future }],
     });
+    // Unknown campaign + discovery unavailable (row creation fails) → fail closed as no_synced_row.
+    db.fail["synced_campaigns:WRITE"] = "error";
     const r = await post(db, payload("linkedin", SEQ));
     assertEquals(r.body.skipped, "no_synced_row");
     assertEquals(db.writes("agent_leads").length, 0);
@@ -204,3 +212,41 @@ for (const seq of [SEQ, String(SEQ)]) {
     },
   });
 }
+
+// ---- Unknown campaign follows auto_capture_new_campaigns (discovery) -------
+
+Deno.test({
+  name: "reply-webhook discovery: unknown campaign + auto ON → campaign row created capture-on, reply captured, no skip",
+  ...testOpts,
+  async fn() {
+    const db = new FakeSupabase({ outbound_integrations: [integration], synced_campaigns: [], synced_contacts: [syncedContact], agent_configs: [agentConfig] });
+    const r = await post(db, payload("linkedin", SEQ));
+    assertEquals(r.status, 200);
+    assertEquals(r.body.skipped, undefined, JSON.stringify(r.body));
+    assert(db.writes("agent_leads").length >= 1, "captured");
+    const created = (db.tables.synced_campaigns as Row[]).filter((x) => String(x.external_campaign_id) === String(SEQ));
+    assertEquals(created.length, 1, "exactly one campaign row created");
+    assertEquals(created[0].capture_enabled, true);
+    assertEquals(created[0].source, "reply_io");
+    assertEquals(db.calls.filter((x) => x.table === "rpc:record_capture_scope_skips").length, 0);
+  },
+});
+
+Deno.test({
+  name: "reply-webhook discovery: unknown campaign + auto OFF → campaign row created capture-off, reply skipped (capture_disabled) and recorded",
+  ...testOpts,
+  async fn() {
+    const db = new FakeSupabase({ outbound_integrations: [{ ...integration, auto_capture_new_campaigns: false }], synced_campaigns: [], synced_contacts: [syncedContact], agent_configs: [agentConfig] });
+    const r = await post(db, payload("linkedin", SEQ));
+    assertEquals(r.status, 200);
+    assertEquals(r.body.skipped, "capture_disabled");
+    assertEquals(db.writes("agent_leads").filter((w) => w.method !== "GET").length, 0, "not captured");
+    const created = (db.tables.synced_campaigns as Row[]).filter((x) => String(x.external_campaign_id) === String(SEQ));
+    assertEquals(created.length, 1);
+    assertEquals(created[0].capture_enabled, false);
+    const skipRows = db.calls.filter((x) => x.table === "rpc:record_capture_scope_skips").flatMap((x) => (x.body as { p_rows: Row[] }).p_rows);
+    assertEquals(skipRows.length, 1);
+    assertEquals(skipRows[0].reason, "capture_disabled");
+    assertEquals(skipRows[0].contact_key, "prospect-0002@example.test");
+  },
+});

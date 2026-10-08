@@ -212,7 +212,8 @@ Deno.test({
 
 const skipCases: Array<{ name: string; db: () => FakeSupabase; campaign?: unknown; reason: string }> = [
   { name: "capture disabled", db: () => baseDb({}, false), reason: "capture_disabled" },
-  { name: "no synced row", db: () => new FakeSupabase({ outbound_integrations: [integration()], synced_campaigns: [], agent_configs: [AGENT_CONFIG] }), reason: "no_synced_row" },
+  // Unknown campaign + discovery unavailable (row creation fails) → fail closed.
+  { name: "no synced row", db: () => { const d = new FakeSupabase({ outbound_integrations: [integration()], synced_campaigns: [], agent_configs: [AGENT_CONFIG] }); d.fail["synced_campaigns:WRITE"] = "error"; return d; }, reason: "no_synced_row" },
   { name: "no campaign id", db: () => baseDb(), campaign: null, reason: "no_campaign_id" },
   {
     name: "lookup error",
