@@ -434,6 +434,16 @@ export function AgentAudience() {
                     <p className="text-xs text-muted-foreground mt-1">Matches any title containing one of these.</p>
                   </div>
 
+                  <div>
+                    <Label>Exclude job titles</Label>
+                    <TagInput
+                      value={vrellyFilters.exclude_job_titles ?? []}
+                      onChange={(v) => setVFilter('exclude_job_titles', v)}
+                      placeholder="Product Owner — Enter to add"
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">Drops anyone whose title contains one of these.</p>
+                  </div>
+
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <Label>Seniority</Label>

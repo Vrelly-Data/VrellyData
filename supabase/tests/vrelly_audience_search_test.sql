@@ -43,6 +43,12 @@ begin
   if (r->>'total')::int <> 5 then raise exception 'check 3b (vp of) failed: %', r; end if;
   n := n + 1;
 
+  -- 3c. excluded titles drop out ("VP of Product" here); NULL titles survive
+  r := public.vrelly_audience_search(u, '{"title_patterns":["%vp of%"],"exclude_title_patterns":["%product%"]}', 25, 0, true);
+  if (r->>'total')::int <> 4 or r::text ilike '%VP of Product%' then
+    raise exception 'check 3c (exclude titles) failed: %', r; end if;
+  n := n + 1;
+
   -- 4. paging walks the id order without overlap
   q := '{"title_patterns":["%vp of%"]}';
   r := public.vrelly_audience_search(u, q, 2, 0);

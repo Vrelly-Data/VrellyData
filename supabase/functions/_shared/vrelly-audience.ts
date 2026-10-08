@@ -35,6 +35,11 @@ export const VRELLY_FILTERS_VERSION = 2;
 export interface VrellyAudienceFilters {
   /** Contains, any of. "CEO" matches "CEO & Founder". */
   job_titles?: string[];
+  /**
+   * Contains, none of — removes e.g. "Product Owner" from an "Owner" search.
+   * Not a filter on its own: an audience still needs at least one positive one.
+   */
+  exclude_job_titles?: string[];
   /** Keys of VRELLY_SENIORITIES. */
   seniorities?: string[];
   /** Contains, any of — prod stores multi-valued "C-Suite, Marketing". */
@@ -97,6 +102,7 @@ const US_STATE_NAMES: Readonly<Record<string, string>> = Object.fromEntries(
 /** Exactly what public.vrelly_audience_search receives as p_query. */
 export interface CompiledVrellyQuery {
   title_patterns: string[] | null;
+  exclude_title_patterns: string[] | null;
   seniorities: string[] | null;
   department_patterns: string[] | null;
   industry_patterns: string[] | null;
@@ -162,7 +168,7 @@ function expandStates(values: string[]): string[] {
 }
 
 const KNOWN_KEYS = new Set<keyof VrellyAudienceFilters>([
-  "job_titles", "seniorities", "departments", "industries", "company_sizes",
+  "job_titles", "exclude_job_titles", "seniorities", "departments", "industries", "company_sizes",
   "person_countries", "person_states", "company_countries", "company_states", "keywords",
 ]);
 
@@ -186,6 +192,7 @@ export function normalizeVrellyFilters(raw: unknown): VrellyAudienceFilters {
   const put = (k: keyof VrellyAudienceFilters, v: string[]) => { if (v.length) f[k] = v; };
 
   put("job_titles", cleanList("job_titles", obj.job_titles));
+  put("exclude_job_titles", cleanList("exclude_job_titles", obj.exclude_job_titles));
   const sen = cleanList("seniorities", obj.seniorities).map((s) => s.toLowerCase());
   for (const s of sen) {
     if (!VRELLY_SENIORITIES[s]) {
@@ -210,8 +217,9 @@ export function normalizeVrellyFilters(raw: unknown): VrellyAudienceFilters {
   return f;
 }
 
+/** A positive filter — exclusions alone would still match the whole database. */
 export function hasAnyVrellyFilter(f: VrellyAudienceFilters): boolean {
-  return Object.values(f).some((v) => Array.isArray(v) && v.length > 0);
+  return Object.entries(f).some(([k, v]) => k !== "exclude_job_titles" && Array.isArray(v) && v.length > 0);
 }
 
 /**
@@ -225,6 +233,7 @@ export function compileVrellyFilters(raw: unknown): CompiledVrellyQuery {
     xs && xs.length ? map(xs) : null;
   return {
     title_patterns: or(f.job_titles, (xs) => xs.map(containsPattern)),
+    exclude_title_patterns: or(f.exclude_job_titles, (xs) => xs.map(containsPattern)),
     seniorities: or(f.seniorities, (xs) => [...new Set(xs.flatMap((s) => VRELLY_SENIORITIES[s]))]),
     department_patterns: or(f.departments, (xs) => xs.map(containsPattern)),
     industry_patterns: or(f.industries, (xs) => xs.map(containsPattern)),

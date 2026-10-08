@@ -23,6 +23,9 @@
 -- max_per_run matches in id order, those people become pushes, the exclusion
 -- below drops them, and the next run starts where the last one ended.
 --
+-- Reading public.prospects to build the views takes only ACCESS SHARE on it:
+-- selects, inserts and updates on prospects carry on during the ~2.5 min build.
+--
 -- REFRESH: weekly (Sunday 07:10 UTC), concurrently, skip-if-running, with its
 -- own 30min statement_timeout. prospects is imported in bulk and rarely;
 -- public.refresh_prospect_audience_index() can be run by hand after an import.
@@ -67,16 +70,6 @@ begin
     where nullif(btrim(p.business_email), '') is not null
     order by p.id;
 
-    create unique index prospect_audience_search_id_key on public.prospect_audience_search (id);
-    create index prospect_audience_search_title_trgm on public.prospect_audience_search using gin (job_title gin_trgm_ops);
-    create index prospect_audience_search_industry_trgm on public.prospect_audience_search using gin (company_industry gin_trgm_ops);
-    create index prospect_audience_search_department_trgm on public.prospect_audience_search using gin (department gin_trgm_ops);
-    create index prospect_audience_search_seniority on public.prospect_audience_search (seniority_l);
-    create index prospect_audience_search_size on public.prospect_audience_search (company_size_l);
-    create index prospect_audience_search_country on public.prospect_audience_search (country_l);
-    create index prospect_audience_search_state on public.prospect_audience_search (state_l);
-    create index prospect_audience_search_company_country on public.prospect_audience_search (company_country_l);
-    create index prospect_audience_search_company_state on public.prospect_audience_search (company_state_l);
   end if;
 
   if to_regclass('public.prospect_audience_keywords') is null then
@@ -88,16 +81,14 @@ begin
       and (nullif(btrim(p.company_description), '') is not null or nullif(btrim(p.keywords), '') is not null)
     order by p.id;
 
-    create unique index prospect_audience_keywords_id_key on public.prospect_audience_keywords (id);
-    create index prospect_audience_keywords_kw on public.prospect_audience_keywords using gin (kw);
   end if;
 end
 $mv$;
 
 -- Not exposed: prospects data reaches clients only through the definer function.
 revoke all on public.prospect_audience_search, public.prospect_audience_keywords from public, anon, authenticated;
-analyze public.prospect_audience_search;
-analyze public.prospect_audience_keywords;
+-- Indexes are built by 20261008150100's companion 20261008150200 with CREATE
+-- INDEX CONCURRENTLY, outside a transaction, so nothing waits on them.
 
 comment on materialized view public.prospect_audience_search is
   'Narrow, id-ordered copy of the filterable prospects columns (rows with a business email only) for Agent Audiences source=vrelly. Read by vrelly_audience_search; refreshed weekly by refresh-prospect-audience-index.';
@@ -179,7 +170,7 @@ declare
   v_total bigint;
   v_cap integer := greatest(1, least(coalesce(p_count_cap, 100000), 1000000));
   arr text[];
-  a_title text[]; a_sen text[]; a_dept text[]; a_ind text[]; a_size text[];
+  a_title text[]; a_xtitle text[]; a_sen text[]; a_dept text[]; a_ind text[]; a_size text[];
   a_pc text[]; a_ps text[]; a_cc text[]; a_cs text[];
 begin
   if p_user_id is null then
@@ -187,7 +178,7 @@ begin
   end if;
 
   -- jsonb list -> text[]; null/absent/empty -> null (no filter).
-  for v_term in select unnest(array['title_patterns','seniorities','department_patterns','industry_patterns',
+  for v_term in select unnest(array['title_patterns','exclude_title_patterns','seniorities','department_patterns','industry_patterns',
                                     'company_sizes','person_countries','person_states','company_countries',
                                     'company_states','keywords'])
   loop
@@ -197,6 +188,7 @@ begin
     end if;
     case v_term
       when 'title_patterns'      then a_title := arr;
+      when 'exclude_title_patterns' then a_xtitle := arr;
       when 'seniorities'         then a_sen := arr;
       when 'department_patterns' then a_dept := arr;
       when 'industry_patterns'   then a_ind := arr;
@@ -241,6 +233,8 @@ begin
   if a_cc    is not null then v_where := v_where || ' and s.company_country_l = any ($8)'; end if;
   if a_cs    is not null then v_where := v_where || ' and s.company_state_l = any ($9)'; end if;
   if p_prospect_ids is not null then v_where := v_where || ' and s.id = any ($11)'; end if;
+  -- Exclusions narrow; they never count as a filter on their own (above).
+  if a_xtitle is not null then v_where := v_where || ' and coalesce(s.job_title, '''') not ilike all ($14)'; end if;
 
   -- Exclusion keys for this user, once per call.
   create temp table if not exists _vas_ex_email (k text primary key) on commit drop;
@@ -305,7 +299,7 @@ begin
     $q$, v_where)
     into v_people
     using a_title, a_sen, a_dept, a_ind, a_size, a_pc, a_ps, a_cc, a_cs, v_tsq, p_prospect_ids,
-          least(p_limit, 500), greatest(coalesce(p_offset, 0), 0);
+          least(p_limit, 500), greatest(coalesce(p_offset, 0), 0), a_xtitle;
   else
     v_people := '[]'::jsonb;
   end if;
@@ -327,7 +321,8 @@ begin
         ) x
       $q$, v_where_base)
       into v_base
-      using a_title, a_sen, a_dept, a_ind, a_size, a_pc, a_ps, a_cc, a_cs, v_tsq, p_prospect_ids, v_cap + 1;
+      using a_title, a_sen, a_dept, a_ind, a_size, a_pc, a_ps, a_cc, a_cs, v_tsq, p_prospect_ids, v_cap + 1,
+            null::integer, a_xtitle;
       v_total := v_base;
     else
       execute format($q$
@@ -341,7 +336,8 @@ begin
         ) x
       $q$, v_where_base)
       into v_base, v_sampled, v_hits
-      using a_title, a_sen, a_dept, a_ind, a_size, a_pc, a_ps, a_cc, a_cs, v_tsq, p_prospect_ids, v_cap + 1;
+      using a_title, a_sen, a_dept, a_ind, a_size, a_pc, a_ps, a_cc, a_cs, v_tsq, p_prospect_ids, v_cap + 1,
+            null::integer, a_xtitle;
       if v_base <= v_sampled then
         v_total := v_hits;
       else

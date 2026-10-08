@@ -14,7 +14,7 @@ import {
 } from "./vrelly-audience.ts";
 
 const none = {
-  title_patterns: null, seniorities: null, department_patterns: null, industry_patterns: null,
+  title_patterns: null, exclude_title_patterns: null, seniorities: null, department_patterns: null, industry_patterns: null,
   company_sizes: null, person_countries: null, person_states: null, company_countries: null,
   company_states: null, keywords: null,
 };
@@ -72,6 +72,13 @@ Deno.test("keywords stay terms (lower-cased); Postgres stems them", () => {
     compileVrellyFilters({ keywords: ["Finance", "Money Lending"] }).keywords,
     ["finance", "money lending"],
   );
+});
+
+Deno.test("excluded titles compile to contains-patterns; an exclusion alone is not a filter", () => {
+  const q = compileVrellyFilters({ job_titles: ["Owner"], exclude_job_titles: ["Product Owner", "product owner"] });
+  assertEquals(q.title_patterns, ["%Owner%"]);
+  assertEquals(q.exclude_title_patterns, ["%Product Owner%"]);
+  assertThrows(() => compileVrellyFilters({ exclude_job_titles: ["Product Owner"] }), VrellyFilterError, "At least one filter");
 });
 
 Deno.test("no filter at all is refused — it would walk the whole database", () => {

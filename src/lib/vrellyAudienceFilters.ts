@@ -11,6 +11,8 @@
 /** agent_audiences.filters for source='vrelly' (filters_version 2). */
 export interface VrellyAudienceFilters {
   job_titles?: string[];
+  /** Contains, none of. Not a filter on its own. */
+  exclude_job_titles?: string[];
   seniorities?: string[];
   departments?: string[];
   industries?: string[];
@@ -47,6 +49,8 @@ export const VRELLY_DEPARTMENT_OPTIONS = [
   'Health Services', 'Administrative', 'Customer Service', 'Media And Communications',
 ];
 
+/** A positive filter is set — exclusions alone would match the whole database. */
 export function hasVrellyFilter(f: VrellyAudienceFilters | null | undefined): boolean {
-  return !!f && Object.values(f).some((v) => Array.isArray(v) && v.some((x) => String(x).trim() !== ''));
+  return !!f && Object.entries(f).some(([k, v]) =>
+    k !== 'exclude_job_titles' && Array.isArray(v) && v.some((x) => String(x).trim() !== ''));
 }
