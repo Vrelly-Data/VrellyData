@@ -468,7 +468,10 @@ Deno.serve(async (req) => {
     // on main (no lead, no inference event), so it still returns here.
     let captureSkipReason: string | null = null;
     {
-      const gate = await checkCaptureGate(supabase as any, integration.id, smartleadCampaignId);
+      // Unknown campaign: create it so auto_capture_new_campaigns decides.
+      const gate = await checkCaptureGate(supabase as any, integration.id, smartleadCampaignId, {
+        discover: { teamId: integration.team_id, platform: "smartlead", name: lastCampaignName },
+      });
       if (!gate.allowed) {
         captureSkipReason = gate.reason;
         // No silent drops: surface the skipped reply in Capture Scope.

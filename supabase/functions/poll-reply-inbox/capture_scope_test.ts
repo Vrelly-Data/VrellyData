@@ -22,7 +22,9 @@ const USER = "00000000-0000-4000-8000-0000000000b1";
 const USER2 = "00000000-0000-4000-8000-0000000000b2";
 const RECENT = new Date(Date.now() - 600_000).toISOString();
 
-const integ = (id: string, user: string, key: string): Row => ({ id, created_by: user, team_id: TEAM, api_key_encrypted: key, is_active: true, platform: "reply.io" });
+// auto_capture_new_campaigns defaults to OFF here so the scope tests keep
+// testing what is enabled; unknown sequences are discovered capture-off.
+const integ = (id: string, user: string, key: string, auto = false): Row => ({ id, created_by: user, team_id: TEAM, api_key_encrypted: key, is_active: true, platform: "reply.io", auto_capture_new_campaigns: auto });
 const row = (id: string, enabled: boolean, integrationId = INT): Row => ({ id: `sc-${integrationId}-${id}`, integration_id: integrationId, team_id: TEAM, external_campaign_id: id, capture_enabled: enabled });
 
 // Threads: 701 enabled seq (number id), 702 enabled seq (string id), 703
@@ -164,15 +166,15 @@ Deno.test({
     assertEquals(r.status, 200);
     const rows = skipRowsOf(db);
     const bySeq = new Map(rows.map((x) => [String(x.campaign_external_id), x]));
-    assertEquals([...bySeq.keys()].sort(), ["11111", "99999"], "703 (off) and 704 (unsynced) only");
+    assertEquals([...bySeq.keys()].sort(), ["11111", "99999"], "703 (off) and 704 (unknown → discovered capture-off) only");
     assertEquals(bySeq.get("11111")!.reason, "capture_disabled");
     assertEquals(bySeq.get("11111")!.campaign_name, "Synced S3", "synced name preferred");
     assertEquals(bySeq.get("11111")!.contact_key, "t3@example.test");
     assertEquals(bySeq.get("11111")!.platform, "reply.io");
     assertEquals(bySeq.get("11111")!.integration_id, INT);
     assertEquals(bySeq.get("11111")!.team_id, TEAM);
-    assertEquals(bySeq.get("99999")!.reason, "no_synced_row");
-    assertEquals(bySeq.get("99999")!.campaign_name, "S4", "falls back to the thread's sequence name");
+    assertEquals(bySeq.get("99999")!.reason, "capture_disabled", "unknown sequence is created, capture-off per the integration setting");
+    assertEquals(bySeq.get("99999")!.campaign_name, "S4", "named from the thread's sequence");
     assert(rows.every((x) => x.source === "poll-reply-inbox"));
     assertEquals(r.body.captureScope.skipsRecorded, 2, "reported in the run summary");
   },
@@ -189,7 +191,7 @@ Deno.test({
     });
     await run(off);
     const seqs = skipRowsOf(off).map((x) => `${x.campaign_external_id}:${x.reason}`).sort();
-    assertEquals(seqs, ["11111:no_synced_row", "13579:capture_disabled", "24680:capture_disabled", "99999:no_synced_row"]);
+    assertEquals(seqs, ["11111:capture_disabled", "13579:capture_disabled", "24680:capture_disabled", "99999:capture_disabled"]);
 
     const broken = new FakeSupabase({
       outbound_integrations: [integ(INT, USER, "k1")],
@@ -296,5 +298,79 @@ Deno.test({
       return { status: res.status, body: await res.json() };
     });
     assertEquals(result.status, 401);
+  },
+});
+
+
+// ---- Unknown sequences follow auto_capture_new_campaigns -------------------
+
+Deno.test({
+  name: "poll-reply-inbox discovery: unknown sequence + auto ON → row created capture-on, its thread captured (classify path), no skip",
+  ...testOpts,
+  async fn() {
+    const db = new FakeSupabase({
+      outbound_integrations: [integ(INT, USER, "k1", true)],
+      agent_configs: [{ id: "cfg-1", user_id: USER, is_active: true }],
+      synced_campaigns: [row("13579", true), row("24680", true), row("11111", false)],
+    });
+    const r = await run(db);
+    assertEquals(r.status, 200);
+    const created = (db.tables.synced_campaigns as Row[]).find((x) => x.external_campaign_id === "99999")!;
+    assert(created, "row created for the unknown sequence");
+    assertEquals(created.capture_enabled, true);
+    assertEquals(created.source, "reply_io");
+    assertEquals(created.name, "S4");
+    assertEquals(created.is_linked, true);
+    const inserted = db.writes("agent_leads").filter((w) => w.method === "POST").map((w) => String((w.body as Row).external_id)).sort();
+    assertEquals(inserted, ["701", "702", "704"], "704 (unknown sequence) is captured");
+    assert(!skipRowsOf(db).some((x) => x.campaign_external_id === "99999"));
+    assert(r.rec.logs.some((l) => l.includes("discovered 1 unsynced sequence(s)") && l.includes("1 capture-on")));
+  },
+});
+
+Deno.test({
+  name: "poll-reply-inbox discovery: a 10-day-old reply in a newly discovered capture-on sequence is captured (14-day window); a normal known one is not",
+  ...testOpts,
+  async fn() {
+    const tenDays = new Date(Date.now() - 10 * 86400_000).toISOString();
+    const db = new FakeSupabase({
+      outbound_integrations: [integ(INT, USER, "k1", true)],
+      agent_configs: [{ id: "cfg-1", user_id: USER, is_active: true }],
+      synced_campaigns: [row("13579", true)],
+    });
+    const oldApi = (_req: Request, url: URL) => {
+      if (url.hostname !== "api.reply.io") return undefined;
+      if (/\/inbox\/threads\/\d+\/messages$/.test(url.pathname)) {
+        return json({ items: [{ date: tenDays, body: "Late reply", fromName: "Prospect", isOutbound: false, channel: "email" }], hasMore: false });
+      }
+      if (url.pathname.endsWith("/inbox/threads")) {
+        return json({ items: [{ ...THREADS[0], lastActivityDate: tenDays }, { ...THREADS[3], lastActivityDate: tenDays }], hasMore: false });
+      }
+      return undefined;
+    };
+    await withFakes(db, oldApi, async () => {
+      const res = await handler(new Request("http://local/poll-reply-inbox", { method: "POST", headers: { "Content-Type": "application/json", "x-agent-key": AGENT_KEY }, body: "{}" }));
+      return await res.json();
+    });
+    const inserted = db.writes("agent_leads").filter((w) => w.method === "POST").map((w) => w.body as Row);
+    assertEquals(inserted.map((x) => String(x.external_id)), ["704"], "only the discovered sequence's old thread");
+    assertEquals(inserted[0].inbox_status, "pending");
+  },
+});
+
+Deno.test({
+  name: "poll-reply-inbox discovery: row creation fails → unknown sequence stays uncaptured and is recorded as no_synced_row",
+  ...testOpts,
+  async fn() {
+    const db = new FakeSupabase({
+      outbound_integrations: [integ(INT, USER, "k1", true)],
+      agent_configs: [{ id: "cfg-1", user_id: USER, is_active: true }],
+      synced_campaigns: [row("13579", true), row("24680", true), row("11111", false)],
+    });
+    db.fail["synced_campaigns:WRITE"] = "error";
+    await run(db);
+    const inserted = db.writes("agent_leads").filter((w) => w.method === "POST").map((w) => String((w.body as Row).external_id)).sort();
+    assertEquals(inserted, ["701", "702"]);
+    assertEquals(skipRowsOf(db).find((x) => x.campaign_external_id === "99999")?.reason, "no_synced_row");
   },
 });

@@ -190,6 +190,75 @@ export interface CaptureGateResult {
   allowed: boolean;
   reason: "allowed" | CaptureGateSkipReason;
   campaignName?: string | null;
+  // True when this call created the synced_campaigns row (campaign seen on a
+  // reply before any sync knew it). Its capture_enabled came from the
+  // integration's auto_capture_new_campaigns setting.
+  discovered?: boolean;
+}
+
+// ── Unknown campaigns ───────────────────────────────────────────────────────
+// A reply can arrive for a campaign no sync has inserted yet (new sequence,
+// stalled sync). Dropping it as "no_synced_row" made a brand-new campaign
+// silently capture nothing. Instead the capture path creates the row itself:
+// the BEFORE INSERT trigger gives it capture_enabled from
+// outbound_integrations.auto_capture_new_campaigns, exactly as if a sync had
+// discovered it, and the campaign then shows in Capture Scope where it can be
+// toggled. The next sync fills in name/status/stats (it matches on
+// integration + external id and never writes capture_enabled).
+
+export interface DiscoverCampaign {
+  teamId: string;
+  // outbound_integrations.platform value: reply.io | smartlead | heyreach
+  platform: string;
+  name?: string | null;
+}
+
+// synced_campaigns.source per platform (the column defaults to 'reply_io', so
+// it must always be explicit).
+function sourceForPlatform(platform: string): string | null {
+  const p = platform.trim().toLowerCase();
+  if (p === "reply.io") return "reply_io";
+  if (p === "smartlead") return "smartlead";
+  if (p === "heyreach") return "heyreach";
+  return null;
+}
+
+/**
+ * Insert synced_campaigns rows for campaign ids this integration does not know
+ * yet. Existing rows are never touched (ON CONFLICT DO NOTHING), so a toggle is
+ * never overwritten. Returns the ids that were newly created. Throws on error.
+ */
+export async function discoverCampaigns(
+  // deno-lint-ignore no-explicit-any
+  db: any,
+  integrationId: string,
+  d: Omit<DiscoverCampaign, "name">,
+  campaigns: Array<{ id: unknown; name?: string | null }>,
+): Promise<string[]> {
+  const source = sourceForPlatform(d.platform);
+  if (!source || !integrationId || !d.teamId) return [];
+  const rows = new Map<string, Record<string, unknown>>();
+  for (const c of campaigns) {
+    const id = normalizeCampaignId(c.id);
+    if (!id || rows.has(id)) continue;
+    rows.set(id, {
+      integration_id: integrationId,
+      team_id: d.teamId,
+      external_campaign_id: id,
+      name: (c.name ?? "").trim() || `Campaign ${id}`,
+      source,
+      status: "unknown",
+      // Same default a sync gives a new campaign (Data Analysis scope).
+      is_linked: true,
+    });
+  }
+  if (rows.size === 0) return [];
+  const { data, error } = await db
+    .from("synced_campaigns")
+    .upsert([...rows.values()], { onConflict: "integration_id,external_campaign_id", ignoreDuplicates: true })
+    .select("external_campaign_id");
+  if (error) throw new Error(error.message);
+  return (Array.isArray(data) ? data : []).map((r: { external_campaign_id: unknown }) => String(r.external_campaign_id));
 }
 
 /**
@@ -285,7 +354,9 @@ export async function checkCaptureGate(
   db: any,
   integrationId: string,
   campaignExternalId: unknown,
-  opts?: { timeoutMs?: number },
+  // discover: create the synced_campaigns row when the campaign is unknown, so
+  // the integration's auto_capture_new_campaigns decides instead of a drop.
+  opts?: { timeoutMs?: number; discover?: DiscoverCampaign },
 ): Promise<CaptureGateResult> {
   const campaignId = normalizeCampaignId(campaignExternalId);
   if (!campaignId) {
@@ -313,12 +384,36 @@ export async function checkCaptureGate(
       console.warn(`[capture-scope] lookup_error for campaign ${campaignId}: ${error.message}`);
       return { allowed: false, reason: "lookup_error" };
     }
-    const row = data as { capture_enabled?: boolean | null; name?: string | null } | null;
+    type GateRow = { capture_enabled?: boolean | null; name?: string | null };
+    let row = data as GateRow | null;
+    let discovered = false;
+    if (!row && opts?.discover) {
+      try {
+        const created = await discoverCampaigns(db, integrationId, opts.discover, [{ id: campaignId, name: opts.discover.name }]);
+        discovered = created.includes(campaignId);
+        const again = await runBounded<LookupResult>(
+          (signal) =>
+            withAbort(
+              db.from("synced_campaigns").select("capture_enabled, name")
+                .eq("integration_id", integrationId).eq("external_campaign_id", campaignId),
+              signal,
+            ).maybeSingle(),
+          timeoutMs,
+        );
+        if (again.error) throw new Error(again.error.message);
+        row = again.data as GateRow | null;
+        if (row) {
+          console.log(`[capture-scope] discovered campaign ${campaignId} for integration ${integrationId} → capture_enabled=${row.capture_enabled === true}`);
+        }
+      } catch (e) {
+        console.warn(`[capture-scope] could not create unknown campaign ${campaignId}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
     if (!row) return { allowed: false, reason: "no_synced_row" };
     if (row.capture_enabled !== true) {
-      return { allowed: false, reason: "capture_disabled", campaignName: row.name ?? null };
+      return { allowed: false, reason: "capture_disabled", campaignName: row.name ?? null, discovered };
     }
-    return { allowed: true, reason: "allowed", campaignName: row.name ?? null };
+    return { allowed: true, reason: "allowed", campaignName: row.name ?? null, discovered };
   } catch (e) {
     console.warn(`[capture-scope] lookup_error (threw) for campaign ${campaignId}: ${e instanceof Error ? e.message : String(e)}`);
     return { allowed: false, reason: "lookup_error" };

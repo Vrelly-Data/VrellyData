@@ -468,7 +468,10 @@ Deno.serve(async (req) => {
     let gateCampaignName: string | null = null;
     let captureSkipReason: string | null = null;
     {
-      const gate = await checkCaptureGate(supabase as any, integration.id, campaignExternalId);
+      // Unknown campaign: create it so auto_capture_new_campaigns decides.
+      const gate = await checkCaptureGate(supabase as any, integration.id, campaignExternalId, {
+        discover: { teamId: integration.team_id, platform: "heyreach", name: payloadCampaignName ?? null },
+      });
       gateCampaignName = gate.campaignName ?? null;
       if (!gate.allowed) {
         captureSkipReason = gate.reason;

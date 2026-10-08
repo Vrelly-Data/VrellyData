@@ -480,7 +480,11 @@ Deno.serve(async (req) => {
     let captureGate: CaptureGateResult | null = null;
     const getCaptureGate = async (): Promise<CaptureGateResult> => {
       if (!captureGate) {
-        captureGate = await checkCaptureGate(supabase as any, integration.id, campaignId || null);
+        // Unknown sequence (no sync has inserted it yet): create it so the
+        // integration's auto_capture_new_campaigns decides, not a silent drop.
+        captureGate = await checkCaptureGate(supabase as any, integration.id, campaignId || null, {
+          discover: { teamId: integration.team_id, platform: 'reply.io', name: (event?.sequence_fields?.name as string | undefined) ?? null },
+        });
       }
       return captureGate;
     };

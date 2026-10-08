@@ -203,7 +203,21 @@ export class FakeSupabase {
       return rowsOut(page);
     }
     if (method === "POST") {
-      const items = (Array.isArray(body) ? body : [body]) as Row[];
+      let items = (Array.isArray(body) ? body : [body]) as Row[];
+      // Emulates migration 20261007210000's BEFORE INSERT trigger: a new
+      // synced_campaigns row takes capture_enabled from its integration's
+      // auto_capture_new_campaigns (column default true). ON CONFLICT DO
+      // NOTHING (ignore-duplicates upserts) leaves existing rows untouched.
+      if (table === "synced_campaigns") {
+        const ignoreDup = (req.headers.get("Prefer") ?? "").includes("resolution=ignore-duplicates");
+        const ints = this.tables.outbound_integrations ?? [];
+        items = items
+          .filter((r) => !ignoreDup || !all.some((e) => e.integration_id === r.integration_id && String(e.external_campaign_id) === String(r.external_campaign_id)))
+          .map((r) => {
+            const integ = ints.find((i) => i.id === r.integration_id);
+            return integ ? { ...r, capture_enabled: integ.auto_capture_new_campaigns !== false } : r;
+          });
+      }
       const out = items.map((r) => ({ id: `${table}-${++this.seq}`, ...r }));
       all.push(...out);
       return rowsOut(out, 201);
