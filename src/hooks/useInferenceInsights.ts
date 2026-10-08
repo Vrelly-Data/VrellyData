@@ -65,6 +65,8 @@ export type InsightsSummary = {
   copy: RpcCopy;
   heatmap: RpcHeatmap;
   computed_at: string;
+  // When the precomputed reply facts were last refreshed (every 15 minutes).
+  facts_as_of: string | null;
 };
 
 export type InsightsSuggestions = {

@@ -99,6 +99,11 @@ export function InferenceSection() {
               replies {pct(baseline.interestedRate)}
             </p>
             <SourceSplit live={baseline.live} backfill={baseline.backfill} />
+            {data?.facts_as_of && (
+              <p className="text-[11px] text-muted-foreground">
+                Reply data as of {format(new Date(data.facts_as_of), 'MMM d, HH:mm')} · refreshed every 15 minutes
+              </p>
+            )}
           </div>
           <p className="basis-full text-[11px] text-muted-foreground">
             Rates here are the interested share of replies. There are no non-responder sends for the backfill, so they
