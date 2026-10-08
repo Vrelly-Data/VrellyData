@@ -8,17 +8,16 @@ import { Label } from '@/components/ui/label';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
+  Dimension,
   SegmentFilter,
   SourceFilter,
+  biasFromCounts,
   describeSegment,
-  enrichmentBias,
-  filterRows,
-  matchesSegment,
   pct,
-  statsFor,
-  topTitles,
+  toSegmentRow,
+  toStats,
 } from '@/lib/inferenceAnalytics';
-import { useInferenceDataset } from '@/hooks/useInferenceInsights';
+import { useInsightsSuggestions, useInsightsSummary } from '@/hooks/useInferenceInsights';
 import { SourceSplit } from '@/components/admin/inference/SourceSplit';
 import { SegmentExplorer } from '@/components/admin/inference/SegmentExplorer';
 import { CopyLeaderboard } from '@/components/admin/inference/CopyLeaderboard';
@@ -45,24 +44,32 @@ function DatePicker({ label, value, onChange }: { label: string; value?: Date; o
 }
 
 export function InferenceSection() {
-  const { data: dataset, isLoading, error } = useInferenceDataset(true);
   const [source, setSource] = useState<SourceFilter>('all');
   const [from, setFrom] = useState<Date | undefined>();
   const [to, setTo] = useState<Date | undefined>();
   const [segment, setSegment] = useState<SegmentFilter | null>(null);
+  const [dims, setDims] = useState<Dimension[]>(['industry']);
+  const [includeUnknown, setIncludeUnknown] = useState(false);
 
   // "To" is inclusive of the whole day
   const toEnd = useMemo(() => (to ? new Date(to.getFullYear(), to.getMonth(), to.getDate(), 23, 59, 59, 999) : undefined), [to]);
-  const rows = useMemo(() => filterRows(dataset ?? [], { source, from, to: toEnd }), [dataset, source, from, toEnd]);
-  const keepTitles = useMemo(() => topTitles(rows), [rows]);
-  const baseline = useMemo(() => statsFor(rows), [rows]);
-  const bias = useMemo(() => enrichmentBias(rows), [rows]);
-  const segmentRows = useMemo(
-    () => (segment ? rows.filter((r) => matchesSegment(r, segment, keepTitles)) : rows),
-    [rows, segment, keepTitles],
+  const filters = useMemo(() => ({ source, from, to: toEnd }), [source, from, toEnd]);
+
+  // All aggregation happens in Postgres (admin_inference_insights).
+  const summary = useInsightsSummary(filters, { dims, includeUnknown, segment });
+  const suggestions = useInsightsSuggestions(filters);
+  const data = summary.data;
+  const { isLoading, error } = summary;
+
+  const baseline = useMemo(() => toStats(data?.baseline), [data]);
+  const bias = useMemo(() => biasFromCounts(data?.bias), [data]);
+  const segmentStats = useMemo(() => toStats(data?.segment_stats), [data]);
+  const segments = useMemo(
+    () => (data?.segments ?? []).map((r) => toSegmentRow(r, baseline.interestedRate)),
+    [data, baseline.interestedRate],
   );
   const segmentLabel = segment ? describeSegment(segment) : 'All replies in view';
-  const global = { source, from, to: toEnd };
+  const global = filters;
 
   return (
     <div className="space-y-4">
@@ -88,7 +95,7 @@ export function InferenceSection() {
           )}
           <div className="ml-auto text-right">
             <p className="text-sm tabular-nums">
-              {rows.length.toLocaleString()} replies · {baseline.interested.toLocaleString()} interested · baseline interested share of
+              {baseline.replies.toLocaleString()} replies · {baseline.interested.toLocaleString()} interested · baseline interested share of
               replies {pct(baseline.interestedRate)}
             </p>
             <SourceSplit live={baseline.live} backfill={baseline.backfill} />
@@ -101,7 +108,7 @@ export function InferenceSection() {
         {segment && (
           <CardContent className="pt-0">
             <Button variant="secondary" size="sm" className="gap-1" onClick={() => setSegment(null)}>
-              Focused on: {segmentLabel} ({segmentRows.length.toLocaleString()} replies)
+              Focused on: {segmentLabel} ({segmentStats.replies.toLocaleString()} replies)
               <X className="h-3.5 w-3.5" />
             </Button>
           </CardContent>
@@ -112,29 +119,34 @@ export function InferenceSection() {
         <p className="text-sm text-destructive">Failed to load reply data: {(error as Error).message}</p>
       ) : isLoading ? (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" /> Loading every reply (live + backfill)…
+          <Loader2 className="h-4 w-4 animate-spin" /> Aggregating every reply (live + backfill)…
         </div>
       ) : (
         <>
           <SegmentExplorer
-            rows={rows}
-            keepTitles={keepTitles}
-            baselineRate={baseline.interestedRate}
+            segments={segments}
+            totalReplies={baseline.replies}
+            covered={Number(data?.covered ?? 0)}
+            dims={dims}
+            onDimsChange={setDims}
+            includeUnknown={includeUnknown}
+            onIncludeUnknownChange={setIncludeUnknown}
             bias={bias}
             selected={segment}
             onSelect={setSegment}
+            refreshing={summary.isFetching}
           />
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-            <CopyLeaderboard rows={segmentRows} segmentLabel={segmentLabel} />
-            <TimingHeatmap rows={segmentRows} segmentLabel={segmentLabel} />
+            <CopyLeaderboard copy={data?.copy} segmentLabel={segmentLabel} />
+            <TimingHeatmap heatmap={data?.heatmap} segmentLabel={segmentLabel} />
           </div>
           <DeductionsPanel
-            rows={rows}
-            keepTitles={keepTitles}
+            candidates={suggestions.data?.suggestions}
+            candidatesLoading={suggestions.isLoading}
             baselineRate={baseline.interestedRate}
             bias={bias}
             segment={segment}
-            segmentRows={segmentRows}
+            segmentStats={segmentStats}
             global={global}
           />
         </>

@@ -1,8 +1,16 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
-import { BACKFILL_SOURCE, ReplyRow, SegmentFilter } from '@/lib/inferenceAnalytics';
-import { RawClassified, RawReply, RawSend, assembleReplyRows } from '@/lib/inferenceDataset';
+import {
+  BACKFILL_SOURCE,
+  Dimension,
+  RpcBias,
+  RpcCopy,
+  RpcHeatmap,
+  RpcStats,
+  SegmentFilter,
+  SourceFilter,
+} from '@/lib/inferenceAnalytics';
 import { LiveEvent, buildLiveCards, isFullyEnriched, num, startOfToday, startOfWeek } from '@/lib/liveFeed';
 
 // inference_events / inference_deductions are not in the generated Supabase types.
@@ -40,45 +48,80 @@ async function fetchAll<T>(table: string, select: string, apply: (q: AnyQuery) =
 const onlyLive = (q: AnyQuery) =>
   q.neq('source', BACKFILL_SOURCE).or('metadata->>backfill.is.null,metadata->>backfill.neq.true');
 
-// -------- Inference dataset: one row per reply, all sources --------
-const REPLY_SELECT = [
-  'id,team_id,person_key,channel,occurred_at,source,intent,job_title,seniority,industry,company_size,state,copy_fingerprint,subject',
-  'hours_to_reply:metadata->hours_to_reply',
-  // Eastern Time for every row (the *_local fields were tz-skewed by enrichment)
-  'reply_hour:metadata->reply_hour_et',
-  'reply_dow:metadata->reply_dow_et',
-  'step_number:metadata->sequence_step_number',
-  'sequence_number:metadata->sequence_number',
-  'variant_id:metadata->variant_id',
-  'reply_subject:metadata->>reply_subject',
-  'thread_id:metadata->>provider_thread_id',
-  'backfill:metadata->>backfill',
-].join(',');
+// -------- Inference aggregates (server-side) --------
+// Everything the Inference tab shows is aggregated in Postgres by
+// admin_inference_insights (admin-only). Two calls, so the expensive one is
+// cached: 'summary' re-runs when the explorer dimensions or the focused segment
+// change; 'suggestions' only when the source / date range changes.
 
-export function useInferenceDataset(enabled: boolean) {
+export type InsightsFilters = { source: SourceFilter; from?: Date; to?: Date };
+
+export type InsightsSummary = {
+  baseline: RpcStats;
+  bias: RpcBias;
+  segment_stats: RpcStats;
+  segments: Array<RpcStats & { values: SegmentFilter }>;
+  covered: number;
+  copy: RpcCopy;
+  heatmap: RpcHeatmap;
+  computed_at: string;
+};
+
+export type InsightsSuggestions = {
+  baseline: RpcStats;
+  bias: RpcBias;
+  suggestions: {
+    // Ranked by lift (ties as the client used to break them), up to 300 each.
+    all: Array<RpcStats & { values: SegmentFilter }>;
+    // Same candidates without any enrichment-biased dimension, ranked and capped
+    // separately so biased high-lift segments cannot crowd them out.
+    unbiased: Array<RpcStats & { values: SegmentFilter }>;
+    biased_dims: Dimension[];
+  };
+  computed_at: string;
+};
+
+async function callInsights(
+  f: InsightsFilters,
+  extra: { dims: Dimension[]; includeUnknown: boolean; segment: SegmentFilter | null; sections: Array<'summary' | 'suggestions'> },
+) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (supabase.rpc as any)('admin_inference_insights', {
+    p_source: f.source,
+    p_from: f.from ? f.from.toISOString() : null,
+    p_to: f.to ? f.to.toISOString() : null,
+    p_dims: extra.dims,
+    p_include_unknown: extra.includeUnknown,
+    p_segment: extra.segment ?? {},
+    p_sections: extra.sections,
+  });
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+const filterKey = (f: InsightsFilters) => [f.source, f.from?.toISOString() ?? null, f.to?.toISOString() ?? null];
+
+export function useInsightsSummary(
+  filters: InsightsFilters,
+  view: { dims: Dimension[]; includeUnknown: boolean; segment: SegmentFilter | null },
+) {
   return useQuery({
-    queryKey: ['inference_dataset'],
-    enabled,
+    queryKey: ['inference_insights', 'summary', ...filterKey(filters), view.dims, view.includeUnknown, view.segment ?? {}],
     staleTime: 5 * 60_000,
-    queryFn: async (): Promise<ReplyRow[]> => {
-      const [replies, sends, classified] = await Promise.all([
-        fetchAll<RawReply>('inference_events', REPLY_SELECT, (q) => q.eq('event_type', 'replied')),
-        // Send time lives on the backfill's sent events; joined to replies by provider thread.
-        fetchAll<RawSend>(
-          'inference_events',
-          'thread_id:metadata->>provider_thread_id,send_hour:metadata->send_hour_et,send_dow:metadata->send_dow_et',
-          (q) => q.eq('source', BACKFILL_SOURCE).eq('event_type', 'sent'),
-        ),
-        // Live replies mostly carry no intent; it is on the person's classification.
-        fetchAll<RawClassified>(
-          'inference_events',
-          'team_id,person_key,intent,occurred_at',
-          (q) => q.eq('event_type', 'classified').neq('source', BACKFILL_SOURCE).not('intent', 'is', null),
-        ),
-      ]);
+    // Keep showing the previous numbers while a new grouping loads.
+    placeholderData: (previous) => previous,
+    queryFn: async (): Promise<InsightsSummary> =>
+      callInsights(filters, { ...view, sections: ['summary'] }),
+  });
+}
 
-      return assembleReplyRows(replies, sends, classified);
-    },
+export function useInsightsSuggestions(filters: InsightsFilters) {
+  return useQuery({
+    queryKey: ['inference_insights', 'suggestions', ...filterKey(filters)],
+    staleTime: 5 * 60_000,
+    placeholderData: (previous) => previous,
+    queryFn: async (): Promise<InsightsSuggestions> =>
+      callInsights(filters, { dims: ['industry'], includeUnknown: false, segment: null, sections: ['suggestions'] }),
   });
 }
 

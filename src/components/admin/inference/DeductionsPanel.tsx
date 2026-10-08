@@ -15,7 +15,7 @@ import {
   DIMENSION_LABELS,
   Dimension,
   DimensionBias,
-  ReplyRow,
+  RpcStats,
   biasedDims,
   SegmentFilter,
   SourceFilter,
@@ -25,8 +25,7 @@ import {
   fmtHours,
   fmtLift,
   pct,
-  statsFor,
-  suggestDeductions,
+  toSegmentRow,
 } from '@/lib/inferenceAnalytics';
 import { Deduction, DeductionInput, useDeductions, useSaveDeduction } from '@/hooks/useInferenceInsights';
 import { SourceSplit } from '@/components/admin/inference/SourceSplit';
@@ -85,21 +84,27 @@ function EvidenceLine({ evidence }: { evidence: Record<string, unknown> | null }
   );
 }
 
+// Suggestion candidates come ranked from the server (admin_inference_insights,
+// section 'suggestions'); this panel only drops the ones already accepted or
+// rejected and shows the top SUGGESTIONS_SHOWN.
+const SUGGESTIONS_SHOWN = 8;
+
 export function DeductionsPanel({
-  rows,
-  keepTitles,
+  candidates,
+  candidatesLoading,
   baselineRate,
   bias,
   segment,
-  segmentRows,
+  segmentStats,
   global,
 }: {
-  rows: ReplyRow[];
-  keepTitles: Set<string>;
+  candidates: { all: Array<RpcStats & { values: SegmentFilter }>; unbiased: Array<RpcStats & { values: SegmentFilter }> } | undefined;
+  candidatesLoading: boolean;
   baselineRate: number;
   bias: Record<Dimension, DimensionBias>;
   segment: SegmentFilter | null;
-  segmentRows: ReplyRow[];
+  // Stats of the focused segment (or of every reply in view when none is focused).
+  segmentStats: Stats;
   global: GlobalFilter;
 }) {
   const { data: deductions = [], isLoading, error } = useDeductions();
@@ -112,9 +117,14 @@ export function DeductionsPanel({
     () => new Set(deductions.filter((d) => d.suggestion_key && d.status !== 'suggested').map((d) => d.suggestion_key as string)),
     [deductions],
   );
-  const suggestions = useMemo(
-    () => suggestDeductions(rows, { baselineRate, keepTitles, exclude: decided, excludeDims: includeBiased ? [] : flagged }),
-    [rows, baselineRate, keepTitles, decided, includeBiased, flagged],
+  const suggestions: Suggestion[] = useMemo(
+    () =>
+      ((includeBiased ? candidates?.all : candidates?.unbiased) ?? [])
+        .map((c) => toSegmentRow(c, baselineRate))
+        .map((s) => ({ ...s, suggestionKey: s.key }))
+        .filter((s) => !decided.has(s.suggestionKey))
+        .slice(0, SUGGESTIONS_SHOWN),
+    [candidates, includeBiased, baselineRate, decided],
   );
   const accepted = deductions.filter((d) => d.status === 'accepted');
   const rejected = deductions.filter((d) => d.status === 'rejected');
@@ -130,7 +140,7 @@ export function DeductionsPanel({
 
   const writeForSegment = () => {
     const values = segment ?? {};
-    const stats = statsFor(segment ? segmentRows : rows);
+    const stats = segmentStats;
     setDraft({
       title: '',
       body: '',
@@ -170,7 +180,11 @@ export function DeductionsPanel({
               </span>
             )}
           </div>
-          {suggestions.length === 0 ? (
+          {candidatesLoading ? (
+            <p className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Ranking segments…
+            </p>
+          ) : suggestions.length === 0 ? (
             <p className="text-xs text-muted-foreground">No segment beats the baseline with n ≥ 30 in this selection.</p>
           ) : (
             suggestions.map((s) => (
