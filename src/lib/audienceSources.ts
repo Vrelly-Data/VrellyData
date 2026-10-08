@@ -1,8 +1,8 @@
 /**
  * Audience data sources — the adapter contract.
  *
- * STAGE 1: this file is the whole abstraction, and Apollo is its only working
- * implementation. Nothing here changes what the Apollo path does; it describes
+ * STAGE 3 (2026-10): Apollo and Vrelly are both live. Stage 1 made this file the
+ * whole abstraction with Apollo as its only implementation. Nothing here changes what the Apollo path does; it describes
  * what Apollo already does, in terms general enough that a second source can be
  * added without editing the Apollo code. That ordering is deliberate — the
  * Apollo pipeline (search -> reveal -> cache -> push) was verified end to end
@@ -35,7 +35,8 @@ export type AudienceSourceId = 'apollo' | 'vrelly' | 'clay' | 'ai';
  * rows and fail on prod, which is the worst possible way to find out.
  */
 export type SourceTransport =
-  | { kind: 'edge-function'; search: string; reveal: string }
+  /** reveal is absent for a source whose records are complete (Vrelly). */
+  | { kind: 'edge-function'; search: string; reveal?: string }
   | { kind: 'definer-rpc'; results: string; count: string };
 
 /** A filter the UI can render but this source cannot usefully answer. */
@@ -100,19 +101,21 @@ export const AUDIENCE_SOURCES: Readonly<Record<AudienceSourceId, AudienceSource>
 
   vrelly: {
     id: 'vrelly',
-    label: 'Vrelly',
-    description: 'Our own prospect database. Free to search and use — no credits, no reveal step.',
-    available: false,
-    unavailableReason: 'Not wired up yet (Stage 3).',
+    label: 'Vrelly database',
+    description: 'Our own 1.7M-contact database. Free — no credits, no reveal step, every record has a work email.',
+    available: true,
     requiresReveal: false,
     costsCredits: false,
-    // See SourceTransport: the table itself is unreadable through PostgREST at
-    // prod scale. These two are SECURITY DEFINER and are the only supported way in.
-    transport: { kind: 'definer-rpc', results: 'search_prospects_results', count: 'search_prospects_count' },
-    // Coverage measured against prod 2026-08-31 over a 1,000-row sample.
+    // An edge function, not a client RPC: public.prospects is unreadable
+    // through PostgREST at prod scale, and vrelly-audience-search runs the SAME
+    // compile + search (_shared/vrelly-audience.ts) that run-agent-audience
+    // does, so a scheduled run takes exactly the people the preview showed.
+    transport: { kind: 'edge-function', search: 'vrelly-audience-search' },
+    // Keywords search company_description (84% populated) as well as the
+    // sparse keywords column, so it is a real filter here. Company country is
+    // only 4% populated (measured 2026-10-08) — the form says so next to it.
     unsupportedFilters: [
       { key: 'technologies', label: 'Technologies', reason: 'Only 2% of Vrelly records have technology data.' },
-      { key: 'keywords', label: 'Keywords', reason: 'Only 2% of Vrelly records have keyword data.' },
       { key: 'interests', label: 'Interests', reason: 'Only 7% of Vrelly records have interest data.' },
     ],
   },
@@ -142,8 +145,20 @@ export const AUDIENCE_SOURCES: Readonly<Record<AudienceSourceId, AudienceSource>
   },
 };
 
-/** Every audience predating the source column is Apollo. */
+/**
+ * What a STORED row with no source resolves to. Every audience predating the
+ * source column is Apollo — never change this to the new-audience default.
+ */
 export const DEFAULT_SOURCE: AudienceSourceId = 'apollo';
+
+/** Preselected for a NEW audience: free, and no Apollo credits. */
+export const NEW_AUDIENCE_SOURCE: AudienceSourceId = 'vrelly';
+
+/**
+ * agent_audiences.filters_version per source — each source stores filters in
+ * its own vocabulary, and a CHECK constraint ties the two together.
+ */
+export const FILTERS_VERSION: Partial<Record<AudienceSourceId, number>> = { apollo: 1, vrelly: 2 };
 
 export const SOURCE_ORDER: readonly AudienceSourceId[] = ['vrelly', 'apollo', 'clay', 'ai'];
 
@@ -176,12 +191,12 @@ export function resolveTransport(source: AudienceSource): SourceTransport {
 }
 
 /** Endpoints for an edge-function-backed source, narrowed. */
-export function resolveEdgeFunctions(source: AudienceSource): { search: string; reveal: string } {
+export function resolveEdgeFunctions(source: AudienceSource): { search: string; reveal: string | null } {
   const t = resolveTransport(source);
   if (t.kind !== 'edge-function') {
     throw new Error(`The ${source.label} source is not reached through an edge function.`);
   }
-  return { search: t.search, reveal: t.reveal };
+  return { search: t.search, reveal: t.reveal ?? null };
 }
 
 /** Is this filter meaningful for this source? Drives hiding/labelling in the UI. */

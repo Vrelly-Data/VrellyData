@@ -583,7 +583,7 @@ export function AudiencePreviewDialog(
                     {source.label} returned nothing for these filters.
                   </p>
                   {(() => {
-                    const why = emptyReason(audience?.filters);
+                    const why = emptyReason(audience?.filters as ApolloAudienceFilters | undefined);
                     return why ? (
                       <p className="text-sm mt-3 max-w-xl mx-auto text-amber-600 flex items-start gap-1.5 text-left">
                         <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />

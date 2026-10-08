@@ -27,6 +27,28 @@
 //   7. push                        IRREVERSIBLE
 //   8. close the run row
 //
+// TWO SOURCES (agent_audiences.source):
+//   apollo  search (free) -> enrich (credits) -> push, as described above.
+//   vrelly  ONE database call replaces search+enrich: public.prospects rows are
+//           already complete, so steps 4-6 collapse into vrelly_audience_search
+//           (_shared/vrelly-audience.ts), which also drops everyone this user
+//           already pushed, already has as a lead, or already has as a synced
+//           contact. No Apollo call is made and credits_spent stays 0. Matches
+//           come back in id order, so successive runs walk the list.
+//   The live preflight (step 3) runs FIRST for both: a dead campaign must stop
+//   a Vrelly run just as it stops an Apollo one, because the push burns the
+//   prospect either way.
+//
+// APOLLO GUARDRAILS. The shared APOLLO_API_KEY pays for every client without a
+// key of their own, so on that key a client may spend at most
+// agent_configs.apollo_monthly_credit_cap credits per calendar month (UTC),
+// counted from agent_audience_runs. A run that would cross it enriches only up
+// to the cap and ends 'partial' with reason 'monthly_cap'; Apollo answering
+// 422 "insufficient credits" ends it 'partial' with reason
+// 'apollo_insufficient_credits'. Either way whatever was already enriched is
+// still pushed — those credits are spent. The reason is shown on the audience
+// card and in Admin (admin_apollo_credit_alerts).
+//
 // WHY PREFLIGHT COMES BEFORE ENRICHMENT. synced_campaigns.status is not a
 // safety signal — proved both ways on 2026-08-16. A Reply.io sequence marked
 // 'skipped' held an automatic zero-delay email step and was inert only because
@@ -41,6 +63,17 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { preflightCampaign } from "../_shared/campaign-preflight.ts";
 import { ENRICH_MAX_PER_CALL } from "../_shared/apollo.ts";
+import { getApolloKeyForUser, ApolloKeyMissingError } from "../_shared/apollo-key.ts";
+import { compileVrellyFilters, searchVrelly, VrellyFilterError } from "../_shared/vrelly-audience.ts";
+
+type RunReason = "monthly_cap" | "apollo_insufficient_credits";
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** First instant of the current calendar month, UTC. */
+function monthStartUtc(now = new Date()): string {
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
+}
 
 const allowedOrigins = [
   Deno.env.get("ALLOWED_ORIGIN") || "https://vrelly.com",
@@ -104,7 +137,7 @@ Deno.serve(async (req) => {
     const audienceId: string | undefined = body.audience_id;
     if (!audienceId) return json({ error: "audience_id is required" }, 400);
     const explicitIds: string[] | null = Array.isArray(body.person_ids)
-      ? [...new Set(body.person_ids.map((s: unknown) => String(s).trim()).filter(Boolean))]
+      ? [...new Set<string>(body.person_ids.map((s: unknown) => String(s).trim()).filter(Boolean))]
       : null;
 
     // ---- 1. claim -----------------------------------------------------------
@@ -125,7 +158,7 @@ Deno.serve(async (req) => {
 
     const { data: current, error: readErr } = await supabase
       .from("agent_audiences")
-      .select("id, user_id, default_platform, default_synced_campaign_id, filters, max_per_run, max_total, total_pushed, last_run_status, last_run_at, consecutive_failures")
+      .select("id, user_id, agent_config_id, source, filters, max_per_run, max_total, total_pushed, default_platform, default_synced_campaign_id, last_run_status, last_run_at, consecutive_failures")
       .eq("id", audienceId)
       .eq("user_id", userId)
       .maybeSingle();
@@ -199,19 +232,43 @@ Deno.serve(async (req) => {
     const finish = async (
       status: "success" | "partial" | "failed",
       errorDetail: Record<string, unknown> | null,
+      reason: RunReason | null = null,
     ) => {
       if (runId) {
         await supabase.from("agent_audience_runs").update({
           status, finished_at: new Date().toISOString(), ...counters,
-          error_detail: errorDetail,
+          error_detail: errorDetail, reason,
         }).eq("id", runId);
       }
       const failures = status === "failed";
       await supabase.from("agent_audiences").update({
         last_run_status: status,
         last_run_error: errorDetail ? JSON.stringify(errorDetail).slice(0, 500) : null,
+        last_run_reason: reason,
         consecutive_failures: failures ? (claimed.consecutive_failures ?? 0) + 1 : 0,
       }).eq("id", claimed.id);
+    };
+
+    // max_per_run, and max_total against the trigger-maintained total_pushed.
+    let allowance = claimed.max_per_run;
+    if (claimed.max_total !== null && claimed.max_total !== undefined) {
+      allowance = Math.min(allowance, Math.max(0, claimed.max_total - claimed.total_pushed));
+    }
+
+    // The irreversible step, shared by both sources.
+    const push = async (contacts: Record<string, unknown>[]) => {
+      const pr = await fetch(`${supabaseUrl}/functions/v1/add-contacts-to-sequence`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-agent-key": agentApiKey },
+        body: JSON.stringify({
+          user_id: userId, audience_id: claimed.id, run_id: runId,
+          platform, synced_campaign_id: campaignId, contacts,
+        }),
+      });
+      if (!pr.ok) {
+        return { ok: false as const, detail: (await pr.text().catch(() => "")).slice(0, 300) };
+      }
+      return { ok: true as const, body: await pr.json() };
     };
 
     // ---- 3. PREFLIGHT — live, before any spend ------------------------------
@@ -263,6 +320,70 @@ Deno.serve(async (req) => {
       }, 409);
     }
 
+    // ---- 4v. VRELLY: one query replaces search + enrich ---------------------
+    if ((claimed.source ?? "apollo") === "vrelly") {
+      let query;
+      try {
+        query = compileVrellyFilters(claimed.filters);
+      } catch (e) {
+        if (!(e instanceof VrellyFilterError)) throw e;
+        await finish("failed", { stage: "filters", detail: e.message });
+        return json({ error: "Invalid Vrelly filters", detail: e.message, run_id: runId }, 400);
+      }
+      // Manual pushes name prospects by id; anything that is not a uuid cannot
+      // be a prospect (an Apollo id here means the caller has the wrong source).
+      const prospectIds = explicitIds && explicitIds.length > 0 ? explicitIds.filter((id) => UUID_RE.test(id)) : null;
+      if (explicitIds && explicitIds.length > 0 && prospectIds!.length !== explicitIds.length) {
+        await finish("failed", { stage: "search", detail: "person_ids are not Vrelly prospect ids" });
+        return json({ error: "person_ids are not Vrelly prospect ids", run_id: runId }, 400);
+      }
+      if (allowance <= 0) {
+        await finish("success", null);
+        return json({ success: true, run_id: runId, ...counters, note: "audience cap reached — nothing to push" });
+      }
+
+      let found;
+      try {
+        found = await searchVrelly(supabase, {
+          userId: userId!, query, limit: allowance, prospectIds,
+        });
+      } catch (e) {
+        const d = e instanceof Error ? e.message : String(e);
+        await finish("failed", { stage: "search", detail: d.slice(0, 300) });
+        return json({ error: "Vrelly search failed", detail: d, run_id: runId }, 502);
+      }
+      counters.searched = found.people.length;
+      // A ticked person the search no longer returns was excluded since the
+      // preview (already pushed, now a lead/contact) or no longer matches.
+      if (prospectIds) counters.skipped_duplicate = prospectIds.length - found.people.length;
+
+      if (found.people.length === 0) {
+        await finish("success", null);
+        return json({ success: true, run_id: runId, ...counters, note: "nobody new matches — everyone matching is already pushed, a lead or a contact" });
+      }
+
+      const pr = await push(found.people.map((p) => ({
+        prospect_id: p.prospect_id, email: p.email,
+        first_name: p.first_name, last_name: p.last_name, linkedin_url: p.linkedin_url,
+        title: p.title, company_name: p.company_name, company_domain: p.company_domain,
+        city: p.city, state: p.state, country: p.country,
+      })));
+      if (!pr.ok) {
+        await finish("failed", { stage: "push", detail: pr.detail });
+        return json({ error: "Push failed", detail: pr.detail, run_id: runId, ...counters }, 502);
+      }
+      counters.pushed = Number(pr.body.pushed ?? 0);
+      counters.skipped_duplicate += Number(pr.body.tally?.skipped_duplicate ?? 0);
+      counters.failed += Number(pr.body.tally?.failed ?? 0);
+      const vStatus = counters.failed > 0 ? (counters.pushed > 0 ? "partial" : "failed") : "success";
+      await finish(vStatus, counters.failed > 0 ? { stage: "push", tally: pr.body.tally } : null);
+      console.log(
+        `[run-agent-audience] audience=${claimed.id} source=vrelly trigger=${trigger} status=${vStatus} ` +
+          Object.entries(counters).map(([k, v]) => `${k}=${v}`).join(" "),
+      );
+      return json({ success: true, run_id: runId, status: vStatus, source: "vrelly", ...counters, results: pr.body.results });
+    }
+
     // ---- 4. candidate ids ---------------------------------------------------
     let candidateIds: string[] = [];
     if (explicitIds && explicitIds.length > 0) {
@@ -302,10 +423,6 @@ Deno.serve(async (req) => {
     }
 
     // ---- caps ---------------------------------------------------------------
-    let allowance = claimed.max_per_run;
-    if (claimed.max_total !== null && claimed.max_total !== undefined) {
-      allowance = Math.min(allowance, Math.max(0, claimed.max_total - claimed.total_pushed));
-    }
     candidateIds = candidateIds.slice(0, allowance);
 
     if (candidateIds.length === 0) {
@@ -313,10 +430,62 @@ Deno.serve(async (req) => {
       return json({ success: true, run_id: runId, ...counters, note: "nothing new to push" });
     }
 
+    // ---- 5b. monthly credit budget (shared key only) ---------------------------
+    // A client's own key draws down their own Apollo balance and is not ours to
+    // cap. On the shared key, credits already spent this month by this client's
+    // runs are subtracted from the cap; Apollo charges at most one credit per
+    // record, so enriching N more records can never cost more than N.
+    let keySource: "client" | "shared";
+    try {
+      keySource = (await getApolloKeyForUser(supabase, userId!)).source;
+    } catch (e) {
+      if (!(e instanceof ApolloKeyMissingError)) throw e;
+      await finish("failed", { stage: "enrich", reason: "Apollo is not configured for this account" });
+      return json({ error: "Apollo is not configured for this account", run_id: runId }, 503);
+    }
+    if (runId) await supabase.from("agent_audience_runs").update({ apollo_key_source: keySource }).eq("id", runId);
+
+    let budget = Number.POSITIVE_INFINITY;
+    if (keySource === "shared") {
+      const { data: cfg, error: cfgErr } = await supabase
+        .from("agent_configs").select("apollo_monthly_credit_cap").eq("id", claimed.agent_config_id).maybeSingle();
+      const { data: spentRows, error: spentErr } = await supabase
+        .from("agent_audience_runs")
+        .select("credits_spent")
+        .eq("user_id", userId)
+        // Runs from before apollo_key_source existed carry null; they all used
+        // the shared key (no client had their own), so they count.
+        .or("apollo_key_source.eq.shared,apollo_key_source.is.null")
+        .gte("started_at", monthStartUtc());
+      if (cfgErr || spentErr) {
+        // Fail closed: an unknown budget is not permission to spend.
+        const d = (cfgErr ?? spentErr)!.message;
+        await finish("failed", { stage: "budget", detail: d });
+        return json({ error: "Could not read the Apollo credit budget", detail: d, run_id: runId }, 500);
+      }
+      const cap = Number(cfg?.apollo_monthly_credit_cap ?? 200);
+      const used = (spentRows ?? []).reduce((n: number, r: { credits_spent: number }) => n + Number(r.credits_spent ?? 0), 0);
+      budget = Math.max(0, cap - used);
+      console.log(`[run-agent-audience] apollo budget user=${userId} cap=${cap} used_this_month=${used} remaining=${budget}`);
+    }
+
     // ---- 6. enrich (COSTS MONEY) --------------------------------------------
     const contacts: Record<string, unknown>[] = [];
-    for (let i = 0; i < candidateIds.length; i += ENRICH_MAX_PER_CALL) {
-      const chunk = candidateIds.slice(i, i + ENRICH_MAX_PER_CALL);
+    let reason: RunReason | null = null;
+    let enrichDetail: Record<string, unknown> | null = null;
+    let i = 0;
+    while (i < candidateIds.length) {
+      const remaining = budget - counters.credits_spent;
+      if (remaining <= 0) {
+        reason = "monthly_cap";
+        enrichDetail = {
+          stage: "enrich", reason: "monthly_cap",
+          detail: `monthly Apollo credit cap reached; ${candidateIds.length - i} candidate(s) not enriched`,
+        };
+        break;
+      }
+      const chunk = candidateIds.slice(i, i + Math.min(ENRICH_MAX_PER_CALL, remaining));
+      i += chunk.length;
       const er = await fetch(`${supabaseUrl}/functions/v1/apollo-enrich`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-agent-key": agentApiKey },
@@ -329,50 +498,67 @@ Deno.serve(async (req) => {
       }
       const ej = await er.json();
       counters.credits_spent += Number(ej.credits_spent ?? 0);
+      if (ej.insufficient_credits === true) {
+        // Apollo refused for lack of credits. Keep what this chunk did return
+        // (if anything), then stop: every further call would 422 too.
+        reason = "apollo_insufficient_credits";
+        enrichDetail = { stage: "enrich", reason: "apollo_insufficient_credits", key_source: keySource };
+        counters.failed += (ej.failed_chunks ?? []).reduce((n: number, c: { ids: string[] }) => n + c.ids.length, 0);
+      }
       for (const p of ej.people ?? []) {
         counters.enriched++;
         if (!p.email) continue; // no work email -> nothing to enrol
         contacts.push({
           apollo_person_id: p.apollo_person_id, email: p.email,
           first_name: p.first_name, last_name: p.last_name, linkedin_url: p.linkedin_url,
+          title: p.title, company_name: p.organization_name, company_domain: p.organization_domain,
+          city: p.city, state: p.state, country: p.country,
         });
       }
+      if (reason === "apollo_insufficient_credits") break;
     }
 
     if (contacts.length === 0) {
-      await finish(counters.failed > 0 ? "partial" : "success", null);
-      return json({ success: true, run_id: runId, ...counters, note: "no enriched contacts with an email" });
+      // A budget stop is 'partial' even with nothing pushed: the run did not do
+      // what it was asked, and the card has to say why.
+      await finish(reason ? "partial" : counters.failed > 0 ? "partial" : "success", enrichDetail, reason);
+      return json({
+        success: true, run_id: runId, status: reason ? "partial" : undefined, reason, ...counters,
+        note: reason === "monthly_cap"
+          ? "monthly Apollo credit cap reached — nothing enriched"
+          : reason === "apollo_insufficient_credits"
+          ? "Apollo has no credits left — nothing enriched"
+          : "no enriched contacts with an email",
+      });
     }
 
     // ---- 7. push (IRREVERSIBLE) ---------------------------------------------
-    const pr = await fetch(`${supabaseUrl}/functions/v1/add-contacts-to-sequence`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-agent-key": agentApiKey },
-      body: JSON.stringify({
-        user_id: userId, audience_id: claimed.id, run_id: runId,
-        platform, synced_campaign_id: campaignId, contacts,
-      }),
-    });
+    const pr = await push(contacts);
     if (!pr.ok) {
-      const d = (await pr.text().catch(() => "")).slice(0, 300);
-      await finish("failed", { stage: "push", detail: d });
-      return json({ error: "Push failed", detail: d, run_id: runId, ...counters }, 502);
+      await finish("failed", { stage: "push", detail: pr.detail }, reason);
+      return json({ error: "Push failed", detail: pr.detail, run_id: runId, ...counters }, 502);
     }
-    const pj = await pr.json();
+    const pj = pr.body;
     counters.pushed = Number(pj.pushed ?? 0);
     counters.skipped_duplicate += Number(pj.tally?.skipped_duplicate ?? 0);
     counters.failed += Number(pj.tally?.failed ?? 0);
 
     // ---- 8. close ------------------------------------------------------------
-    const status = counters.failed > 0 ? (counters.pushed > 0 ? "partial" : "failed") : "success";
-    await finish(status, counters.failed > 0 ? { stage: "push", tally: pj.tally } : null);
+    const status = reason
+      ? "partial"
+      : counters.failed > 0 ? (counters.pushed > 0 ? "partial" : "failed") : "success";
+    await finish(
+      status,
+      enrichDetail ?? (counters.failed > 0 ? { stage: "push", tally: pj.tally } : null),
+      reason,
+    );
 
     console.log(
       `[run-agent-audience] audience=${claimed.id} trigger=${trigger} status=${status} ` +
         Object.entries(counters).map(([k, v]) => `${k}=${v}`).join(" "),
     );
 
-    return json({ success: true, run_id: runId, status, ...counters, results: pj.results });
+    return json({ success: true, run_id: runId, status, reason, ...counters, results: pj.results });
   } catch (error) {
     console.error("[run-agent-audience] Fatal:", error);
     if (runId) {

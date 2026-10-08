@@ -166,3 +166,16 @@ Read rows safely (works with the anon key; `SECURITY DEFINER` bypasses the slow 
 ```js
 await supabase.rpc('search_prospects_results', { p_limit: 25, p_offset: 0 });
 ```
+
+---
+
+## 6. Agent Audiences (source `vrelly`) do NOT use these functions
+
+Added 2026-10-08 (migrations `20261008150000`, `20261008150100`). Agent Audience
+runs and previews read `prospect_audience_search` / `prospect_audience_keywords`
+— narrow, id-ordered materialized views of the rows **with a business email** —
+through `public.vrelly_audience_search` (service_role only, called by the
+`vrelly-audience-search` and `run-agent-audience` edge functions). Its filter
+vocabulary and compiler live in `supabase/functions/_shared/vrelly-audience.ts`.
+The views refresh weekly (`refresh-prospect-audience-index`, Sunday 07:10 UTC);
+after a prospects import run `select public.refresh_prospect_audience_index();`.

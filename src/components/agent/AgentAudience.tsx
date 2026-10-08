@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Plus, Loader2, Pencil, Trash2, AlertTriangle, Telescope, Rocket } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -16,11 +16,16 @@ import { TagInput } from '@/components/ui/tag-input';
 import { MultiSelectDropdown } from '@/components/search/MultiSelectDropdown';
 import { useToast } from '@/hooks/use-toast';
 import { AudiencePreviewDialog } from './AudiencePreviewDialog';
+import { VrellyPreviewDialog } from './VrellyPreviewDialog';
 import { AudienceSourceSelect } from './AudienceSourceSelect';
-import { getAudienceSource, DEFAULT_SOURCE } from '@/lib/audienceSources';
+import { getAudienceSource, DEFAULT_SOURCE, NEW_AUDIENCE_SOURCE } from '@/lib/audienceSources';
+import {
+  hasVrellyFilter, VRELLY_COMPANY_SIZE_OPTIONS, VRELLY_DEPARTMENT_OPTIONS, VRELLY_SENIORITY_OPTIONS,
+  type VrellyAudienceFilters,
+} from '@/lib/vrellyAudienceFilters';
 import {
   useAgentAudiences, useAudienceCampaigns, useCreateAudience, useUpdateAudience,
-  useToggleAudienceActive, useDeleteAudience,
+  useToggleAudienceActive, useDeleteAudience, useVrellyPreview, formatVrellyCount,
   type AgentAudience as Audience, type AudienceInput, type ApolloAudienceFilters,
 } from '@/hooks/useAgentAudiences';
 
@@ -51,7 +56,13 @@ const DEPARTMENTS = [
 const EMPTY: AudienceInput = {
   name: '', default_platform: null, default_synced_campaign_id: null,
   cadence: 'manual', max_per_run: 25, max_total: null, filters: {},
-  source: DEFAULT_SOURCE,
+  // New audiences start on the free Vrelly database; Apollo is one click away.
+  source: NEW_AUDIENCE_SOURCE,
+};
+
+const REASON_TEXT: Record<string, string> = {
+  monthly_cap: 'Monthly Apollo credit cap reached',
+  apollo_insufficient_credits: 'Apollo is out of credits',
 };
 
 function statusBadge(a: Audience) {
@@ -60,7 +71,16 @@ function statusBadge(a: Audience) {
   }
   switch (a.last_run_status) {
     case 'success': return <Badge variant="secondary">Success</Badge>;
-    case 'partial': return <Badge variant="outline">Partial</Badge>;
+    case 'partial':
+      // A budget stop says why — "Partial" alone reads as a glitch.
+      return a.last_run_reason
+        ? (
+          <div className="space-y-0.5">
+            <Badge variant="outline" className="border-amber-500 text-amber-700 dark:text-amber-400">Partial</Badge>
+            <p className="text-[11px] text-amber-700 dark:text-amber-400 leading-tight">{REASON_TEXT[a.last_run_reason] ?? a.last_run_reason}</p>
+          </div>
+        )
+        : <Badge variant="outline">Partial</Badge>;
     case 'failed': return <Badge variant="destructive">Failed</Badge>;
     case 'running': return <Badge variant="outline">Running…</Badge>;
     default: return <Badge variant="outline">Never run</Badge>;
@@ -81,9 +101,40 @@ export function AgentAudience() {
   const [form, setForm] = useState<AudienceInput>(EMPTY);
   const { data: campaigns = [] } = useAudienceCampaigns(form.default_platform ?? undefined);
 
+  const isVrelly = (form.source ?? DEFAULT_SOURCE) === 'vrelly';
+  // The filters are in the selected source's own vocabulary; each block below
+  // reads and writes only its own keys.
+  const apolloFilters = form.filters as ApolloAudienceFilters;
+  const vrellyFilters = form.filters as VrellyAudienceFilters;
   const setFilter = <K extends keyof ApolloAudienceFilters>(
     key: K, value: ApolloAudienceFilters[K],
   ) => setForm((f) => ({ ...f, filters: { ...f.filters, [key]: value } }));
+  const setVFilter = <K extends keyof VrellyAudienceFilters>(
+    key: K, value: VrellyAudienceFilters[K],
+  ) => setForm((f) => ({ ...f, filters: { ...f.filters, [key]: value } }));
+
+  // Live match count while editing Vrelly filters. Debounced; a newer request
+  // supersedes an older one so a slow count cannot overwrite a fresh one.
+  const vrellyCount = useVrellyPreview();
+  const [liveCount, setLiveCount] = useState<string | null>(null);
+  const [liveCountError, setLiveCountError] = useState<string | null>(null);
+  const filtersKey = JSON.stringify(form.filters);
+  useEffect(() => {
+    setLiveCount(null);
+    setLiveCountError(null);
+    if (!open || !isVrelly || !hasVrellyFilter(vrellyFilters)) return;
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      try {
+        const r = await vrellyCount.mutateAsync({ filters: vrellyFilters, per_page: 1 });
+        if (!cancelled) setLiveCount(formatVrellyCount(r.pagination) ?? 'Count unavailable — preview still works');
+      } catch (e) {
+        if (!cancelled) setLiveCountError(e instanceof Error ? e.message : 'Count failed');
+      }
+    }, 600);
+    return () => { cancelled = true; clearTimeout(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, isVrelly, filtersKey]);
 
   const openCreate = () => { setEditing(null); setForm(EMPTY); setOpen(true); };
   const openEdit = (a: Audience) => {
@@ -110,7 +161,7 @@ export function AgentAudience() {
     if (v && typeof v === 'object') return Object.values(v).some((x) => x !== undefined && x !== null && x !== '');
     return v !== undefined && v !== null && v !== '';
   };
-  const hasFilter = Object.values(form.filters).some(isSet);
+  const hasFilter = isVrelly ? hasVrellyFilter(vrellyFilters) : Object.values(form.filters).some(isSet);
 
   const save = async () => {
     try {
@@ -262,7 +313,9 @@ export function AgentAudience() {
                 making a new audience. */}
             <AudienceSourceSelect
               value={form.source ?? DEFAULT_SOURCE}
-              onChange={(v) => setForm({ ...form, source: v })}
+              // Vocabularies differ, so a source switch on a NEW audience starts
+              // the filters over rather than carrying meaningless keys across.
+              onChange={(v) => setForm({ ...form, source: v, filters: {} })}
               locked={!!editing}
             />
 
@@ -369,142 +422,268 @@ export function AgentAudience() {
                 {getAudienceSource(form.source).label} filters
               </p>
 
-              <div>
-                <Label>Job titles</Label>
-                <TagInput
-                  value={form.filters.person_titles ?? []}
-                  onChange={(v) => setFilter('person_titles', v)}
-                  placeholder="CEO, VP Sales — Enter to add"
-                />
-              </div>
+              {isVrelly ? (
+                <div className="space-y-4">
+                  <div>
+                    <Label>Job titles</Label>
+                    <TagInput
+                      value={vrellyFilters.job_titles ?? []}
+                      onChange={(v) => setVFilter('job_titles', v)}
+                      placeholder="CEO, Owner — Enter to add"
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">Matches any title containing one of these.</p>
+                  </div>
 
-              <div>
-                <Label>Seniority</Label>
-                <MultiSelectDropdown
-                  options={SENIORITIES}
-                  selected={form.filters.person_seniorities ?? []}
-                  onChange={(v) => setFilter('person_seniorities', v)}
-                  placeholder="Any seniority"
-                />
-              </div>
+                  <div>
+                    <Label>Exclude job titles</Label>
+                    <TagInput
+                      value={vrellyFilters.exclude_job_titles ?? []}
+                      onChange={(v) => setVFilter('exclude_job_titles', v)}
+                      placeholder="Product Owner — Enter to add"
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">Drops anyone whose title contains one of these.</p>
+                  </div>
 
-              <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Label>Seniority</Label>
+                      <MultiSelectDropdown
+                        options={VRELLY_SENIORITY_OPTIONS}
+                        selected={vrellyFilters.seniorities ?? []}
+                        onChange={(v) => setVFilter('seniorities', v)}
+                        placeholder="Any seniority"
+                      />
+                    </div>
+                    <div>
+                      <Label>Department</Label>
+                      <MultiSelectDropdown
+                        options={VRELLY_DEPARTMENT_OPTIONS}
+                        selected={vrellyFilters.departments ?? []}
+                        onChange={(v) => setVFilter('departments', v)}
+                        placeholder="Any department"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Label>Company industry</Label>
+                      <TagInput
+                        value={vrellyFilters.industries ?? []}
+                        onChange={(v) => setVFilter('industries', v)}
+                        placeholder="Financial Services — Enter to add"
+                      />
+                    </div>
+                    <div>
+                      <Label>Company size</Label>
+                      <MultiSelectDropdown
+                        options={VRELLY_COMPANY_SIZE_OPTIONS}
+                        selected={vrellyFilters.company_sizes ?? []}
+                        onChange={(v) => setVFilter('company_sizes', v)}
+                        placeholder="Any size"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Label>Person country</Label>
+                      <TagInput
+                        value={vrellyFilters.person_countries ?? []}
+                        onChange={(v) => setVFilter('person_countries', v)}
+                        placeholder="United States"
+                      />
+                    </div>
+                    <div>
+                      <Label>Person state</Label>
+                      <TagInput
+                        value={vrellyFilters.person_states ?? []}
+                        onChange={(v) => setVFilter('person_states', v)}
+                        placeholder="Texas or TX"
+                      />
+                    </div>
+                    <div>
+                      <Label>Company country</Label>
+                      <TagInput
+                        value={vrellyFilters.company_countries ?? []}
+                        onChange={(v) => setVFilter('company_countries', v)}
+                        placeholder="United States"
+                      />
+                      <p className="text-xs text-amber-600 mt-1">Only ~4% of records have a company country — prefer person country.</p>
+                    </div>
+                    <div>
+                      <Label>Company state</Label>
+                      <TagInput
+                        value={vrellyFilters.company_states ?? []}
+                        onChange={(v) => setVFilter('company_states', v)}
+                        placeholder="CA or California"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <Label>Keywords</Label>
+                    <TagInput
+                      value={vrellyFilters.keywords ?? []}
+                      onChange={(v) => setVFilter('keywords', v)}
+                      placeholder="lending, fintech — Enter to add"
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Searches the company description and keywords. Any keyword matches; every word inside one
+                      keyword must appear (&ldquo;money lending&rdquo; needs both words).
+                    </p>
+                  </div>
+
+                  {hasFilter && (
+                    <p className="text-sm font-medium flex items-center gap-2" aria-live="polite">
+                      {vrellyCount.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+                      {liveCountError
+                        ? <span className="text-destructive font-normal">{liveCountError}</span>
+                        : liveCount ?? (vrellyCount.isPending ? 'Counting…' : null)}
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-4">
                 <div>
-                  <Label>Person location</Label>
+                  <Label>Job titles</Label>
                   <TagInput
-                    value={form.filters.person_locations ?? []}
-                    onChange={(v) => setFilter('person_locations', v)}
-                    placeholder="California, US"
+                    value={apolloFilters.person_titles ?? []}
+                    onChange={(v) => setFilter('person_titles', v)}
+                    placeholder="CEO, VP Sales — Enter to add"
                   />
                 </div>
+
                 <div>
-                  <Label>Company HQ location</Label>
-                  <TagInput
-                    value={form.filters.organization_locations ?? []}
-                    onChange={(v) => setFilter('organization_locations', v)}
-                    placeholder="United States"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <Label>Company size</Label>
-                <MultiSelectDropdown
-                  options={EMPLOYEE_RANGES.map((r) => ({ label: r.replace(',', '–'), value: r }))}
-                  selected={form.filters.organization_num_employees_ranges ?? []}
-                  onChange={(v) => setFilter('organization_num_employees_ranges', v)}
-                  placeholder="Any size"
-                />
-              </div>
-
-              <div>
-                <Label>Keywords</Label>
-                <Input
-                  value={form.filters.q_keywords ?? ''}
-                  placeholder="healthcare"
-                  onChange={(e) => setFilter('q_keywords', e.target.value)}
-                />
-                {/* Apollo itself has no OR here — apollo-search fans out one
-                    query per comma-separated term and merges. Words WITHIN a
-                    term are still AND-ed, which is the remaining trap and the
-                    only part worth spending a line on. */}
-                <p className="text-xs text-muted-foreground mt-1">
-                  Commas match any: &ldquo;finance, loans&rdquo; finds people matching
-                  either. Words inside one term must all appear, so
-                  &ldquo;private equity&rdquo; stays a single term. Up to 5 terms.
-                </p>
-              </div>
-
-              <div>
-                <Label>Industry / company keywords</Label>
-                <TagInput
-                  value={form.filters.q_organization_keyword_tags ?? []}
-                  onChange={(v) => setFilter('q_organization_keyword_tags', v)}
-                  placeholder="saas, logistics — Enter to add"
-                />
-                <p className="text-xs text-muted-foreground mt-1">
-                  Apollo has no true industry filter on this endpoint; these tags are the
-                  closest equivalent.
-                </p>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <Label>Email status</Label>
+                  <Label>Seniority</Label>
                   <MultiSelectDropdown
-                    options={EMAIL_STATUSES}
-                    selected={form.filters.contact_email_status ?? []}
-                    onChange={(v) => setFilter('contact_email_status', v)}
-                    placeholder="Any"
+                    options={SENIORITIES}
+                    selected={apolloFilters.person_seniorities ?? []}
+                    onChange={(v) => setFilter('person_seniorities', v)}
+                    placeholder="Any seniority"
                   />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label>Person location</Label>
+                    <TagInput
+                      value={apolloFilters.person_locations ?? []}
+                      onChange={(v) => setFilter('person_locations', v)}
+                      placeholder="California, US"
+                    />
+                  </div>
+                  <div>
+                    <Label>Company HQ location</Label>
+                    <TagInput
+                      value={apolloFilters.organization_locations ?? []}
+                      onChange={(v) => setFilter('organization_locations', v)}
+                      placeholder="United States"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <Label>Company size</Label>
+                  <MultiSelectDropdown
+                    options={EMPLOYEE_RANGES.map((r) => ({ label: r.replace(',', '–'), value: r }))}
+                    selected={apolloFilters.organization_num_employees_ranges ?? []}
+                    onChange={(v) => setFilter('organization_num_employees_ranges', v)}
+                    placeholder="Any size"
+                  />
+                </div>
+
+                <div>
+                  <Label>Keywords</Label>
+                  <Input
+                    value={apolloFilters.q_keywords ?? ''}
+                    placeholder="healthcare"
+                    onChange={(e) => setFilter('q_keywords', e.target.value)}
+                  />
+                  {/* Apollo itself has no OR here — apollo-search fans out one
+                      query per comma-separated term and merges. Words WITHIN a
+                      term are still AND-ed, which is the remaining trap and the
+                      only part worth spending a line on. */}
                   <p className="text-xs text-muted-foreground mt-1">
-                    Restricting to Verified reduces wasted enrichment credits and bounces.
+                    Commas match any: &ldquo;finance, loans&rdquo; finds people matching
+                    either. Words inside one term must all appear, so
+                    &ldquo;private equity&rdquo; stays a single term. Up to 5 terms.
                   </p>
                 </div>
-                <div>
-                  <Label>Department</Label>
-                  <MultiSelectDropdown
-                    options={DEPARTMENTS}
-                    selected={form.filters.person_department_or_subdepartments ?? []}
-                    onChange={(v) => setFilter('person_department_or_subdepartments', v)}
-                    placeholder="Any department"
-                  />
-                </div>
-              </div>
 
-              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <Label>Company revenue (min)</Label>
-                  <Input
-                    type="number" min={0} placeholder="no minimum"
-                    value={form.filters.revenue_range?.min ?? ''}
-                    onChange={(e) => setFilter('revenue_range', {
-                      ...form.filters.revenue_range,
-                      min: e.target.value ? Number(e.target.value) : undefined,
-                    })}
+                  <Label>Industry / company keywords</Label>
+                  <TagInput
+                    value={apolloFilters.q_organization_keyword_tags ?? []}
+                    onChange={(v) => setFilter('q_organization_keyword_tags', v)}
+                    placeholder="saas, logistics — Enter to add"
                   />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Apollo has no true industry filter on this endpoint; these tags are the
+                    closest equivalent.
+                  </p>
                 </div>
-                <div>
-                  <Label>Company revenue (max)</Label>
-                  <Input
-                    type="number" min={0} placeholder="no maximum"
-                    value={form.filters.revenue_range?.max ?? ''}
-                    onChange={(e) => setFilter('revenue_range', {
-                      ...form.filters.revenue_range,
-                      max: e.target.value ? Number(e.target.value) : undefined,
-                    })}
-                  />
-                </div>
-              </div>
 
-              <div>
-                <Label>Company domains</Label>
-                <TagInput
-                  value={form.filters.q_organization_domains_list ?? []}
-                  onChange={(v) => setFilter('q_organization_domains_list', v)}
-                  placeholder="acme.com — Enter to add"
-                />
-              </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label>Email status</Label>
+                    <MultiSelectDropdown
+                      options={EMAIL_STATUSES}
+                      selected={apolloFilters.contact_email_status ?? []}
+                      onChange={(v) => setFilter('contact_email_status', v)}
+                      placeholder="Any"
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Restricting to Verified reduces wasted enrichment credits and bounces.
+                    </p>
+                  </div>
+                  <div>
+                    <Label>Department</Label>
+                    <MultiSelectDropdown
+                      options={DEPARTMENTS}
+                      selected={apolloFilters.person_department_or_subdepartments ?? []}
+                      onChange={(v) => setFilter('person_department_or_subdepartments', v)}
+                      placeholder="Any department"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label>Company revenue (min)</Label>
+                    <Input
+                      type="number" min={0} placeholder="no minimum"
+                      value={apolloFilters.revenue_range?.min ?? ''}
+                      onChange={(e) => setFilter('revenue_range', {
+                        ...apolloFilters.revenue_range,
+                        min: e.target.value ? Number(e.target.value) : undefined,
+                      })}
+                    />
+                  </div>
+                  <div>
+                    <Label>Company revenue (max)</Label>
+                    <Input
+                      type="number" min={0} placeholder="no maximum"
+                      value={apolloFilters.revenue_range?.max ?? ''}
+                      onChange={(e) => setFilter('revenue_range', {
+                        ...apolloFilters.revenue_range,
+                        max: e.target.value ? Number(e.target.value) : undefined,
+                      })}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <Label>Company domains</Label>
+                  <TagInput
+                    value={apolloFilters.q_organization_domains_list ?? []}
+                    onChange={(v) => setFilter('q_organization_domains_list', v)}
+                    placeholder="acme.com — Enter to add"
+                  />
+                </div>
+
+                </div>
+              )}
 
               {!hasFilter && (
                 <p className="text-xs text-amber-600 flex items-center gap-1">
@@ -531,9 +710,16 @@ export function AgentAudience() {
         </DialogContent>
       </Dialog>
 
+      {/* Each source has its own preview: Apollo's search withholds contact
+          data and needs Reveal; Vrelly's records are complete. */}
       <AudiencePreviewDialog
-        audience={previewing}
-        open={!!previewing}
+        audience={previewing && previewing.source !== 'vrelly' ? previewing : null}
+        open={!!previewing && previewing.source !== 'vrelly'}
+        onOpenChange={(v) => { if (!v) setPreviewing(null); }}
+      />
+      <VrellyPreviewDialog
+        audience={previewing && previewing.source === 'vrelly' ? previewing : null}
+        open={!!previewing && previewing.source === 'vrelly'}
         onOpenChange={(v) => { if (!v) setPreviewing(null); }}
       />
     </div>

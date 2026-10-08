@@ -5,6 +5,7 @@ import { FeedMode, useLiveFeed } from '@/hooks/useInferenceInsights';
 import { LiveEventCard } from '@/components/admin/inference/LiveEventCard';
 import { CaptureHealthPanel } from '@/components/admin/inference/CaptureHealthPanel';
 import { CaptureSkipsAlert } from '@/components/admin/inference/CaptureSkipsAlert';
+import { ApolloCreditAlert } from '@/components/admin/inference/ApolloCreditAlert';
 
 const MODE_LABEL: Record<FeedMode, string> = {
   connecting: 'Connecting… (polling every 15s)',
@@ -32,6 +33,7 @@ export function LiveFeedSection() {
   return (
     <div className="space-y-4">
       <CaptureSkipsAlert />
+      <ApolloCreditAlert />
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-base flex flex-wrap items-center gap-2">

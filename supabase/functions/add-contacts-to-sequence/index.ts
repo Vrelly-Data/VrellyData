@@ -1,5 +1,6 @@
-// add-contacts-to-sequence — enrol enriched Apollo contacts into a synced
-// Smartlead or Reply.io campaign, and record what was pushed.
+// add-contacts-to-sequence — enrol audience contacts (enriched Apollo people,
+// or Vrelly prospects) into a synced Smartlead or Reply.io campaign, and record
+// what was pushed.
 //
 // This is the irreversible step. Everything before it (search, enrich) can be
 // re-run harmlessly; this one puts real prospects into a real sequence and
@@ -24,7 +25,10 @@
 //      the gate no schema can enforce.
 //   2. ALREADY PUSHED — agent_audience_pushes, client-wide (user_id), not
 //      per-audience: if two audiences match the same person, they must not both
-//      enrol them.
+//      enrol them. Checked on EVERY key the contact carries — email, LinkedIn,
+//      and its source id (apollo_person_id or prospect_id) — and within the
+//      batch itself, before the claim. The unique indexes on the same keys
+//      remain the concurrency backstop (a racing run gets 23505).
 //   3. CAPS — max_per_run, and max_total against the trigger-maintained
 //      total_pushed.
 //
@@ -62,13 +66,27 @@ const SMARTLEAD_API_BASE = "https://server.smartlead.ai/api/v1";
 const REPLY_API_V3 = "https://api.reply.io/v3";
 
 interface InboundContact {
+  /** Apollo source. */
   apollo_person_id?: string;
+  /** Vrelly source: prospects.id. */
+  prospect_id?: string;
   email?: string;
   first_name?: string;
   last_name?: string;
   name?: string;
   linkedin_url?: string;
+  title?: string | null;
+  company_name?: string | null;
+  company_domain?: string | null;
+  city?: string | null;
+  state?: string | null;
+  country?: string | null;
 }
+
+const clean = (v: unknown): string | null => {
+  const s = typeof v === "string" ? v.trim() : "";
+  return s ? s : null;
+};
 
 type Outcome =
   | "pushed"
@@ -80,6 +98,7 @@ type Outcome =
 
 interface ContactResult {
   apollo_person_id: string | null;
+  prospect_id: string | null;
   email: string | null;
   outcome: Outcome;
   external_ref?: string | null;
@@ -215,13 +234,17 @@ Deno.serve(async (req) => {
 
     const results: ContactResult[] = [];
     let pushed = 0;
+    // Keys already claimed in THIS batch, so two contacts sharing an email or a
+    // LinkedIn URL cannot both be enrolled even before the ledger sees either.
+    const batchKeys = new Set<string>();
 
     for (const c of contacts) {
       const apolloId = c.apollo_person_id ? String(c.apollo_person_id) : null;
+      const prospectId = c.prospect_id ? String(c.prospect_id) : null;
       const emailKey = normalizeEmailKey(c.email);
       const linkedinKey = normalizeLinkedInUrl(c.linkedin_url);
       const record = (outcome: Outcome, extra: Partial<ContactResult> = {}) =>
-        results.push({ apollo_person_id: apolloId, email: c.email ?? null, outcome, ...extra });
+        results.push({ apollo_person_id: apolloId, prospect_id: prospectId, email: c.email ?? null, outcome, ...extra });
 
       if (remaining <= 0) { record("skipped_cap"); continue; }
 
@@ -247,17 +270,49 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      // ---- gate 2 + claim ---------------------------------------------------
-      // The insert IS the duplicate check: the unique indexes on
-      // (user_id, apollo_person_id) and (user_id, email_key) reject a repeat
-      // with 23505, which is also what makes this safe against a concurrent run.
+      // ---- gate 2: already pushed (any key), or already in this batch ---------
+      const keys = [
+        `e:${emailKey}`,
+        linkedinKey ? `l:${linkedinKey}` : null,
+        apolloId ? `a:${apolloId}` : null,
+        prospectId ? `p:${prospectId}` : null,
+      ].filter((k): k is string => k !== null);
+      if (keys.some((k) => batchKeys.has(k))) { record("skipped_duplicate"); continue; }
+
+      // Values are double-quoted for PostgREST's or= grammar, so a comma or
+      // parenthesis inside a LinkedIn URL cannot split the filter.
+      const q = (v: string) => `"${v.replace(/["\\]/g, "\\$&")}"`;
+      const priorFilters = [`email_key.eq.${q(emailKey)}`];
+      if (linkedinKey) priorFilters.push(`linkedin_key.eq.${q(linkedinKey)}`);
+      if (apolloId) priorFilters.push(`apollo_person_id.eq.${q(apolloId)}`);
+      if (prospectId) priorFilters.push(`prospect_id.eq.${q(prospectId)}`);
+      const { data: prior, error: priorErr } = await supabase
+        .from("agent_audience_pushes")
+        .select("id")
+        .eq("user_id", userId)
+        .or(priorFilters.join(","))
+        .limit(1);
+      if (priorErr) {
+        // Fail closed: an unanswerable dedup check must not become a push.
+        record("failed", { error: `dedup check failed: ${priorErr.message}` });
+        continue;
+      }
+      if (prior && prior.length > 0) { record("skipped_duplicate"); continue; }
+
+      // ---- claim ---------------------------------------------------------------
+      // The unique indexes on (user_id, apollo_person_id | prospect_id |
+      // email_key | linkedin_key) reject a concurrent run's identical claim with
+      // 23505, which is what makes this safe when two runs race.
       const { data: claim, error: claimErr } = await supabase
         .from("agent_audience_pushes")
         .insert({
           audience_id: audience.id,
           user_id: userId,
           run_id: runId,
-          apollo_person_id: apolloId ?? `email:${emailKey}`,
+          // A Vrelly push is keyed by prospect_id; only a contact with neither
+          // source id falls back to the historical email-derived placeholder.
+          apollo_person_id: apolloId ?? (prospectId ? null : `email:${emailKey}`),
+          prospect_id: prospectId,
           email_key: emailKey,
           linkedin_key: linkedinKey,
           synced_campaign_id: campaignId,
@@ -272,9 +327,13 @@ Deno.serve(async (req) => {
         record("failed", { error: `claim failed: ${claimErr.message}` });
         continue;
       }
+      for (const k of keys) batchKeys.add(k);
 
       // ---- push --------------------------------------------------------------
       const { first, last } = splitName(c);
+      const title = clean(c.title);
+      const company = clean(c.company_name);
+      const city = clean(c.city), state = clean(c.state), country = clean(c.country);
       let externalRef: string | null = null;
       let pushError: string | null = null;
 
@@ -289,7 +348,16 @@ Deno.serve(async (req) => {
             method: "POST",
             headers: { "Content-Type": "application/json", Accept: "application/json" },
             body: JSON.stringify({
-              lead_list: [{ first_name: first, last_name: last, email: c.email }],
+              lead_list: [{
+                first_name: first, last_name: last, email: c.email,
+                ...(company ? { company_name: company } : {}),
+                ...(clean(c.linkedin_url) ? { linkedin_profile: clean(c.linkedin_url) } : {}),
+                ...(city || state || country
+                  ? { location: [city, state, country].filter(Boolean).join(", ") }
+                  : {}),
+                ...(clean(c.company_domain) ? { website: clean(c.company_domain) } : {}),
+                ...(title ? { custom_fields: { job_title: title } } : {}),
+              }],
               // Conservative, matching add-to-smartlead-campaign: we respect
               // dedup, blocklists and unsubscribes rather than overriding them.
               settings: {
@@ -345,6 +413,13 @@ Deno.serve(async (req) => {
               firstName: first,
               lastName: last,
               ...(c.linkedin_url ? { linkedInUrl: c.linkedin_url } : {}),
+              ...(title ? { title } : {}),
+              // v3's create body calls it `company` (verified on dev
+              // 2026-10-08: `companyName` is silently dropped).
+              ...(company ? { company } : {}),
+              ...(city ? { city } : {}),
+              ...(state ? { state } : {}),
+              ...(country ? { country } : {}),
             }),
           });
 
