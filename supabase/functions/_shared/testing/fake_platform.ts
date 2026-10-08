@@ -8,8 +8,10 @@
 //   so several test files can load different handlers in one run.
 // - FakeSupabase: a tiny in-memory PostgREST covering the operators these
 //   handlers use (eq/neq/in/is/gt/gte/lt/lte, limit/offset, single/maybeSingle,
-//   insert/upsert/update/delete). Unknown operators (or=, JSON paths, ilike,
-//   not.*) are ignored, i.e. treated as matching. Per-table failure injection:
+//   insert/upsert/update/delete). `or=(a.eq.x,b.eq."y")` is evaluated with the
+//   same eq/neq/is/in operators; an unknown operator inside it counts as a
+//   match, so an or= that uses one still matches everything. Unknown operators
+//   elsewhere (JSON paths, ilike, not.*) are ignored, i.e. treated as matching. Per-table failure injection:
 //   "error" (HTTP 500) or "hang" (never answers; rejects only when the
 //   request's AbortSignal fires, like real fetch).
 // - installFetch(): routes SUPA/rest/v1 to the fake DB, SUPA/functions/v1 to a
@@ -100,10 +102,41 @@ export class FakeSupabase {
     return this.fail[`${table}:${kind}`] ?? this.fail[table];
   }
 
+  private orMatches(row: Row, raw: string): boolean {
+    const inner = raw.replace(/^\(/, "").replace(/\)$/, "");
+    // Split on commas outside double quotes.
+    const parts: string[] = [];
+    let cur = "", quoted = false;
+    for (let i = 0; i < inner.length; i++) {
+      const ch = inner[i];
+      if (ch === "\\" && quoted) { cur += ch + (inner[++i] ?? ""); continue; }
+      if (ch === '"') quoted = !quoted;
+      if (ch === "," && !quoted) { parts.push(cur); cur = ""; continue; }
+      cur += ch;
+    }
+    if (cur) parts.push(cur);
+    return parts.some((part) => {
+      const d1 = part.indexOf(".");
+      if (d1 < 0) return true;
+      const col = part.slice(0, d1);
+      let rest = part.slice(d1 + 1);
+      const d2 = rest.indexOf(".");
+      const op = rest.slice(0, d2);
+      rest = rest.slice(d2 + 1);
+      if (!["eq", "neq", "is", "in"].includes(op)) return true;
+      const val = rest.startsWith('"') ? rest.slice(1, -1).replace(/\\(.)/g, "$1") : rest;
+      return this.matches(row, new URLSearchParams([[col, `${op}.${val}`]]));
+    });
+  }
+
   private matches(row: Row, params: URLSearchParams): boolean {
     for (const [key, raw] of params) {
       if (["select", "order", "limit", "offset", "on_conflict", "columns"].includes(key)) continue;
-      if (key.includes("->") || key === "or" || key === "and") continue;
+      if (key === "or") {
+        if (!this.orMatches(row, raw)) return false;
+        continue;
+      }
+      if (key.includes("->") || key === "and") continue;
       const dot = raw.indexOf(".");
       if (dot < 0) continue;
       const op = raw.slice(0, dot);
@@ -156,7 +189,9 @@ export class FakeSupabase {
     if (path.startsWith("rpc/")) {
       const fn = path.slice(4);
       this.calls.push({ method, table: `rpc:${fn}`, params: url.searchParams, body });
-      return json(fn in this.rpc ? this.rpc[fn] : null);
+      const r = this.rpc[fn];
+      // A function value answers per call (it sees the RPC arguments).
+      return json(typeof r === "function" ? (r as (b: unknown) => unknown)(body) : fn in this.rpc ? r : null);
     }
     const table = path;
     this.calls.push({ method, table, params: url.searchParams, body });
@@ -248,10 +283,15 @@ export interface Recorder {
 
 // Installs the fetch stub (and silences + records console.log/warn) for the
 // duration of fn.
+// Optional responder for SUPA/functions/v1/* calls; return undefined to fall
+// back to the default {ok: true}.
+export type FunctionFn = (path: string, body: unknown) => Response | Promise<Response> | undefined;
+
 export async function withFakes<T>(
   db: FakeSupabase,
   provider: ProviderFn,
   fn: (rec: Recorder) => Promise<T>,
+  functions?: FunctionFn,
 ): Promise<{ result: T; rec: Recorder }> {
   const rec: Recorder = { functionCalls: [], providerCalls: [], logs: [] };
   const realFetch = globalThis.fetch;
@@ -273,7 +313,8 @@ export async function withFakes<T>(
       let b: unknown = t;
       try { b = JSON.parse(t); } catch { /* keep text */ }
       rec.functionCalls.push({ path: url.pathname, body: b });
-      return json({ ok: true });
+      const r = functions ? await functions(url.pathname, b) : undefined;
+      return r ?? json({ ok: true });
     }
     let b: unknown = null;
     if (req.method !== "GET" && req.method !== "HEAD") {

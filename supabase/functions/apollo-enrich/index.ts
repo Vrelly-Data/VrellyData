@@ -67,6 +67,15 @@ function getCorsHeaders(req: Request) {
   };
 }
 
+/**
+ * Apollo's "out of credits" refusal: HTTP 422 whose body mentions credits
+ * (e.g. "You have insufficient credits…"). A 422 about anything else (a
+ * malformed id) is an ordinary failed chunk.
+ */
+export function isInsufficientCredits(status: number, body: string): boolean {
+  return status === 422 && /credit/i.test(body);
+}
+
 Deno.serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
@@ -107,7 +116,7 @@ Deno.serve(async (req) => {
     if (!rawIds) {
       return json({ error: "person_ids must be an array of Apollo person ids" }, 400);
     }
-    const ids = [...new Set(rawIds.map((s: unknown) => String(s).trim()).filter(Boolean))];
+    const ids: string[] = [...new Set<string>(rawIds.map((s: unknown) => String(s).trim()).filter(Boolean))];
     if (ids.length === 0) {
       return json({ error: "person_ids is empty" }, 400);
     }
@@ -148,6 +157,11 @@ Deno.serve(async (req) => {
     let reportedCredits = 0;
     let anyCreditsReported = false;
     let missingRecords = 0;
+    // Apollo answers 422 with an "insufficient credits" message when the
+    // account's balance is gone. Every later chunk would get the same answer,
+    // so the loop stops and the caller is told explicitly — run-agent-audience
+    // ends the run 'partial' with reason 'apollo_insufficient_credits'.
+    let insufficientCredits = false;
 
     // ---- the cache read, BEFORE any spend ----------------------------------
     // Scoped to this user by construction (see the migration on why the cache is
@@ -176,6 +190,10 @@ Deno.serve(async (req) => {
         // Record and continue: one bad chunk must not discard the ones that
         // already succeeded (and were already paid for).
         failedChunks.push({ ids: chunk, status: res.status, detail });
+        if (isInsufficientCredits(res.status, detail)) {
+          insufficientCredits = true;
+          break;
+        }
         continue;
       }
 
@@ -220,6 +238,10 @@ Deno.serve(async (req) => {
       }
     }
 
+    const notAttempted = insufficientCredits
+      ? toFetch.filter((id) => !freshById.has(id) && !failedChunks.some((f) => f.ids.includes(id)))
+      : [];
+
     // Prefer Apollo's own figure over any inference of ours.
     //
     // The fallback counts only FRESH records — the ones this call could have
@@ -262,12 +284,17 @@ Deno.serve(async (req) => {
       // obvious response.
       unmatched: ids.filter((id) =>
         !people.some((p) => p.apollo_person_id === id) &&
-        !failedChunks.some((f) => f.ids.includes(id))
+        !failedChunks.some((f) => f.ids.includes(id)) &&
+        !notAttempted.includes(id)
       ),
       credits_spent: creditsSpent,
       already_revealed_for_team: alreadyRevealed,
       key_source: apollo.source,
       failed_chunks: failedChunks.map((f) => ({ ids: f.ids, status: f.status })),
+      // Ids never sent because the balance ran out are not in failed_chunks;
+      // they were simply not attempted.
+      insufficient_credits: insufficientCredits,
+      not_attempted: notAttempted,
     });
   } catch (error) {
     console.error("[apollo-enrich] Fatal:", error);

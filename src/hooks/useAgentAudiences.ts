@@ -1,9 +1,12 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import {
-  getAudienceSource, resolveEdgeFunctions, DEFAULT_SOURCE,
+  getAudienceSource, resolveEdgeFunctions, DEFAULT_SOURCE, FILTERS_VERSION,
   type AudienceSourceId,
 } from '@/lib/audienceSources';
+import type { VrellyAudienceFilters } from '@/lib/vrellyAudienceFilters';
+
+export type { VrellyAudienceFilters } from '@/lib/vrellyAudienceFilters';
 
 // Cast until Supabase types are regenerated for the agent_audience_* tables.
 // Same pattern as useAgent.ts.
@@ -28,12 +31,15 @@ export interface ApolloAudienceFilters {
   q_keywords?: string;
 }
 
+/** Filters in the audience's own source vocabulary — see `source`. */
+export type AudienceFilters = ApolloAudienceFilters | VrellyAudienceFilters;
+
 export interface AgentAudience {
   id: string;
   user_id: string;
   agent_config_id: string;
   name: string;
-  filters: ApolloAudienceFilters;
+  filters: AudienceFilters;
   filters_version: number;
   /**
    * Which data source this audience searches. Rows created before the source
@@ -54,6 +60,8 @@ export interface AgentAudience {
   last_run_at: string | null;
   last_run_status: 'running' | 'success' | 'partial' | 'failed' | null;
   last_run_error: string | null;
+  /** Why the last run stopped early ('partial'), when it was a budget stop. */
+  last_run_reason: 'monthly_cap' | 'apollo_insufficient_credits' | null;
   consecutive_failures: number;
   created_at: string;
   updated_at: string;
@@ -119,8 +127,8 @@ export interface AudienceInput {
   cadence: 'manual' | 'daily' | 'weekly' | 'monthly';
   max_per_run: number;
   max_total: number | null;
-  filters: ApolloAudienceFilters;
-  /** Omit to create an Apollo audience — the only source wired up today. */
+  filters: AudienceFilters;
+  /** Omit to create an Apollo audience. filters_version is derived from it. */
   source?: AudienceSourceId;
 }
 
@@ -141,9 +149,13 @@ export function useCreateAudience() {
         .maybeSingle();
       if (!cfg) throw new Error('No active agent config — set up the Agent first.');
 
+      const source = input.source ?? DEFAULT_SOURCE;
       const { data, error } = await db
         .from('agent_audiences')
-        .insert({ ...input, user_id: user.id, agent_config_id: cfg.id })
+        .insert({
+          ...input, source, filters_version: FILTERS_VERSION[source] ?? 1,
+          user_id: user.id, agent_config_id: cfg.id,
+        })
         .select()
         .single();
       if (error) throw error;
@@ -288,7 +300,7 @@ export function usePreviewAudience() {
     mutationFn: async (
       { filters, page = 1, per_page = 25, source = DEFAULT_SOURCE }:
       {
-        filters: ApolloAudienceFilters; page?: number; per_page?: number;
+        filters: AudienceFilters; page?: number; per_page?: number;
         source?: AudienceSourceId;
       },
     ): Promise<AudiencePreview> => {
@@ -415,6 +427,7 @@ export function useRevealPeople() {
         throw new Error(`${src.label} records are already complete — there is nothing to reveal.`);
       }
       const { reveal } = resolveEdgeFunctions(src);
+      if (!reveal) throw new Error(`${src.label} has no reveal step.`);
       const ids = [...new Set(person_ids.filter(Boolean))];
       const merged: RevealResult = {
         people: [], requested: 0, served_from_cache: 0, cache_ttl_days: 0,
@@ -443,10 +456,74 @@ export function useRevealPeople() {
   });
 }
 
+/** One Vrelly prospect — complete; mirrors VrellyPerson in _shared/vrelly-audience.ts. */
+export interface VrellyPreviewPerson {
+  prospect_id: string;
+  first_name: string | null;
+  last_name: string | null;
+  email: string;
+  title: string | null;
+  seniority: string | null;
+  department: string | null;
+  company_name: string | null;
+  company_domain: string | null;
+  company_industry: string | null;
+  company_size: string | null;
+  linkedin_url: string | null;
+  city: string | null;
+  state: string | null;
+  country: string | null;
+}
+
+export interface VrellyPreview {
+  source: 'vrelly';
+  people: VrellyPreviewPerson[];
+  pagination: {
+    page: number;
+    per_page: number;
+    /** null when the count timed out — the rows are still valid. */
+    total_entries: number | null;
+    total_pages: number | null;
+    /** The count stopped at count_cap; total_entries is a floor. */
+    total_is_lower_bound: boolean;
+    /** Keyword share was sampled; total_entries is approximate. */
+    total_is_estimate: boolean;
+    count_cap: number;
+  };
+  notice: string;
+  credits_consumed: 0;
+}
+
+/**
+ * Preview a Vrelly audience. Free. The people returned already exclude anyone
+ * a run would skip for this client (pushed, an existing lead, a synced
+ * contact), so the count is "people a run could still add".
+ */
+export function useVrellyPreview() {
+  return useMutation({
+    mutationFn: async (
+      { filters, page = 1, per_page = 25 }: { filters: VrellyAudienceFilters; page?: number; per_page?: number },
+    ): Promise<VrellyPreview> => {
+      const { search } = resolveEdgeFunctions(getAudienceSource('vrelly'));
+      return invokeFn<VrellyPreview>(search, { filters, page, per_page });
+    },
+  });
+}
+
+/** "25,595 people match" — honest about caps and estimates. */
+export function formatVrellyCount(p: VrellyPreview['pagination'] | null | undefined): string | null {
+  if (!p || p.total_entries === null) return null;
+  const n = p.total_entries.toLocaleString();
+  if (p.total_is_lower_bound) return `${n}+ people match`;
+  if (p.total_is_estimate) return `About ${n} people match`;
+  return `${n} ${p.total_entries === 1 ? 'person matches' : 'people match'}`;
+}
+
 export interface AudienceRunResult {
   success?: boolean;
   run_id: string | null;
   status?: 'success' | 'partial' | 'failed';
+  reason?: 'monthly_cap' | 'apollo_insufficient_credits' | null;
   searched: number;
   enriched: number;
   credits_spent: number;
@@ -471,13 +548,19 @@ export function useRunAudience() {
     mutationFn: async (
       { audience_id, person_ids, platform, synced_campaign_id }: {
         audience_id: string;
-        person_ids: string[];
+        /**
+         * The people to push. Omit to run exactly as the schedule would: the
+         * first max_per_run matches in the source's own order (Vrelly only —
+         * an Apollo run without ids would enrich un-reviewed people).
+         */
+        person_ids?: string[];
         platform: string;
         synced_campaign_id: string;
       },
     ): Promise<AudienceRunResult> =>
       invokeFn<AudienceRunResult>('run-agent-audience', {
-        audience_id, person_ids, platform, synced_campaign_id, trigger: 'manual',
+        audience_id, platform, synced_campaign_id, trigger: 'manual',
+        ...(person_ids ? { person_ids } : {}),
       }),
     onSuccess: () => {
       // The run rewrites last_run_status/total_pushed, and a successful run is

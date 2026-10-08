@@ -355,3 +355,27 @@ export function useCaptureSkipAlerts(hours = 24) {
     },
   });
 }
+
+export type ApolloCreditAlert = {
+  user_id: string;
+  user_name: string | null;
+  reason: 'monthly_cap' | 'apollo_insufficient_credits';
+  runs: number;
+  audiences: number;
+  credits_spent: number;
+  last_at: string;
+};
+
+/** Audience runs cut short by the monthly Apollo cap or by Apollo running out of credits. */
+export function useApolloCreditAlerts(days = 7) {
+  return useQuery({
+    queryKey: ['inference_live', 'apollo_credit_alerts', days],
+    staleTime: 60_000,
+    queryFn: async (): Promise<ApolloCreditAlert[]> => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase.rpc as any)('admin_apollo_credit_alerts', { p_days: days });
+      if (error) throw new Error(error.message);
+      return (Array.isArray(data) ? data : []) as ApolloCreditAlert[];
+    },
+  });
+}

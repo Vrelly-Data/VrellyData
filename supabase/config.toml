@@ -133,6 +133,11 @@ verify_jwt = false
 [functions.apollo-enrich]
 verify_jwt = false
 
+# Vrelly database preview (Agent Audience source 'vrelly'). Same dual auth as
+# apollo-search — user JWT or x-agent-key + user_id — checked in-function.
+[functions.vrelly-audience-search]
+verify_jwt = false
+
 # Called from the Add Integration dialog BEFORE the user has an apollo row, by a
 # signed-in user. Mirrors validate-smartlead-key / validate-heyreach-key.
 [functions.validate-apollo-key]
