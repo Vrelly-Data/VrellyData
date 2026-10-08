@@ -75,6 +75,17 @@ for (const c of warehouseOnlyCases) {
       assertEquals(r.status, 200);
       assertEquals(r.body.success, true);
       assertEquals(r.body.skipped, c.reason);
+      // No silent drops: a known-but-off (or not yet synced) campaign records a skip row.
+      const skipRows = db.calls.filter((x) => x.table === "rpc:record_capture_scope_skips").flatMap((x) => (x.body as { p_rows: Row[] }).p_rows);
+      if (c.reason === "no_synced_row" || c.reason === "capture_disabled") {
+        assertEquals(skipRows.length, 1, "skip row recorded");
+        assertEquals(skipRows[0].reason, c.reason);
+        assertEquals(skipRows[0].platform, "heyreach");
+        assertEquals(skipRows[0].campaign_external_id, String(CAMPAIGN));
+        assertEquals(skipRows[0].contact_key, "linkedin.com/in/test-prospect-0001");
+      } else {
+        assertEquals(skipRows, [], "no skip row when the campaign is unknown or the lookup failed");
+      }
       assertEquals(r.body.warehouseRecorded, true);
       assertEquals(r.body.conversationId, "conv-test-1", "skip response carries the conversation id");
       assertEquals(r.leadWrites.length, 0, "no agent_leads write on skip");
@@ -126,6 +137,14 @@ Deno.test({
     assertEquals(db.writes("inference_events").length, 0, "capture_disabled stays silent, as on main");
     assertEquals(db.writes("people").length, 0);
     assert(r.rec.logs.some((l) => l.includes("skip (capture_disabled)") && l.includes("conversation=conv-test-1")), "skip is logged");
+    // Silent towards the inbox, but not a silent drop: recorded for Capture Scope.
+    const skipRows = db.calls.filter((x) => x.table === "rpc:record_capture_scope_skips").flatMap((x) => (x.body as { p_rows: Row[] }).p_rows);
+    assertEquals(skipRows.length, 1);
+    assertEquals(skipRows[0].reason, "capture_disabled");
+    assertEquals(skipRows[0].platform, "heyreach");
+    assertEquals(skipRows[0].campaign_external_id, String(CAMPAIGN));
+    assertEquals(skipRows[0].contact_key, "linkedin.com/in/test-prospect-0001");
+    assertEquals(skipRows[0].source, "heyreach-webhook");
     assertEquals(db.writes("webhook_events").length, 1);
   },
 });

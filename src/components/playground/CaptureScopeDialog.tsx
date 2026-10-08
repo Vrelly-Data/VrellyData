@@ -1,5 +1,6 @@
-// Capture Scope — campaign selection (capture_enabled) for Smartlead, HeyReach
-// and Reply.io. Stage 3 of 5; Reply.io added in the PR #91 follow-up.
+// Capture Scope — campaign selection (capture_enabled) for every platform with
+// a capture gate: Reply.io, Smartlead and HeyReach. The dialog is platform-
+// agnostic; everything platform-specific lives in fetch-capture-scope's adapters.
 //
 // A FORK of ManageCampaignsDialog, not a generalisation of it. That dialog
 // serves Reply.io, most clients are on Reply.io, and making it platform-
@@ -27,8 +28,10 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
+import { Switch } from '@/components/ui/switch';
+import { Label } from '@/components/ui/label';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Loader2, Search, Users, Building2, Mail, ChevronRight, ChevronDown } from 'lucide-react';
+import { Loader2, Search, Users, Building2, Mail, ChevronRight, ChevronDown, AlertTriangle } from 'lucide-react';
 import { useCaptureScope, type CaptureScopeCampaign } from '@/hooks/useCaptureScope';
 
 interface CaptureScopeDialogProps {
@@ -66,6 +69,8 @@ export function CaptureScopeDialog({
     campaigns, groups, counts, sendersAvailable, sendersDeferred, sendersLoadedFor,
     isLoading, error, refetch, loadSenders, sendersLoading, sendersProgress,
     save, isSaving,
+    autoCaptureNewCampaigns, setAutoCapture, isSettingAutoCapture,
+    enableAndRecapture, enablingExternalId, skippedRepliesWindowDays,
   } = useCaptureScope(integrationId, open);
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -134,6 +139,36 @@ export function CaptureScopeDialog({
           </DialogHeader>
 
           <div className="flex flex-col gap-4 flex-1 min-h-0">
+            {/* Integration-level default for campaigns discovered by future
+                syncs. Never changes existing campaigns. */}
+            <div className="flex items-start justify-between gap-4 p-3 rounded-md border bg-muted/30">
+              <div className="min-w-0">
+                <Label htmlFor="auto-capture-new" className="text-sm font-medium">
+                  Automatically capture new campaigns
+                </Label>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Campaigns created after a sync start with capture {autoCaptureNewCampaigns ? 'on' : 'off'}. Existing campaigns keep their setting.
+                </p>
+              </div>
+              <Switch
+                id="auto-capture-new"
+                checked={autoCaptureNewCampaigns}
+                disabled={isLoading || isSettingAutoCapture}
+                onCheckedChange={(v) => setAutoCapture(v)}
+              />
+            </div>
+
+            {counts.skippedReplies > 0 && (
+              <div className="flex items-start gap-2 p-3 rounded-md border border-destructive/40 bg-destructive/5 text-sm">
+                <AlertTriangle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
+                <span>
+                  {counts.skippedReplies} repl{counts.skippedReplies === 1 ? 'y was' : 'ies were'} skipped in the last {skippedRepliesWindowDays} days
+                  because {counts.skippedReplies === 1 ? 'its campaign was' : 'their campaigns were'} not capturing. Use <b>Enable &amp; recapture</b> on a
+                  campaign to pull them into the inbox.
+                </span>
+              </div>
+            )}
+
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
@@ -229,6 +264,8 @@ export function CaptureScopeDialog({
                       sendersFetched={!sendersDeferred || c.externalId in sendersLoadedFor}
                       expanded={expanded.has(c.externalId)}
                       sendersAvailable={sendersAvailable}
+                      enabling={enablingExternalId === c.externalId}
+                      onEnableAndRecapture={() => enableAndRecapture(c)}
                       onToggle={() => {
                         const next = new Map(selections);
                         next.set(c.externalId, !effective(c));
@@ -298,17 +335,19 @@ export function CaptureScopeDialog({
 }
 
 function CampaignRow({
-  campaign, checked, sendersFetched, expanded, sendersAvailable, onToggle, onToggleExpand,
+  campaign, checked, sendersFetched, expanded, sendersAvailable, enabling, onEnableAndRecapture, onToggle, onToggleExpand,
 }: {
   campaign: CaptureScopeCampaign;
   checked: boolean;
   sendersFetched: boolean;
   expanded: boolean;
   sendersAvailable: boolean;
+  enabling: boolean;
+  onEnableAndRecapture: () => void;
   onToggle: () => void;
   onToggleExpand: () => void;
 }) {
-  const { volume, senders, group } = campaign;
+  const { volume, senders, group, skippedReplies, channel } = campaign;
   const personas = [...new Set(senders.map((s) => s.label))];
 
   return (
@@ -320,7 +359,27 @@ function CampaignRow({
           <div className="font-medium truncate">{campaign.name}</div>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-xs text-muted-foreground">
             <span className="font-mono">{campaign.externalId}</span>
+            {channel && <Badge variant="outline" className="text-[10px] capitalize">{channel}</Badge>}
             {group && <Badge variant="secondary" className="text-[10px]">{group.label}</Badge>}
+            {skippedReplies && skippedReplies.count > 0 && (
+              <>
+                <Badge variant="destructive" className="text-[10px]">
+                  {skippedReplies.count} repl{skippedReplies.count === 1 ? 'y' : 'ies'} skipped
+                </Badge>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-6 px-2 text-[11px]"
+                  disabled={enabling}
+                  onClick={(e) => { e.stopPropagation(); onEnableAndRecapture(); }}
+                >
+                  {enabling
+                    ? <><Loader2 className="h-3 w-3 animate-spin mr-1" />Working…</>
+                    : campaign.captureEnabled ? 'Recapture' : 'Enable & recapture'}
+                </Button>
+              </>
+            )}
             {/* The sender summary is a CONTROL, not a label. Every inbox on a
                 campaign usually shares one from_name, so "Marcus Reid · 30
                 inboxes" collapsed 30 distinct addresses into what read as a

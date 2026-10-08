@@ -97,15 +97,13 @@ Deno.serve(async (req) => {
         // upsert below can preserve it. See the note at the upsert for why
         // this cannot be handled by simply omitting the key.
         const linkedByExternalId = new Map<string, boolean>();
-        const captureByExternalId = new Map<string, boolean>();
         {
           const { data: existingRows } = await supabase
             .from('synced_campaigns')
-            .select('external_campaign_id, is_linked, capture_enabled')
+            .select('external_campaign_id, is_linked')
             .eq('integration_id', integration.id);
           for (const r of existingRows ?? []) {
             linkedByExternalId.set(String(r.external_campaign_id), r.is_linked);
-            captureByExternalId.set(String(r.external_campaign_id), r.capture_enabled === true);
           }
           console.log(`[sync-heyreach-campaigns] Loaded ${linkedByExternalId.size} existing campaign row(s) for is_linked preservation`);
         }
@@ -189,15 +187,11 @@ Deno.serve(async (req) => {
                 stats,
                 raw_data: campaign,
                 is_linked: linkedByExternalId.get(externalId) ?? true,
-                // Capture Scope enforcement point 1 of 4: a newly discovered
-                // campaign must not start capturing on its own. Existing rows
-                // keep the operator's choice; only new campaigns are affected,
-                // and they arrive OFF.
-                //
-                // Deliberately the opposite default to is_linked above:
-                // is_linked is reporting scope and harmless when on, capture is
-                // not. See migration 20260822020000.
-                capture_enabled: captureByExternalId.get(externalId) ?? false,
+                // capture_enabled is deliberately NOT sent. A new campaign
+                // takes it from outbound_integrations.auto_capture_new_campaigns
+                // (BEFORE INSERT trigger, migration 20261007210000); an existing
+                // row keeps the operator's toggle because a key absent from the
+                // upsert is absent from its UPDATE SET.
                 // HeyReach is LinkedIn-only by construction. Hardcoded so
                 // the channel column is correct without any per-row
                 // detection. See 20260619130000 migration header.

@@ -12,7 +12,7 @@ import { sanitizeLinkedinUrlForStorage } from '../_shared/normalize.ts';
 import { findLeadByNormalizedLinkedIn } from '../_shared/agent-leads-lookup.ts';
 import { isStaleProspectMessage } from '../_shared/stale.ts';
 import { decideSurfaceAndClassify, buildSurfaceUpdateFields } from '../_shared/surface.ts';
-import { listEnabledCampaignIds, numericCampaignIds } from '../_shared/capture-scope.ts';
+import { listEnabledCampaignIds, normalizeCampaignId, numericCampaignIds, recordCaptureScopeSkips, type CaptureSkipRecord } from '../_shared/capture-scope.ts';
 import { HEYREACH_DRAFTING_ENV, heyreachClassifyGate, isHeyReachDraftingEnabled } from '../_shared/heyreach-drafting.ts';
 import {
   applyScope,
@@ -67,6 +67,110 @@ async function itemDb<T>(label: string, signal: AbortSignal, run: (signal: Abort
   }
 }
 
+// ── Capture Scope: recapture + skip probe ───────────────────────────────────
+// This poller asks HeyReach only for capture-ENABLED campaigns (campaignIds
+// filter), so on its own it never sees a reply capture dropped. The probe
+// checks a few capture-off campaigns per run (rotating, oldest-probed first),
+// one GetConversationsV2 page each, and records replies from the last 14 days
+// in capture_scope_skips. Read-only towards HeyReach.
+const RECAPTURE_MAX_LOOKBACK_DAYS = 14;
+const PROBE_CAMPAIGNS_PER_RUN = 3;
+const PROBE_LOOKBACK_DAYS = 14;
+const PROBE_MIN_REMAINING_MS = 20_000;
+
+async function probeCaptureOffHeyReach(
+  // deno-lint-ignore no-explicit-any
+  supabase: any,
+  integration: { id: string; team_id: string },
+  apiKey: string,
+): Promise<{ probed: number; skips: number }> {
+  const { data, error } = await supabase
+    .from('synced_campaigns')
+    .select('external_campaign_id, name, status, capture_skip_probe_at')
+    .eq('integration_id', integration.id)
+    .eq('capture_enabled', false)
+    .neq('status', 'draft')
+    .order('capture_skip_probe_at', { ascending: true, nullsFirst: true })
+    .limit(200)
+    .abortSignal(AbortSignal.timeout(DB_TIMEOUT_MS));
+  if (error) {
+    console.warn(`[poll-heyreach-inbox] probe: campaign lookup failed: ${error.message}`);
+    return { probed: 0, skips: 0 };
+  }
+  type Row = { external_campaign_id: string; name: string | null; status: string | null; capture_skip_probe_at: string | null };
+  const weight = (st: string | null) => {
+    const v = (st ?? '').toLowerCase();
+    return v === 'in_progress' || v === 'active' ? 0 : v === 'paused' ? 1 : 2;
+  };
+  const rows = ((data ?? []) as Row[])
+    .filter((r) => numericCampaignIds([String(r.external_campaign_id)]).length === 1)
+    .sort((a, b) => {
+      const w = weight(a.status) - weight(b.status);
+      if (w !== 0) return w;
+      const at = a.capture_skip_probe_at ? Date.parse(a.capture_skip_probe_at) : 0;
+      const bt = b.capture_skip_probe_at ? Date.parse(b.capture_skip_probe_at) : 0;
+      return at - bt;
+    })
+    .slice(0, PROBE_CAMPAIGNS_PER_RUN);
+  if (rows.length === 0) return { probed: 0, skips: 0 };
+
+  const cutoff = Date.now() - PROBE_LOOKBACK_DAYS * 86400_000;
+  const records: CaptureSkipRecord[] = [];
+  for (const row of rows) {
+    const id = String(row.external_campaign_id);
+    try {
+      const res = await fetch(`${HEYREACH_API}/inbox/GetConversationsV2`, {
+        method: 'POST',
+        headers: { 'X-API-KEY': apiKey, 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({
+          // Exactly one campaign id: a non-empty list (an empty one means
+          // "every campaign") and it attributes each conversation.
+          filters: { linkedInAccountIds: [], campaignIds: numericCampaignIds([id]), searchString: '' },
+          offset: 0,
+          limit: 25,
+        }),
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!res.ok) {
+        console.warn(`[poll-heyreach-inbox] probe: campaign ${id} -> HTTP ${res.status}`);
+        continue;
+      }
+      const page = await res.json().catch(() => ({}));
+      // deno-lint-ignore no-explicit-any
+      for (const convo of (Array.isArray(page?.items) ? page.items : []) as any[]) {
+        if (!convo?.lastMessageText || convo.lastMessageSender === 'ME') continue;
+        const at = Date.parse(convo.lastMessageAt ?? '');
+        if (Number.isFinite(at) && at < cutoff) continue;
+        const profile = convo.correspondentProfile || {};
+        records.push({
+          integrationId: integration.id,
+          teamId: integration.team_id,
+          platform: 'heyreach',
+          campaignExternalId: id,
+          campaignName: row.name,
+          contactLinkedinUrl: sanitizeLinkedinUrlForStorage(profile.profileUrl || ''),
+          contactName: [profile.firstName, profile.lastName].filter(Boolean).join(' ') || null,
+          contactFallbackId: convo.id != null ? String(convo.id) : null,
+          occurredAt: Number.isFinite(at) ? new Date(at).toISOString() : null,
+          reason: 'capture_disabled',
+          source: 'heyreach-probe',
+        });
+      }
+    } catch (e) {
+      console.warn(`[poll-heyreach-inbox] probe: campaign ${id} failed (${e instanceof Error ? e.message : String(e)})`);
+    }
+  }
+  const { error: cursorErr } = await supabase
+    .from('synced_campaigns')
+    .update({ capture_skip_probe_at: new Date().toISOString() })
+    .eq('integration_id', integration.id)
+    .in('external_campaign_id', rows.map((r) => String(r.external_campaign_id)))
+    .abortSignal(AbortSignal.timeout(DB_TIMEOUT_MS));
+  if (cursorErr) console.warn(`[poll-heyreach-inbox] probe: cursor update failed: ${cursorErr.message}`);
+  const skips = await recordCaptureScopeSkips(supabase, records);
+  return { probed: rows.length, skips };
+}
+
 type Counts = {
   seen: number;
   polled: number;
@@ -97,6 +201,27 @@ Deno.serve(async (req) => {
     const authHeader = req.headers.get('authorization');
 
     let filterUserId: string | null = null;
+
+    // Recapture mode (fetch-capture-scope, x-agent-key only): ONE integration,
+    // only the given capture-enabled campaigns, conversations from the last
+    // lookbackDays (≤14), processed by the same per-conversation capture as
+    // the walk. No walk/baseline state is read or written, and no probe runs.
+    const reqBody = await req.json().catch(() => ({})) as {
+      mode?: string; integrationId?: string; campaignIds?: unknown[]; lookbackDays?: number;
+    };
+    const isAgent = !!agentKey && agentKey === expectedKey;
+    const recapture = isAgent && reqBody?.mode === 'recapture' && reqBody.integrationId && Array.isArray(reqBody.campaignIds)
+      ? {
+          integrationId: String(reqBody.integrationId),
+          campaignIds: new Set(reqBody.campaignIds.map((id) => normalizeCampaignId(id)).filter((id): id is string => !!id)),
+          lookbackDays: Math.min(RECAPTURE_MAX_LOOKBACK_DAYS, Math.max(1, Number(reqBody.lookbackDays) || RECAPTURE_MAX_LOOKBACK_DAYS)),
+        }
+      : null;
+    if (recapture) {
+      console.log(`[poll-heyreach-inbox] RECAPTURE integration=${recapture.integrationId} campaigns=${recapture.campaignIds.size} lookbackDays=${recapture.lookbackDays}`);
+    }
+    let probeCampaigns = 0;
+    let probeSkips = 0;
 
     if (agentKey && agentKey === expectedKey) {
       console.log('[poll-heyreach-inbox] auth=agent_key (cron path), filterUserId=null');
@@ -134,13 +259,16 @@ Deno.serve(async (req) => {
     // Fetch active HeyReach integrations (include persistent state)
     let query = supabase
       .from('outbound_integrations')
-      .select('id, created_by, api_key_encrypted, heyreach_poll_state')
+      .select('id, created_by, team_id, api_key_encrypted, heyreach_poll_state')
       .eq('is_active', true)
       .eq('platform', 'heyreach')
       .abortSignal(AbortSignal.timeout(DB_TIMEOUT_MS));
 
     if (filterUserId) {
       query = query.eq('created_by', filterUserId);
+    }
+    if (recapture) {
+      query = query.eq('id', recapture.integrationId);
     }
 
     const { data: integrations, error: intError } = await query;
@@ -292,10 +420,25 @@ Deno.serve(async (req) => {
         // in skipped.captureScope. There is no unfiltered mode.
         const scopeResult = await listEnabledCampaignIds(supabase, String(integration.id), { timeoutMs: DB_TIMEOUT_MS });
         // HeyReach filters on INTEGER campaign ids (row order kept for the request).
-        const campaignIdFilter: number[] = scopeResult.ok ? numericCampaignIds(scopeResult.ids) : [];
+        // Recapture narrows the filter to the requested campaigns that are
+        // still enabled; it never widens it.
+        const campaignIdFilter: number[] = scopeResult.ok
+          ? numericCampaignIds(recapture ? scopeResult.ids.filter((id) => recapture.campaignIds.has(id)) : scopeResult.ids)
+          : [];
         const scope = canonicalScope(campaignIdFilter);
         if (!scope) {
           const reason = scopeResult.ok ? 'none_enabled' : scopeResult.reason;
+          // Nothing enabled is exactly where replies vanish: still probe the
+          // capture-off campaigns (not on lookup_error, not in recapture).
+          if (!recapture && reason === 'none_enabled' && remaining() > PROBE_MIN_REMAINING_MS) {
+            try {
+              const probe = await probeCaptureOffHeyReach(supabase, { id: String(integration.id), team_id: String(integration.team_id) }, apiKey);
+              probeCampaigns += probe.probed;
+              probeSkips += probe.skips;
+            } catch (e) {
+              console.warn('[poll-heyreach-inbox] skip probe threw (non-fatal):', e instanceof Error ? e.message : String(e));
+            }
+          }
           console.log(
             `[poll-heyreach-inbox] skip integration ${integration.id} — capture scope ${reason}: ` +
               `no poll, no head scan, no state write this tick`,
@@ -684,6 +827,46 @@ Deno.serve(async (req) => {
               if (error) throw error;
             },
         };
+        if (recapture) {
+          // Newest-first through the requested campaigns until older than the
+          // lookback. Same processItem as the walk; no state is saved.
+          const cutoffMs = Date.now() - recapture.lookbackDays * 86400_000;
+          let offset = 0;
+          let processed = 0;
+          let failures = 0;
+          const limit = 100;
+          recaptureLoop: while (remaining() > DEFAULT_PAGER_OPTIONS.minRemainingForNextPageMs) {
+            const page = await deps.fetchPage(offset, limit, AbortSignal.timeout(30_000), 'head');
+            const items = Array.isArray(page?.items) ? page.items : [];
+            if (items.length === 0) break;
+            for (const convo of items) {
+              const lastAt = Date.parse(convo?.lastMessageAt ?? '');
+              if (Number.isFinite(lastAt) && lastAt < cutoffMs) break recaptureLoop;
+              try {
+                await deps.processItem(convo, AbortSignal.timeout(8_000), 'head');
+                processed++;
+              } catch {
+                failures++;
+              }
+            }
+            offset += items.length;
+            if (typeof page?.totalCount === 'number' && offset >= page.totalCount) break;
+          }
+          console.log(`[poll-heyreach-inbox] recapture integration ${integration.id}: processed=${processed} failures=${failures}`);
+          perIntegration.push({
+            integrationId: integration.id,
+            stopReason: 'end_of_list',
+            pagesFetched: Math.ceil(offset / limit),
+            conversationsProcessed: processed,
+            failures,
+            walkStartedAt: null,
+            walkOffset: null,
+            baselineStartedAt: (integration?.heyreach_poll_state?.baselineStartedAt as string) ?? null,
+            headScan: { items: 0, failures: 0, elapsedMs: 0, stopReason: 'skipped_budget' },
+          });
+          continue;
+        }
+
         const tickOpts = { ...DEFAULT_PAGER_OPTIONS, runBudgetMs: remaining() };
         // deno-lint-ignore no-explicit-any
         const walker = await tickWithHeadScan<any>(deps, stateIn, tickOpts);
@@ -720,6 +903,18 @@ Deno.serve(async (req) => {
         } else if (!overallStop) {
           overallStop = walker.stopReason;
         }
+        // Capture Scope probe of capture-off campaigns, with whatever budget the
+        // walk left (best-effort; never blocks the walk).
+        if (remaining() > PROBE_MIN_REMAINING_MS) {
+          try {
+            const probe = await probeCaptureOffHeyReach(supabase, { id: String(integration.id), team_id: String(integration.team_id) }, apiKey);
+            probeCampaigns += probe.probed;
+            probeSkips += probe.skips;
+          } catch (e) {
+            console.warn('[poll-heyreach-inbox] skip probe threw (non-fatal):', e instanceof Error ? e.message : String(e));
+          }
+        }
+
         console.log(
           `[poll-heyreach-inbox] integration ${integration.id} summary: pages=${walker.pagesFetched}, items=${walker.itemsProcessed}, failures=${walker.failures}, stop=${walker.stopReason}` +
             ` | headScan items=${walker.headScan.items}, failures=${walker.headScan.failures}, elapsedMs=${walker.headScan.elapsedMs}, stop=${walker.headScan.stopReason}`,
@@ -767,6 +962,7 @@ Deno.serve(async (req) => {
           integrationsNoKey: integrationsSkippedNoKey,
           integrationsNoAgentConfig: integrationsSkippedNoAgentConfig,
           captureScope: captureScopeSkips,
+          captureScopeProbe: { campaigns: probeCampaigns, skipsRecorded: probeSkips },
         },
       }),
       {

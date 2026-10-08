@@ -52,10 +52,19 @@ async function run(db: FakeSupabase) {
     }));
     return { status: res.status, body: await res.json() };
   });
-  const sweptCampaigns = rec.providerCalls
-    .map((c) => new URL(c.url).pathname.match(/\/campaigns\/(\d+)\/analytics-by-date$/)?.[1])
-    .filter(Boolean) as string[];
-  return { ...result, rec, sweptCampaigns };
+  // analytics-by-date is called by the new-lead sweep (3-day window) and by the
+  // Capture Scope probe of capture-OFF campaigns (14-day window). Told apart by
+  // the window so each assertion is about one of them.
+  const analyticsCalls = rec.providerCalls
+    .map((c) => new URL(c.url))
+    .filter((u) => /\/campaigns\/\d+\/analytics-by-date$/.test(u.pathname))
+    .map((u) => ({
+      id: u.pathname.match(/\/campaigns\/(\d+)\//)![1],
+      days: Math.round((Date.parse(u.searchParams.get("end_date")!) - Date.parse(u.searchParams.get("start_date")!)) / 86400_000),
+    }));
+  const sweptCampaigns = analyticsCalls.filter((c) => c.days < 10).map((c) => c.id);
+  const probedCampaigns = analyticsCalls.filter((c) => c.days >= 10).map((c) => c.id);
+  return { ...result, rec, sweptCampaigns, probedCampaigns };
 }
 
 const isScopeLookup = (c: RestCall) =>
@@ -78,6 +87,9 @@ for (const c of skipCases) {
       const r = await run(db);
       assertEquals(r.status, 200);
       assertEquals(r.sweptCampaigns, [], "no campaign is swept");
+      // The probe only ever looks at this integration's capture-OFF campaigns.
+      const off = c.rows.filter((x) => x.integration_id === INT && x.capture_enabled === false).map((x) => String(x.external_campaign_id));
+      assertEquals(r.probedCampaigns, off);
       assertEquals(db.writes("agent_leads").length, 0);
       assertEquals(r.body.newLeads, 0);
       assertEquals(r.body.captureScope.skippedIntegrations, [{ integrationId: INT, reason: c.reason }]);
@@ -97,9 +109,68 @@ Deno.test({
     const r = await run(db);
     assertEquals(r.status, 200, JSON.stringify(r.body));
     assertEquals(r.sweptCampaigns, ["1001"]);
+    assertEquals(r.probedCampaigns, ["1002"], "probe reads only the capture-off campaign of this integration");
     const inserts = db.writes("agent_leads").filter((w) => w.method === "POST");
     assertEquals(inserts.length, 1);
     assertEquals(String((inserts[0].body as Row).smartlead_campaign_id), "1001");
     assertEquals(r.body.newLeads, 1);
+  },
+});
+
+
+Deno.test({
+  name: "poll-smartlead-inbox probe: replied lead on a capture-off campaign → skip row recorded, cursor advanced, no agent_leads insert",
+  ...testOpts,
+  async fn() {
+    const db = new FakeSupabase({ outbound_integrations: [integration], synced_campaigns: [row("1001", false)] });
+    db.rpc.record_capture_scope_skips = 1;
+    const r = await run(db);
+    assertEquals(r.status, 200);
+    assertEquals(r.probedCampaigns, ["1001"]);
+    assertEquals(db.writes("agent_leads").length, 0, "probe never captures");
+    const rpc = db.calls.filter((c) => c.table === "rpc:record_capture_scope_skips");
+    assertEquals(rpc.length, 1);
+    const rows = (rpc[0].body as { p_rows: Row[] }).p_rows;
+    assertEquals(rows.length, 1);
+    assertEquals(rows[0].integration_id, INT);
+    assertEquals(rows[0].team_id, TEAM);
+    assertEquals(rows[0].platform, "smartlead");
+    assertEquals(rows[0].campaign_external_id, "1001");
+    assertEquals(rows[0].contact_key, "lead-1001@example.test");
+    assertEquals(rows[0].reason, "capture_disabled");
+    assertEquals(rows[0].source, "smartlead-probe");
+    const cursor = db.writes("synced_campaigns").filter((w) => w.method === "PATCH");
+    assertEquals(cursor.length, 1);
+    assert(typeof (cursor[0].body as Row).capture_skip_probe_at === "string");
+    assertEquals(r.body.skipsRecorded, 1);
+  },
+});
+
+Deno.test({
+  name: "poll-smartlead-inbox recapture: only the requested enabled campaign, 14-day window, no probe, no thread refresh",
+  ...testOpts,
+  async fn() {
+    const db = new FakeSupabase({
+      outbound_integrations: [integration],
+      synced_campaigns: [row("1001", true), row("1002", true), row("1003", false)],
+    });
+    const { result, rec } = await withFakes(db, smartlead, async () => {
+      const res = await handler(new Request("http://local/poll-smartlead-inbox", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-agent-key": AGENT_KEY },
+        body: JSON.stringify({ mode: "recapture", integrationId: INT, campaignIds: ["1002", "1003"], lookbackDays: 14 }),
+      }));
+      return { status: res.status, body: await res.json() };
+    });
+    assertEquals(result.status, 200);
+    const statsCalls = rec.providerCalls.map((c) => new URL(c.url)).filter((u) => /lead-statistics$/.test(u.pathname));
+    assert(statsCalls.length > 0 && statsCalls.every((u) => u.pathname.includes("/campaigns/1002/")),
+      `only campaign 1002 swept: ${statsCalls.map((u) => u.pathname).join(",")}`);
+    assert(statsCalls.every((u) => (Date.now() - Date.parse(u.searchParams.get("replied_after")!)) > 13 * 86400_000), "14-day window");
+    assert(!rec.providerCalls.some((c) => /analytics-by-date/.test(c.url)), "no probe and no analytics prefilter in recapture");
+    const inserts = db.writes("agent_leads").filter((w) => w.method === "POST");
+    assertEquals(inserts.length, 1);
+    assertEquals(String((inserts[0].body as Row).smartlead_campaign_id), "1002");
+    assertEquals(result.body.skipsRecorded, 0);
   },
 });

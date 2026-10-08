@@ -145,3 +145,156 @@ Deno.test({
     assertEquals(r.body.captureScope.warehouseOnlyThreads, 9);
   },
 });
+
+// ---- Capture Scope: no silent drops + recapture ----------------------------
+
+const skipRowsOf = (db: FakeSupabase) =>
+  db.calls.filter((x) => x.table === "rpc:record_capture_scope_skips").flatMap((x) => (x.body as { p_rows: Row[] }).p_rows);
+
+Deno.test({
+  name: "poll-reply-inbox skips: genuinely new replies on capture-off / unsynced sequences recorded (capture_disabled / no_synced_row); none for no-sequence or captured threads",
+  ...testOpts,
+  async fn() {
+    const db = new FakeSupabase({
+      outbound_integrations: [integ(INT, USER, "k1")],
+      agent_configs: [{ id: "cfg-1", user_id: USER, is_active: true }],
+      synced_campaigns: [{ ...row("13579", true), name: "S1" }, { ...row("24680", true), name: "S2" }, { ...row("11111", false), name: "Synced S3" }],
+    });
+    const r = await run(db);
+    assertEquals(r.status, 200);
+    const rows = skipRowsOf(db);
+    const bySeq = new Map(rows.map((x) => [String(x.campaign_external_id), x]));
+    assertEquals([...bySeq.keys()].sort(), ["11111", "99999"], "703 (off) and 704 (unsynced) only");
+    assertEquals(bySeq.get("11111")!.reason, "capture_disabled");
+    assertEquals(bySeq.get("11111")!.campaign_name, "Synced S3", "synced name preferred");
+    assertEquals(bySeq.get("11111")!.contact_key, "t3@example.test");
+    assertEquals(bySeq.get("11111")!.platform, "reply.io");
+    assertEquals(bySeq.get("11111")!.integration_id, INT);
+    assertEquals(bySeq.get("11111")!.team_id, TEAM);
+    assertEquals(bySeq.get("99999")!.reason, "no_synced_row");
+    assertEquals(bySeq.get("99999")!.campaign_name, "S4", "falls back to the thread's sequence name");
+    assert(rows.every((x) => x.source === "poll-reply-inbox"));
+    assertEquals(r.body.captureScope.skipsRecorded, 2, "reported in the run summary");
+  },
+});
+
+Deno.test({
+  name: "poll-reply-inbox skips: nothing enabled (none_enabled) still records every attributable reply; lookup_error records none",
+  ...testOpts,
+  async fn() {
+    const off = new FakeSupabase({
+      outbound_integrations: [integ(INT, USER, "k1")],
+      agent_configs: [{ id: "cfg-1", user_id: USER, is_active: true }],
+      synced_campaigns: [row("13579", false), row("24680", false)],
+    });
+    await run(off);
+    const seqs = skipRowsOf(off).map((x) => `${x.campaign_external_id}:${x.reason}`).sort();
+    assertEquals(seqs, ["11111:no_synced_row", "13579:capture_disabled", "24680:capture_disabled", "99999:no_synced_row"]);
+
+    const broken = new FakeSupabase({
+      outbound_integrations: [integ(INT, USER, "k1")],
+      agent_configs: [{ id: "cfg-1", user_id: USER, is_active: true }],
+      synced_campaigns: [row("13579", true)],
+    });
+    broken.fail["synced_campaigns:GET"] = "error";
+    await run(broken);
+    assertEquals(skipRowsOf(broken), [], "cannot tell a sequence is off when the lookup failed");
+  },
+});
+
+async function runRecapture(db: FakeSupabase, body: Record<string, unknown>) {
+  const { result, rec } = await withFakes(db, replyApi, async () => {
+    const res = await handler(new Request("http://local/poll-reply-inbox", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-agent-key": AGENT_KEY },
+      body: JSON.stringify(body),
+    }));
+    return { status: res.status, body: await res.json() };
+  });
+  const messageCalls = rec.providerCalls
+    .map((c) => new URL(c.url).pathname.match(/\/inbox\/threads\/(\d+)\/messages$/)?.[1])
+    .filter(Boolean) as string[];
+  return { ...result, rec, messageCalls };
+}
+
+Deno.test({
+  name: "poll-reply-inbox recapture: one integration, only the requested still-enabled sequence; captured with classify path; nothing else read or recorded",
+  ...testOpts,
+  async fn() {
+    const db = new FakeSupabase({
+      outbound_integrations: [integ(INT, USER, "k1"), integ(INT2, USER2, "k2")],
+      agent_configs: [{ id: "cfg-1", user_id: USER, is_active: true }, { id: "cfg-2", user_id: USER2, is_active: true }],
+      synced_campaigns: [row("13579", true), row("24680", true), row("11111", false), row("13579", true, INT2)],
+    });
+    // 11111 is requested but OFF: recapture must never widen capture.
+    const r = await runRecapture(db, { mode: "recapture", integrationId: INT, campaignIds: ["13579", "11111"], lookbackDays: 14 });
+    assertEquals(r.status, 200);
+    assertEquals(r.body.recapture, { integrationId: INT, sequences: 2, lookbackDays: 14 });
+    assertEquals(r.messageCalls, ["701"], "only the requested enabled sequence's thread is read");
+    const inserted = db.writes("agent_leads").filter((w) => w.method === "POST").map((w) => w.body as Row);
+    assertEquals(inserted.map((x) => String(x.external_id)), ["701"]);
+    assertEquals(inserted[0].user_id, USER, "only the requested integration");
+    assertEquals(skipRowsOf(db), [], "recapture records no skips");
+    assertEquals(db.writes("inference_events").length, 1, "no warehouse writes for other threads");
+  },
+});
+
+Deno.test({
+  name: "poll-reply-inbox recapture: a thread whose reply is 10 days old is captured (24h window widened to the lookback)",
+  ...testOpts,
+  async fn() {
+    const tenDays = new Date(Date.now() - 10 * 86400_000).toISOString();
+    const db = new FakeSupabase({
+      outbound_integrations: [integ(INT, USER, "k1")],
+      agent_configs: [{ id: "cfg-1", user_id: USER, is_active: true }],
+      synced_campaigns: [row("13579", true)],
+    });
+    const oldApi = (_req: Request, url: URL) => {
+      if (url.hostname !== "api.reply.io") return undefined;
+      if (/\/inbox\/threads\/\d+\/messages$/.test(url.pathname)) {
+        return json({ items: [{ date: tenDays, body: "Late reply", fromName: "Prospect", isOutbound: false, channel: "email" }], hasMore: false });
+      }
+      if (url.pathname.endsWith("/inbox/threads")) return json({ items: [{ ...THREADS[0], lastActivityDate: tenDays }], hasMore: false });
+      return undefined;
+    };
+    const normal = await withFakes(db, oldApi, async () => {
+      const res = await handler(new Request("http://local/poll-reply-inbox", { method: "POST", headers: { "Content-Type": "application/json", "x-agent-key": AGENT_KEY }, body: "{}" }));
+      return await res.json();
+    });
+    assertEquals(db.writes("agent_leads").length, 0, "a normal run ignores a 10-day-old thread (24h window)");
+    assert(normal.result.processed === 0);
+    const { result } = await withFakes(db, oldApi, async () => {
+      const res = await handler(new Request("http://local/poll-reply-inbox", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-agent-key": AGENT_KEY },
+        body: JSON.stringify({ mode: "recapture", integrationId: INT, campaignIds: ["13579"], lookbackDays: 14 }),
+      }));
+      return await res.json();
+    });
+    assertEquals(result.processed, 1);
+    const inserted = db.writes("agent_leads").filter((w) => w.method === "POST").map((w) => w.body as Row);
+    assertEquals(inserted.length, 1);
+    assertEquals(inserted[0].inbox_status, "pending", "surfaces like a fresh reply so it gets a draft");
+  },
+});
+
+Deno.test({
+  name: "poll-reply-inbox recapture: ignored without the agent key (a user JWT runs a normal poll)",
+  ...testOpts,
+  async fn() {
+    const db = new FakeSupabase({
+      outbound_integrations: [integ(INT, USER, "k1")],
+      agent_configs: [{ id: "cfg-1", user_id: USER, is_active: true }],
+      synced_campaigns: [row("13579", true)],
+    });
+    const { result } = await withFakes(db, replyApi, async () => {
+      const res = await handler(new Request("http://local/poll-reply-inbox", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-agent-key": "wrong" },
+        body: JSON.stringify({ mode: "recapture", integrationId: INT, campaignIds: ["13579"] }),
+      }));
+      return { status: res.status, body: await res.json() };
+    });
+    assertEquals(result.status, 401);
+  },
+});

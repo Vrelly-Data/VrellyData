@@ -89,6 +89,8 @@ function readVolume(stats: Record<string, unknown> | null) {
 
 export const smartleadCaptureScopeAdapter: CaptureScopeAdapter = {
   platform: "smartlead",
+  // Re-reads recent replies for campaigns just switched on (mode 'recapture').
+  recaptureFunction: "poll-smartlead-inbox",
 
   async listCampaigns(db, integration): Promise<CaptureScopeCampaign[]> {
     // Scoped by integration_id — the same key the sync upserts conflict on.
@@ -119,6 +121,7 @@ export const smartleadCaptureScopeAdapter: CaptureScopeAdapter = {
         status: normalizeStatus(String(row.status ?? "")),
         rawStatus: (row.raw_status as string | null) ?? null,
         captureEnabled: row.capture_enabled === true,
+        channel: "email",
         senders: [],
         volume: readVolume(row.stats as Record<string, unknown> | null),
         group: groupId

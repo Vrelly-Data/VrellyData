@@ -313,12 +313,12 @@ Deno.serve(async (req) => {
     // and write its is_linked onto the other's.
     const existingByExternalId = new Map<
       string,
-      { stats: Record<string, unknown> | null; isLinked: boolean; captureEnabled: boolean }
+      { stats: Record<string, unknown> | null; isLinked: boolean }
     >();
     {
       const { data: existingRows } = await supabase
         .from("synced_campaigns")
-        .select("external_campaign_id, stats, is_linked, capture_enabled")
+        .select("external_campaign_id, stats, is_linked")
         .eq("integration_id", integration.id);
       for (const r of existingRows ?? []) {
         existingByExternalId.set(
@@ -326,7 +326,6 @@ Deno.serve(async (req) => {
           {
             stats: (r as { stats: Record<string, unknown> | null }).stats ?? null,
             isLinked: (r as { is_linked: boolean }).is_linked,
-            captureEnabled: (r as { capture_enabled: boolean }).capture_enabled === true,
           },
         );
       }
@@ -503,11 +502,12 @@ Deno.serve(async (req) => {
             // is false, so the key must be sent explicitly rather than
             // omitted. Same contract as sync-reply-campaigns.
             is_linked: existingByExternalId.get(externalId)?.isLinked ?? true,
-            // Discovery ≠ consent: new campaigns do NOT start capturing on their
-            // own. Preserve any existing row's operator toggle; only genuinely
-            // new rows default to OFF.
-            capture_enabled:
-              existingByExternalId.get(externalId)?.captureEnabled ?? false,
+            // capture_enabled is deliberately NOT sent. A new row takes it
+            // from outbound_integrations.auto_capture_new_campaigns (BEFORE
+            // INSERT trigger); an existing row keeps the operator's toggle,
+            // because a key absent from the upsert is absent from its UPDATE
+            // SET. Re-sending a value read earlier in this run could overwrite
+            // a toggle made while the sync was running.
             // last_synced_at column doesn't exist on synced_campaigns;
             // updated_at is bumped by the existing trigger on UPDATE.
           },

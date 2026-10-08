@@ -106,6 +106,17 @@ for (const c of skipCases) {
       assertEquals(r.status, 200);
       assertEquals(r.body.skipped, c.reason);
       assertEquals(r.body.warehouseRecorded, true);
+      // No silent drops: a known-but-off (or not yet synced) campaign records a skip row.
+      const skipRows = db.calls.filter((x) => x.table === "rpc:record_capture_scope_skips").flatMap((x) => (x.body as { p_rows: Row[] }).p_rows);
+      if (c.reason === "no_synced_row" || c.reason === "capture_disabled") {
+        assertEquals(skipRows.length, 1, "skip row recorded");
+        assertEquals(skipRows[0].reason, c.reason);
+        assertEquals(skipRows[0].platform, "reply.io");
+        assertEquals(skipRows[0].campaign_external_id, String(SEQ));
+        assertEquals(skipRows[0].contact_key, EMAIL);
+      } else {
+        assertEquals(skipRows, [], "no skip row when the campaign is unknown or the lookup failed");
+      }
       assertEquals(db.writes("agent_leads").length, 0, "inbox-routing writer must not write on skip");
       assertEquals(db.writes("agent_activity").length, 0, "no activity row on skip");
       assert(!r.rec.functionCalls.some((f) => f.path.endsWith("/classify-reply")), "no classify-reply on skip");

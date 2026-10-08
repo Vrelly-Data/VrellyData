@@ -5,7 +5,7 @@ import { detectLanguageCode } from "../_shared/language.ts";
 import { sanitizeLinkedinUrlForStorage } from "../_shared/normalize.ts";
 import { findLeadByNormalizedLinkedIn } from "../_shared/agent-leads-lookup.ts";
 import { decideSurfaceAndClassify, buildSurfaceUpdateFields } from "../_shared/surface.ts";
-import { checkCaptureGate, normalizeCampaignId } from "../_shared/capture-scope.ts";
+import { checkCaptureGate, isRecordableSkip, normalizeCampaignId, recordCaptureScopeSkips } from "../_shared/capture-scope.ts";
 import { HEYREACH_DRAFTING_ENV, heyreachClassifyGate, isHeyReachDraftingEnabled } from "../_shared/heyreach-drafting.ts";
 
 // HeyReach reply webhooks carry the campaign as a nested object
@@ -472,6 +472,22 @@ Deno.serve(async (req) => {
       gateCampaignName = gate.campaignName ?? null;
       if (!gate.allowed) {
         captureSkipReason = gate.reason;
+        // No silent drops: surface the skipped reply in Capture Scope.
+        if (isRecordableSkip(gate.reason)) {
+          await recordCaptureScopeSkips(supabase, [{
+            integrationId: integration.id,
+            teamId: integration.team_id,
+            platform: "heyreach",
+            campaignExternalId: campaignExternalId,
+            campaignName: payloadCampaignName ?? gate.campaignName ?? null,
+            contactLinkedinUrl: linkedinUrl,
+            contactName: fullName,
+            contactFallbackId: conversationId ? String(conversationId) : null,
+            occurredAt: newestThreadTimestamp(replyThread) ?? new Date().toISOString(),
+            reason: gate.reason,
+            source: "heyreach-webhook",
+          }]);
+        }
         console.log(
           `[heyreach-webhook] skip (${gate.reason}) for integration=${integration.id} ` +
             `campaign=${campaignExternalId ?? "null"} conversation=${conversationId ?? "null"} event=${eventType}` +

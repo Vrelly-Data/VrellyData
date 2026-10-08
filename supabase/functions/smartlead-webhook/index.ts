@@ -53,7 +53,7 @@ import { cleanReplyPreview } from "../_shared/reply-text.ts";
 import { detectLanguageCode } from "../_shared/language.ts";
 import { sanitizeLinkedinUrlForStorage } from "../_shared/normalize.ts";
 import { upsertAgentLeadWithLinkedinRecovery } from "../_shared/agent-leads.ts";
-import { checkCaptureGate } from "../_shared/capture-scope.ts";
+import { checkCaptureGate, isRecordableSkip, recordCaptureScopeSkips } from "../_shared/capture-scope.ts";
 
 const allowedOrigins = [
   Deno.env.get("ALLOWED_ORIGIN") || "https://vrelly.com",
@@ -471,6 +471,21 @@ Deno.serve(async (req) => {
       const gate = await checkCaptureGate(supabase as any, integration.id, smartleadCampaignId);
       if (!gate.allowed) {
         captureSkipReason = gate.reason;
+        // No silent drops: surface the skipped reply in Capture Scope.
+        if (isRecordableSkip(gate.reason)) {
+          await recordCaptureScopeSkips(supabase, [{
+            integrationId: integration.id,
+            teamId: integration.team_id,
+            platform: "smartlead",
+            campaignExternalId: smartleadCampaignId,
+            campaignName: lastCampaignName ?? gate.campaignName ?? null,
+            contactEmail: email,
+            contactName: fullName,
+            occurredAt: replyTimestamp,
+            reason: gate.reason,
+            source: "smartlead-webhook",
+          }]);
+        }
         console.log(
           `[smartlead-webhook v2] skip (${gate.reason}) for integration=${integration.id} ` +
             `campaign=${smartleadCampaignId ?? "null"} event=${eventType}` +

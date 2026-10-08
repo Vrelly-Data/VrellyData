@@ -181,10 +181,10 @@ Deno.serve(async (req) => {
     // in smartlead-webhook still rejects them, because a registration can also
     // exist from a failed deregistration or from outside Vrelly entirely.
     //
-    // Scoped by source too: capture_enabled is meaningless on a reply_io row
-    // (Reply.io's capture scope is unmanaged by design and its rows keep the
-    // column default), so an unscoped filter here would be reading a column
-    // that platform never populates.
+    // Scoped by source too: this registers SMARTLEAD webhooks, and the team
+    // can also own Reply.io / HeyReach rows whose capture_enabled is managed in
+    // Capture Scope like any other platform's but needs no per-campaign
+    // Smartlead webhook.
     let campaignQuery = supabase
       .from("synced_campaigns")
       .select("external_campaign_id, name, status")

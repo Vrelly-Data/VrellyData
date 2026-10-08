@@ -59,7 +59,7 @@ Deno.test({
     assertEquals(byId.get("222")!.captureEnabled, false);
     assertEquals(byId.get("222")!.volume, { sent: null, replies: null }, "unknown volume stays null");
     assertEquals(byId.get("222")!.name, "Untitled sequence 222");
-    assertEquals(r.body.counts, { total: 2, captureEnabled: 1, captureDisabled: 1 });
+    assertEquals(r.body.counts, { total: 2, captureEnabled: 1, captureDisabled: 1, skippedReplies: 0 });
     assertEquals(r.body.sendersAvailable, false);
     assertEquals(r.body.sendersDeferred, false);
     assertEquals(r.rec.providerCalls.length, 0, "no Reply.io API call");

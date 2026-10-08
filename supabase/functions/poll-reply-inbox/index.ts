@@ -9,7 +9,7 @@ import { htmlToText } from '../_shared/html-to-text.ts';
 import { shouldResurface, fireClassifyReply } from '../_shared/inbox-reply.ts';
 import { cleanReplyPreview } from '../_shared/reply-text.ts';
 import { detectLanguageCode } from '../_shared/language.ts';
-import { listEnabledCampaignIds, normalizeCampaignId } from '../_shared/capture-scope.ts';
+import { listEnabledCampaignIds, normalizeCampaignId, recordCaptureScopeSkips, type CaptureSkipRecord } from '../_shared/capture-scope.ts';
 
 const allowedOrigins = [
   'https://vrelly.com',
@@ -152,6 +152,9 @@ async function fetchV3WithRetry<T = unknown>(
 async function fetchInboxThreads(
   apiKey: string,
   maxPages: number = 2,
+  // Recapture: keep paging until a page ends with threads older than this
+  // (the inbox is newest-first), up to maxPages.
+  stopBefore: string | null = null,
 ): Promise<InboxThread[]> {
   const pageSize = 100;
   const all: InboxThread[] = [];
@@ -165,11 +168,19 @@ async function fetchInboxThreads(
     console.log(`  /inbox/threads page ${page} (skip=${skip}): fetched ${items.length}, total ${all.length}`);
     if (resp.hasMore === false) break;
     if (items.length < pageSize) break;
+    if (stopBefore) {
+      const oldest = items[items.length - 1]?.lastActivityDate;
+      if (oldest && oldest < stopBefore) break;
+    }
     skip += items.length;
     await new Promise(r => setTimeout(r, 300));
   }
   return all;
 }
+
+// Recapture (Capture Scope "enable + recapture"): internal callers only.
+const RECAPTURE_MAX_PAGES = 30;
+const RECAPTURE_MAX_LOOKBACK_DAYS = 14;
 
 // Fetch the FULL messages of one thread (chronological, oldest first) via
 // GET /v3/inbox/threads/{threadId}/messages. Gives us full bodies + the
@@ -223,6 +234,26 @@ Deno.serve(async (req) => {
 
     let filterUserId: string | null = null;
 
+    // Recapture mode (fetch-capture-scope, x-agent-key only): one integration,
+    // only the given capture-enabled sequences, a lookback of up to 14 days
+    // instead of 24h. Capture itself is unchanged — same gate, same writes,
+    // same classify-reply call — it just looks further back for fewer
+    // sequences.
+    const body = await req.json().catch(() => ({})) as {
+      mode?: string; integrationId?: string; campaignIds?: unknown[]; lookbackDays?: number;
+    };
+    const isAgent = !!agentKey && agentKey === expectedKey;
+    const recapture = isAgent && body?.mode === 'recapture' && body.integrationId && Array.isArray(body.campaignIds)
+      ? {
+          integrationId: String(body.integrationId),
+          campaignIds: new Set(body.campaignIds.map((id) => normalizeCampaignId(id)).filter((id): id is string => !!id)),
+          lookbackDays: Math.min(RECAPTURE_MAX_LOOKBACK_DAYS, Math.max(1, Number(body.lookbackDays) || RECAPTURE_MAX_LOOKBACK_DAYS)),
+        }
+      : null;
+    if (recapture) {
+      console.log(`[poll-reply-inbox] RECAPTURE integration=${recapture.integrationId} sequences=${recapture.campaignIds.size} lookbackDays=${recapture.lookbackDays}`);
+    }
+
     if (agentKey && agentKey === expectedKey) {
       // Cron call — process all users
       filterUserId = null;
@@ -257,6 +288,9 @@ Deno.serve(async (req) => {
     if (filterUserId) {
       query = query.eq('created_by', filterUserId);
     }
+    if (recapture) {
+      query = query.eq('id', recapture.integrationId);
+    }
 
     const { data: integrations, error: intError } = await query;
 
@@ -279,6 +313,7 @@ Deno.serve(async (req) => {
     let threadsDroppedNotEnabled = 0;
     let warehouseOnlyThreads = 0;
     let warehouseOnlyRecorded = 0;
+    let capturedSkipsRecorded = 0;
 
     for (const integration of integrations ?? []) {
       try {
@@ -316,14 +351,40 @@ Deno.serve(async (req) => {
           console.log(`[poll-reply-inbox] skip integration ${integration.id} — capture scope ${scope.reason}; threads recorded warehouse-only`);
           captureScopeSkips.push({ integrationId: String(integration.id), reason: scope.reason });
         }
-        const enabledSet = new Set(scope.ok ? scope.ids : []);
+        // Recapture narrows capture to the requested sequences that are still
+        // enabled; it never widens it.
+        const enabledSet = new Set(
+          (scope.ok ? scope.ids : []).filter((id) => !recapture || recapture.campaignIds.has(id)),
+        );
+
+        // Known sequences (any capture state) → name, so a skipped reply can
+        // be told apart as capture_disabled vs no_synced_row and labelled.
+        const knownSequences = new Map<string, string | null>();
+        if (!recapture && (scope.ok || scope.reason === 'none_enabled')) {
+          const { data: seqRows, error: seqErr } = await supabase
+            .from('synced_campaigns')
+            .select('external_campaign_id, name')
+            .eq('integration_id', integration.id);
+          if (seqErr) console.warn(`[poll-reply-inbox] sequence name lookup failed (skips still recorded): ${seqErr.message}`);
+          for (const r of (seqRows ?? []) as { external_campaign_id: string; name: string | null }[]) {
+            const id = normalizeCampaignId(r.external_campaign_id);
+            if (id) knownSequences.set(id, r.name ?? null);
+          }
+        }
+        const skipRecords: CaptureSkipRecord[] = [];
 
         // Fetch the inbox threads (the correct reply source — see
         // fetchInboxThreads). Newest-first, capped at maxPages so each poll is
         // fast and focused on recent replies.
         let inboxThreads: InboxThread[];
         try {
-          inboxThreads = await fetchInboxThreads(apiKey);
+          inboxThreads = recapture
+            ? await fetchInboxThreads(
+                apiKey,
+                RECAPTURE_MAX_PAGES,
+                new Date(Date.now() - recapture.lookbackDays * 86400_000).toISOString(),
+              )
+            : await fetchInboxThreads(apiKey);
           console.log(`[poll-reply-inbox] Fetched ${inboxThreads.length} inbox threads for integration ${integration.id}`);
         } catch (fetchErr) {
           console.error(`[poll-reply-inbox] Reply.io inbox fetch failed for integration ${integration.id}:`, fetchErr);
@@ -358,7 +419,11 @@ Deno.serve(async (req) => {
           }
         }
 
-        const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+        // Activity window: 24h normally; the recapture lookback in recapture
+        // mode. (Name kept: every recency check below reads it.)
+        const oneDayAgo = new Date(
+          Date.now() - (recapture ? recapture.lookbackDays * 24 : 24) * 60 * 60 * 1000,
+        ).toISOString();
 
         const normalizeChannel = (c: unknown): string =>
           String(c).toLowerCase() === 'linkedin' ? 'linkedin' : 'email';
@@ -384,6 +449,10 @@ Deno.serve(async (req) => {
             const captureAllowed = captureAllowedFor(thread);
             const externalId = String(thread.id);
             const threadActivity = thread.lastActivityDate || null;
+
+            // Recapture touches only the requested, still-enabled sequences —
+            // no messages call, no warehouse write for anything else.
+            if (recapture && !captureAllowed) continue;
 
             // PERFORMANCE: only inspect threads active within the last 24h —
             // those are the only candidates for an actionable reply, and the
@@ -602,6 +671,26 @@ Deno.serve(async (req) => {
               if (targetInboxStatus === 'pending') {
                 await recordRepliedInference(agentConfig.id, { capture_skipped: scope.ok ? 'not_in_capture_scope' : scope.reason });
                 warehouseOnlyRecorded++;
+                // No silent drops: a genuinely new reply on a sequence that is
+                // off (or not synced yet) is recorded for the Capture Scope UI.
+                // Not on lookup_error — then we cannot say the sequence is off.
+                const skipSeqId = normalizeCampaignId(thread?.sequence?.id);
+                if (skipSeqId && (scope.ok || scope.reason === 'none_enabled')) {
+                  skipRecords.push({
+                    integrationId: String(integration.id),
+                    teamId: String(integration.team_id),
+                    platform: 'reply.io',
+                    campaignExternalId: skipSeqId,
+                    campaignName: knownSequences.get(skipSeqId) ?? thread?.sequence?.name ?? null,
+                    contactEmail: contact?.email ?? null,
+                    contactLinkedinUrl: contact?.linkedInProfileUrl ?? null,
+                    contactName: contact?.fullName ?? latestInbound.fromName ?? null,
+                    contactFallbackId: externalId,
+                    occurredAt: lastReplyDate,
+                    reason: knownSequences.has(skipSeqId) ? 'capture_disabled' : 'no_synced_row',
+                    source: 'poll-reply-inbox',
+                  });
+                }
               }
               warehouseOnlyThreads++;
               continue;
@@ -799,6 +888,10 @@ Deno.serve(async (req) => {
             console.error(`[poll-reply-inbox] Error processing thread ${thread.id}:`, threadErr);
           }
         }
+        // Flush skipped replies once per integration (best-effort, never throws).
+        if (skipRecords.length > 0) {
+          capturedSkipsRecorded += await recordCaptureScopeSkips(supabase, skipRecords);
+        }
       } catch (integrationErr) {
         console.error(`[poll-reply-inbox] Error processing integration ${integration.id}:`, integrationErr);
       }
@@ -817,7 +910,9 @@ Deno.serve(async (req) => {
         threadsDroppedNotEnabled,
         warehouseOnlyThreads,
         warehouseOnlyRecorded,
+        skipsRecorded: capturedSkipsRecorded,
       },
+      ...(recapture ? { recapture: { integrationId: recapture.integrationId, sequences: recapture.campaignIds.size, lookbackDays: recapture.lookbackDays } } : {}),
     }), {
       status: 200,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },

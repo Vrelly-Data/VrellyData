@@ -91,6 +91,12 @@ type Recorded = {
   scopeQueries: string[];
   logs: string[];
   activityWrites: number;
+  // record_capture_scope_skips payloads (Capture Scope skip rows).
+  // deno-lint-ignore no-explicit-any
+  skipRpcRows: any[];
+  // synced_campaigns PATCH bodies (the probe's rotation cursor).
+  // deno-lint-ignore no-explicit-any
+  campaignPatches: any[];
 };
 
 function json(body: unknown, status = 200) {
@@ -122,6 +128,15 @@ function installFetch(sc: Scenario, rec: Recorded) {
     }
     if (url.origin === SUPA && url.pathname.startsWith("/rest/v1/")) {
       const table = url.pathname.replace("/rest/v1/", "");
+      if (table === "rpc/record_capture_scope_skips") {
+        const b = JSON.parse(await req.text());
+        rec.skipRpcRows.push(...(b?.p_rows ?? []));
+        return json(Array.isArray(b?.p_rows) ? b.p_rows.length : 0);
+      }
+      if (table === "synced_campaigns" && method === "PATCH") {
+        rec.campaignPatches.push({ query: url.search, body: JSON.parse(await req.text()) });
+        return new Response(null, { status: 204 });
+      }
       if (table === "synced_campaigns") rec.scopeQueries.push(url.search);
       const hangs = (table === "agent_leads" && ((sc.hang === "lookup" && method === "GET") || (sc.hang === "write" && method !== "GET"))) ||
         (table === "synced_campaigns" && sc.hang === "scope");
@@ -192,8 +207,8 @@ function installFetch(sc: Scenario, rec: Recorded) {
   return () => { globalThis.fetch = realFetch; };
 }
 
-async function run(sc: Scenario) {
-  const rec: Recorded = { leadWrites: [], states: [], chatroomCalls: 0, order: [], convOffsets: [], convCampaignIds: [], functionCalls: [], functionBodies: [], functionAgentKeyOk: [], scopeQueries: [], logs: [], activityWrites: 0 };
+async function run(sc: Scenario, reqBody: Record<string, unknown> = {}) {
+  const rec: Recorded = { leadWrites: [], states: [], chatroomCalls: 0, order: [], convOffsets: [], convCampaignIds: [], functionCalls: [], functionBodies: [], functionAgentKeyOk: [], scopeQueries: [], logs: [], activityWrites: 0, skipRpcRows: [], campaignPatches: [] };
   const restore = installFetch(sc, rec);
   const realLog = console.log;
   console.log = (...args: unknown[]) => { rec.logs.push(args.map(String).join(" ")); };
@@ -201,7 +216,7 @@ async function run(sc: Scenario) {
     const res = await handler!(new Request("http://local/poll-heyreach-inbox", {
       method: "POST",
       headers: { "x-agent-key": AGENT_KEY, "Content-Type": "application/json" },
-      body: "{}",
+      body: JSON.stringify(reqBody),
     }));
     const body = await res.json();
     return { status: res.status, body, rec, finalState: rec.states[rec.states.length - 1] as { baselineStartedAt: string | null; walk: unknown; scope?: unknown; lastTick?: { headScan?: unknown; fetchError?: string } } };
@@ -380,14 +395,23 @@ Deno.test({
 
 // ---- Fail-closed Capture Scope skip (S-idx fail-closed) ---------------------
 // Any scope outcome other than "at least one enabled integer campaign id" skips
-// the integration for this tick: no GetConversationsV2 (no walk, no head scan),
-// no GetChatroom, no agent_leads write, no poll-state write, and the reason is
-// logged and returned in skipped.captureScope. The deep walk state proves the
-// head scan would otherwise have run.
-function assertSkippedClosed(r: Awaited<ReturnType<typeof run>>, reason: string) {
+// CAPTURE for the integration this tick: no capture GetConversationsV2 (no
+// walk, no head scan), no GetChatroom, no agent_leads write, no poll-state
+// write, and the reason is logged and returned in skipped.captureScope. The
+// deep walk state proves the head scan would otherwise have run.
+//
+// The only HeyReach calls allowed are the Capture Scope PROBE's: offset 0,
+// exactly one campaign id, and that id is a capture-OFF campaign of this
+// integration (it never reads an enabled campaign, never polls unfiltered).
+// None on lookup_error.
+function assertSkippedClosed(r: Awaited<ReturnType<typeof run>>, reason: string, captureOffIds: number[] = []) {
   assertEquals(r.status, 200);
-  assertEquals(r.rec.convOffsets, [], "no HeyReach inbox call at all (no unfiltered poll, no head scan)");
-  assertEquals(r.rec.convCampaignIds, []);
+  for (const ids of r.rec.convCampaignIds) {
+    assert(Array.isArray(ids) && ids.length === 1 && captureOffIds.includes(ids[0] as number),
+      `only probe calls (one capture-off campaign id): ${JSON.stringify(r.rec.convCampaignIds)}`);
+  }
+  assert(r.rec.convOffsets.every((o) => o === 0), "probe reads page 1 only");
+  if (reason === "lookup_error") assertEquals(r.rec.convOffsets, [], "no HeyReach call on lookup_error");
   assertEquals(r.rec.chatroomCalls, 0);
   assertEquals(r.rec.leadWrites, []);
   assertEquals(r.rec.activityWrites, 0);
@@ -419,9 +443,12 @@ for (const [label, campaigns, reason] of [
         campaigns: campaigns as Scenario["campaigns"],
         state: { ...deepState(), scope: { campaignIds: [508828] } },
       });
-      assertSkippedClosed(r, reason);
-      assertEquals(r.rec.scopeQueries.length, 1);
-      const q = new URLSearchParams(r.rec.scopeQueries[0]);
+      const off = (campaigns === "error" ? [] : (campaigns as unknown as { external_campaign_id: string; capture_enabled: boolean; integration_id?: string }[]))
+        .filter((c) => !c.capture_enabled && !c.integration_id).map((c) => Number(c.external_campaign_id));
+      assertSkippedClosed(r, reason, off);
+      const scopeQs = r.rec.scopeQueries.filter((qs) => new URLSearchParams(qs).get("capture_enabled") === "eq.true");
+      assertEquals(scopeQs.length, 1);
+      const q = new URLSearchParams(scopeQs[0]);
       assertEquals(q.get("integration_id"), `eq.${INTEGRATION_ID}`, "scope keyed by integration_id");
       assertEquals(q.get("capture_enabled"), "eq.true");
     },
@@ -456,7 +483,10 @@ Deno.test({
       state: { version: 1, baselineStartedAt: BASELINE, walk: structuredClone(DEEP_WALK), scope: { unfiltered: true, campaignIds: [] } },
     });
     assertEquals(r.status, 200);
-    assert(r.rec.convCampaignIds.length > 0 && r.rec.convCampaignIds.every((c) => JSON.stringify(c) === "[518402]"), JSON.stringify(r.rec.convCampaignIds));
+    // Capture calls carry only the enabled campaign; the only other call is the
+    // probe of the capture-off one (508828).
+    const captureCalls = r.rec.convCampaignIds.filter((c) => JSON.stringify(c) !== "[508828]");
+    assert(captureCalls.length > 0 && captureCalls.every((c) => JSON.stringify(c) === "[518402]"), JSON.stringify(r.rec.convCampaignIds));
     assertEquals(r.rec.convOffsets[0], 0, "walk restarts from the top after the reset");
     assertEquals(r.rec.chatroomCalls, 1, "the older conversation is processed after the reset");
     assertEquals(r.finalState.scope, { campaignIds: [518402] });
@@ -635,7 +665,9 @@ for (const [label, campaigns, reason] of [
     ...opts,
     async fn() {
       const r = await withDraftingFlag("true", () => run(freshScenario({ campaigns: campaigns as Scenario["campaigns"] })));
-      assertSkippedClosed(r, reason);
+      const off = (campaigns === "error" ? [] : (campaigns as unknown as { external_campaign_id: string; capture_enabled: boolean; integration_id?: string }[]))
+        .filter((c) => !c.capture_enabled && !c.integration_id).map((c) => Number(c.external_campaign_id));
+      assertSkippedClosed(r, reason, off);
       assertEquals(r.rec.functionBodies, []);
     },
   });
@@ -650,5 +682,91 @@ Deno.test({
     const off = await withDraftingFlag(undefined, () => run(freshScenario()));
     assertEquals(off.rec.functionCalls, []);
     assert(off.rec.logs.some((l) => l.includes("(HeyReach drafting off)")));
+  },
+});
+
+
+// ---- Capture Scope probe + recapture (CS-idx) -------------------------------
+
+Deno.test({
+  name: "(CS-idx probe) nothing enabled + fresh reply on a capture-off campaign → one probe call for it, skip row recorded, cursor advanced, nothing captured",
+  ...opts,
+  async fn() {
+    const fresh = new Date(Date.now() - 60 * 60_000).toISOString();
+    const r = await run({
+      chatroom: "ok",
+      existingLead: false,
+      convoTs: fresh,
+      campaigns: [{ external_campaign_id: "518402", capture_enabled: false }],
+    });
+    assertSkippedClosed(r, "none_enabled", [518402]);
+    assertEquals(r.rec.convCampaignIds, [[518402]], "exactly one probe call");
+    assertEquals(r.rec.skipRpcRows.length, 1);
+    const row = r.rec.skipRpcRows[0];
+    assertEquals(row.integration_id, INTEGRATION_ID);
+    assertEquals(row.platform, "heyreach");
+    assertEquals(row.campaign_external_id, "518402");
+    assertEquals(row.contact_key, "linkedin.com/in/test-prospect");
+    assertEquals(row.reason, "capture_disabled");
+    assertEquals(row.source, "heyreach-probe");
+    assertEquals(r.rec.campaignPatches.length, 1, "rotation cursor written");
+    assert(typeof r.rec.campaignPatches[0].body.capture_skip_probe_at === "string");
+    assertEquals(r.body.skipped.captureScopeProbe, { campaigns: 1, skipsRecorded: 1 });
+  },
+});
+
+Deno.test({
+  name: "(CS-idx probe) reply older than 14 days on a capture-off campaign → probed but no skip row",
+  ...opts,
+  async fn() {
+    const old = new Date(Date.now() - 20 * 86400_000).toISOString();
+    const r = await run({
+      chatroom: "ok",
+      existingLead: false,
+      convoTs: old,
+      campaigns: [{ external_campaign_id: "518402", capture_enabled: false }],
+    });
+    assertEquals(r.rec.convCampaignIds, [[518402]]);
+    assertEquals(r.rec.skipRpcRows, []);
+  },
+});
+
+Deno.test({
+  name: "(CS-idx recapture) mode recapture → only the requested enabled campaign, conversation captured, NO poll-state write, no probe",
+  ...opts,
+  async fn() {
+    const fresh = new Date(Date.now() - 2 * 86400_000).toISOString();
+    const r = await run(
+      {
+        chatroom: "ok",
+        existingLead: true,
+        convoTs: fresh,
+        chatroomTs: fresh,
+        campaigns: [{ external_campaign_id: "518402", capture_enabled: true }, { external_campaign_id: "508828", capture_enabled: false }],
+      },
+      { mode: "recapture", integrationId: INTEGRATION_ID, campaignIds: ["518402", "508828"], lookbackDays: 14 },
+    );
+    assertEquals(r.status, 200);
+    assert(r.rec.convCampaignIds.length > 0 && r.rec.convCampaignIds.every((c) => JSON.stringify(c) === "[518402]"),
+      `recapture never reads the capture-off campaign and runs no probe: ${JSON.stringify(r.rec.convCampaignIds)}`);
+    assertEquals(r.rec.chatroomCalls, 1, "conversation processed by the normal per-item capture");
+    assertEquals(r.rec.leadWrites, ["PATCH"]);
+    assertEquals(r.rec.states, [], "recapture writes no walk/baseline state");
+    assertEquals(r.rec.skipRpcRows, []);
+  },
+});
+
+Deno.test({
+  name: "(CS-idx recapture) requested campaign not enabled → nothing read, nothing written",
+  ...opts,
+  async fn() {
+    const r = await run(
+      { chatroom: "ok", existingLead: true, campaigns: [{ external_campaign_id: "518402", capture_enabled: false }] },
+      { mode: "recapture", integrationId: INTEGRATION_ID, campaignIds: ["518402"] },
+    );
+    assertEquals(r.status, 200);
+    assertEquals(r.rec.convCampaignIds, [], "no capture call and no probe in recapture mode");
+    assertEquals(r.rec.leadWrites, []);
+    assertEquals(r.rec.states, []);
   },
 });
