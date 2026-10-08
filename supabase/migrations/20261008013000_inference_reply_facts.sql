@@ -7,13 +7,36 @@
 -- statement timeout for `authenticated`.
 --
 -- inference_reply_facts holds the same facts (one narrow row per reply; joins and
--- metadata extraction done), refreshed concurrently every 15 minutes by pg_cron.
+-- metadata extraction done), refreshed concurrently every 15 minutes by pg_cron
+-- through refresh_inference_reply_facts(): a run that finds another refresh in
+-- progress skips (advisory lock) instead of overlapping, and the job sets its
+-- own 15-minute statement_timeout (a timeout set inside a function does not
+-- apply to the statement already running, so it is set in the job command).
 -- The function now reads only that and returns facts_as_of (the refresh time);
 -- the Live Feed is unaffected and stays real-time.
 --
 -- Not exposed to clients: materialized views have no RLS, so select is revoked
 -- from anon / authenticated; only the SECURITY DEFINER function reads it.
 -- Guarded: inference_events only exists on prod (dev skips the view and the job).
+
+create or replace function public.refresh_inference_reply_facts()
+returns text
+language plpgsql
+set search_path = public
+set lock_timeout = '2min'
+as $$
+begin
+  if not pg_try_advisory_xact_lock(hashtext('public.refresh_inference_reply_facts')) then
+    raise notice 'refresh_inference_reply_facts: skipped, a refresh is already running';
+    return 'skipped';
+  end if;
+  refresh materialized view concurrently public.inference_reply_facts;
+  return 'refreshed';
+end;
+$$;
+
+-- Server-side only: clients must not be able to trigger a full-table refresh.
+revoke all on function public.refresh_inference_reply_facts() from public, anon, authenticated;
 
 do $mv$
 begin
@@ -75,11 +98,11 @@ begin
     create unique index if not exists inference_reply_facts_id_key on public.inference_reply_facts (id);
     revoke all on public.inference_reply_facts from public, anon, authenticated;
     comment on materialized view public.inference_reply_facts is
-      'Admin → Inference: one row per replied event with the dimensions admin_inference_insights groups by. Refreshed every 15 minutes (pg_cron refresh-inference-reply-facts). Not readable by clients.';
-    if exists (select 1 from pg_extension where extname = 'pg_cron')
-       and not exists (select 1 from cron.job where jobname = 'refresh-inference-reply-facts') then
+      'Admin → Inference: one row per replied event with the dimensions admin_inference_insights groups by. Refreshed every 15 minutes (pg_cron refresh-inference-reply-facts → refresh_inference_reply_facts()). Not readable by clients.';
+    -- cron.schedule upserts by job name.
+    if exists (select 1 from pg_extension where extname = 'pg_cron') then
       perform cron.schedule('refresh-inference-reply-facts', '*/15 * * * *',
-        'refresh materialized view concurrently public.inference_reply_facts');
+        $job$set statement_timeout = '15min'; select public.refresh_inference_reply_facts();$job$);
     end if;
   end if;
 end
