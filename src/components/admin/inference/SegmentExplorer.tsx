@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { AlertTriangle, ArrowDown, Layers } from 'lucide-react';
+import { AlertTriangle, ArrowDown, Layers, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -14,10 +14,8 @@ import {
   DimensionBias,
   describeBias,
   MIN_SAMPLE,
-  ReplyRow,
   SegmentFilter,
   SegmentRow,
-  aggregateSegments,
   fmtHours,
   fmtLift,
   pct,
@@ -38,35 +36,41 @@ const COLUMNS: Array<{ key: SortKey; label: string }> = [
   { key: 'medianHoursToReply', label: 'Median time to reply' },
 ];
 
+// Rows come grouped from the server (admin_inference_insights); this component
+// only sorts and renders them. Dimensions and the unknowns toggle live in the
+// parent because they are part of the server query.
 export function SegmentExplorer({
-  rows,
-  keepTitles,
-  baselineRate,
+  segments,
+  totalReplies,
+  covered,
+  dims,
+  onDimsChange,
+  includeUnknown,
+  onIncludeUnknownChange,
   bias,
   selected,
   onSelect,
+  refreshing,
 }: {
-  rows: ReplyRow[];
-  keepTitles: Set<string>;
-  baselineRate: number;
+  segments: SegmentRow[];
+  totalReplies: number;
+  covered: number;
+  dims: Dimension[];
+  onDimsChange: (dims: Dimension[]) => void;
+  includeUnknown: boolean;
+  onIncludeUnknownChange: (v: boolean) => void;
   bias: Record<Dimension, DimensionBias>;
   selected: SegmentFilter | null;
   onSelect: (segment: SegmentFilter | null) => void;
+  refreshing: boolean;
 }) {
-  const [dims, setDims] = useState<Dimension[]>(['industry']);
-  const [includeUnknown, setIncludeUnknown] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>('replies');
   const [showAll, setShowAll] = useState(false);
 
-  const segments = useMemo(
-    () => aggregateSegments(rows, dims, { includeUnknown, baselineRate, keepTitles }),
-    [rows, dims, includeUnknown, baselineRate, keepTitles],
-  );
   const sorted = useMemo(() => {
     const val = (s: SegmentRow) => (s[sortKey] ?? -Infinity) as number;
     return [...segments].sort((a, b) => val(b) - val(a) || b.replies - a.replies);
   }, [segments, sortKey]);
-  const covered = segments.reduce((sum, s) => sum + s.replies, 0);
   const visible = showAll ? sorted : sorted.slice(0, PAGE_ROWS);
   const selectedKey = selected ? suggestionKey(selected) : null;
   const biased = dims.filter((d) => bias[d]?.biased);
@@ -76,6 +80,7 @@ export function SegmentExplorer({
       <CardHeader className="pb-2">
         <CardTitle className="text-base flex items-center gap-2">
           <Layers className="h-4 w-4" /> Segment explorer
+          {refreshing && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" aria-label="Updating" />}
         </CardTitle>
         <p className="text-xs text-muted-foreground">
           Pick up to {MAX_DIMS} dimensions. Rows with n &lt; {MIN_SAMPLE} are greyed out. Click a row to focus the copy
@@ -88,7 +93,7 @@ export function SegmentExplorer({
           value={dims}
           onValueChange={(v) => {
             if (v.length === 0 || v.length > MAX_DIMS) return;
-            setDims(v as Dimension[]);
+            onDimsChange(v as Dimension[]);
             onSelect(null);
           }}
           className="flex flex-wrap justify-start"
@@ -101,11 +106,11 @@ export function SegmentExplorer({
         </ToggleGroup>
         <div className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
           <div className="flex items-center gap-2">
-            <Checkbox id="include-unknown" checked={includeUnknown} onCheckedChange={(v) => setIncludeUnknown(v === true)} />
+            <Checkbox id="include-unknown" checked={includeUnknown} onCheckedChange={(v) => onIncludeUnknownChange(v === true)} />
             <Label htmlFor="include-unknown" className="text-xs font-normal">Include "(unknown)" values</Label>
           </div>
           <span>
-            {covered.toLocaleString()} of {rows.length.toLocaleString()} replies have{' '}
+            {covered.toLocaleString()} of {totalReplies.toLocaleString()} replies have{' '}
             {dims.length === 1 ? 'this dimension' : 'all selected dimensions'}
             {includeUnknown ? ' (unknowns included)' : ''} · {segments.length.toLocaleString()} segments
           </span>

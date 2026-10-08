@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Clock } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { ReplyRow, WEEKDAYS, interestedHeatmap } from '@/lib/inferenceAnalytics';
+import { RpcHeatmap, WEEKDAYS, heatmapGrid } from '@/lib/inferenceAnalytics';
 import { SourceSplit } from '@/components/admin/inference/SourceSplit';
 
 const HOURS = Array.from({ length: 24 }, (_, h) => h);
@@ -13,11 +13,13 @@ function cellColor(v: number, max: number): string | undefined {
   return `hsl(var(--primary) / ${(0.12 + 0.88 * (v / max)).toFixed(3)})`;
 }
 
-export function TimingHeatmap({ rows, segmentLabel }: { rows: ReplyRow[]; segmentLabel: string }) {
-  const { cells, max, counted, missingTime } = useMemo(() => interestedHeatmap(rows), [rows]);
+export function TimingHeatmap({ heatmap, segmentLabel }: { heatmap: RpcHeatmap | undefined; segmentLabel: string }) {
+  const { cells, max } = useMemo(() => heatmapGrid(heatmap), [heatmap]);
   const [hover, setHover] = useState<{ d: number; h: number } | null>(null);
-  const interestedLive = rows.filter((r) => r.intent === 'interested' && r.origin === 'live').length;
-  const interestedAll = counted + missingTime;
+  const counted = heatmap?.counted ?? 0;
+  const interestedAll = heatmap?.interested ?? 0;
+  const missingTime = interestedAll - counted;
+  const interestedLive = heatmap?.interested_live ?? 0;
 
   return (
     <Card>

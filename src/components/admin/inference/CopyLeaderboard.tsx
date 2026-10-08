@@ -4,23 +4,20 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { cn } from '@/lib/utils';
-import { MIN_SAMPLE, ReplyRow, copyLeaderboard, pct } from '@/lib/inferenceAnalytics';
+import { MIN_SAMPLE, RpcCopy, pct, toCopyRows } from '@/lib/inferenceAnalytics';
 import { SourceSplit } from '@/components/admin/inference/SourceSplit';
 
-const TOP = 25;
-
-export function CopyLeaderboard({ rows, segmentLabel }: { rows: ReplyRow[]; segmentLabel: string }) {
+// Both rankings come ranked from the server (top 25 each); share ranking only
+// considers copy with n >= MIN_SAMPLE.
+export function CopyLeaderboard({ copy, segmentLabel }: { copy: RpcCopy | undefined; segmentLabel: string }) {
   const [rankBy, setRankBy] = useState<'count' | 'share'>('count');
-  const { rows: copies, withoutCopy } = useMemo(() => copyLeaderboard(rows), [rows]);
-  const ranked = useMemo(() => {
-    if (rankBy === 'count') return copies.slice(0, TOP);
-    // Share is only meaningful with enough replies behind it
-    return copies
-      .filter((c) => c.replies >= MIN_SAMPLE)
-      .sort((a, b) => b.interestedShare - a.interestedShare || b.interested - a.interested)
-      .slice(0, TOP);
-  }, [copies, rankBy]);
-  const live = rows.filter((r) => r.origin === 'live').length;
+  const ranked = useMemo(
+    () => toCopyRows(rankBy === 'count' ? copy?.by_interested : copy?.by_share),
+    [copy, rankBy],
+  );
+  const withoutCopy = copy?.without_copy ?? 0;
+  const rows = copy?.rows ?? 0;
+  const live = copy?.live ?? 0;
 
   return (
     <Card>
@@ -28,7 +25,7 @@ export function CopyLeaderboard({ rows, segmentLabel }: { rows: ReplyRow[]; segm
         <CardTitle className="text-base flex flex-wrap items-center gap-2">
           <Trophy className="h-4 w-4" /> Copy leaderboard
           <span className="text-xs font-normal text-muted-foreground">{segmentLabel}</span>
-          <SourceSplit live={live} backfill={rows.length - live} className="ml-auto" />
+          <SourceSplit live={live} backfill={rows - live} className="ml-auto" />
         </CardTitle>
         <p className="text-xs text-muted-foreground">
           Outbound copy (copy fingerprint, labelled by subject) ranked by interested replies.{' '}
