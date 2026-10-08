@@ -366,7 +366,39 @@ async function fetchAllSequencesV3(
 // limits. Contacts + per-campaign stats are synced via the separate
 // `sync-reply-contacts` function.
 
+// Background mode (auto-sync-integrations, x-agent-key only): reply 202 at
+// once and run the sync below unchanged in EdgeRuntime.waitUntil. A big
+// workspace (Avania, 134 sequences) takes ~190s; awaited, the caller hit the
+// 150s request idle timeout and the sync was cut off partway (2026-10-08 01:00:
+// 102/134 sequences, sync_status stuck at 'syncing'). In the background the
+// sync is bounded by the wall-clock limit instead of the response timeout.
+// UI callers (no flag) get the same synchronous response as before.
 Deno.serve(async (req) => {
+  if (req.method === "POST" && req.headers.get("x-agent-key")) {
+    const text = await req.text();
+    let parsed: { background?: boolean } = {};
+    try { parsed = JSON.parse(text); } catch { /* not JSON: normal path reports it */ }
+    const rebuilt = new Request(req.url, { method: req.method, headers: req.headers, body: text });
+    const expected = Deno.env.get("AGENT_API_KEY");
+    // @ts-ignore EdgeRuntime is provided by Supabase
+    const canBackground = typeof EdgeRuntime !== "undefined" && typeof EdgeRuntime.waitUntil === "function";
+    if (parsed.background === true && expected && req.headers.get("x-agent-key") === expected && canBackground) {
+      const run = handleSync(rebuilt)
+        .then(async (res) => console.log(`[sync-reply-campaigns] background sync finished: HTTP ${res.status} ${(await res.text().catch(() => "")).slice(0, 200)}`))
+        .catch((e) => console.error("[sync-reply-campaigns] background sync failed:", e instanceof Error ? e.message : e));
+      // @ts-ignore
+      EdgeRuntime.waitUntil(run);
+      return new Response(JSON.stringify({ accepted: true, background: true }), {
+        status: 202,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    return handleSync(rebuilt);
+  }
+  return handleSync(req);
+});
+
+async function handleSync(req: Request): Promise<Response> {
   const corsHeaders = getCorsHeaders(req);
 
   if (req.method === "OPTIONS") {
@@ -852,4 +884,4 @@ Deno.serve(async (req) => {
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
-});
+}
