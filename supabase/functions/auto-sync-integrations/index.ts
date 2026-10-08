@@ -142,7 +142,9 @@ Deno.serve(async (req) => {
     if (scope === "campaigns") {
       for (const i of integrations ?? []) {
         if (i.platform === "reply.io") {
-          jobs.push({ platform: i.platform, integrationId: i.id, fn: "sync-reply-campaigns", body: { integrationId: i.id } });
+          // background: the sync answers 202 at once and runs past the 150s
+          // response timeout (big workspaces take ~190s).
+          jobs.push({ platform: i.platform, integrationId: i.id, fn: "sync-reply-campaigns", body: { integrationId: i.id, background: true } });
         } else if (i.platform === "smartlead") {
           jobs.push({ platform: i.platform, integrationId: i.id, fn: "sync-smartlead-campaigns", body: { integrationId: i.id, skipAnalytics: true } });
         }
