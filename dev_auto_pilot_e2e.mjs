@@ -11,7 +11,9 @@
 //   2. that failure is recorded as an 'auto_send_failed' activity carrying the
 //      sender's error, and the lead stays 'draft_ready' with its draft;
 //   3. with auto_send_daily_cap = 0 the next reply is held ('auto_send_held',
-//      reason daily_cap) and no sender is called.
+//      reason daily_cap) and no sender is called;
+//   4. a reply already answered (lead 'sent' + a message_sent after the reply)
+//      is held as already_replied and no sender is called.
 // The successful-send path is covered by the unit tests
 // (_shared/auto-pilot_test.ts) and by Myall's own prod test.
 import fs from 'node:fs';
@@ -107,11 +109,11 @@ const acts1 = await activities(lead1.id);
 const failed = acts1.find((a) => a.activity_type === 'auto_send_failed');
 check('auto_send_failed recorded', !!failed, failed?.description);
 check('…routed to send-agent-reply (not send-heyreach-message)', failed?.metadata?.target === 'send-agent-reply', failed?.metadata?.target);
-// Expected: send-agent-reply's own 'Reply.io integration not found'. On
-// 2026-10-09 dev's deployed send-agent-reply crashed at boot (bundle
-// SyntaxError), so the call timed out instead — still a recorded failure.
+// Expected: send-agent-reply's own 'Reply.io integration not found' (dev's
+// send-agent-reply was redeployed from main on 2026-10-09 after a broken
+// bundle made it time out).
 console.log(`     sender error recorded: ${failed?.metadata?.error}`);
-check('…with an error message recorded', !!failed?.metadata?.error);
+check('…with send-agent-reply\'s own error', /integration not found/i.test(failed?.metadata?.error ?? ''), failed?.metadata?.error);
 const { data: after1 } = await sb.from('agent_leads').select('inbox_status, auto_handled, draft_response').eq('id', lead1.id).single();
 check('lead left draft_ready with its draft, not marked handled',
   after1.inbox_status === 'draft_ready' && after1.auto_handled === false && !!after1.draft_response, `${after1.inbox_status} auto_handled=${after1.auto_handled}`);
@@ -128,6 +130,19 @@ check('no send attempted', !acts2.some((a) => a.activity_type === 'auto_send_fai
 const { data: after2 } = await sb.from('agent_leads').select('inbox_status').eq('id', lead2.id).single();
 check('lead held as draft_ready', after2.inbox_status === 'draft_ready', after2.inbox_status);
 await sb.from('agent_configs').update({ auto_send_daily_cap: 25 }).eq('user_id', userId);
+
+console.log('\n3. Already answered (a send recorded after the reply) → held, no sender call');
+const lead3 = await newLead('c');
+// The reply was sent from Reply.io (lead 'sent'); classify-reply overwrites the
+// status to draft_ready, so the recorded send is what must stop a second reply.
+await sb.from('agent_leads').update({ inbox_status: 'sent' }).eq('id', lead3.id);
+await sb.from('agent_activity').insert({ user_id: userId, lead_id: lead3.id, activity_type: 'message_sent', description: 'dev e2e: manual send', metadata: { sent_by: 'user' } });
+const c3 = await classify(lead3);
+console.log(`     classify-reply HTTP ${c3.status} intent=${c3.json?.intent}`);
+const acts3 = await activities(lead3.id);
+const held3 = acts3.find((a) => a.activity_type === 'auto_send_held');
+check('auto_send_held recorded with reason already_replied', held3?.metadata?.reason === 'already_replied', held3?.description);
+check('no send attempted', !acts3.some((a) => a.activity_type === 'auto_send_failed'));
 
 console.log(fails.length ? `\n${fails.length} FAILED: ${fails.join('; ')}` : '\nall passed');
 process.exit(fails.length ? 1 : 0);
