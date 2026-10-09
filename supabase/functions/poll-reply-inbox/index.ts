@@ -886,6 +886,10 @@ Deno.serve(async (req) => {
                   last_reply_at: lastReplyDate || nowIso,
                   last_reply_text: cleanReplyPreview(replyText),
                   reply_thread: replyThread,
+                  // Same campaign fields as the update path, so new leads show their sequence too.
+                  ...(thread.sequence?.id
+                    ? { campaign_external_id: String(thread.sequence.id), last_campaign_name: thread.sequence.name ?? null }
+                    : {}),
                   // Seed the surface watermark when the new lead lands actionable.
                   ...(targetInboxStatus === 'pending'
                     ? { last_surfaced_reply_at: lastReplyDate || nowIso }

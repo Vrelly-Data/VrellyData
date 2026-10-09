@@ -88,6 +88,33 @@ export function alreadyReplied(thread: unknown): boolean {
   return latestOurs > -Infinity && latestOurs >= latestProspect;
 }
 
+/**
+ * Statuses that mean "we already answered this reply". send-agent-reply leaves
+ * a Reply.io lead 'sent'; send-heyreach-message / send-smartlead-email leave
+ * 'replied'. Both are treated identically.
+ */
+export const ANSWERED_STATUSES: ReadonlySet<string> = new Set(["sent", "replied"]);
+
+/**
+ * True when any of three independent signals says the latest reply was already
+ * answered: the lead's status is an answered one ('sent' or 'replied'); the
+ * thread's newest message is ours; or a 'message_sent' activity is at or after
+ * the reply. The activity check matters because the inbox pollers rewrite
+ * reply_thread from the provider, which can drop our appended sender entry.
+ */
+export function answeredAlready(a: {
+  inboxStatus?: string | null;
+  replyThread: unknown;
+  lastSentAt?: string | null;
+  lastReplyAt?: string | null;
+}): boolean {
+  if (ANSWERED_STATUSES.has(String(a.inboxStatus ?? "").toLowerCase())) return true;
+  if (alreadyReplied(a.replyThread)) return true;
+  const sent = a.lastSentAt ? Date.parse(a.lastSentAt) : NaN;
+  const reply = a.lastReplyAt ? Date.parse(a.lastReplyAt) : NaN;
+  return Number.isFinite(sent) && Number.isFinite(reply) && sent >= reply;
+}
+
 export interface AutoSendInput {
   intent: string;
   draft: string | null | undefined;
@@ -96,6 +123,10 @@ export interface AutoSendInput {
   dispositionTag: string | null | undefined;
   lastReplyAt: string | null | undefined;
   replyThread: unknown;
+  /** agent_leads.inbox_status at decision time. */
+  inboxStatus?: string | null;
+  /** created_at of the lead's newest 'message_sent' activity (any sender, manual or auto). */
+  lastSentAt?: string | null;
   sentToday: number;
   dailyCap: number;
   now?: number;
@@ -115,7 +146,9 @@ export function decideAutoSend(i: AutoSendInput): AutoSendDecision {
   const replyAt = i.lastReplyAt ? Date.parse(i.lastReplyAt) : NaN;
   if (!Number.isFinite(replyAt)) return { action: "hold", reason: "reply_time_unknown" };
   if (now - replyAt > AUTO_SEND_MAX_REPLY_AGE_MS) return { action: "hold", reason: "reply_too_old" };
-  if (alreadyReplied(i.replyThread)) return { action: "hold", reason: "already_replied" };
+  if (answeredAlready({ inboxStatus: i.inboxStatus, replyThread: i.replyThread, lastSentAt: i.lastSentAt, lastReplyAt: i.lastReplyAt })) {
+    return { action: "hold", reason: "already_replied" };
+  }
   const target = routeAutoSend(i.source, i.channel);
   if (!target) {
     const known = ["reply_io", "smartlead", "heyreach"].includes(String(i.source ?? "").toLowerCase());
@@ -159,7 +192,13 @@ export function utcDayStart(now = Date.now()): string {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())).toISOString();
 }
 
-/** Auto-sends today: the senders' own 'message_sent' activities marked sent_by=auto. */
+/** Auto-sends today: the senders' own 'message_sent' activities marked sent_by=auto. *
+ * TODO(auto-pilot cap): this is a read-then-send check, so two replies for one
+ * user classified in the same instant at cap-1 can both send (accepted for
+ * now, 2026-10-09). The hard fix is a DB counter: an
+ * agent_auto_send_counters(user_id, day) row incremented with
+ * `update ... set n = n + 1 where n < cap returning n` before the send.
+ */
 export async function countAutoSendsToday(
   // deno-lint-ignore no-explicit-any
   supabase: any,
@@ -218,7 +257,7 @@ export async function runAutoPilot(a: RunAutoPilotArgs): Promise<AutoPilotOutcom
   // context fetch, which may have been partial.
   const [{ data: lead, error: leadErr }, { data: cfg, error: cfgErr }] = await Promise.all([
     supabase.from("agent_leads")
-      .select("source, channel, disposition_tag, last_reply_at, reply_thread, full_name")
+      .select("source, channel, disposition_tag, last_reply_at, reply_thread, full_name, inbox_status")
       .eq("id", leadId).eq("user_id", userId).maybeSingle(),
     supabase.from("agent_configs")
       .select("auto_send_daily_cap")
@@ -228,6 +267,18 @@ export async function runAutoPilot(a: RunAutoPilotArgs): Promise<AutoPilotOutcom
     const err = leadErr?.message ?? cfgErr?.message ?? "lead not found";
     console.error(`[auto-pilot] lookup failed for lead ${leadId}: ${err}`);
     await activity("auto_send_held", "Auto Pilot held this reply: could not load the lead or settings", { reason: "lookup_failed", error: err });
+    return { outcome: "held", reason: "lookup_failed" };
+  }
+
+  // Newest send on this lead by anyone (manual or auto, any sender). Fail
+  // closed: if we cannot tell whether it was answered, do not send.
+  const { data: lastSent, error: lastSentErr } = await supabase.from("agent_activity")
+    .select("created_at")
+    .eq("user_id", userId).eq("lead_id", leadId).eq("activity_type", "message_sent")
+    .order("created_at", { ascending: false }).limit(1).maybeSingle();
+  if (lastSentErr) {
+    console.error(`[auto-pilot] last-send lookup failed for lead ${leadId}: ${lastSentErr.message}`);
+    await activity("auto_send_held", "Auto Pilot held this reply: could not check whether it was already answered", { reason: "lookup_failed", error: lastSentErr.message });
     return { outcome: "held", reason: "lookup_failed" };
   }
 
@@ -244,6 +295,7 @@ export async function runAutoPilot(a: RunAutoPilotArgs): Promise<AutoPilotOutcom
   const decision = decideAutoSend({
     intent: a.intent, draft: a.draft, source: lead.source, channel: lead.channel,
     dispositionTag: lead.disposition_tag, lastReplyAt: lead.last_reply_at, replyThread: lead.reply_thread,
+    inboxStatus: lead.inbox_status, lastSentAt: lastSent?.created_at ?? null,
     sentToday, dailyCap, now,
   });
 

@@ -1,4 +1,4 @@
-// poll-reply-inbox: lead UPDATES carry the thread's campaign (REAL index.ts,
+// poll-reply-inbox: lead updates AND inserts carry the thread's campaign (REAL index.ts,
 // fake PostgREST + fake Reply.io v3; synthetic data only).
 //
 // Bug: an existing lead updated by the poller kept a null/stale
@@ -54,5 +54,27 @@ Deno.test({
     assertEquals(patches[0].last_campaign_name, "Q4 Lenders");
     const lead = (db.tables.agent_leads as Row[])[0];
     assertEquals([lead.campaign_external_id, lead.last_campaign_name], ["13579", "Q4 Lenders"]);
+  },
+});
+
+Deno.test({
+  name: "poll-reply-inbox: a NEW Reply.io lead is inserted with campaign_external_id + last_campaign_name from thread.sequence",
+  ...testOpts,
+  async fn() {
+    const db = new FakeSupabase({
+      outbound_integrations: [{ id: INT, created_by: USER, team_id: TEAM, api_key_encrypted: "k1", is_active: true, platform: "reply.io", auto_capture_new_campaigns: false }],
+      agent_configs: [{ id: "cfg-1", user_id: USER, is_active: true }],
+      synced_campaigns: [{ id: "sc-1", integration_id: INT, team_id: TEAM, external_campaign_id: "13579", capture_enabled: true }],
+      agent_leads: [],
+    });
+    await withFakes(db, replyApi, async () => {
+      const res = await handler(new Request("http://local/poll-reply-inbox", {
+        method: "POST", headers: { "Content-Type": "application/json", "x-agent-key": AGENT_KEY }, body: "{}",
+      }));
+      assertEquals(res.status, 200);
+    });
+    const leads = db.tables.agent_leads as Row[];
+    assertEquals(leads.length, 1, "one new lead inserted");
+    assertEquals([leads[0].campaign_external_id, leads[0].last_campaign_name], ["13579", "Q4 Lenders"]);
   },
 });

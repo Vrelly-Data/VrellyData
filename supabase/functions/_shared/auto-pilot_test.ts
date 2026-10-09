@@ -4,6 +4,7 @@
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   alreadyReplied,
+  answeredAlready,
   buildSendBody,
   decideAutoSend,
   interpretSendResult,
@@ -97,6 +98,24 @@ Deno.test("gates: replies older than 24h, or with no reply time, are held", () =
 Deno.test("gates: a reply we already answered is held", () => {
   const answered = [...(base.replyThread as Row[]), { role: "sender", timestamp: "2026-10-09T14:30:00Z" }];
   assertEquals(decideAutoSend({ ...base, replyThread: answered }), { action: "hold", reason: "already_replied" });
+});
+
+Deno.test("gates: inbox_status 'sent' (Reply.io after a send) is treated exactly like 'replied'", () => {
+  for (const inboxStatus of ["sent", "replied", "SENT"]) {
+    assertEquals(decideAutoSend({ ...base, inboxStatus }), { action: "hold", reason: "already_replied" }, inboxStatus);
+  }
+  for (const inboxStatus of ["draft_ready", "pending", null, undefined]) {
+    assertEquals(decideAutoSend({ ...base, inboxStatus }), { action: "send", target: "send-agent-reply" }, String(inboxStatus));
+  }
+});
+
+Deno.test("gates: a send recorded at/after the reply holds even when the thread lost our entry", () => {
+  // base.replyThread ends with the prospect — the poller rewrote it without our sender entry.
+  assertEquals(decideAutoSend({ ...base, lastSentAt: "2026-10-09T14:05:00Z" }), { action: "hold", reason: "already_replied" });
+  assertEquals(decideAutoSend({ ...base, lastSentAt: "2026-10-09T14:00:00Z" }), { action: "hold", reason: "already_replied" });
+  // A send before this reply answered an earlier message, not this one.
+  assertEquals(decideAutoSend({ ...base, lastSentAt: "2026-10-08T10:00:00Z" }), { action: "send", target: "send-agent-reply" });
+  assertEquals(answeredAlready({ replyThread: [], lastSentAt: "bad", lastReplyAt: "2026-10-09T14:00:00Z" }), false);
 });
 
 Deno.test("gates: unknown source and undeliverable channel are held", () => {
@@ -271,5 +290,36 @@ Deno.test({
     const old = new Date(Date.now() - 25 * 3_600_000).toISOString();
     assertEquals(await run(db({ last_reply_at: old }), sender(200, { success: true }, calls)), { outcome: "held", reason: "reply_too_old" });
     assertEquals(calls.length, 0);
+  },
+});
+
+Deno.test({
+  name: "runAutoPilot: lead already 'sent' (Reply.io) or 'replied' → held already_replied, no sender called",
+  ...testOpts,
+  async fn() {
+    for (const inbox_status of ["sent", "replied"]) {
+      const calls: Array<{ url: string; body: Row }> = [];
+      const d = db({ inbox_status });
+      assertEquals(await run(d, sender(200, { success: true }, calls)), { outcome: "held", reason: "already_replied" }, inbox_status);
+      assertEquals(calls.length, 0);
+      const held = (d.tables.agent_activity as Row[]).find((a) => a.activity_type === "auto_send_held")!;
+      assertEquals((held.metadata as Row).reason, "already_replied");
+    }
+  },
+});
+
+Deno.test({
+  name: "runAutoPilot: a message_sent activity after the reply holds, even with a thread that lost our entry",
+  ...testOpts,
+  async fn() {
+    const after = new Date(Date.parse(recent) + 60_000).toISOString();
+    const calls: Array<{ url: string; body: Row }> = [];
+    const d = db({}, [{ id: "s1", user_id: USER, lead_id: LEAD, activity_type: "message_sent", metadata: { sent_by: "user" }, created_at: after }]);
+    assertEquals(await run(d, sender(200, { success: true }, calls)), { outcome: "held", reason: "already_replied" });
+    assertEquals(calls.length, 0);
+    // An older send on the same lead (answering an earlier message) does not block.
+    const before = new Date(Date.parse(recent) - 86_400_000).toISOString();
+    const d2 = db({}, [{ id: "s0", user_id: USER, lead_id: LEAD, activity_type: "message_sent", metadata: { sent_by: "user" }, created_at: before }]);
+    assertEquals((await run(d2, sender(200, { success: true }, calls))).outcome, "sent");
   },
 });
