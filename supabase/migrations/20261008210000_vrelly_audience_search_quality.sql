@@ -18,7 +18,21 @@
 --    (code or name) now has country_l NULL — unknown — so a country=US filter
 --    no longer picks it up. Rows with no state keep their country.
 --
--- 3. Job titles move to whole-word matching; that is the function change in
+-- 3. EMAIL NOT AT THE COMPANY. When the prospect has a company_domain, the
+--    chosen email's domain must equal it or be a subdomain of it (domains are
+--    normalized: lower-case, no scheme, no www., no path). Rows without a
+--    company_domain are kept. A 3% sample put the mismatch at 27% of rows with
+--    a valid email; for Agent Upload it removed 883 of 2,508 matches. These
+--    are the addresses most likely to be stale (a past employer) or wrong
+--    person — in the first-10 preview, 3 of 10 were like this.
+--
+-- 4. FOREIGN EMAIL TLD, for US searches. email_foreign_cctld holds the email's
+--    two-letter country-code TLD when it is not 'us' and not one of the ccTLDs
+--    used generically by US companies (io co ai me tv ly so fm gg sh cc to ws
+--    la vc). vrelly_audience_search excludes those rows when the person-country
+--    filter is US only (part 2). Agent Upload: removed 287 of 2,508.
+--
+-- 5. Job titles move to whole-word matching; that is the function change in
 --    part 2 (substring "cto" matched 204,950 titles, as a word 9,938).
 --
 -- Reading prospects takes only ACCESS SHARE; nothing that writes it waits.
@@ -53,12 +67,24 @@ begin
            lower(btrim(p.company_country))  as company_country_l,
            lower(btrim(p.company_state))    as company_state_l,
            e.email_key,
-           public.audience_linkedin_key(p.linkedin_url) as linkedin_key
+           public.audience_linkedin_key(p.linkedin_url) as linkedin_key,
+           case
+             when substring(d.email_domain from '\.([a-z]{2})$') <> all (array[
+                    'us', 'io', 'co', 'ai', 'me', 'tv', 'ly', 'so', 'fm', 'gg', 'sh', 'cc', 'to', 'ws', 'la', 'vc'])
+               then substring(d.email_domain from '\.([a-z]{2})$')
+           end                              as email_foreign_cctld
     from public.prospects p
     cross join lateral (
       select lower(split_part(regexp_replace(btrim(p.business_email), '[[:space:],;]+', ',', 'g'), ',', 1)) as email_key
     ) e
+    cross join lateral (
+      select split_part(e.email_key, '@', 2) as email_domain,
+             nullif(split_part(regexp_replace(regexp_replace(lower(btrim(p.company_domain)), '^[a-z]+://', ''), '^www\.', ''), '/', 1), '') as company_domain
+    ) d
     where e.email_key ~ '^[^@[:space:],;]+@[^@[:space:],;]+\.[a-z]{2,}$'
+      and (d.company_domain is null
+           or d.email_domain = d.company_domain
+           or d.email_domain like '%.' || d.company_domain)
     order by p.id;
   end if;
 end

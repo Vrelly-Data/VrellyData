@@ -171,6 +171,27 @@ begin
     raise exception 'check 12d (Owner is a whole word) failed: %', r; end if;
   n := n + 1;
 
+  -- 13. EMAIL GUARDS (20261008210000): with a company_domain the email must be on
+  --     it or a subdomain; without one anything goes. A US-only country filter
+  --     drops emails on foreign ccTLDs; a UK filter does not.
+  insert into public.prospects (source, first_name, business_email, company_domain, job_title, country, state)
+  values ('vrelly_search_test', 'Match', 'a@acme.example.com', 'https://www.acme.example.com/about', 'Yeta Owner', 'US', 'TX'),
+         ('vrelly_search_test', 'Sub', 'b@mail.acme.example.com', 'acme.example.com', 'Yeta Owner', 'US', 'TX'),
+         ('vrelly_search_test', 'Other', 'c@oldjob.example.com', 'acme.example.com', 'Yeta Owner', 'US', 'TX'),
+         ('vrelly_search_test', 'NoDom', 'd@whatever.example.com', null, 'Yeta Owner', 'US', 'TX'),
+         ('vrelly_search_test', 'Uk', 'e@firm.co.uk', null, 'Yeta Owner', 'US', null),
+         ('vrelly_search_test', 'Io', 'f@startup.io', null, 'Yeta Owner', 'US', null);
+  refresh materialized view public.prospect_audience_search;
+  r := public.vrelly_audience_search(u, '{"title_regexes":["\\myeta\\M"]}', 25, 0, true);
+  if (r->>'total')::int <> 5 or r::text ilike '%oldjob%' then
+    raise exception 'check 13a (email must be on the company domain or a subdomain; none = allowed) failed: %', r; end if;
+  r := public.vrelly_audience_search(u, '{"title_regexes":["\\myeta\\M"],"person_countries":["united states","us","usa"]}', 25, 0, true);
+  if (r->>'total')::int <> 4 or r::text ilike '%firm.co.uk%' then
+    raise exception 'check 13b (US filter drops .co.uk, keeps .io) failed: %', r; end if;
+  r := public.vrelly_audience_search(u, '{"title_regexes":["\\myeta\\M"],"person_countries":["us","united kingdom"]}', 25, 0, true);
+  if (r->>'total')::int <> 5 then raise exception 'check 13c (mixed-country filter keeps .co.uk) failed: %', r; end if;
+  n := n + 1;
+
 raise exception 'VRELLY_SEARCH_TESTS_PASSED (% checks) — rolled back', n using errcode = 'P0001';
 end
 $t$;

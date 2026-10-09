@@ -10,7 +10,8 @@
 -- vrelly_audience_search in one short transaction (it holds ACCESS EXCLUSIVE
 -- on the two views for milliseconds; a search in flight just waits) ->
 -- VACUUM ANALYZE. The function change: job titles match WHOLE WORDS
--- (~* with \m \M), it returns the cleaned first email, and it still accepts the
+-- (~* with \m \M), it returns the cleaned first email, a US-only country
+-- filter also drops emails on foreign country TLDs, and it still accepts the
 -- old ILIKE title keys so an edge function deployed earlier keeps working.
 
 create unique index concurrently if not exists prospect_audience_search_next_id_key on public.prospect_audience_search_next (id);
@@ -135,6 +136,11 @@ begin
   if a_ind   is not null then v_where := v_where || ' and s.company_industry ilike any ($4)'; end if;
   if a_size  is not null then v_where := v_where || ' and s.company_size_l = any ($5)'; end if;
   if a_pc    is not null then v_where := v_where || ' and s.country_l = any ($6)'; end if;
+  -- A US-only person-country filter also drops emails on non-US country TLDs
+  -- (.co.uk, .ca, .de, ...; see email_foreign_cctld in 20261008210000).
+  if a_pc is not null and a_pc <@ array['united states', 'us', 'usa', 'united states of america', 'u.s.', 'u.s.a.'] then
+    v_where := v_where || ' and s.email_foreign_cctld is null';
+  end if;
   if a_ps    is not null then v_where := v_where || ' and s.state_l = any ($7)'; end if;
   if a_cc    is not null then v_where := v_where || ' and s.company_country_l = any ($8)'; end if;
   if a_cs    is not null then v_where := v_where || ' and s.company_state_l = any ($9)'; end if;
