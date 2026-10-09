@@ -13,6 +13,7 @@ import { AdminRoute } from "@/components/AdminRoute";
 import { Analytics } from "@vercel/analytics/react";
 import { SpeedInsights } from "@vercel/speed-insights/react";
 import { AppErrorBoundary } from "@/components/AppErrorBoundary";
+import { RouteChangeTracker } from "@/components/RouteChangeTracker";
 import Landing from "./pages/Landing";
 import Resources from "./pages/Resources";
 import ResourceArticle from "./pages/ResourceArticle";
@@ -48,6 +49,7 @@ const App = () => (
           <Toaster />
           <Sonner />
           <BrowserRouter>
+            <RouteChangeTracker />
             <AuthProvider>
               <Routes>
                 <Route path="/" element={<Landing />} />
