@@ -51,6 +51,24 @@ const CADENCE_HOURS: Record<string, number> = {
 };
 const MAX_CONSECUTIVE_FAILURES = 3;
 
+/**
+ * Slack on "due". The cron fires at the same minute every day and a run stamps
+ * last_run_at a fraction of a second AFTER that tick, so a strict 24h test is
+ * still false at the next day's tick (23h59m59.4s on 2026-10-09) and a daily
+ * audience silently ran every OTHER day. 15 minutes of slack covers any
+ * run's start-up delay while staying small enough that an hourly dispatcher
+ * (PR #100) cannot pull a daily run forward by a whole tick each day.
+ */
+export const DUE_GRACE_MS = 15 * 60_000;
+
+/** Pure: is an audience with this cadence and last run due at `now`? */
+export function isDue(cadence: string, lastRunAt: string | null | undefined, now: number): boolean {
+  const hours = CADENCE_HOURS[cadence];
+  if (!hours) return false;
+  const lastMs = lastRunAt ? Date.parse(lastRunAt) : 0;
+  return now - lastMs >= hours * 3_600_000 - DUE_GRACE_MS;
+}
+
 Deno.serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
@@ -99,9 +117,7 @@ Deno.serve(async (req) => {
         paused.push(a.id);
         continue;
       }
-      const hours = CADENCE_HOURS[a.cadence] ?? Number.POSITIVE_INFINITY;
-      const lastMs = a.last_run_at ? Date.parse(a.last_run_at) : 0;
-      if (now - lastMs >= hours * 3_600_000) due.push(a);
+      if (isDue(a.cadence, a.last_run_at, now)) due.push(a);
       else notDue.push(a.id);
     }
 

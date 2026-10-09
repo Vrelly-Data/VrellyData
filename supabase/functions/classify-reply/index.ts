@@ -1,4 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { runAutoPilot } from '../_shared/auto-pilot.ts';
 import { htmlToText } from '../_shared/html-to-text.ts';
 import { preprocessEmailReply } from '../_shared/reply-text.ts';
 import { computeCopyFingerprint } from '../_shared/copy-fingerprint.ts';
@@ -54,10 +55,6 @@ const SAFE_FALLBACK = {
   reasoning: 'Classification failed - needs manual review',
   next_pipeline_stage: 'replied',
 };
-
-// Hard gates — do NOT trust the LLM alone
-const AUTO_SEND_INTENTS = new Set(['interested', 'needs_more_info', 'not_interested', 'referral']);
-const SUPPRESS_INTENTS = new Set(['out_of_office', 'bounce']);
 
 // SHA-256 hex of a string (prompt-drift fingerprint for draft_audit).
 async function sha256Hex(input: string): Promise<string> {
@@ -1250,93 +1247,31 @@ Return ONLY valid JSON. No markdown fences. No explanation.`;
       console.warn('[classify-reply] inference_events write failed (non-fatal):', e);
     }
 
-    // ===================== Fully Auto handling (mode === 'auto') =====================
-    // DO NOT trust the model to enforce safety — hard-gate with allow/suppress sets.
-    // - SUPPRESS: out_of_office | bounce → mark handled; no outbound
-    // - AUTO-SEND: interested | needs_more_info | not_interested | referral and non-empty draft
-    //              → fire-and-forget via service-auth to the correct sender
-    // - HOLD: unknown → draft_ready as above; no auto-send
+    // ===================== Auto Pilot (mode === 'auto') =====================
+    // Routing + outcome handling live in _shared/auto-pilot.ts (see its header
+    // for why): route by lead SOURCE, AWAIT the send, and on failure leave the
+    // lead draft_ready with an 'auto_send_failed' activity. Safety gates there:
+    // only interested / needs_more_info / not_interested / referral; OOO and
+    // bounce suppressed; never opted_out; never a reply older than 24h or one
+    // already answered; agent_configs.auto_send_daily_cap.
+    //
+    // A failed draft (Call 2) is passed as null: OOO/bounce are still
+    // suppressed as before, and anything else is held — never sent.
     if (agentMode === 'auto' && lead_id) {
-      const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-      const svcKey = Deno.env.get('AGENT_API_KEY') || '';
-      // Guard: opted_out must NEVER send
-      const isOptedOut = (leadDispositionTag ?? '') === 'opted_out';
-      const hasDraft = typeof suggestedResponse === 'string' && suggestedResponse.trim().length > 0;
-      const isSuppress = SUPPRESS_INTENTS.has(intent);
-      const isAllowed = AUTO_SEND_INTENTS.has(intent) && (channel === 'email' || channel === 'linkedin');
-
       try {
-        if (isSuppress) {
-          // Mark as handled without a send — smallest consistent pattern:
-          // inbox_status='replied', clear draft, set auto_handled
-          await (async () => {
-            const s = createClient(supabaseUrl, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
-            await s
-              .from('agent_leads')
-              .update({ inbox_status: 'replied', draft_response: null, auto_handled: true })
-              .eq('id', lead_id)
-              .eq('user_id', user_id);
-          })();
-        } else if (isAllowed && hasDraft && !isOptedOut) {
-          // Fire-and-forget correct sender by channel/source
-          const fire = async () => {
-            const headers = { 'Content-Type': 'application/json', 'x-agent-key': svcKey };
-            if (channel === 'linkedin') {
-              await fetch(`${supabaseUrl}/functions/v1/send-heyreach-message`, {
-                method: 'POST',
-                headers,
-                body: JSON.stringify({ user_id, lead_id, message: suggestedResponse, auto: true }),
-              });
-              return;
-            }
-            // email — choose function by source
-            // Use the DB again to fetch source (reliable even if earlier context fetch failed)
-            let sourceVal: string | null = null;
-            try {
-              const s = createClient(supabaseUrl, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
-              const { data: srcRow } = await s.from('agent_leads').select('source').eq('id', lead_id).eq('user_id', user_id).maybeSingle();
-              sourceVal = (srcRow?.source as string | null) ?? null;
-            } catch {
-              sourceVal = null;
-            }
-            if (sourceVal === 'reply_io') {
-              await fetch(`${supabaseUrl}/functions/v1/send-agent-reply`, {
-                method: 'POST',
-                headers,
-                body: JSON.stringify({
-                  user_id,
-                  leadId: lead_id,
-                  draftResponse: suggestedResponse,
-                  intent,
-                  auto: true,
-                }),
-              });
-            } else if (sourceVal === 'smartlead') {
-              await fetch(`${supabaseUrl}/functions/v1/send-smartlead-email`, {
-                method: 'POST',
-                headers,
-                body: JSON.stringify({
-                  user_id,
-                  leadId: lead_id,
-                  message: suggestedResponse,
-                  auto: true,
-                }),
-              });
-            } else {
-              // Unknown source — hold for AM
-              return;
-            }
-          };
-          // @ts-ignore EdgeRuntime provided by Supabase
-          if (typeof EdgeRuntime !== 'undefined' && typeof EdgeRuntime.waitUntil === 'function') {
-            // @ts-ignore
-            EdgeRuntime.waitUntil(fire().catch((e) => console.warn('[classify-reply] auto-send fire-and-forget failed (non-fatal):', e)));
-          } else {
-            fire().catch((e) => console.warn('[classify-reply] auto-send fire-and-forget failed (non-fatal):', e));
-          }
-        }
+        const outcome = await runAutoPilot({
+          supabase: createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!),
+          supabaseUrl: Deno.env.get('SUPABASE_URL')!,
+          agentKey: Deno.env.get('AGENT_API_KEY') || '',
+          userId: user_id,
+          leadId: lead_id,
+          intent,
+          draft: call2Failed ? null : suggestedResponse,
+        });
+        console.log(`[classify-reply] auto-pilot lead=${lead_id} outcome=${JSON.stringify(outcome)}`);
       } catch (e) {
-        console.warn('[classify-reply] auto-mode handler failed (non-fatal):', e);
+        // runAutoPilot does not throw by design; this is a last-resort log.
+        console.error('[classify-reply] auto-pilot crashed:', e);
       }
     }
 

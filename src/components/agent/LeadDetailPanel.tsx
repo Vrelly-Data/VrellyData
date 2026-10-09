@@ -51,6 +51,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { LeadTagsSection } from './LeadTagsSection';
 import { useDialerEventsForEmail } from '@/hooks/useDialerEvents';
 import { useBookingEventsForEmail } from '@/hooks/useBookingEvents';
+import { useAutoSentTimes, isAutoSentMessage } from '@/hooks/useAutoPilot';
 
 export type { AgentLead };
 
@@ -248,6 +249,8 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
   const [ccEmail, setCcEmail] = useState('');
   const [notes, setNotes] = useState(lead.notes || '');
   const { data: leadLearnings = [] } = useLearnings({ leadId: lead.id });
+  // Only fetched for leads Auto Pilot has touched.
+  const { data: autoSentTimes } = useAutoSentTimes(lead.auto_handled ? lead.id : null);
   const addLearning = useAddLearning();
   const deleteLearning = useDeleteLearning();
   const [newLearning, setNewLearning] = useState('');
@@ -839,6 +842,9 @@ export function LeadDetailPanel({ lead: initialLead, onClose, showDraft = true, 
                       {it.timestamp && (
                         <p className="text-[10px] text-muted-foreground mt-1">
                           {formatRelativeTime(it.timestamp)}
+                          {it.role !== 'prospect' && isAutoSentMessage(it.timestamp, autoSentTimes) && (
+                            <span className="ml-1.5 font-medium text-blue-700 dark:text-blue-300">· Sent by Auto Pilot</span>
+                          )}
                         </p>
                       )}
                     </div>

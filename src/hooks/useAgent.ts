@@ -32,6 +32,8 @@ export interface AgentConfig {
   agent_knowledge: string | null;
   managed_campaigns: string[] | null;
   mode: string | null;
+  /** Most replies Auto Pilot may send per UTC day (default 25). */
+  auto_send_daily_cap?: number | null;
   is_active: boolean | null;
   onboarding_complete: boolean | null;
   onboarding_step: number | null;
@@ -90,6 +92,7 @@ export interface AgentConfigInput {
   default_cc?: string | null;
   agent_knowledge?: string | null;
   mode?: string;
+  auto_send_daily_cap?: number;
   is_active?: boolean;
   onboarding_complete?: boolean;
   onboarding_step?: number;

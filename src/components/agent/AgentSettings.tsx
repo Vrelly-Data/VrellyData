@@ -25,6 +25,7 @@ import {
   type SenderProfile,
 } from '@/hooks/useSenderProfiles';
 import { EmailMailboxMapping } from './EmailMailboxMapping';
+import { useAutoSendsToday } from '@/hooks/useAutoPilot';
 import { PLATFORM } from '@/lib/platforms';
 import {
   useAgentDocuments,
@@ -453,6 +454,7 @@ export function AgentSettings() {
     default_cc: '',
     agent_knowledge: '',
     mode: 'copilot',
+    auto_send_daily_cap: 25,
     is_active: false,
     campaign_rules: EMPTY_RULES as CampaignRules,
   });
@@ -477,13 +479,16 @@ export function AgentSettings() {
         default_cc: config.default_cc ?? '',
         agent_knowledge: config.agent_knowledge ?? '',
         mode: config.mode ?? 'copilot',
+        auto_send_daily_cap: config.auto_send_daily_cap ?? 25,
         is_active: config.is_active ?? false,
         campaign_rules: normalizeCampaignRules((config as any).campaign_rules),
       });
     }
   }, [config]);
 
-  const update = (field: string, value: string | boolean) =>
+  const { data: autoSendsToday } = useAutoSendsToday(formData.mode === 'auto');
+
+  const update = (field: string, value: string | boolean | number) =>
     setFormData((prev) => ({ ...prev, [field]: value }));
 
   const handleTestConnection = async () => {
@@ -528,6 +533,7 @@ export function AgentSettings() {
       default_cc: formData.default_cc.trim() || null,
       agent_knowledge: formData.agent_knowledge.trim() || null,
       mode: formData.mode,
+      auto_send_daily_cap: Math.max(0, Math.floor(Number(formData.auto_send_daily_cap) || 0)),
       is_active: formData.is_active,
       onboarding_complete: true,
       campaign_rules: formData.campaign_rules,
@@ -576,7 +582,7 @@ export function AgentSettings() {
                     : 'border-border hover:border-muted-foreground/40'
                 )}
               >
-                <div className="font-medium text-sm">Co-pilot</div>
+                <div className="font-medium text-sm">Copilot</div>
                 <div className="text-xs text-muted-foreground mt-1">
                   Your agent drafts responses. You approve before anything sends.
                 </div>
@@ -591,12 +597,35 @@ export function AgentSettings() {
                     : 'border-border hover:border-muted-foreground/40'
                 )}
               >
-                <div className="font-medium text-sm">Auto</div>
+                <div className="font-medium text-sm">Auto Pilot</div>
                 <div className="text-xs text-muted-foreground mt-1">
                   Sends clear email and LinkedIn replies for you. Skips OOO and bounces; holds unclear ones for approval.
                 </div>
               </button>
             </div>
+            {formData.mode === 'auto' && (
+              <div className="mt-4 rounded-lg border bg-muted/30 p-4 space-y-3">
+                <div className="flex flex-wrap items-end gap-4">
+                  <div>
+                    <Label htmlFor="s_auto_cap">Daily auto-send limit</Label>
+                    <Input
+                      id="s_auto_cap" type="number" min={0} className="w-28 mt-1"
+                      value={formData.auto_send_daily_cap}
+                      onChange={(e) => update('auto_send_daily_cap', e.target.value === '' ? 0 : Number(e.target.value))}
+                    />
+                  </div>
+                  <p className="text-sm pb-2">
+                    <span className="font-medium">{autoSendsToday ?? '—'}</span>
+                    <span className="text-muted-foreground"> sent by Auto Pilot today (UTC)</span>
+                  </p>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Auto Pilot only sends replies classified Interested, Needs more info, Not interested or Referral, received in the
+                  last 24 hours and not yet answered. Past the limit, replies wait in your inbox as drafts. A send that fails stays
+                  as a draft and the reason appears in Activity.
+                </p>
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>

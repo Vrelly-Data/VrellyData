@@ -65,7 +65,25 @@ const REASON_TEXT: Record<string, string> = {
   apollo_insufficient_credits: 'Apollo is out of credits',
 };
 
+/** "Oct 8" — the run date beside the status; the full timestamp is on hover. */
+function runDate(iso: string | null): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? null : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
 function statusBadge(a: Audience) {
+  const date = runDate(a.last_run_at);
+  if (!date || !a.last_run_status) return statusBadgeOnly(a);
+  return (
+    <div className="flex items-center gap-1.5" title={new Date(a.last_run_at as string).toLocaleString()}>
+      {statusBadgeOnly(a)}
+      <span className="text-xs text-muted-foreground whitespace-nowrap">· {date}</span>
+    </div>
+  );
+}
+
+function statusBadgeOnly(a: Audience) {
   if (a.consecutive_failures >= 3) {
     return <Badge variant="destructive">Paused ({a.consecutive_failures} failures)</Badge>;
   }
@@ -396,7 +414,9 @@ export function AgentAudience() {
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground mt-1">
-                  Audiences add people to campaigns weekly by default. Monthly remains optional.
+                  {form.cadence === 'manual'
+                    ? 'Runs only when you push from Preview & run.'
+                    : `Adds up to "Max per run" people ${form.cadence === 'daily' ? 'every day' : form.cadence === 'weekly' ? 'every week' : 'every month'} once armed.`}
                 </p>
               </div>
               <div>
