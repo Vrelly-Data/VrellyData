@@ -190,8 +190,10 @@ export class FakeSupabase {
       const fn = path.slice(4);
       this.calls.push({ method, table: `rpc:${fn}`, params: url.searchParams, body });
       const r = this.rpc[fn];
-      // A function value answers per call (it sees the RPC arguments).
-      return json(typeof r === "function" ? (r as (b: unknown) => unknown)(body) : fn in this.rpc ? r : null);
+      // A function value answers per call (it sees the RPC arguments); a
+      // Response (e.g. json({...}, 500)) is returned as-is to simulate errors.
+      const out = typeof r === "function" ? (r as (b: unknown) => unknown)(body) : fn in this.rpc ? r : null;
+      return out instanceof Response ? out : json(out);
     }
     const table = path;
     this.calls.push({ method, table, params: url.searchParams, body });
