@@ -12,8 +12,12 @@
 // WHAT "COMPILE" MEANS. compileVrellyFilters turns operator-facing values into
 // exactly what the SQL compares against, and nothing else happens to them in
 // the database:
-//   * contains-matches (titles, industries, departments) become ILIKE patterns
-//     with the operator's own %, _ and \ escaped, so "100%" is a literal;
+//   * job titles match WHOLE WORDS (case-insensitive regex with word
+//     boundaries): "CTO" must not match "Director", nor "Owner"
+//     "Homeownership" — measured on prod 2026-10-08, substring "cto" hit
+//     204,950 titles vs 9,938 as a word. Operator text is regex-escaped;
+//   * industries and departments stay contains-matches (ILIKE patterns with
+//     the operator's own %, _ and \ escaped, so "100%" is a literal);
 //   * equality matches (seniority, size band, locations) become lower-case
 //     lists, with synonyms expanded where prod data uses two spellings for one
 //     thing (country 'US' vs 'United States'; state 'TX' vs 'Texas');
@@ -33,10 +37,10 @@ export const VRELLY_FILTERS_VERSION = 2;
 
 /** Stored verbatim in agent_audiences.filters for source='vrelly'. */
 export interface VrellyAudienceFilters {
-  /** Contains, any of. "CEO" matches "CEO & Founder". */
+  /** Whole words, any of. "CEO" matches "CEO & Founder", "Owner" does not match "Homeownership". */
   job_titles?: string[];
   /**
-   * Contains, none of — removes e.g. "Product Owner" from an "Owner" search.
+   * Whole words, none of — removes e.g. "Product Owner" from an "Owner" search.
    * Not a filter on its own: an audience still needs at least one positive one.
    */
   exclude_job_titles?: string[];
@@ -101,8 +105,9 @@ const US_STATE_NAMES: Readonly<Record<string, string>> = Object.fromEntries(
 
 /** Exactly what public.vrelly_audience_search receives as p_query. */
 export interface CompiledVrellyQuery {
-  title_patterns: string[] | null;
-  exclude_title_patterns: string[] | null;
+  /** Case-insensitive POSIX regexes (whole words), matched with ~*. */
+  title_regexes: string[] | null;
+  exclude_title_regexes: string[] | null;
   seniorities: string[] | null;
   department_patterns: string[] | null;
   industry_patterns: string[] | null;
@@ -139,6 +144,20 @@ function cleanList(key: string, v: unknown, max = VRELLY_MAX_VALUES_PER_FILTER):
   }
   if (out.length > max) throw new VrellyFilterError(`${key} allows at most ${max} values (got ${out.length})`);
   return out;
+}
+
+/**
+ * Whole-word, case-insensitive regex for a title term. Word boundaries (\m, \M)
+ * are only added on a side that starts/ends with a letter or digit, so "C++" or
+ * "(Interim)" still match; inner whitespace matches any run of whitespace.
+ */
+export function wordRegex(term: string): string {
+  const body = term.trim().split(/\s+/)
+    .map((w) => w.replace(/[\\^$.|?*+()[\]{}]/g, (c) => `\\${c}`))
+    .join("\\s+");
+  const start = /^[\p{L}\p{N}]/u.test(term.trim()) ? "\\m" : "";
+  const end = /[\p{L}\p{N}]$/u.test(term.trim()) ? "\\M" : "";
+  return `${start}${body}${end}`;
 }
 
 /** ILIKE pattern for "contains", with the operator's wildcards made literal. */
@@ -232,8 +251,8 @@ export function compileVrellyFilters(raw: unknown): CompiledVrellyQuery {
   const or = (xs: string[] | undefined | null, map: (xs: string[]) => string[]) =>
     xs && xs.length ? map(xs) : null;
   return {
-    title_patterns: or(f.job_titles, (xs) => xs.map(containsPattern)),
-    exclude_title_patterns: or(f.exclude_job_titles, (xs) => xs.map(containsPattern)),
+    title_regexes: or(f.job_titles, (xs) => xs.map(wordRegex)),
+    exclude_title_regexes: or(f.exclude_job_titles, (xs) => xs.map(wordRegex)),
     seniorities: or(f.seniorities, (xs) => [...new Set(xs.flatMap((s) => VRELLY_SENIORITIES[s]))]),
     department_patterns: or(f.departments, (xs) => xs.map(containsPattern)),
     industry_patterns: or(f.industries, (xs) => xs.map(containsPattern)),

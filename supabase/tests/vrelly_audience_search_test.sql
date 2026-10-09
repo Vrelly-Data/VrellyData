@@ -25,7 +25,7 @@ begin
   delete from public.agent_audience_pushes where user_id = u;
 
   -- 1. contains-match on title, ordered by id, with count
-  r := public.vrelly_audience_search(u, '{"title_patterns":["%chief%"]}', 25, 0, true);
+  r := public.vrelly_audience_search(u, '{"title_regexes":["\\mchief\\M"]}', 25, 0, true);
   select array_agg(x->>'email' order by x->>'prospect_id') into emails from jsonb_array_elements(r->'people') x;
   if coalesce(array_length(emails, 1), 0) <> 3 or (r->>'total')::int <> 3 then
     raise exception 'check 1 (title contains) failed: %', r; end if;
@@ -37,20 +37,20 @@ begin
   n := n + 1;
 
   -- 3. an escaped underscore is literal: "vp\_of" matches nothing, "vp of" matches 5
-  r := public.vrelly_audience_search(u, '{"title_patterns":["%vp\\_of%"]}', 25, 0, true);
-  if (r->>'total')::int <> 0 then raise exception 'check 3a (escaped _) failed: %', r; end if;
-  r := public.vrelly_audience_search(u, '{"title_patterns":["%vp of%"]}', 25, 0, true);
+  r := public.vrelly_audience_search(u, '{"title_regexes":["\\mvp_of\\M"]}', 25, 0, true);
+  if (r->>'total')::int <> 0 then raise exception 'check 3a (regex _ is literal) failed: %', r; end if;
+  r := public.vrelly_audience_search(u, '{"title_regexes":["\\mvp\\s+of\\M"]}', 25, 0, true);
   if (r->>'total')::int <> 5 then raise exception 'check 3b (vp of) failed: %', r; end if;
   n := n + 1;
 
   -- 3c. excluded titles drop out ("VP of Product" here); NULL titles survive
-  r := public.vrelly_audience_search(u, '{"title_patterns":["%vp of%"],"exclude_title_patterns":["%product%"]}', 25, 0, true);
+  r := public.vrelly_audience_search(u, '{"title_regexes":["\\mvp\\s+of\\M"],"exclude_title_regexes":["\\mproduct\\M"]}', 25, 0, true);
   if (r->>'total')::int <> 4 or r::text ilike '%VP of Product%' then
     raise exception 'check 3c (exclude titles) failed: %', r; end if;
   n := n + 1;
 
   -- 4. paging walks the id order without overlap
-  q := '{"title_patterns":["%vp of%"]}';
+  q := '{"title_regexes":["\\mvp\\s+of\\M"]}';
   r := public.vrelly_audience_search(u, q, 2, 0);
   emails := array(select x->>'prospect_id' from jsonb_array_elements(r->'people') x);
   r := public.vrelly_audience_search(u, q, 2, 2);
@@ -60,7 +60,7 @@ begin
   n := n + 1;
 
   -- 5. rows come back complete: email, names, title, company, location
-  r := public.vrelly_audience_search(u, '{"title_patterns":["%chief executive%"]}', 1, 0);
+  r := public.vrelly_audience_search(u, '{"title_regexes":["\\mchief\\s+executive\\M"]}', 1, 0);
   if r->'people'->0->>'email' is null or r->'people'->0->>'first_name' is null
      or r->'people'->0->>'title' is null or r->'people'->0->>'company_name' is null then
     raise exception 'check 5 (complete rows) failed: %', r; end if;
@@ -87,7 +87,7 @@ begin
   select aud, u, gen_random_uuid(), 'someone-else@example.org', s.linkedin_key, 'reply.io'
   from public.prospect_audience_search s where s.job_title = 'Chief Marketing Officer';
 
-  r := public.vrelly_audience_search(u, '{"title_patterns":["%chief%"]}', 25, 0, true);
+  r := public.vrelly_audience_search(u, '{"title_regexes":["\\mchief\\M"]}', 25, 0, true);
   if (r->>'total')::int <> 1 or r->'people'->0->>'title' <> 'Chief Executive Officer' then
     raise exception 'check 6b (exclude by email AND by linkedin) failed: %', r; end if;
   n := n + 1;
@@ -112,7 +112,7 @@ begin
   n := n + 1;
 
   -- 8. explicit prospect ids are still subject to the exclusions
-  r := public.vrelly_audience_search(u, '{"title_patterns":["%chief%"]}', 25, 0, false,
+  r := public.vrelly_audience_search(u, '{"title_regexes":["\\mchief\\M"]}', 25, 0, false,
          100000, array(select id from public.prospect_audience_search where job_title like 'Chief%'));
   if jsonb_array_length(r->'people') <> 1 then raise exception 'check 8 (explicit ids excluded) failed: %', r; end if;
   n := n + 1;
@@ -145,11 +145,30 @@ begin
          ('vrelly_search_test', 'Kw', 'Three', 'kw3@example.com', 'Partner', 'C', 'Public equity research.', 'US');
   refresh materialized view public.prospect_audience_search;
   refresh materialized view public.prospect_audience_keywords;
-  r := public.vrelly_audience_search(u, '{"title_patterns":["%partner%"],"keywords":["private equity"]}', 25, 0, true);
+  r := public.vrelly_audience_search(u, '{"title_regexes":["\\mpartner\\M"],"keywords":["private equity"]}', 25, 0, true);
   if (r->>'total')::int <> 1 or r->'people'->0->>'email' <> 'kw1@example.com' or (r->>'total_is_estimate')::boolean then
     raise exception 'check 11a (words of a term AND-ed, any order; exact when few candidates) failed: %', r; end if;
-  r := public.vrelly_audience_search(u, '{"title_patterns":["%partner%"],"keywords":["loan","private equity"]}', 25, 0, true);
+  r := public.vrelly_audience_search(u, '{"title_regexes":["\\mpartner\\M"],"keywords":["loan","private equity"]}', 25, 0, true);
   if (r->>'total')::int <> 2 then raise exception 'check 11b (terms OR-ed, stemmed loan~loans) failed: %', r; end if;
+  n := n + 1;
+
+  -- 12. DATA QUALITY (20261008210000): first valid email only; a "US" row whose
+  --     state is not a US state is country-unknown; "Owner" is a whole word.
+  insert into public.prospects (source, first_name, business_email, job_title, country, state)
+  values ('vrelly_search_test', 'Multi', 'Multi@X.example.com, other@y.example.com', 'Zeta Owner', 'US', 'TX'),
+         ('vrelly_search_test', 'Uk', 'uk@x.example.com', 'Zeta Owner', 'US', 'ENG'),
+         ('vrelly_search_test', 'Bad', 'not-an-email', 'Zeta Owner', 'US', 'TX'),
+         ('vrelly_search_test', 'Home', 'home@x.example.com', 'Zeta Homeownership Lead', 'US', 'TX');
+  refresh materialized view public.prospect_audience_search;
+  r := public.vrelly_audience_search(u, '{"title_regexes":["\\mzeta\\M"],"person_countries":["us"]}', 25, 0, true);
+  if (r->>'total')::int <> 2 then raise exception 'check 12a (bad email row left out; ENG row not US) failed: %', r; end if;
+  if not (r::text ilike '%multi@x.example.com%' and r::text not ilike '%other@y%') then
+    raise exception 'check 12b (first address only, lower-cased) failed: %', r; end if;
+  r := public.vrelly_audience_search(u, '{"title_regexes":["\\mzeta\\M"],"person_states":["eng"]}', 25, 0, true);
+  if (r->>'total')::int <> 1 then raise exception 'check 12c (ENG row still searchable by state) failed: %', r; end if;
+  r := public.vrelly_audience_search(u, '{"title_regexes":["\\mowner\\M"],"person_states":["tx"]}', 25, 0, true);
+  if r::text ilike '%Homeownership%' or (r->>'total')::int < 1 then
+    raise exception 'check 12d (Owner is a whole word) failed: %', r; end if;
   n := n + 1;
 
 raise exception 'VRELLY_SEARCH_TESTS_PASSED (% checks) — rolled back', n using errcode = 'P0001';
