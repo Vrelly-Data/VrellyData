@@ -99,7 +99,7 @@ Deno.test({
     assertEquals(args.p_user_id, USER);
     assertEquals(args.p_limit, 3);
     assertEquals(args.p_count, false);
-    assertEquals((args.p_query as Row).title_patterns, ["%CEO%"]);
+    assertEquals((args.p_query as Row).title_regexes, ["\\mCEO\\M"]);
     assertEquals((args.p_query as Row).person_countries, ["united states", "us", "usa", "united states of america", "u.s.", "u.s.a."]);
 
     // No Apollo function was touched.

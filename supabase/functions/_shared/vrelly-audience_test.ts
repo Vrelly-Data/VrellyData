@@ -8,18 +8,19 @@ import { assertEquals, assertThrows } from "https://deno.land/std@0.224.0/assert
 import {
   compileVrellyFilters,
   containsPattern,
+  wordRegex,
   normalizeVrellyFilters,
   VrellyFilterError,
   VRELLY_MAX_VALUES_PER_FILTER,
 } from "./vrelly-audience.ts";
 
 const none = {
-  title_patterns: null, exclude_title_patterns: null, seniorities: null, department_patterns: null, industry_patterns: null,
+  title_regexes: null, exclude_title_regexes: null, seniorities: null, department_patterns: null, industry_patterns: null,
   company_sizes: null, person_countries: null, person_states: null, company_countries: null,
   company_states: null, keywords: null,
 };
 
-Deno.test("titles, industries, departments compile to contains-patterns; unused filters are null", () => {
+Deno.test("titles compile to whole-word regexes; industries and departments to contains-patterns", () => {
   const q = compileVrellyFilters({
     job_titles: ["CEO", "  Owner ", "Founder"],
     industries: ["Financial Services"],
@@ -27,17 +28,30 @@ Deno.test("titles, industries, departments compile to contains-patterns; unused 
   });
   assertEquals(q, {
     ...none,
-    title_patterns: ["%CEO%", "%Owner%", "%Founder%"],
+    title_regexes: ["\\mCEO\\M", "\\mOwner\\M", "\\mFounder\\M"],
     industry_patterns: ["%Financial Services%"],
     department_patterns: ["%Sales%"],
   });
 });
 
-Deno.test("the operator's %, _ and \\ are literal, not wildcards", () => {
-  assertEquals(containsPattern("100%"), "%100\\%%");
-  assertEquals(containsPattern("c_level"), "%c\\_level%");
-  assertEquals(containsPattern("a\\b"), "%a\\\\b%");
-  assertEquals(compileVrellyFilters({ job_titles: ["VP_%"] }).title_patterns, ["%VP\\_\\%%"]);
+Deno.test("whole-word title regex: semantics checked with a POSIX-like JS equivalent", () => {
+  // Postgres \\m / \\M ~ JS (?<![\\p{L}\\p{N}]) / (?![\\p{L}\\p{N}]) for these cases.
+  const js = (term: string) =>
+    new RegExp(wordRegex(term).replace(/\\m/g, "(?<![\\p{L}\\p{N}_])").replace(/\\M/g, "(?![\\p{L}\\p{N}_])"), "iu");
+  const owner = js("Owner");
+  for (const t of ["Owner", "CEO & Owner", "Co-Owner", "Owner/Founder", "Product Owner"]) assertEquals(owner.test(t), true, t);
+  for (const t of ["Homeownership Program Director", "Owners", "Ownership Lead"]) assertEquals(owner.test(t), false, t);
+  const cto = js("CTO");
+  assertEquals(cto.test("Director of Sales"), false);
+  assertEquals(cto.test("CTO & Co-founder"), true);
+  assertEquals(js("Chief  Executive").test("Chief Executive Officer"), true);
+});
+
+Deno.test("regex metacharacters in a title are literal; boundaries only next to letters/digits", () => {
+  assertEquals(wordRegex("C++"), "\\mC\\+\\+");
+  assertEquals(wordRegex("(Interim) CEO"), "\\(Interim\\)\\s+CEO\\M");
+  assertEquals(wordRegex("V.P."), "\\mV\\.P\\.");
+  assertEquals(wordRegex("a|b"), "\\ma\\|b\\M");
 });
 
 Deno.test("values are trimmed, inner whitespace collapsed, blanks dropped, case-insensitive duplicates removed", () => {
@@ -76,8 +90,8 @@ Deno.test("keywords stay terms (lower-cased); Postgres stems them", () => {
 
 Deno.test("excluded titles compile to contains-patterns; an exclusion alone is not a filter", () => {
   const q = compileVrellyFilters({ job_titles: ["Owner"], exclude_job_titles: ["Product Owner", "product owner"] });
-  assertEquals(q.title_patterns, ["%Owner%"]);
-  assertEquals(q.exclude_title_patterns, ["%Product Owner%"]);
+  assertEquals(q.title_regexes, ["\\mOwner\\M"]);
+  assertEquals(q.exclude_title_regexes, ["\\mProduct\\s+Owner\\M"]);
   assertThrows(() => compileVrellyFilters({ exclude_job_titles: ["Product Owner"] }), VrellyFilterError, "At least one filter");
 });
 
@@ -111,7 +125,7 @@ Deno.test("the Agent Upload equivalent compiles to the expected query", () => {
     industries: ["Financial Services"],
     keywords: ["finance", "loans", "lending", "money lending"],
   });
-  assertEquals(q.title_patterns, ["%CEO%", "%Owner%", "%Founder%"]);
+  assertEquals(q.title_regexes, ["\\mCEO\\M", "\\mOwner\\M", "\\mFounder\\M"]);
   assertEquals(q.person_countries?.slice(0, 3), ["united states", "us", "usa"]);
   assertEquals(q.industry_patterns, ["%Financial Services%"]);
   assertEquals(q.keywords, ["finance", "loans", "lending", "money lending"]);
