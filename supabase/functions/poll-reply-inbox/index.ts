@@ -781,6 +781,16 @@ Deno.serve(async (req) => {
                   ...(targetInboxStatus === 'pending'
                     ? { last_surfaced_reply_at: lastReplyDate || nowIso }
                     : {}),
+                  // Campaign attribution from the thread's sequence, so the
+                  // lead carries the campaign its latest reply came from
+                  // (Inbox, Inference and Auto Pilot logs read these). Only
+                  // when the thread names one — never overwrite with null.
+                  ...(thread.sequence?.id
+                    ? {
+                        campaign_external_id: String(thread.sequence.id),
+                        ...(thread.sequence.name ? { last_campaign_name: thread.sequence.name } : {}),
+                      }
+                    : {}),
                   // SELF-HEALING NULL-REPAIR (strict upgrade, null -> thread id).
                   //
                   // reply-webhook captures in real time but cannot always resolve
