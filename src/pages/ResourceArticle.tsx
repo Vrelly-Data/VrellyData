@@ -8,6 +8,7 @@ import { Calendar, Clock, ArrowLeft, User } from 'lucide-react';
 import { Navbar } from '@/components/landing/Navbar';
 import { Footer } from '@/components/landing/Footer';
 import { useResource, useResources, Resource } from '@/hooks/useResources';
+import { ArticleSignup } from '@/components/landing/ArticleSignup';
 
 export default function ResourceArticle() {
   const { slug } = useParams<{ slug: string }>();
@@ -185,6 +186,9 @@ export default function ResourceArticle() {
                 </div>
               </section>
             )}
+
+            {/* Inline email signup */}
+            {slug && <ArticleSignup slug={slug} />}
 
             {/* Footer CTA */}
             <div className="mt-16 p-8 rounded-xl bg-primary/5 border border-primary/20 text-center">
