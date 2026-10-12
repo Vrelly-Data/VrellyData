@@ -190,3 +190,24 @@ verify_jwt = false
 
 [functions.recover-heyreach-leads]
 verify_jwt = false
+
+[functions.dispatch-signal-sources]
+verify_jwt = false
+
+[functions.signal-pe-seller-intent]
+verify_jwt = false
+
+[functions.signal-openfda-510k]
+verify_jwt = false
+
+[functions.signal-saas-hiring]
+verify_jwt = false
+
+[functions.signal-github-activity]
+verify_jwt = false
+
+[functions.signal-web-visitors]
+verify_jwt = false
+
+[functions.track]
+verify_jwt = false

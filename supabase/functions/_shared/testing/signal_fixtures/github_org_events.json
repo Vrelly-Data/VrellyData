@@ -1,0 +1,25 @@
+[
+ {
+  "id": "16846927998",
+  "type": "ReleaseEvent",
+  "repo": {
+   "id": 264192686,
+   "name": "supabase/supabase-js",
+   "url": "https://api.github.com/repos/supabase/supabase-js"
+  },
+  "payload": {
+   "action": "published",
+   "release": {
+    "id": 408192400,
+    "tag_name": "v2.118.0-canary.0",
+    "name": "v2.118.0-canary.0",
+    "html_url": "https://github.com/supabase/supabase-js/releases/tag/v2.118.0-canary.0",
+    "published_at": "2026-10-09T17:58:41Z",
+    "prerelease": true,
+    "draft": false
+   }
+  },
+  "public": true,
+  "created_at": "2026-10-09T17:58:41Z"
+ }
+]

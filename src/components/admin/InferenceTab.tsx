@@ -2,6 +2,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { PlatformTotalsCard } from '@/components/admin/PlatformTotalsCard';
 import { LiveFeedSection } from '@/components/admin/inference/LiveFeedSection';
 import { InferenceSection } from '@/components/admin/inference/InferenceSection';
+import { SignalsView } from '@/components/signals/SignalsView';
 
 // Admin → Inference Insights. Inactive tabs unmount, so the Live Feed's Realtime subscription
 // and the Inference dataset only load while their tab is open.
@@ -12,6 +13,7 @@ export function InferenceTab() {
         <TabsTrigger value="totals">Platform Totals</TabsTrigger>
         <TabsTrigger value="live">Live Feed</TabsTrigger>
         <TabsTrigger value="inference">Inference</TabsTrigger>
+        <TabsTrigger value="signals">Signals</TabsTrigger>
       </TabsList>
       <TabsContent value="totals">
         <PlatformTotalsCard />
@@ -21,6 +23,9 @@ export function InferenceTab() {
       </TabsContent>
       <TabsContent value="inference">
         <InferenceSection />
+      </TabsContent>
+      <TabsContent value="signals">
+        <SignalsView mode="admin" />
       </TabsContent>
     </Tabs>
   );

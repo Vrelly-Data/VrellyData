@@ -1,0 +1,80 @@
+{
+ "meta": {
+  "disclaimer": "Do not rely on openFDA to make decisions regarding medical care. While we make every effort to ensure that data is accurate, you should assume all results are unvalidated. We may limit or otherwise restrict your access to the API in line with our Terms of Service.",
+  "terms": "https://open.fda.gov/terms/",
+  "license": "https://open.fda.gov/license/",
+  "last_updated": "2026-09-28",
+  "results": {
+   "skip": 0,
+   "limit": 2,
+   "total": 215
+  }
+ },
+ "results": [
+  {
+   "third_party_flag": "N",
+   "city": "Budapest",
+   "advisory_committee_description": "Unknown",
+   "address_1": "Szabads\u00e1g Ter. 7",
+   "address_2": "",
+   "statement_or_summary": "Summary",
+   "product_code": "",
+   "openfda": {},
+   "zip_code": "1054",
+   "applicant": "Fit-Pro KFT (Ltd.) - DBA E-Fit",
+   "decision_date": "2026-09-27",
+   "decision_code": "SESE",
+   "country_code": "HU",
+   "device_name": "Ultima System (UL-800);Ultimate Face Package (UL-800-Face-Set);Ultimate Shape Extension Kit 1 (UL-800-Shape-Ext-Kit-1);Ultimate Shape Extension Kit 2 (UL-800-Shape-Ext-Kit-2)",
+   "advisory_committee": "",
+   "contact": "Janos  Papp",
+   "expedited_review_flag": "",
+   "k_number": "K260945",
+   "state": "",
+   "date_received": "2026-03-23",
+   "review_advisory_committee": "PM",
+   "postal_code": "1054",
+   "decision_description": "Substantially Equivalent",
+   "clearance_type": "Traditional"
+  },
+  {
+   "third_party_flag": "N",
+   "city": "Bangalore",
+   "advisory_committee_description": "Orthopedic",
+   "address_1": "34, Azeez Sait Industrial Town, 6th Mile, Mysore Rd.,",
+   "address_2": "Nayandahalli",
+   "statement_or_summary": "Summary",
+   "product_code": "NKB",
+   "openfda": {
+    "registration_number": [
+     "3003935342",
+     ""
+    ],
+    "fei_number": [
+     "3003935342",
+     ""
+    ],
+    "device_name": "Thoracolumbosacral Pedicle Screw System",
+    "medical_specialty_description": "Orthopedic",
+    "regulation_number": "888.3070",
+    "device_class": "2"
+   },
+   "zip_code": "560039",
+   "applicant": "Rivarp Medical Pvt., Ltd.",
+   "decision_date": "2026-09-27",
+   "decision_code": "SESE",
+   "country_code": "IN",
+   "device_name": "Kentrospine Viktr-MIS\u00ae Pedicle screw system",
+   "advisory_committee": "OR",
+   "contact": "Sushma  N.R",
+   "expedited_review_flag": "",
+   "k_number": "K252139",
+   "state": "",
+   "date_received": "2025-07-08",
+   "review_advisory_committee": "OR",
+   "postal_code": "560039",
+   "decision_description": "Substantially Equivalent",
+   "clearance_type": "Traditional"
+  }
+ ]
+}

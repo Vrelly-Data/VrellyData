@@ -1,23 +1,25 @@
 import { useState } from 'react';
-import { LayoutDashboard, Inbox, Kanban, ActivitySquare, BookOpen, Settings, Telescope } from 'lucide-react';
+import { LayoutDashboard, Inbox, Kanban, ActivitySquare, BookOpen, Settings, Telescope, Radar } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { AgentOverview } from './AgentOverview';
 import { AgentInbox } from './AgentInbox';
 import { AgentPipeline } from './AgentPipeline';
 import { AgentAudience } from './AgentAudience';
 import { AgentActivity } from './AgentActivity';
+import { SignalsView } from '@/components/signals/SignalsView';
 import { SalesPlaybook } from './SalesPlaybook';
 import { AgentSettings } from './AgentSettings';
 import { useAgentInboxData } from '@/hooks/useAgentInbox';
 import { cn } from '@/lib/utils';
 
-type View = 'overview' | 'inbox' | 'pipeline' | 'audience' | 'activity' | 'sales_playbook' | 'settings';
+type View = 'overview' | 'inbox' | 'pipeline' | 'audience' | 'signals' | 'activity' | 'sales_playbook' | 'settings';
 
 const navItems: { key: View; label: string; icon: typeof LayoutDashboard }[] = [
   { key: 'overview', label: 'Overview', icon: LayoutDashboard },
   { key: 'inbox', label: 'Inbox', icon: Inbox },
   { key: 'pipeline', label: 'Pipeline', icon: Kanban },
   { key: 'audience', label: 'Audience', icon: Telescope },
+  { key: 'signals', label: 'Signals', icon: Radar },
   { key: 'activity', label: 'Activity', icon: ActivitySquare },
   { key: 'sales_playbook', label: 'Sales Playbook', icon: BookOpen },
   { key: 'settings', label: 'Settings', icon: Settings },
@@ -59,6 +61,7 @@ export function AgentWorkspace() {
         {activeView === 'inbox' && <AgentInbox />}
         {activeView === 'pipeline' && <AgentPipeline />}
         {activeView === 'audience' && <AgentAudience />}
+        {activeView === 'signals' && <SignalsView mode="client" />}
         {activeView === 'activity' && <AgentActivity />}
         {activeView === 'sales_playbook' && <SalesPlaybook />}
         {activeView === 'settings' && <AgentSettings />}

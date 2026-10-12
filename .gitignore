@@ -32,3 +32,6 @@ dist-ssr
 
 # Supabase CLI scratch artifacts
 supabase/.temp/
+
+# dev Signals test sessions (short-lived JWTs)
+signals_dev_sessions.json

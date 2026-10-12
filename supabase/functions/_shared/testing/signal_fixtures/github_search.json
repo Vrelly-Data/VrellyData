@@ -1,0 +1,38 @@
+{
+ "total_count": 778,
+ "items": [
+  {
+   "id": 1409683147,
+   "full_name": "0xgetz/zcode-claim-9router",
+   "html_url": "https://github.com/0xgetz/zcode-claim-9router",
+   "description": "Automate the ZCode free Start-Plan claim (z.ai token/cookies -> ZCode JWT -> Start Plan) and wire GLM into 9Router as a glm provider pool. Web UI console + CLI. Reverse-engineered from ZCode 3.14.4.",
+   "created_at": "2026-10-08T03:43:27Z",
+   "pushed_at": "2026-10-08T06:27:03Z",
+   "stargazers_count": 33,
+   "language": "Python",
+   "topics": [
+    "9router",
+    "ai",
+    "automation",
+    "browser-automation",
+    "cdp",
+    "coding-plan",
+    "glm",
+    "glm-5",
+    "llm",
+    "open-webui",
+    "python",
+    "reverse-engineering",
+    "token-farm",
+    "z-ai",
+    "zai",
+    "zcode"
+   ],
+   "fork": false,
+   "owner": {
+    "login": "0xgetz",
+    "type": "User"
+   }
+  }
+ ]
+}
