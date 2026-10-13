@@ -5,8 +5,10 @@ import {
   type AudienceSourceId,
 } from '@/lib/audienceSources';
 import type { VrellyAudienceFilters } from '@/lib/vrellyAudienceFilters';
+import type { SignalAudienceFilters } from '@/lib/signalAudienceFilters';
 
 export type { VrellyAudienceFilters } from '@/lib/vrellyAudienceFilters';
+export type { SignalAudienceFilters } from '@/lib/signalAudienceFilters';
 
 // Cast until Supabase types are regenerated for the agent_audience_* tables.
 // Same pattern as useAgent.ts.
@@ -32,7 +34,7 @@ export interface ApolloAudienceFilters {
 }
 
 /** Filters in the audience's own source vocabulary — see `source`. */
-export type AudienceFilters = ApolloAudienceFilters | VrellyAudienceFilters;
+export type AudienceFilters = ApolloAudienceFilters | VrellyAudienceFilters | SignalAudienceFilters;
 
 export interface AgentAudience {
   id: string;
@@ -546,7 +548,7 @@ export function useRunAudience() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (
-      { audience_id, person_ids, platform, synced_campaign_id }: {
+      { audience_id, person_ids, signal_ids, selections, platform, synced_campaign_id }: {
         audience_id: string;
         /**
          * The people to push. Omit to run exactly as the schedule would: the
@@ -554,6 +556,10 @@ export function useRunAudience() {
          * an Apollo run without ids would enrich un-reviewed people).
          */
         person_ids?: string[];
+        /** Signals source: only these signals (from Signals → Build audience). */
+        signal_ids?: string[];
+        /** Signals source: exactly these people from the preview. */
+        selections?: Array<{ signal_id: string; person_key: string }>;
         platform: string;
         synced_campaign_id: string;
       },
@@ -561,6 +567,8 @@ export function useRunAudience() {
       invokeFn<AudienceRunResult>('run-agent-audience', {
         audience_id, platform, synced_campaign_id, trigger: 'manual',
         ...(person_ids ? { person_ids } : {}),
+        ...(signal_ids ? { signal_ids } : {}),
+        ...(selections ? { selections } : {}),
       }),
     onSuccess: () => {
       // The run rewrites last_run_status/total_pushed, and a successful run is
@@ -570,3 +578,90 @@ export function useRunAudience() {
     },
   });
 }
+
+// ---- Signals source ----------------------------------------------------------
+
+/** One person a signal resolved to. Mirrors ResolvedPerson in _shared/signal-resolver.ts. */
+export interface SignalPreviewPerson {
+  source: 'vrelly' | 'signal' | 'apollo';
+  prospect_id?: string | null;
+  apollo_person_id?: string | null;
+  /** null for an Apollo candidate not yet enriched (pending). */
+  email: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  title: string | null;
+  linkedin_url: string | null;
+  company_name: string | null;
+  company_domain: string | null;
+  city: string | null;
+  state: string | null;
+  country: string | null;
+  pending?: boolean;
+  cached?: boolean;
+}
+
+export interface SignalPreviewSignal {
+  signal: {
+    id: string; vertical: string; signal_type: string; occurred_at: string; title: string;
+    url: string | null; score: number; company_name: string | null; company_domain: string | null;
+    state: string | null;
+  };
+  company_key: string | null;
+  domain: string | null;
+  derived_domain: string | null;
+  people: SignalPreviewPerson[];
+  apollo: string;
+  apollo_error?: string;
+  estimated_credits: number;
+}
+
+export interface SignalPreview {
+  source: 'signals';
+  signals: SignalPreviewSignal[];
+  pagination: { page: number; per_page: number; total_entries: number | null; total_pages: number | null };
+  people_by_source: { vrelly: number; signal: number; apollo: number };
+  estimated_credits: number;
+  apollo_budget: { key_source: 'client' | 'shared'; remaining: number | null; cap: number | null; used: number } | null;
+  apollo_enabled: boolean;
+  notice: string;
+  credits_consumed: 0;
+}
+
+/** The key run-agent-audience's `selections` uses — same rule as personKey in run-agent-audience/signals.ts. */
+export function signalPersonKey(p: SignalPreviewPerson): string | null {
+  if (p.prospect_id) return `p:${p.prospect_id}`;
+  if (p.apollo_person_id) return `a:${p.apollo_person_id}`;
+  const e = (p.email ?? '').trim().toLowerCase();
+  return e ? `e:${e}` : null;
+}
+
+/** Preview a Signals audience. Free: Apollo candidates are found but not enriched. */
+export function useSignalAudiencePreview() {
+  return useMutation({
+    mutationFn: async (
+      args: { filters: SignalAudienceFilters; page?: number; per_page?: number; signal_ids?: string[] | null; audience_id?: string | null },
+    ): Promise<SignalPreview> => {
+      const { search } = resolveEdgeFunctions(getAudienceSource('signals'));
+      return invokeFn<SignalPreview>(search, {
+        filters: args.filters, page: args.page ?? 1, per_page: args.per_page ?? 10,
+        ...(args.signal_ids ? { signal_ids: args.signal_ids } : {}),
+        ...(args.audience_id ? { audience_id: args.audience_id } : {}),
+      });
+    },
+  });
+}
+
+export const APOLLO_STATUS_TEXT: Record<string, string> = {
+  not_needed: '',
+  cached: 'Apollo (bought before, free now)',
+  enriched: 'Apollo',
+  pending: 'Apollo — enriched on push',
+  none_found: 'Nobody matching found',
+  no_domain: 'No company domain — not sent to Apollo',
+  disabled: 'Apollo fallback off',
+  persona_unsupported: 'Apollo needs a job title or seniority',
+  budget: 'Monthly Apollo cap reached',
+  insufficient_credits: 'Apollo is out of credits',
+  failed: 'Apollo search failed',
+};

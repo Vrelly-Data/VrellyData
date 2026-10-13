@@ -48,6 +48,8 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { normalizeEmailKey, normalizeLinkedInUrl } from "../_shared/lead-dedup.ts";
+import { cleanCustomFields } from "./custom_fields.ts";
+import { ensureReplyCustomFields } from "../_shared/reply-custom-fields.ts";
 
 const allowedOrigins = [
   Deno.env.get("ALLOWED_ORIGIN") || "https://vrelly.com",
@@ -81,7 +83,18 @@ interface InboundContact {
   city?: string | null;
   state?: string | null;
   country?: string | null;
+  /**
+   * Signals source: the signal behind this contact (signal_type, signal_title,
+   * signal_date, signal_url), so copy can reference it. Smartlead takes them in
+   * the lead's custom_fields. Reply.io: the fields are registered in the
+   * account on first use (idempotent), then PATCHed onto the contact before
+   * it is moved into the sequence; if either step fails the contact is still
+   * enrolled, without the fields, and the result carries a warning.
+   * Absent for Apollo and Vrelly contacts, whose pushes are unchanged.
+   */
+  custom_fields?: Record<string, string> | null;
 }
+
 
 const clean = (v: unknown): string | null => {
   const s = typeof v === "string" ? v.trim() : "";
@@ -103,6 +116,8 @@ interface ContactResult {
   outcome: Outcome;
   external_ref?: string | null;
   error?: string;
+  /** Enrolled, but something non-essential (signal custom fields) was not written. */
+  warning?: string;
 }
 
 function splitName(c: InboundContact): { first: string; last: string } {
@@ -237,6 +252,10 @@ Deno.serve(async (req) => {
     // Keys already claimed in THIS batch, so two contacts sharing an email or a
     // LinkedIn URL cannot both be enrolled even before the ledger sees either.
     const batchKeys = new Set<string>();
+    // Reply.io custom fields registered in this account during this call,
+    // keyed by field-name set: null = not tried yet, true = ready, false =
+    // registration failed (the push goes ahead without them).
+    const replyFieldsReady = new Map<string, boolean>();
 
     for (const c of contacts) {
       const apolloId = c.apollo_person_id ? String(c.apollo_person_id) : null;
@@ -334,8 +353,10 @@ Deno.serve(async (req) => {
       const title = clean(c.title);
       const company = clean(c.company_name);
       const city = clean(c.city), state = clean(c.state), country = clean(c.country);
+      const extraFields = cleanCustomFields(c.custom_fields);
       let externalRef: string | null = null;
       let pushError: string | null = null;
+      let fieldWarning: string | null = null;
 
       try {
         if (platform === "smartlead") {
@@ -356,7 +377,9 @@ Deno.serve(async (req) => {
                   ? { location: [city, state, country].filter(Boolean).join(", ") }
                   : {}),
                 ...(clean(c.company_domain) ? { website: clean(c.company_domain) } : {}),
-                ...(title ? { custom_fields: { job_title: title } } : {}),
+                ...(title || extraFields
+                  ? { custom_fields: { ...(extraFields ?? {}), ...(title ? { job_title: title } : {}) } }
+                  : {}),
               }],
               // Conservative, matching add-to-smartlead-campaign: we respect
               // dedup, blocklists and unsubscribes rather than overriding them.
@@ -443,6 +466,43 @@ Deno.serve(async (req) => {
             pushError = `Reply.io create ${createRes.status}: ${(await createRes.text().catch(() => "")).slice(0, 200)}`;
           }
 
+          if (contactId !== null && !pushError && extraFields) {
+            // Signal context. NEVER a reason not to enrol: the contact already
+            // exists in Reply.io by now, and a created-but-not-enrolled contact
+            // is worse than an enrolled one whose merge fields are blank. So a
+            // failure here is logged and the move goes ahead.
+            const names = Object.keys(extraFields).sort();
+            const setKey = names.join(",");
+            if (!replyFieldsReady.has(setKey)) {
+              try {
+                // v3 drops writes to unregistered names, so register first
+                // (once per account per call; idempotent across calls).
+                await ensureReplyCustomFields(apiKey, names);
+                replyFieldsReady.set(setKey, true);
+              } catch (e) {
+                replyFieldsReady.set(setKey, false);
+                console.warn(`[add-contacts-to-sequence] WARNING Reply.io custom fields not registered — enrolling without signal fields: ${e instanceof Error ? e.message : e}`);
+              }
+            }
+            if (replyFieldsReady.get(setKey)) {
+              // Same {name, value} shape send-agent-reply writes custom_message
+              // with. BEFORE the move: the sequence's first step may send at once.
+              const cf = await fetch(`${REPLY_API_V3}/contacts/${contactId}`, {
+                method: "PATCH",
+                headers: authH,
+                body: JSON.stringify({
+                  customFields: Object.entries(extraFields).map(([name, value]) => ({ name, value })),
+                }),
+              });
+              if (!cf.ok) {
+                console.warn(`[add-contacts-to-sequence] WARNING Reply.io custom field write ${cf.status} for contact ${contactId} — enrolling without signal fields: ${(await cf.text().catch(() => "")).slice(0, 200)}`);
+                fieldWarning = `custom fields not written (${cf.status})`;
+              }
+            } else {
+              fieldWarning = "custom fields not registered in Reply.io";
+            }
+          }
+
           if (contactId !== null && !pushError) {
             const seqId = Number(campaign.external_campaign_id);
             if (!Number.isFinite(seqId)) {
@@ -483,7 +543,7 @@ Deno.serve(async (req) => {
       }
       remaining--;
       pushed++;
-      record("pushed", { external_ref: externalRef });
+      record("pushed", { external_ref: externalRef, ...(fieldWarning ? { warning: fieldWarning } : {}) });
     }
 
     const tally = results.reduce<Record<string, number>>((a, r) => {

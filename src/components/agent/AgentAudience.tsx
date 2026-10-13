@@ -17,6 +17,10 @@ import { MultiSelectDropdown } from '@/components/search/MultiSelectDropdown';
 import { useToast } from '@/hooks/use-toast';
 import { AudiencePreviewDialog } from './AudiencePreviewDialog';
 import { VrellyPreviewDialog } from './VrellyPreviewDialog';
+import { SignalsPreviewDialog } from './SignalsPreviewDialog';
+import { SignalAudienceFiltersForm } from './SignalAudienceFiltersForm';
+import { DEFAULT_SIGNAL_FILTERS, hasSignalPersona, type SignalAudienceFilters } from '@/lib/signalAudienceFilters';
+import { useIsPlatformAdmin } from '@/hooks/useIsPlatformAdmin';
 import { AudienceSourceSelect } from './AudienceSourceSelect';
 import { getAudienceSource, DEFAULT_SOURCE, NEW_AUDIENCE_SOURCE } from '@/lib/audienceSources';
 import {
@@ -120,6 +124,8 @@ export function AgentAudience() {
   const { data: campaigns = [] } = useAudienceCampaigns(form.default_platform ?? undefined);
 
   const isVrelly = (form.source ?? DEFAULT_SOURCE) === 'vrelly';
+  const isSignals = form.source === 'signals';
+  const { isPlatformAdmin } = useIsPlatformAdmin();
   // The filters are in the selected source's own vocabulary; each block below
   // reads and writes only its own keys.
   const apolloFilters = form.filters as ApolloAudienceFilters;
@@ -179,7 +185,9 @@ export function AgentAudience() {
     if (v && typeof v === 'object') return Object.values(v).some((x) => x !== undefined && x !== null && x !== '');
     return v !== undefined && v !== null && v !== '';
   };
-  const hasFilter = isVrelly ? hasVrellyFilter(vrellyFilters) : Object.values(form.filters).some(isSet);
+  const hasFilter = isSignals
+    ? hasSignalPersona(form.filters as SignalAudienceFilters)
+    : isVrelly ? hasVrellyFilter(vrellyFilters) : Object.values(form.filters).some(isSet);
 
   const save = async () => {
     try {
@@ -333,7 +341,7 @@ export function AgentAudience() {
               value={form.source ?? DEFAULT_SOURCE}
               // Vocabularies differ, so a source switch on a NEW audience starts
               // the filters over rather than carrying meaningless keys across.
-              onChange={(v) => setForm({ ...form, source: v, filters: {} })}
+              onChange={(v) => setForm({ ...form, source: v, filters: v === 'signals' ? { ...DEFAULT_SIGNAL_FILTERS } : {} })}
               locked={!!editing}
             />
 
@@ -442,7 +450,13 @@ export function AgentAudience() {
                 {getAudienceSource(form.source).label} filters
               </p>
 
-              {isVrelly ? (
+              {isSignals ? (
+                <SignalAudienceFiltersForm
+                  value={form.filters as SignalAudienceFilters}
+                  onChange={(v) => setForm((f) => ({ ...f, filters: v }))}
+                  isAdmin={isPlatformAdmin}
+                />
+              ) : isVrelly ? (
                 <div className="space-y-4">
                   <div>
                     <Label>Job titles</Label>
@@ -708,8 +722,9 @@ export function AgentAudience() {
               {!hasFilter && (
                 <p className="text-xs text-amber-600 flex items-center gap-1">
                   <AlertTriangle className="h-3 w-3" />
-                  At least one filter is required — {getAudienceSource(form.source).label}
-                  {' '}refuses an unfiltered search.
+                  {isSignals
+                    ? 'Choose who to reach — at least one job title, seniority or department.'
+                    : <>At least one filter is required — {getAudienceSource(form.source).label}{' '}refuses an unfiltered search.</>}
                 </p>
               )}
             </div>
@@ -733,13 +748,18 @@ export function AgentAudience() {
       {/* Each source has its own preview: Apollo's search withholds contact
           data and needs Reveal; Vrelly's records are complete. */}
       <AudiencePreviewDialog
-        audience={previewing && previewing.source !== 'vrelly' ? previewing : null}
-        open={!!previewing && previewing.source !== 'vrelly'}
+        audience={previewing && previewing.source !== 'vrelly' && previewing.source !== 'signals' ? previewing : null}
+        open={!!previewing && previewing.source !== 'vrelly' && previewing.source !== 'signals'}
         onOpenChange={(v) => { if (!v) setPreviewing(null); }}
       />
       <VrellyPreviewDialog
         audience={previewing && previewing.source === 'vrelly' ? previewing : null}
         open={!!previewing && previewing.source === 'vrelly'}
+        onOpenChange={(v) => { if (!v) setPreviewing(null); }}
+      />
+      <SignalsPreviewDialog
+        audience={previewing && previewing.source === 'signals' ? previewing : null}
+        open={!!previewing && previewing.source === 'signals'}
         onOpenChange={(v) => { if (!v) setPreviewing(null); }}
       />
     </div>

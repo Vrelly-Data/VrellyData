@@ -27,7 +27,7 @@
 //   7. push                        IRREVERSIBLE
 //   8. close the run row
 //
-// TWO SOURCES (agent_audiences.source):
+// THREE SOURCES (agent_audiences.source):
 //   apollo  search (free) -> enrich (credits) -> push, as described above.
 //   vrelly  ONE database call replaces search+enrich: public.prospects rows are
 //           already complete, so steps 4-6 collapse into vrelly_audience_search
@@ -35,7 +35,13 @@
 //           already pushed, already has as a lead, or already has as a synced
 //           contact. No Apollo call is made and credits_spent stays 0. Matches
 //           come back in id order, so successive runs walk the list.
-//   The live preflight (step 3) runs FIRST for both: a dead campaign must stop
+//   signals signal -> company -> people (./signals.ts, _shared/signal-resolver.ts):
+//           matching signals this audience has not used yet, resolved free
+//           (Vrelly prospects, the signal's named person) before paid (Apollo,
+//           under the same monthly cap and 422 handling), pushed with the
+//           signal as custom fields; pushed signals are marked 'pushed' for
+//           the team.
+//   The live preflight (step 3) runs FIRST for all of them: a dead campaign must stop
 //   a Vrelly run just as it stops an Apollo one, because the push burns the
 //   prospect either way.
 //
@@ -65,6 +71,7 @@ import { preflightCampaign } from "../_shared/campaign-preflight.ts";
 import { ENRICH_MAX_PER_CALL } from "../_shared/apollo.ts";
 import { getApolloKeyForUser, ApolloKeyMissingError } from "../_shared/apollo-key.ts";
 import { compileVrellyFilters, searchVrelly, VrellyFilterError } from "../_shared/vrelly-audience.ts";
+import { runSignalsSource } from "./signals.ts";
 
 type RunReason = "monthly_cap" | "apollo_insufficient_credits";
 
@@ -318,6 +325,27 @@ Deno.serve(async (req) => {
         note: "Checked live against the platform — a stored campaign status is not a reliable signal.",
         preflight: pf, run_id: runId,
       }, 409);
+    }
+
+    // ---- 4s. SIGNALS: signal -> company -> people ---------------------------
+    if (claimed.source === "signals") {
+      const r = await runSignalsSource({
+        supabase, supabaseUrl, agentApiKey, userId: userId!, audience: claimed, runId, allowance,
+        signalIds: Array.isArray(body.signal_ids) ? body.signal_ids.map(String) : null,
+        selections: Array.isArray(body.selections) ? body.selections : null,
+        counters, push,
+      });
+      await finish(r.status, r.errorDetail, r.reason);
+      console.log(
+        `[run-agent-audience] audience=${claimed.id} source=signals trigger=${trigger} status=${r.status} ` +
+          `reason=${r.reason ?? "-"} signals_considered=${r.signalsConsidered} ` +
+          Object.entries(counters).map(([k, v]) => `${k}=${v}`).join(" "),
+      );
+      return json({
+        ...(r.httpStatus === 200 ? { success: true } : { error: r.error }),
+        run_id: runId, status: r.status, reason: r.reason, source: "signals", ...counters,
+        signals_considered: r.signalsConsidered, signals_marked: r.signalsMarked, note: r.note, results: r.results,
+      }, r.httpStatus);
     }
 
     // ---- 4v. VRELLY: one query replaces search + enrich ---------------------

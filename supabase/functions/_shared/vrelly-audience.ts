@@ -175,7 +175,7 @@ function expandCountries(values: string[]): string[] {
   return [...out];
 }
 
-function expandStates(values: string[]): string[] {
+export function expandStates(values: string[]): string[] {
   const out = new Set<string>();
   for (const v of values) {
     const l = v.toLowerCase();
