@@ -1,4 +1,4 @@
-// github / repo_activity. Logic: ./source.ts; pipeline: ../_shared/signals.ts.
+// product_launch (market saas). Logic: ./source.ts; pipeline: ../_shared/signals.ts.
 import { serveSignalSource } from "../_shared/signals.ts";
 import { fetchGithubActivity } from "./source.ts";
 

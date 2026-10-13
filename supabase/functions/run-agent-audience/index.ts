@@ -72,6 +72,7 @@ import { ENRICH_MAX_PER_CALL } from "../_shared/apollo.ts";
 import { getApolloKeyForUser, ApolloKeyMissingError } from "../_shared/apollo-key.ts";
 import { compileVrellyFilters, searchVrelly, VrellyFilterError } from "../_shared/vrelly-audience.ts";
 import { runSignalsSource } from "./signals.ts";
+import { enrichmentCreditsThisMonth } from "../_shared/signal-resolver-supabase.ts";
 
 type RunReason = "monthly_cap" | "apollo_insufficient_credits";
 
@@ -491,8 +492,17 @@ Deno.serve(async (req) => {
         await finish("failed", { stage: "budget", detail: d });
         return json({ error: "Could not read the Apollo credit budget", detail: d, run_id: runId }, 500);
       }
+      // High Intent enrichment draws on the same monthly cap.
+      let enrichUsed: number;
+      try {
+        enrichUsed = await enrichmentCreditsThisMonth(supabase, userId, monthStartUtc());
+      } catch (e) {
+        const d = e instanceof Error ? e.message : String(e);
+        await finish("failed", { stage: "budget", detail: d });
+        return json({ error: "Could not read the Apollo credit budget", detail: d, run_id: runId }, 500);
+      }
       const cap = Number(cfg?.apollo_monthly_credit_cap ?? 200);
-      const used = (spentRows ?? []).reduce((n: number, r: { credits_spent: number }) => n + Number(r.credits_spent ?? 0), 0);
+      const used = (spentRows ?? []).reduce((n: number, r: { credits_spent: number }) => n + Number(r.credits_spent ?? 0), 0) + enrichUsed;
       budget = Math.max(0, cap - used);
       console.log(`[run-agent-audience] apollo budget user=${userId} cap=${cap} used_this_month=${used} remaining=${budget}`);
     }

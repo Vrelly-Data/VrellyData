@@ -2,7 +2,7 @@
 // runSignalSource's run-log outcomes against a fake PostgREST.
 import { assert, assertEquals, assertThrows } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
-  clampScore, dedupeBatch, dedupeKey, normalizeDomain, runSignalSource, type SignalInput, toIso, upsertSignals,
+  clampScore, dedupeBatch, dedupeKey, fixText, fixTextDeep, normalizeDomain, runSignalSource, type SignalInput, toIso, upsertSignals,
 } from "./signals.ts";
 import { FakeSupabase, json, noProviders, setTestEnv, testOpts, withFakes } from "./testing/fake_platform.ts";
 
@@ -74,7 +74,7 @@ function runDb(start: unknown, upsert?: (b: { p_rows: unknown[] }) => unknown) {
   db.rpc.signals_finish_run = (b: Record<string, unknown>) => { finished.push(b); return null; };
   return { db, finished };
 }
-const started = { run_id: "run-1", last_success_at: null, source: { key: "s", vertical: "v", kind: "api", cadence: "daily", default_visibility: "all_clients", config: { a: 1 } } };
+const started = { run_id: "run-1", last_success_at: null, source: { key: "s", signal_type: "t", default_markets: [], kind: "api", cadence: "daily", default_visibility: "all_clients", config: { a: 1 } } };
 
 Deno.test({
   name: "runSignalSource: success writes the run counts; the fetcher sees config + first-run flag",
@@ -139,6 +139,48 @@ Deno.test({
         fetcher: () => { called = true; return Promise.resolve({ signals: [], fetched: 0 }); },
       }));
       assertEquals([result.status, result.skipped, called, finished.length], ["skipped", why, false, 0]);
+    }
+  },
+});
+
+Deno.test("fixText: cp1252 symbols read as C1 controls, UTF-8 mojibake, idempotent, leaves good text alone", () => {
+  assertEquals(fixText("3M\u0099 Attest\u0099 Steam"), "3M™ Attest™ Steam");
+  assertEquals(fixText("Smith\u0092s \u0093quote\u0094 \u0096 dash"), "Smith’s “quote” – dash");
+  assertEquals(fixText("MickaÃ«l Keromnes"), "Mickaël Keromnes");
+  assertEquals(fixText("Veronika SÃ¼di"), "Veronika Südi");
+  assertEquals(fixText("Itâ€™s fine"), "It’s fine");
+  for (const good of ["Ambu® aScope 0º", "Crème brûlée", "Zürich © 2026", "Ãngel", "東京", "plain"]) {
+    assertEquals(fixText(good), good);
+  }
+  for (const x of ["3M\u0099 Attest\u0099", "MickaÃ«l", "Itâ€™s"]) assertEquals(fixText(fixText(x)), fixText(x), "idempotent");
+  assertEquals(fixText("a\u0000b\u0007c\td\ne"), "abc\td\ne");
+  assertEquals(fixTextDeep({ t: "X\u0099", a: ["Ã«", 1], n: null }), { t: "X™", a: ["ë", 1], n: null });
+});
+
+Deno.test("upsertSignals: every string is repaired before the write", async () => {
+  let sent: SignalInput[] = [];
+  const supabase = { rpc: (_fn: string, args: { p_rows: SignalInput[] }) => { sent = args.p_rows; return Promise.resolve({ data: { inserted: 1 }, error: null }); } };
+  await upsertSignals(supabase, "s", [sig("k", "2026-10-01T00:00:00Z", { title: "3M\u0099 Attest\u0099", payload: { device_name: "Attest\u0099" } })]);
+  assertEquals([sent[0].title, sent[0].payload?.device_name], ["3M™ Attest™", "Attest™"]);
+});
+
+Deno.test({
+  name: "runSignalSource: afterUpsert runs after the write; its error makes the run partial, its detail is kept",
+  ...testOpts,
+  async fn() {
+    for (const [after, want] of [
+      [() => Promise.resolve({ detail: { enriched: 2 } }), "success"],
+      [() => Promise.resolve({ detail: { enriched: 0 }, error: "lookup failed" }), "partial"],
+      [() => Promise.reject(new Error("boom")), "partial"],
+    ] as const) {
+      const { db, finished } = runDb(started);
+      const { result } = await withFakes(db, noProviders, () => runSignalSource({
+        supabase: createClient("http://supabase.test", "svc"), sourceKey: "s",
+        fetcher: () => Promise.resolve({ signals: [sig("x", "2026-10-01T00:00:00Z")], fetched: 1 }),
+        afterUpsert: after,
+      }));
+      assertEquals([result.status, finished[0].p_status, finished[0].p_inserted], [want, want, 1]);
+      if (want === "success") assertEquals((finished[0].p_detail as Record<string, unknown>).enriched, 2);
     }
   },
 });

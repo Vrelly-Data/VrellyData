@@ -9,7 +9,8 @@ const NOW = Date.parse("2026-10-09T15:00:00Z");
 
 Deno.test("map510k: live record → company=applicant, person=contact, k_number dedupe, FDA page url", () => {
   const s = map510k(live.results[0], NOW)!;
-  assertEquals(s.signal_type, "510k_cleared");
+  assertEquals(s.signal_type, "fda_clearance");
+  assertEquals(s.markets, ["medical_device"]);
   assertEquals(s.dedupe_key, "510k:k260945");
   assertEquals(s.company_name, "Fit-Pro KFT (Ltd.) - DBA E-Fit");
   assertEquals(s.person_name, "Janos Papp"); // double space collapsed
@@ -40,7 +41,7 @@ Deno.test("score510k: US + recent + SE + contact ranks above an old foreign reco
 });
 
 function ctx(fetchFn: typeof fetch, lastSuccessAt: string | null, config: Record<string, unknown> = {}): SourceContext {
-  return { supabase: null, source: { key: "openfda_510k", vertical: "medical_device", kind: "api", cadence: "daily", default_visibility: "all_clients", config },
+  return { supabase: null, source: { key: "openfda_510k", signal_type: "fda_clearance", default_markets: ["medical_device"], kind: "api", cadence: "daily", default_visibility: "all_clients", config },
     config: { lookback_days_initial: 30, lookback_days: 10, page_size: 2, max_pages: 5, ...config }, lastSuccessAt, fetchFn, now: NOW };
 }
 

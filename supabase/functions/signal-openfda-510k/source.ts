@@ -1,4 +1,4 @@
-// medical_device / 510k_cleared — FDA 510(k) clearances from openFDA.
+// fda_clearance (market: medical_device) — FDA 510(k) clearances from openFDA.
 //
 // https://api.fda.gov/device/510k.json, decision_date in the last N days
 // (config: lookback_days_initial on the first run, lookback_days after),
@@ -10,8 +10,11 @@
 //                 openfda: { device_name?, medical_specialty_description?, ... } }] }
 // openFDA publishes weekly (last_updated lags), so lookback_days must cover a
 // week+; overlap is free because the dedupe key is the k_number.
+// openFDA serves cp1252 symbols as C1 controls ("3M\u0099" = "3M™"); the shared
+// upsert repairs every string (fixText), so the mapper keeps them raw.
 
 import { clampScore, collapseSpaces, dedupeKey, type FetchResult, type SignalInput, type SourceContext, toIso } from "../_shared/signals.ts";
+import { assignMarkets } from "../_shared/signal-markets.ts";
 
 export const OPENFDA_510K_URL = "https://api.fda.gov/device/510k.json";
 
@@ -59,7 +62,8 @@ export function map510k(r: Fda510k, now = Date.now()): SignalInput | null {
   const applicant = collapseSpaces(r.applicant);
   const device = collapseSpaces(r.device_name) ?? collapseSpaces(r.openfda?.device_name as string | undefined);
   return {
-    signal_type: "510k_cleared",
+    signal_type: "fda_clearance",
+    markets: assignMarkets({ signal_type: "fda_clearance" }),
     occurred_at: occurred,
     dedupe_key: dedupeKey("510k", k),
     title: `${applicant ?? "Unknown applicant"} cleared ${k}${device ? `: ${device}` : ""}`.slice(0, 500),

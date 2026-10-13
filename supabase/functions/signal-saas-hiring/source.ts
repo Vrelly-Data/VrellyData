@@ -1,6 +1,8 @@
-// saas_hiring / job_posted — new postings on watched job boards.
+// hiring — new postings on watched job boards.
 //
-// config.boards: [{ ats: 'greenhouse'|'lever'|'ashby', token, company_name?, company_domain? }]
+// config.boards: [{ ats: 'greenhouse'|'lever'|'ashby', token, company_name?, company_domain?, industry? }]
+// Markets come from the company's industry (board.industry, else the most
+// common industry of the company's Vrelly prospects by domain); else 'other'.
 // (starts empty; admins add companies in Admin → Inference Insights → Signals).
 // Public board APIs, shapes verified live 2026-10-09:
 //   Greenhouse boards-api.greenhouse.io/v1/boards/{token}/jobs?content=true
@@ -16,6 +18,7 @@
 // config.role_keywords (whole words, case-insensitive) raise the score.
 
 import { clampScore, collapseSpaces, dedupeKey, type FetchResult, normalizeDomain, type SignalInput, type SourceContext, toIso } from "../_shared/signals.ts";
+import { assignMarkets } from "../_shared/signal-markets.ts";
 
 export type Ats = "greenhouse" | "lever" | "ashby";
 
@@ -24,6 +27,8 @@ export interface Board {
   token: string;
   company_name?: string | null;
   company_domain?: string | null;
+  /** Company industry, when known (drives the market). */
+  industry?: string | null;
 }
 
 export interface Posting {
@@ -116,8 +121,11 @@ export function mapPosting(board: Board, p: Posting, keywords: string[], now = D
   if (!p.published_at) return null;
   const company = collapseSpaces(board.company_name) ?? p.company_name ?? board.token;
   const matched = matchedKeywords(p.title, keywords);
+  const industry = collapseSpaces(board.industry);
   return {
-    signal_type: "job_posted",
+    signal_type: "hiring",
+    markets: assignMarkets({ signal_type: "hiring", industry }),
+    industry,
     occurred_at: p.published_at,
     dedupe_key: dedupeKey("job", board.ats, board.token, p.id),
     title: `${company} is hiring: ${p.title}${p.location ? ` (${p.location})` : ""}`.slice(0, 500),
@@ -158,8 +166,24 @@ export function readBoards(config: Record<string, unknown>): Board[] {
     .map((b) => ({ ...b, token: String(b.token).trim() }));
 }
 
+/** Fill board.industry from Vrelly prospects by domain where the config has none. Never fatal. */
+export async function withIndustries(ctx: SourceContext, boards: Board[]): Promise<Board[]> {
+  const domains = [...new Set(boards.filter((b) => !b.industry).map((b) => normalizeDomain(b.company_domain)).filter((d): d is string => !!d))];
+  if (!domains.length) return boards;
+  let data, error;
+  try {
+    ({ data, error } = await ctx.supabase.rpc("signals_hi_free_lookups", { p_emails: [], p_domains: domains, p_signal_ids: [] }));
+  } catch (e) {
+    error = e;
+  }
+  if (error) return boards;
+  const by = new Map<string, string>(((data?.by_domain ?? []) as Array<{ domain: string; industry: string | null }>)
+    .filter((r) => r.industry).map((r) => [r.domain, r.industry!]));
+  return boards.map((b) => (b.industry ? b : { ...b, industry: by.get(normalizeDomain(b.company_domain) ?? "") ?? null }));
+}
+
 export async function fetchSaasHiring(ctx: SourceContext): Promise<FetchResult> {
-  const boards = readBoards(ctx.config);
+  const boards = await withIndustries(ctx, readBoards(ctx.config));
   const keywords = Array.isArray(ctx.config.role_keywords) ? (ctx.config.role_keywords as string[]) : DEFAULT_ROLE_KEYWORDS;
   const maxAgeMs = Number(ctx.config.max_age_days ?? 30) * 86_400_000;
   const signals: SignalInput[] = [];

@@ -6,8 +6,9 @@
 // filters exactly as the preview did.
 //
 // TWO HALVES:
-//   * WHICH SIGNALS — verticals/types, recency, minimum score and per-vertical
-//     filters. Compiled to signals_audience_candidates' p_query. Visibility is
+//   * WHICH SIGNALS — signal types (PUBLIC keys: high_intent, fda_clearance, …),
+//     markets, recency, minimum score and per-type filters. Compiled to
+//     signals_audience_candidates' p_query (internal type keys). Visibility is
 //     not a filter here: the SQL applies the signals RLS rule for the user, so
 //     a client can never select an admin-only or another team's signal.
 //   * WHO TO REACH at each signal's company — the target persona (job titles
@@ -19,6 +20,7 @@
 // otherwise silently widen the audience.
 
 import { containsPattern, expandStates, VRELLY_SENIORITIES, wordRegex } from "./vrelly-audience.ts";
+import { COMING_SOON_TYPES, internalTypeKey, isMarket, PUBLIC_TYPE_KEY, type SignalType } from "./signal-catalog.ts";
 
 export const SIGNALS_FILTERS_VERSION = 3;
 
@@ -34,19 +36,20 @@ export interface SignalPersona {
 }
 
 export interface SignalAudienceFilters {
-  /** signal_sources.vertical values; empty = every vertical the user can see. */
-  verticals?: string[];
-  signal_types?: string[];
+  /** Public signal type keys (signal-catalog.ts); empty = every type the user can see. */
+  types?: string[];
+  /** Markets, any of; empty = all. */
+  markets?: string[];
   /** Signals that happened in the last N days. Default 30. */
   recency_days?: number;
   /** 0-100. Default 0. */
   min_score?: number;
-  /** medical_device only. */
+  /** fda_clearance only. */
   fda?: { product_codes?: string[]; device_keywords?: string[]; states?: string[] };
-  /** saas_hiring only: whole words in the posted job title. */
+  /** hiring only: whole words in the posted job title. */
   hiring?: { role_keywords?: string[] };
-  /** github only: repo topics, any of. */
-  github?: { topics?: string[] };
+  /** product_launch only: repo topics, any of. */
+  product_launch?: { topics?: string[] };
   persona?: SignalPersona;
   /** People per company. Default 2, at most 10. */
   max_per_company?: number;
@@ -56,7 +59,6 @@ export interface SignalAudienceFilters {
   us_only?: boolean;
 }
 
-export const SIGNAL_VERTICALS = ["medical_device", "saas_hiring", "github", "web_visitors", "private_equity"] as const;
 export const DEFAULT_RECENCY_DAYS = 30;
 export const MAX_RECENCY_DAYS = 365;
 export const DEFAULT_PER_COMPANY = 2;
@@ -118,24 +120,29 @@ function int(key: string, v: unknown, def: number, min: number, max: number): nu
 }
 
 const TOP_KEYS = [
-  "verticals", "signal_types", "recency_days", "min_score", "fda", "hiring", "github",
+  "types", "markets", "recency_days", "min_score", "fda", "hiring", "product_launch",
   "persona", "max_per_company", "use_apollo", "us_only",
 ];
+
+/** A public (or internal) type key → the public key; throws on unknown or coming-soon types. */
+function publicType(raw: string): string {
+  const t = internalTypeKey(raw);
+  if (!t) throw new SignalFilterError(`Unknown signal type "${raw}"`);
+  if (COMING_SOON_TYPES.includes(t)) throw new SignalFilterError(`"${raw}" signals are coming soon`);
+  return PUBLIC_TYPE_KEY[t];
+}
 
 /** Validate into the canonical stored form (defaults filled in). */
 export function normalizeSignalFilters(raw: unknown): Required<Pick<SignalAudienceFilters,
   "recency_days" | "min_score" | "max_per_company" | "use_apollo" | "us_only">> & SignalAudienceFilters {
   const o = obj("signals", raw ?? {}, TOP_KEYS);
-  const verticals = list("verticals", o.verticals).map((s) => s.toLowerCase());
-  for (const v of verticals) {
-    if (!(SIGNAL_VERTICALS as readonly string[]).includes(v)) throw new SignalFilterError(`Unknown vertical "${v}"`);
-  }
-  const types = list("signal_types", o.signal_types).map((s) => s.toLowerCase());
-  for (const t of types) if (!/^[a-z0-9][a-z0-9_]{1,62}$/.test(t)) throw new SignalFilterError(`Invalid signal type "${t}"`);
+  const types = [...new Set(list("types", o.types).map(publicType))];
+  const markets = list("markets", o.markets).map((s) => s.toLowerCase());
+  for (const m of markets) if (!isMarket(m)) throw new SignalFilterError(`Unknown market "${m}"`);
 
   const fda = obj("fda", o.fda, ["product_codes", "device_keywords", "states"]);
   const hiring = obj("hiring", o.hiring, ["role_keywords"]);
-  const github = obj("github", o.github, ["topics"]);
+  const launch = obj("product_launch", o.product_launch, ["topics"]);
   const persona = obj("persona", o.persona, ["job_titles", "exclude_job_titles", "seniorities", "departments"]);
 
   const codes = list("fda.product_codes", fda.product_codes).map((s) => s.toUpperCase());
@@ -153,8 +160,8 @@ export function normalizeSignalFilters(raw: unknown): Required<Pick<SignalAudien
     use_apollo: o.use_apollo === true,
     us_only: o.us_only === undefined ? true : o.us_only === true,
   };
-  if (verticals.length) out.verticals = verticals;
-  if (types.length) out.signal_types = types;
+  if (types.length) out.types = types;
+  if (markets.length) out.markets = markets;
   const f = {
     product_codes: codes,
     device_keywords: list("fda.device_keywords", fda.device_keywords),
@@ -165,8 +172,8 @@ export function normalizeSignalFilters(raw: unknown): Required<Pick<SignalAudien
   }
   const roles = list("hiring.role_keywords", hiring.role_keywords);
   if (roles.length) out.hiring = { role_keywords: roles };
-  const topics = list("github.topics", github.topics).map((s) => s.toLowerCase());
-  if (topics.length) out.github = { topics };
+  const topics = list("product_launch.topics", launch.topics).map((s) => s.toLowerCase());
+  if (topics.length) out.product_launch = { topics };
   const p: SignalPersona = {};
   const titles = list("persona.job_titles", persona.job_titles);
   const xtitles = list("persona.exclude_job_titles", persona.exclude_job_titles);
@@ -185,15 +192,16 @@ export function hasPersona(p: SignalPersona | undefined): boolean {
 
 /** signals_audience_candidates' p_query. */
 export interface CompiledCandidateQuery {
-  verticals: string[] | null;
+  /** INTERNAL type keys (signals.signal_type). */
   signal_types: string[] | null;
+  markets: string[] | null;
   since: string;
   min_score: number;
   fda_product_codes: string[] | null;
   fda_device_regexes: string[] | null;
   fda_state_keys: string[] | null;
   hiring_role_regexes: string[] | null;
-  github_topics: string[] | null;
+  launch_topics: string[] | null;
 }
 
 /** signals_resolve_people's p_persona. */
@@ -229,15 +237,15 @@ export function compileSignalAudience(raw: unknown, now = Date.now()): CompiledS
   return {
     filters: f,
     candidates: {
-      verticals: nn(f.verticals),
-      signal_types: nn(f.signal_types),
+      signal_types: nn(f.types?.map((t) => internalTypeKey(t) as SignalType)),
+      markets: nn(f.markets),
       since: new Date(now - f.recency_days * 86_400_000).toISOString(),
       min_score: f.min_score,
       fda_product_codes: nn(f.fda?.product_codes),
       fda_device_regexes: nn(f.fda?.device_keywords?.map(wordRegex)),
       fda_state_keys: nn(f.fda?.states ? expandStates(f.fda.states) : undefined),
       hiring_role_regexes: nn(f.hiring?.role_keywords?.map(wordRegex)),
-      github_topics: nn(f.github?.topics),
+      launch_topics: nn(f.product_launch?.topics),
     },
     persona: {
       title_regexes: nn(titles.map(wordRegex)),

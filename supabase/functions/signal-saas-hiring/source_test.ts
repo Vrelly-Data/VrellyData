@@ -7,7 +7,7 @@ import type { SourceContext } from "../_shared/signals.ts";
 const fx = (n: string) => JSON.parse(Deno.readTextFileSync(new URL(`../_shared/testing/signal_fixtures/${n}`, import.meta.url)));
 const NOW = Date.parse("2026-10-09T15:00:00Z");
 
-Deno.test("Greenhouse: live job → posting (department, location, first_published) → job_posted signal", () => {
+Deno.test("Greenhouse: live job → posting (department, location, first_published) → hiring signal", () => {
   const p = fromGreenhouse(fx("greenhouse_jobs.json").jobs[0])!;
   assertEquals([p.id, p.title, p.department, p.location], ["8184174", "Account Manager", "Business Development", "London, United Kingdom"]);
   assertEquals(p.published_at, "2026-09-09T08:35:19.000Z");
@@ -17,6 +17,10 @@ Deno.test("Greenhouse: live job → posting (department, location, first_publish
   assertEquals(s.url, "https://careers.airbnb.com/positions/8184174?gh_jid=8184174");
   assertEquals(s.title, "Airbnb is hiring: Account Manager (London, United Kingdom)");
   assertEquals(s.payload?.department, "Business Development");
+  assertEquals([s.signal_type, s.markets], ["hiring", ["other"]], "no industry known → other");
+  const staffing = mapPosting({ ats: "greenhouse", token: "x", industry: "Staffing and Recruiting" }, p, [], NOW)!;
+  assertEquals([staffing.markets, staffing.industry], [["recruiting"], "Staffing and Recruiting"]);
+  assertEquals(mapPosting({ ats: "greenhouse", token: "x", industry: "Computer Software" }, p, [], NOW)!.markets, ["saas"]);
 });
 
 Deno.test("Lever: live posting → team as department, createdAt ms → ISO", () => {
@@ -63,7 +67,7 @@ Deno.test("fetch: only postings within max_age_days; a failing board is reported
     return Promise.resolve(new Response(JSON.stringify(fx("ashby_jobs.json"))));
   }) as unknown as typeof fetch;
   const config = { boards: [{ ats: "greenhouse", token: "airbnb" }, { ats: "lever", token: "missing" }, { ats: "ashby", token: "ramp" }], max_age_days: 60 };
-  const ctx: SourceContext = { supabase: null, source: { key: "saas_hiring", vertical: "saas_hiring", kind: "api", cadence: "daily", default_visibility: "all_clients", config }, config, lastSuccessAt: null, fetchFn: fake, now: NOW };
+  const ctx: SourceContext = { supabase: null, source: { key: "saas_hiring", signal_type: "hiring", default_markets: [], kind: "api", cadence: "daily", default_visibility: "all_clients", config }, config, lastSuccessAt: null, fetchFn: fake, now: NOW };
   const r = await fetchSaasHiring(ctx);
   assertEquals(r.fetched, 4);
   assertEquals(r.signals.map((s) => s.dedupe_key), ["job:greenhouse:airbnb:8184174"]); // the others are older than 60 days

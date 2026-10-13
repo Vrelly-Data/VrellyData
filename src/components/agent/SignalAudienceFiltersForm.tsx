@@ -4,37 +4,49 @@ import { Switch } from '@/components/ui/switch';
 import { TagInput } from '@/components/ui/tag-input';
 import { MultiSelectDropdown } from '@/components/search/MultiSelectDropdown';
 import { VRELLY_DEPARTMENT_OPTIONS, VRELLY_SENIORITY_OPTIONS } from '@/lib/vrellyAudienceFilters';
-import { SIGNAL_VERTICAL_OPTIONS, type SignalAudienceFilters } from '@/lib/signalAudienceFilters';
+import { SIGNAL_MARKET_OPTIONS, SIGNAL_TYPE_OPTIONS, type SignalAudienceFilters } from '@/lib/signalAudienceFilters';
 
 /**
  * Filters for a Signals-source audience: WHICH signals (top), then WHO to reach
  * at each signal's company (persona). The server validates and compiles both
- * (supabase/functions/_shared/signal-audience.ts); a vertical the user may not
- * see simply yields no signals — visibility is enforced in SQL, not here.
+ * (supabase/functions/_shared/signal-audience.ts); signals the user may not see
+ * (another team's High Intent, say) never match — visibility is enforced in
+ * SQL, not here.
  */
 export function SignalAudienceFiltersForm(
-  { value, onChange, isAdmin = false }:
+  { value, onChange }:
   { value: SignalAudienceFilters; onChange: (v: SignalAudienceFilters) => void; isAdmin?: boolean },
 ) {
   const set = <K extends keyof SignalAudienceFilters>(k: K, v: SignalAudienceFilters[K]) => onChange({ ...value, [k]: v });
   const persona = value.persona ?? {};
   const setPersona = (k: keyof NonNullable<SignalAudienceFilters['persona']>, v: string[]) => set('persona', { ...persona, [k]: v });
-  const verticals = value.verticals ?? [];
-  const shows = (v: string) => verticals.length === 0 || verticals.includes(v);
+  const types = value.types ?? [];
+  const shows = (t: string) => types.length === 0 || types.includes(t);
   const num = (s: string, def: number) => (s.trim() === '' ? def : Number(s));
 
   return (
     <div className="space-y-5">
       <section className="space-y-3">
         <p className="text-sm font-medium">Which signals</p>
-        <div>
-          <Label>Signal types</Label>
-          <MultiSelectDropdown
-            options={SIGNAL_VERTICAL_OPTIONS.filter((o) => isAdmin || o.value !== 'private_equity')}
-            selected={verticals}
-            onChange={(v) => set('verticals', v)}
-            placeholder="All signals you can see"
-          />
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <Label>Signal types</Label>
+            <MultiSelectDropdown
+              options={SIGNAL_TYPE_OPTIONS}
+              selected={types}
+              onChange={(v) => set('types', v)}
+              placeholder="All signals you can see"
+            />
+          </div>
+          <div>
+            <Label>Markets</Label>
+            <MultiSelectDropdown
+              options={SIGNAL_MARKET_OPTIONS}
+              selected={value.markets ?? []}
+              onChange={(v) => set('markets', v)}
+              placeholder="All markets"
+            />
+          </div>
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div>
@@ -49,9 +61,9 @@ export function SignalAudienceFiltersForm(
           </div>
         </div>
 
-        {shows('medical_device') && (
+        {shows('fda_clearance') && (
           <div className="rounded-md border p-3 space-y-3">
-            <p className="text-xs font-medium text-muted-foreground">510(k) clearances</p>
+            <p className="text-xs font-medium text-muted-foreground">FDA clearance</p>
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <Label>Product codes</Label>
@@ -71,18 +83,18 @@ export function SignalAudienceFiltersForm(
             </div>
           </div>
         )}
-        {shows('saas_hiring') && (
+        {shows('hiring') && (
           <div className="rounded-md border p-3">
             <Label>Hiring: role keywords</Label>
             <TagInput value={value.hiring?.role_keywords ?? []} placeholder="SDR, Account Executive — whole words"
               onChange={(v) => set('hiring', { role_keywords: v })} />
           </div>
         )}
-        {shows('github') && (
+        {shows('product_launch') && (
           <div className="rounded-md border p-3">
-            <Label>GitHub: repo topics</Label>
-            <TagInput value={value.github?.topics ?? []} placeholder="kubernetes, llm"
-              onChange={(v) => set('github', { topics: v })} />
+            <Label>Product launch: topics</Label>
+            <TagInput value={value.product_launch?.topics ?? []} placeholder="kubernetes, llm"
+              onChange={(v) => set('product_launch', { topics: v })} />
           </div>
         )}
       </section>
