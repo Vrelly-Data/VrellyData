@@ -19,7 +19,8 @@
 // The first run (no previous success) takes every interested row; later runs
 // take people with an interested row since the last success minus 2 days.
 // After the write, enrichPositiveResponses fills missing firmographics
-// (../_shared/signal-enrichment.ts) for new and changed signals.
+// (../_shared/signal-enrichment.ts) for new and changed signals — on the signal
+// only; inference_events write-back is off (config.inference_write_back).
 
 import {
   clampScore, collapseSpaces, dedupeKey, type FetchResult, normalizeDomain, type SignalInput, type SourceContext, toIso,
@@ -189,7 +190,7 @@ export function queueRowToTarget(q: QueueRow): EnrichTarget {
  * not finished). Free steps always; Apollo per the team's opt-in and budget.
  */
 export async function enrichPositiveResponses(ctx: SourceContext): Promise<{ detail?: Record<string, unknown>; error?: string | null }> {
-  const batch = Math.max(1, Math.min(5000, Number(ctx.config.enrich_batch ?? 500)));
+  const batch = Math.max(1, Math.min(5000, Number(ctx.config.enrich_batch ?? 2000)));
   const { data, error } = await ctx.supabase.rpc("signals_hi_enrichment_queue", { p_limit: batch });
   if (error) return { error: `signals_hi_enrichment_queue: ${error.message}` };
   const targets = ((data ?? []) as QueueRow[]).map(queueRowToTarget);

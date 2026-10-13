@@ -9,9 +9,11 @@
 --     the lead; reply text only in the candidate (it goes to admin detail)
 --   enrichment queue — new / changed signals; Apollo retries only for teams
 --     with Apollo on, not more often than every 6 hours
---   apply — fills only EMPTY signal fields; writes back ONLY to the person's
---     'interested' inference rows in the SAME team scope, ONLY their empty
---     fields; markets/title replaced; provenance kept
+--   apply — fills only EMPTY signal fields; markets/title replaced;
+--     provenance kept; with the shipped config (inference_write_back false)
+--     NO inference_events row is touched; with it turned on, writes back ONLY
+--     to the person's 'interested' rows in the SAME team scope, ONLY their
+--     empty fields
 --   free lookups — prospects by email / domain, inference by signal
 
 do $t$
@@ -102,7 +104,21 @@ begin
     raise exception 'FAIL: provenance %', r.enrichment;
   end if;
 
-  -- write-back: team A interested rows, empty fields only
+  -- shipped config: write-back OFF — no inference row touched
+  if coalesce((cfg ->> 'inference_write_back')::boolean, false) then
+    raise exception 'FAIL: inference_write_back must ship off: %', cfg;
+  end if;
+  if (j ->> 'inference_rows')::int <> 0 then raise exception 'FAIL: wrote back % inference rows with write-back off', j ->> 'inference_rows'; end if;
+  if exists (select 1 from public.inference_events where person_key = pk
+              and (industry is not null and team_id = t_a or country is not null and team_id = t_a
+                   or (team_id = t_a and source = 'agent_leads' and job_title is not null))) then
+    raise exception 'FAIL: an inference row was written with write-back off';
+  end if;
+
+  -- write-back ON (for Part B): re-apply with the flag; team A interested rows, empty fields only
+  j := public.signals_hi_apply_enrichment(jsonb_build_array(jsonb_build_object('signal_id', s_id, 'values', '{}'::jsonb,
+         'markets', jsonb_build_array('private_equity'), 'title', 'High intent: Ann Lee, Founder at Acme')),
+         cfg || '{"inference_write_back": true}'::jsonb);
   if (j ->> 'inference_rows')::int <> 2 then raise exception 'FAIL: wrote back % inference rows (want 2)', j ->> 'inference_rows'; end if;
   if exists (select 1 from public.inference_events where person_key = pk and team_id = t_a and intent = 'interested'
               and (industry is distinct from 'Construction' or country is distinct from 'United States')) then

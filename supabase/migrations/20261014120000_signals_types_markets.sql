@@ -215,7 +215,11 @@ update public.signal_sources
            select jsonb_build_object('reply2_backfill', t, 'smartlead_backfill', t)
              from (select (config -> 'team_ids' ->> 0) as t) x where x.t is not null), '{}'::jsonb),
          'excerpt_chars', coalesce(config -> 'excerpt_chars', '280'::jsonb),
-         'page_size', 500, 'enrich_batch', 500, 'apollo_max_per_run', 50),
+         'page_size', 500, 'enrich_batch', 2000, 'apollo_max_per_run', 50,
+         -- OFF: enriching only interested rows would widen the reply2 enrichment
+         -- bias in inference insights. Part B (all intents enriched equally)
+         -- may turn it on.
+         'inference_write_back', false),
        updated_at = now()
  where key = 'pe_seller_intent';
 
@@ -686,9 +690,10 @@ as $$
    where t.id = any(coalesce(p_team_ids, '{}'))
 $$;
 
--- Store a batch of enrichment results: on the signal (empty fields only;
--- markets/title recomputed by the caller), then into the backing
--- inference_events rows' EMPTY fields only (same team scope, 'interested').
+-- Store a batch of enrichment results on the signal (empty fields only;
+-- markets/title recomputed by the caller). Only when config.inference_write_back
+-- is true (shipped false) also into the backing inference_events rows' EMPTY
+-- fields (same team scope, 'interested').
 create or replace function public.signals_hi_apply_enrichment(p_rows jsonb, p_config jsonb default null)
 returns jsonb
 language plpgsql security definer set search_path = public
@@ -741,6 +746,10 @@ begin
   )
   select count(*) into v_signals from u;
 
+  if not coalesce((v_config ->> 'inference_write_back')::boolean, false) then
+    return jsonb_build_object('signals', v_signals, 'inference_rows', 0, 'inference_write_back', false);
+  end if;
+
   with tgt as (
     select s.id, s.team_id, d.detail ->> 'person_key' as person_key,
            s.industry, s.person_title, s.seniority, s.city, s.state, s.country, s.company_size
@@ -775,7 +784,7 @@ begin
   )
   select count(*) into v_inf from w;
 
-  return jsonb_build_object('signals', v_signals, 'inference_rows', v_inf);
+  return jsonb_build_object('signals', v_signals, 'inference_rows', v_inf, 'inference_write_back', true);
 end
 $$;
 

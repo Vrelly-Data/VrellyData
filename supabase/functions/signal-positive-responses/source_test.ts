@@ -100,7 +100,7 @@ Deno.test("fetch: first run is the backfill (since=null), keyset-paged on scope_
   assertEquals(calls[0].p_since, "2026-10-06T13:05:00.000Z");
 });
 
-Deno.test("enrich hook: queue → free lookups → apply (signal + inference write-back); empty queue does nothing", async () => {
+Deno.test("enrich hook: queue → free lookups → apply (signal + inference write-back only if config turns it on); empty queue does nothing", async () => {
   const rpcs: Array<[string, Record<string, unknown>]> = [];
   const queue = [{
     signal_id: "s1", team_id: TEAM, team_default_market: null, person_key: "email:a@acme.io", person_name: "Ann Lee",
