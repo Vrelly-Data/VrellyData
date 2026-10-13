@@ -1,4 +1,4 @@
-// github / repo_activity — new repositories and releases.
+// product_launch (market: saas) — new GitHub repositories and releases.
 //
 // config.orgs:            [{ login, company_name?, company_domain? }] (or plain login strings)
 // config.search_queries:  GitHub repo-search queries, e.g. "topic:llm stars:>20"
@@ -15,6 +15,7 @@
 // Dedupe: gh:<repo id>:<new_repo|release>:<YYYY-MM-DD>.
 
 import { clampScore, collapseSpaces, dedupeKey, type FetchResult, normalizeDomain, type SignalInput, type SourceContext, toIso } from "../_shared/signals.ts";
+import { assignMarkets } from "../_shared/signal-markets.ts";
 
 export const GITHUB_API = "https://api.github.com";
 
@@ -74,7 +75,8 @@ export function mapNewRepo(repo: Repo, ctx: { entry: OrgEntry | null; org: OrgIn
   const co = companyFor(ctx.entry, ctx.org, ownerLogin, ownerIsOrg);
   const stars = Number(repo.stargazers_count ?? 0);
   return {
-    signal_type: "repo_activity",
+    signal_type: "product_launch",
+    markets: assignMarkets({ signal_type: "product_launch" }),
     occurred_at: created,
     dedupe_key: dedupeKey("gh", repo.id, "new_repo", day(created)),
     title: `New repo ${repo.full_name}${repo.description ? ` — ${collapseSpaces(repo.description)}` : ""}`.slice(0, 500),
@@ -98,7 +100,8 @@ export function mapRelease(ev: ReleaseEvent, ctx: { entry: OrgEntry; org: OrgInf
   const co = companyFor(ctx.entry, ctx.org, ctx.entry.login, true);
   const label = collapseSpaces(rel.name) ?? rel.tag_name ?? "release";
   return {
-    signal_type: "repo_activity",
+    signal_type: "product_launch",
+    markets: assignMarkets({ signal_type: "product_launch" }),
     occurred_at: at,
     dedupe_key: dedupeKey("gh", ev.repo.id, "release", day(at)),
     title: `${ev.repo.name} released ${label}`.slice(0, 500),

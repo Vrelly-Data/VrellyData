@@ -6,7 +6,7 @@ import {
 const persona = { job_titles: ["CEO"] };
 
 Deno.test("filters: defaults filled in, empty lists dropped", () => {
-  const f = normalizeSignalFilters({ verticals: ["medical_device"], persona, fda: { states: [] } });
+  const f = normalizeSignalFilters({ types: ["fda_clearance"], persona, fda: { states: [] } });
   assertEquals(f.recency_days, 30);
   assertEquals(f.min_score, 0);
   assertEquals(f.max_per_company, 2);
@@ -19,7 +19,21 @@ Deno.test("filters: unknown keys are rejected, at every level", () => {
   assertThrows(() => normalizeSignalFilters({ person_titles: ["CEO"] }), SignalFilterError, "Unknown");
   assertThrows(() => normalizeSignalFilters({ fda: { device: ["x"] } }), SignalFilterError, "Unknown fda");
   assertThrows(() => normalizeSignalFilters({ persona: { titles: ["CEO"] } }), SignalFilterError, "Unknown persona");
-  assertThrows(() => normalizeSignalFilters({ verticals: ["crypto"] }), SignalFilterError, "Unknown vertical");
+  assertThrows(() => normalizeSignalFilters({ verticals: ["medical_device"] }), SignalFilterError, "Unknown");
+  assertThrows(() => normalizeSignalFilters({ types: ["crypto"] }), SignalFilterError, "Unknown signal type");
+  assertThrows(() => normalizeSignalFilters({ markets: ["crypto"] }), SignalFilterError, "Unknown market");
+  assertThrows(() => normalizeSignalFilters({ types: ["fast_growth"] }), SignalFilterError, "coming soon");
+  assertThrows(() => normalizeSignalFilters({ github: { topics: ["x"] } }), SignalFilterError, "Unknown");
+});
+
+Deno.test("filters: types stored as PUBLIC keys (high_intent), compiled to internal keys for SQL", () => {
+  const f = normalizeSignalFilters({ types: ["high_intent", "positive_response", "FDA_CLEARANCE"], markets: ["SaaS", "private_equity"] });
+  assertEquals(f.types, ["high_intent", "fda_clearance"]);
+  assertEquals(f.markets, ["saas", "private_equity"]);
+  const c = compileSignalAudience({ ...f, persona });
+  assertEquals(c.candidates.signal_types, ["positive_response", "fda_clearance"]);
+  assertEquals(c.candidates.markets, ["saas", "private_equity"]);
+  assertEquals(compileSignalAudience({ persona }).candidates.signal_types, null);
 });
 
 Deno.test("filters: ranges and FDA product codes validated", () => {
@@ -31,16 +45,16 @@ Deno.test("filters: ranges and FDA product codes validated", () => {
 });
 
 Deno.test("compile: a target persona is required", () => {
-  assertThrows(() => compileSignalAudience({ verticals: ["medical_device"] }), SignalFilterError, "Choose who to reach");
+  assertThrows(() => compileSignalAudience({ types: ["fda_clearance"] }), SignalFilterError, "Choose who to reach");
   assertThrows(() => compileSignalAudience({ persona: { exclude_job_titles: ["Assistant"] } }), SignalFilterError);
 });
 
-Deno.test("compile: candidate query — per-vertical filters, since, states expanded", () => {
+Deno.test("compile: candidate query — per-type filters, since, states expanded", () => {
   const now = Date.parse("2026-10-13T00:00:00Z");
   const c = compileSignalAudience({
-    verticals: ["medical_device", "saas_hiring"], recency_days: 7, min_score: 60,
+    types: ["fda_clearance", "hiring"], recency_days: 7, min_score: 60,
     fda: { product_codes: ["llz"], device_keywords: ["catheter"], states: ["TX"] },
-    hiring: { role_keywords: ["SDR"] }, github: { topics: ["Kubernetes"] }, persona,
+    hiring: { role_keywords: ["SDR"] }, product_launch: { topics: ["Kubernetes"] }, persona,
   }, now);
   assertEquals(c.candidates.since, "2026-10-06T00:00:00.000Z");
   assertEquals(c.candidates.min_score, 60);
@@ -48,7 +62,7 @@ Deno.test("compile: candidate query — per-vertical filters, since, states expa
   assertEquals(c.candidates.fda_device_regexes, ["\\mcatheter\\M"]);
   assertEquals(c.candidates.fda_state_keys?.sort(), ["texas", "tx"]);
   assertEquals(c.candidates.hiring_role_regexes, ["\\mSDR\\M"]);
-  assertEquals(c.candidates.github_topics, ["kubernetes"]);
+  assertEquals(c.candidates.launch_topics, ["kubernetes"]);
 });
 
 Deno.test("compile: persona — whole-word titles, seniority expanded, Apollo terms mapped", () => {

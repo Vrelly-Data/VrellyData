@@ -11,7 +11,7 @@
 --     visitor; never a PE (admin-only) signal or another team's visitor, not
 --     even when named by id; an admin's include PE; the resolver drops
 --     (and counts as refused) every signal the user may not see;
---   candidates — per-vertical filters, min score, recency; signals already
+--   candidates — per-type filters, min score, recency; signals already
 --     used by THIS audience and signals the team dismissed are left out;
 --   resolver a) — Vrelly prospects at the signal's domain, every one with an
 --     email at that domain (#107), persona applied, per-company limit;
@@ -37,7 +37,7 @@ declare
   aud uuid; aud2 uuid; aud_other uuid;
   s_dom uuid; s_name uuid; s_pe uuid; s_visit_client uuid; s_visit_other uuid; s_named uuid; s_named_bad uuid; s_old uuid; s_code uuid;
   v_domain text; v_title text; v_cname text; v_cstate text;
-  q jsonb := jsonb_build_object('verticals', jsonb_build_array('medical_device', 'web_visitors', 'private_equity'),
+  q jsonb := jsonb_build_object('signal_types', jsonb_build_array('fda_clearance', 'website_visit', 'high_intent'),
                                 'since', now() - interval '30 days', 'min_score', 0);
   persona_ceo jsonb := jsonb_build_object('title_regexes', jsonb_build_array('\mCEO\M'));
   j jsonb; ids uuid[]; n int; e text;
@@ -90,30 +90,30 @@ begin
      and public.signals_domain_key(p.company_domain) is not null
    offset 1000 limit 1;
 
-  insert into public.signals (source_key, vertical, signal_type, occurred_at, title, dedupe_key, visibility, company_domain, score, payload)
-  values ('openfda_510k', 'x', '510k_cleared', now() - interval '2 days', 'sa domain', 'satest:dom', 'all_clients', v_domain, 80,
+  insert into public.signals (source_key, signal_type, occurred_at, title, dedupe_key, visibility, company_domain, score, payload)
+  values ('openfda_510k', 'fda_clearance', now() - interval '2 days', 'sa domain', 'satest:dom', 'all_clients', v_domain, 80,
           '{"product_code":"LLZ","device_name":"Cardiac Catheter System"}') returning id into s_dom;
-  insert into public.signals (source_key, vertical, signal_type, occurred_at, title, dedupe_key, visibility, company_name, state, score, payload)
-  values ('openfda_510k', 'x', '510k_cleared', now() - interval '3 days', 'sa name', 'satest:name', 'all_clients', v_cname || ', Inc.', v_cstate, 70,
+  insert into public.signals (source_key, signal_type, occurred_at, title, dedupe_key, visibility, company_name, state, score, payload)
+  values ('openfda_510k', 'fda_clearance', now() - interval '3 days', 'sa name', 'satest:name', 'all_clients', v_cname || ', Inc.', v_cstate, 70,
           '{"product_code":"QAS"}') returning id into s_name;
-  insert into public.signals (source_key, vertical, signal_type, occurred_at, title, dedupe_key, visibility, company_domain, score)
-  values ('pe_seller_intent', 'x', 'seller_intent', now() - interval '1 day', 'sa pe', 'satest:pe', 'admin', v_domain, 99) returning id into s_pe;
-  insert into public.signals (source_key, vertical, signal_type, occurred_at, title, dedupe_key, visibility, team_id, company_domain, score)
-  values ('web_visitors', 'x', 'site_visit', now(), 'sa visit client', 'satest:visit:c', 'team', t_client, v_domain, 50) returning id into s_visit_client;
-  insert into public.signals (source_key, vertical, signal_type, occurred_at, title, dedupe_key, visibility, team_id, company_domain, score)
-  values ('web_visitors', 'x', 'site_visit', now(), 'sa visit other', 'satest:visit:o', 'team', t_other, v_domain, 50) returning id into s_visit_other;
-  insert into public.signals (source_key, vertical, signal_type, occurred_at, title, dedupe_key, visibility, team_id, company_domain,
+  insert into public.signals (source_key, signal_type, occurred_at, title, dedupe_key, visibility, company_domain, score)
+  values ('positive_responses', 'positive_response', now() - interval '1 day', 'sa pe', 'satest:pe', 'admin', v_domain, 99) returning id into s_pe;
+  insert into public.signals (source_key, signal_type, occurred_at, title, dedupe_key, visibility, team_id, company_domain, score)
+  values ('web_visitors', 'website_visit', now(), 'sa visit client', 'satest:visit:c', 'team', t_client, v_domain, 50) returning id into s_visit_client;
+  insert into public.signals (source_key, signal_type, occurred_at, title, dedupe_key, visibility, team_id, company_domain, score)
+  values ('web_visitors', 'website_visit', now(), 'sa visit other', 'satest:visit:o', 'team', t_other, v_domain, 50) returning id into s_visit_other;
+  insert into public.signals (source_key, signal_type, occurred_at, title, dedupe_key, visibility, team_id, company_domain,
                               person_name, person_title, person_email, score)
-  values ('web_visitors', 'x', 'site_visit', now(), 'sa named', 'satest:named', 'team', t_client, 'satest-example.com',
+  values ('web_visitors', 'website_visit', now(), 'sa named', 'satest:named', 'team', t_client, 'satest-example.com',
           'Pat Q Example', 'Founder & CEO', 'pat@satest-example.com', 60) returning id into s_named;
-  insert into public.signals (source_key, vertical, signal_type, occurred_at, title, dedupe_key, visibility, team_id, company_domain,
+  insert into public.signals (source_key, signal_type, occurred_at, title, dedupe_key, visibility, team_id, company_domain,
                               person_name, person_title, person_email, score)
-  values ('web_visitors', 'x', 'site_visit', now(), 'sa named intern', 'satest:named2', 'team', t_client, 'satest-example2.com',
+  values ('web_visitors', 'website_visit', now(), 'sa named intern', 'satest:named2', 'team', t_client, 'satest-example2.com',
           'Sam Example', 'Marketing Intern', 'sam@satest-example2.com', 60) returning id into s_named_bad;
-  insert into public.signals (source_key, vertical, signal_type, occurred_at, title, dedupe_key, visibility, company_domain, score)
-  values ('openfda_510k', 'x', '510k_cleared', now() - interval '90 days', 'sa old', 'satest:old', 'all_clients', v_domain, 90) returning id into s_old;
-  insert into public.signals (source_key, vertical, signal_type, occurred_at, title, dedupe_key, visibility, company_domain, score, payload)
-  values ('openfda_510k', 'x', '510k_cleared', now() - interval '1 days', 'sa low', 'satest:low', 'all_clients', v_domain, 10,
+  insert into public.signals (source_key, signal_type, occurred_at, title, dedupe_key, visibility, company_domain, score)
+  values ('openfda_510k', 'fda_clearance', now() - interval '90 days', 'sa old', 'satest:old', 'all_clients', v_domain, 90) returning id into s_old;
+  insert into public.signals (source_key, signal_type, occurred_at, title, dedupe_key, visibility, company_domain, score, payload)
+  values ('openfda_510k', 'fda_clearance', now() - interval '1 days', 'sa low', 'satest:low', 'all_clients', v_domain, 10,
           '{"product_code":"ZZZ"}') returning id into s_code;
 
   -- ------------------------------------------------------- visibility ---
@@ -141,7 +141,7 @@ begin
   j := public.signals_audience_candidates(u_client, q || '{"fda_product_codes":["LLZ"]}', null, null, 500, 0, false);
   select array_agg((x ->> 'id')::uuid) into ids from jsonb_array_elements(j -> 'signals') x;
   if not (s_dom = any(ids)) or s_name = any(ids) or s_code = any(ids) then raise exception 'FAIL: product-code filter'; end if;
-  if not (s_visit_client = any(ids)) then raise exception 'FAIL: an FDA filter must not drop other verticals'; end if;
+  if not (s_visit_client = any(ids)) then raise exception 'FAIL: an FDA filter must not drop other types'; end if;
 
   j := public.signals_audience_candidates(u_client, q || '{"fda_device_regexes":["\\mcatheter\\M"]}', null, null, 500, 0, false);
   select array_agg((x ->> 'id')::uuid) into ids from jsonb_array_elements(j -> 'signals') x;

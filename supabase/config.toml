@@ -197,7 +197,7 @@ verify_jwt = false
 [functions.dispatch-signal-sources]
 verify_jwt = false
 
-[functions.signal-pe-seller-intent]
+[functions.signal-positive-responses]
 verify_jwt = false
 
 [functions.signal-openfda-510k]

@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
-import type {
-  SignalFilters, SignalRow, SignalRun, SignalSite, SignalSource, SignalStatus, SourceStats, VerticalCount,
+import {
+  compactFilters,
+  type SignalBreakdown, type SignalFilters, type SignalRow, type SignalRun, type SignalSettings, type SignalSite,
+  type SignalSource, type SignalStatus, type SourceStats, type TeamSignalSettings, type TypeCount,
 } from '@/lib/signals';
 
 // Signals tables / RPCs are not in the generated Supabase types yet.
@@ -16,35 +18,48 @@ async function rpc<T>(fn: string, args?: Record<string, unknown>): Promise<T> {
 
 // ------------------------------------------------------------- read side ---
 
-/** Per-vertical counts of what the caller may read (RLS); admins also get empty configured verticals. */
-export function useSignalsOverview() {
+/** The caller's team defaults (country filter) and admin flag. */
+export function useSignalSettings() {
   return useQuery({
-    queryKey: ['signals', 'overview'],
-    queryFn: () => rpc<VerticalCount[]>('signals_overview'),
+    queryKey: ['signals', 'settings'],
+    queryFn: () => rpc<SignalSettings>('signals_my_settings'),
+    staleTime: 5 * 60_000,
+  });
+}
+
+/** Per-type counts of what the caller may read, under the market / country / search filters. */
+export function useSignalsOverview(f: Pick<SignalFilters, 'markets' | 'country' | 'include_unknown_country'>, enabled = true) {
+  return useQuery({
+    queryKey: ['signals', 'overview', f],
+    enabled,
+    queryFn: () => rpc<TypeCount[]>('signals_overview', { p_filters: compactFilters(f) }),
     staleTime: 60_000,
+    placeholderData: (prev) => prev,
   });
 }
 
 export const SIGNALS_PAGE_SIZE = 50;
 
-export function useSignalsFeed(f: SignalFilters, page: number) {
+export function useSignalsFeed(f: SignalFilters, page: number, enabled = true) {
   return useQuery({
     queryKey: ['signals', 'feed', f, page],
-    enabled: !!f.vertical,
+    enabled: enabled && !!f.type,
     queryFn: () =>
       rpc<{ total: number; rows: SignalRow[] }>('signals_feed', {
-        p_vertical: f.vertical,
-        p_from: f.from ?? null,
-        p_to: f.to ?? null,
-        p_min_score: f.minScore ?? null,
-        p_status: f.status ?? null,
-        p_state: f.state || null,
-        p_country: f.country || null,
-        p_search: f.search || null,
-        p_source_key: f.sourceKey ?? null,
+        p_filters: compactFilters(f),
         p_limit: SIGNALS_PAGE_SIZE,
         p_offset: page * SIGNALS_PAGE_SIZE,
       }),
+    placeholderData: (prev) => prev,
+  });
+}
+
+/** Counts by industry / seniority / title / state / country / size (admins: + platform, campaign). */
+export function useSignalsBreakdown(f: SignalFilters, enabled = true) {
+  return useQuery({
+    queryKey: ['signals', 'breakdown', f],
+    enabled: enabled && !!f.type,
+    queryFn: () => rpc<SignalBreakdown>('signals_breakdown', { p_filters: compactFilters(f) }),
     placeholderData: (prev) => prev,
   });
 }
@@ -65,7 +80,7 @@ export function useSignalSources(enabled = true) {
     queryKey: ['signals', 'sources'],
     enabled,
     queryFn: async (): Promise<SignalSource[]> => {
-      const { data, error } = await sb.from('signal_sources').select('*').order('vertical').order('key');
+      const { data, error } = await sb.from('signal_sources').select('*').order('signal_type').order('key');
       if (error) throw new Error(error.message);
       return data ?? [];
     },
@@ -100,7 +115,7 @@ export function useSignalRuns(sourceKey: string | null, enabled = true) {
 export function useUpdateSource() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (p: { key: string; patch: Partial<Pick<SignalSource, 'name' | 'config' | 'is_active' | 'cadence'>> }) => {
+    mutationFn: async (p: { key: string; patch: Partial<Pick<SignalSource, 'name' | 'config' | 'is_active' | 'cadence' | 'default_markets'>> }) => {
       const { error } = await sb.from('signal_sources').update(p.patch).eq('key', p.key);
       if (error) throw new Error(error.message);
     },
@@ -163,5 +178,27 @@ export function useTeamNames(ids: string[], enabled = true) {
       const { data } = await sb.from('teams').select('id, name').in('id', ids);
       return Object.fromEntries((data ?? []).map((t: { id: string; name: string }) => [t.id, t.name]));
     },
+  });
+}
+
+// ------------------------------------------------------- team settings ---
+
+/** Admin: every team's Signals settings (default market, country, Apollo enrichment). */
+export function useTeamSignalSettings(enabled = true) {
+  return useQuery({
+    queryKey: ['signals', 'team-settings'],
+    enabled,
+    queryFn: () => rpc<TeamSignalSettings[]>('signals_admin_teams'),
+  });
+}
+
+export function useSetTeamSignalSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (p: { teamId: string; defaultMarket: string | null; country: string | null; apolloEnrich: boolean }) =>
+      rpc<void>('signals_admin_set_team', {
+        p_team_id: p.teamId, p_default_market: p.defaultMarket, p_country: p.country, p_apollo_enrich: p.apolloEnrich,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['signals'] }),
   });
 }

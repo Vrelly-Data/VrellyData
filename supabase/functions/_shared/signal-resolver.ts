@@ -29,6 +29,7 @@
 // All I/O is injected (ResolverDeps) so the order, the budget and the 422
 // behaviour are unit-tested without a network.
 
+import { publicTypeKey } from "./signal-catalog.ts";
 import { normalizeDomain } from "./signals.ts";
 import { normalizeEmailKey, normalizeLinkedInUrl } from "./lead-dedup.ts";
 import type { ApolloEnrichedPerson, ApolloSearchPerson } from "./apollo.ts";
@@ -58,11 +59,15 @@ export interface ResolvedPerson {
   cached?: boolean;
 }
 
+/**
+ * A signal as signals_audience_candidates returns it: CLIENT-SAFE. `type` is
+ * the PUBLIC key (high_intent, never positive_response); there is no source
+ * key, and a High Intent payload carries nothing about how it was found.
+ */
 export interface CandidateSignal {
   id: string;
-  source_key: string;
-  vertical: string;
-  signal_type: string;
+  type: string;
+  markets?: string[];
   occurred_at: string;
   title: string;
   url: string | null;
@@ -372,10 +377,14 @@ export async function resolveSignals(
   return out;
 }
 
-/** Custom fields every pushed contact carries, so copy can reference the signal. */
-export function signalCustomFields(s: Pick<CandidateSignal, "signal_type" | "title" | "occurred_at" | "url">): Record<string, string> {
+/**
+ * Custom fields every pushed contact carries, so copy can reference the
+ * signal. Client-facing (they land in the client's Reply.io / Smartlead):
+ * signal_type is the PUBLIC key — "high_intent", never "positive_response".
+ */
+export function signalCustomFields(s: Pick<CandidateSignal, "type" | "title" | "occurred_at" | "url">): Record<string, string> {
   return {
-    signal_type: s.signal_type,
+    signal_type: publicTypeKey(s.type),
     signal_title: s.title.slice(0, 250),
     signal_date: String(s.occurred_at).slice(0, 10),
     signal_url: s.url ?? "",

@@ -13,6 +13,24 @@ export function monthStartUtc(now = new Date()): string {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
 }
 
+/**
+ * Shared-key Apollo credits spent this month on High Intent enrichment
+ * (signal_enrichment_spend). Counted against the same monthly cap as the
+ * audiences, so the two paths together never exceed it. Throws on a read
+ * error: an unknown spend is not permission to spend.
+ */
+export async function enrichmentCreditsThisMonth(
+  // deno-lint-ignore no-explicit-any
+  supabase: any,
+  userId: string,
+  since = monthStartUtc(),
+): Promise<number> {
+  const { data, error } = await supabase.from("signal_enrichment_spend")
+    .select("credits").eq("user_id", userId).eq("key_source", "shared").gte("created_at", since);
+  if (error) throw new Error(`Could not read the enrichment credit ledger: ${error.message}`);
+  return (data ?? []).reduce((n: number, r: { credits: number }) => n + Number(r.credits ?? 0), 0);
+}
+
 export interface ApolloBudget {
   keySource: ApolloKeySource;
   key: string;
@@ -26,7 +44,8 @@ export interface ApolloBudget {
  * The monthly Apollo budget, by the same rule as the Apollo source in
  * run-agent-audience: on the SHARED key a client may spend at most
  * agent_configs.apollo_monthly_credit_cap per calendar month (UTC), counted
- * from agent_audience_runs; a client's own key is not ours to cap. Returns null
+ * from agent_audience_runs plus High Intent enrichment (signal_enrichment_spend);
+ * a client's own key is not ours to cap. Returns null
  * when Apollo is not configured. Throws when the budget cannot be read — an
  * unknown budget is not permission to spend.
  */
@@ -53,7 +72,8 @@ export async function readApolloBudget(
     .gte("started_at", monthStartUtc());
   if (cfgErr || spentErr) throw new Error(`Could not read the Apollo credit budget: ${(cfgErr ?? spentErr).message}`);
   const cap = Number(cfg?.apollo_monthly_credit_cap ?? 200);
-  const used = (rows ?? []).reduce((n: number, r: { credits_spent: number }) => n + Number(r.credits_spent ?? 0), 0);
+  const used = (rows ?? []).reduce((n: number, r: { credits_spent: number }) => n + Number(r.credits_spent ?? 0), 0) +
+    await enrichmentCreditsThisMonth(supabase, userId);
   return { keySource: "shared", key: k.key, remaining: Math.max(0, cap - used), cap, used };
 }
 

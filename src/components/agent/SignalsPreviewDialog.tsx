@@ -17,7 +17,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
-import { verticalLabel } from '@/lib/signals';
+import { signalTypeLabel } from '@/lib/signalCatalog';
 import { PERSON_SOURCE_LABEL, type SignalAudienceFilters } from '@/lib/signalAudienceFilters';
 import {
   useSignalAudiencePreview, useRunAudience, useAudienceCampaigns, signalPersonKey, APOLLO_STATUS_TEXT,
@@ -259,7 +259,7 @@ export function SignalsPreviewDialog(
                           <div className="min-w-0">
                             <p className="text-sm font-medium truncate">{r.signal.title}</p>
                             <p className="text-xs text-muted-foreground">
-                              {verticalLabel(r.signal.vertical)} · {format(new Date(r.signal.occurred_at), 'MMM d, yyyy')} · score {r.signal.score}
+                              {signalTypeLabel(r.signal.type)} · {format(new Date(r.signal.occurred_at), 'MMM d, yyyy')} · score {r.signal.score}
                               {' · '}{r.signal.company_name ?? '—'}
                               {r.domain && <> · {r.domain}{r.derived_domain && r.domain === r.derived_domain ? ' (matched by name)' : ''}</>}
                             </p>

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { AlertTriangle, CheckCircle2, Clock, Loader2, Play, XCircle } from 'lucide-react';
+import { Switch } from '@/components/ui/switch';
 import { format, formatDistanceToNowStrict } from 'date-fns';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -8,8 +9,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
-import { type SignalSource, VISIBILITY_LABEL, verticalLabel } from '@/lib/signals';
-import { useRunSourceNow, useSignalRuns, useSignalSources, useSourceStats } from '@/hooks/useSignals';
+import { type SignalSource, type TeamSignalSettings, VISIBILITY_LABEL } from '@/lib/signals';
+import { COUNTRY_OPTIONS, MARKETS, marketLabel, signalTypeLabel } from '@/lib/signalCatalog';
+import {
+  useRunSourceNow, useSetTeamSignalSettings, useSignalRuns, useSignalSources, useSourceStats, useTeamSignalSettings,
+} from '@/hooks/useSignals';
 import { SourceConfigEditor } from './SourceConfigEditor';
 
 const DISPATCH_NOTE =
@@ -65,7 +69,10 @@ export function AdminSourcesPanel() {
                       <span className="font-medium text-sm truncate" title={s.name}>{s.name}</span>
                     </div>
                     <div className="flex flex-wrap gap-1">
-                      <Badge variant="outline" className="text-[10px]">{verticalLabel(s.vertical)}</Badge>
+                      <Badge variant="outline" className="text-[10px]">{signalTypeLabel(s.signal_type)}</Badge>
+                      {(s.default_markets ?? []).map((m) => (
+                        <Badge key={m} variant="outline" className="text-[10px]">{marketLabel(m)}</Badge>
+                      ))}
                       <Badge variant="outline" className="text-[10px]">{s.cadence}</Badge>
                       <Badge variant="outline" className="text-[10px]">{VISIBILITY_LABEL[s.default_visibility]}</Badge>
                       {!s.is_active && <Badge variant="secondary" className="text-[10px]">paused</Badge>}
@@ -149,14 +156,98 @@ export function AdminSourcesPanel() {
   );
 }
 
-/** Admin only, inside a vertical tab: config / watchlist editors for that vertical's sources. */
-export function VerticalSourcesAdmin({ vertical }: { vertical: string }) {
+/** Admin only, inside a type tab: config / watchlist editors for that type's sources. */
+export function TypeSourcesAdmin({ type }: { type: string }) {
   const sources = useSignalSources();
-  const mine = (sources.data ?? []).filter((s) => s.vertical === vertical);
+  const internal = type === 'high_intent' ? 'positive_response' : type;
+  const mine = (sources.data ?? []).filter((s) => s.signal_type === internal);
   if (!mine.length) return null;
   return (
     <div className="space-y-3">
       {mine.map((s) => <SourceConfigEditor key={s.key} source={s} />)}
     </div>
+  );
+}
+
+/**
+ * Admin only: per-team Signals settings. Default market drives the market of
+ * the team's own signals (High Intent, website visits) when the company's
+ * industry does not; country is the team's default Country filter; Apollo
+ * enrichment lets High Intent enrichment spend that team's Apollo credits
+ * (counted against its monthly cap) after the free sources.
+ */
+export function TeamSettingsPanel() {
+  const { toast } = useToast();
+  const teams = useTeamSignalSettings();
+  const save = useSetTeamSignalSettings();
+  const [open, setOpen] = useState(false);
+  const update = (t: TeamSignalSettings, patch: Partial<TeamSignalSettings>) => {
+    const n = { ...t, ...patch };
+    save.mutate(
+      { teamId: t.team_id, defaultMarket: n.default_market, country: n.country, apolloEnrich: n.apollo_enrich },
+      {
+        onSuccess: () => toast({ title: `${t.name}: saved` }),
+        onError: (e) => toast({ title: 'Could not save', description: (e as Error).message, variant: 'destructive' }),
+      },
+    );
+  };
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base flex items-center gap-2">
+          Team settings
+          <span className="text-xs font-normal text-muted-foreground">default market, country filter, Apollo enrichment for High Intent</span>
+          <Button size="sm" variant="ghost" className="ml-auto h-7" onClick={() => setOpen((o) => !o)}>{open ? 'Hide' : 'Show'}</Button>
+        </CardTitle>
+      </CardHeader>
+      {open && (
+        <CardContent>
+          {teams.isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : (
+            <div className="overflow-x-auto max-h-96 overflow-y-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Team</TableHead>
+                    <TableHead>Default market</TableHead>
+                    <TableHead>Country</TableHead>
+                    <TableHead>Apollo enrichment (paid)</TableHead>
+                    <TableHead className="text-right">High Intent</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {(teams.data ?? []).map((t) => (
+                    <TableRow key={t.team_id}>
+                      <TableCell className="text-sm">{t.name}</TableCell>
+                      <TableCell>
+                        <Select value={t.default_market ?? 'none'} onValueChange={(v) => update(t, { default_market: v === 'none' ? null : v })}>
+                          <SelectTrigger className="h-8 w-40"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="none">From industry</SelectItem>
+                            {MARKETS.map((m) => <SelectItem key={m.key} value={m.key}>{m.label}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                      </TableCell>
+                      <TableCell>
+                        <Select value={t.country ?? 'US'} onValueChange={(v) => update(t, { country: v })}>
+                          <SelectTrigger className="h-8 w-40"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            {COUNTRY_OPTIONS.map((c) => <SelectItem key={c.code} value={c.code}>{c.label}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                      </TableCell>
+                      <TableCell>
+                        <Switch checked={t.apollo_enrich} disabled={save.isPending} onCheckedChange={(v) => update(t, { apollo_enrich: v })}
+                          aria-label={`Apollo enrichment for ${t.name}`} />
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums text-xs">{t.high_intent.toLocaleString()}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </CardContent>
+      )}
+    </Card>
   );
 }

@@ -1,4 +1,4 @@
-// saas_hiring / job_posted. Logic: ./source.ts; pipeline: ../_shared/signals.ts.
+// hiring. Logic: ./source.ts; pipeline: ../_shared/signals.ts.
 import { serveSignalSource } from "../_shared/signals.ts";
 import { fetchSaasHiring } from "./source.ts";
 

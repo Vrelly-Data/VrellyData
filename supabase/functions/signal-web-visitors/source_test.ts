@@ -1,4 +1,4 @@
-// Website visitors: visitor-day rollup → one site_visit signal, team-scoped,
+// Website visitors: visitor-day rollup → one website_visit signal, team-scoped,
 // no IP anywhere.
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { mapVisitDay, scoreVisit, type VisitDay } from "./source.ts";
@@ -12,7 +12,9 @@ const v: VisitDay = {
 
 Deno.test("mapVisitDay: one signal per visitor per day, team visibility, pages viewed, stable dedupe", () => {
   const s = mapVisitDay(v)!;
-  assertEquals(s.signal_type, "site_visit");
+  assertEquals(s.signal_type, "website_visit");
+  assertEquals(s.markets, ["other"]);
+  assertEquals(mapVisitDay({ ...v, team_default_market: "saas" })!.markets, ["saas"]);
   assertEquals(s.dedupe_key, "visit:vs_0123456789abcdef0123456789abcdef:a1b2c3d4e5f6:2026-10-09");
   assertEquals([s.visibility, s.team_id], ["team", v.team_id]);
   assertEquals(s.title, "Anonymous visitor viewed 3 pages on vrelly.com");

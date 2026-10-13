@@ -1,17 +1,20 @@
-// web_visitors / site_visit — FOUNDATION: rolls raw pixel hits into one signal
+// website_visit — FOUNDATION: rolls raw pixel hits into one signal
 // per visitor (anon_id) per site per UTC day, with the pages they viewed.
 //
 // Hits arrive through the public 'track' function (signal_pixel_hits). This
 // source re-rolls the last config.rollup_days days each run; the dedupe key is
 // stable per visitor-day, so a growing visit updates its signal instead of
 // adding one. visibility 'team': only the site owner's team can read it.
+// Market: the site owner's team default market (teams.signals_default_market).
 // No IP (raw or hashed) ever reaches a signal.
 
 import { clampScore, dedupeKey, type FetchResult, normalizeDomain, type SignalInput, type SourceContext, toIso } from "../_shared/signals.ts";
+import { assignMarkets } from "../_shared/signal-markets.ts";
 
 export interface VisitDay {
   site_key: string;
   team_id: string;
+  team_default_market?: string | null;
   domain: string;
   anon_id: string;
   day: string;
@@ -50,7 +53,8 @@ export function mapVisitDay(v: VisitDay): SignalInput | null {
   const who = r.company_name ?? "Anonymous visitor";
   const paths = [...new Set((v.urls ?? []).map(pathOf))];
   return {
-    signal_type: "site_visit",
+    signal_type: "website_visit",
+    markets: assignMarkets({ signal_type: "website_visit", team_default_market: v.team_default_market ?? null }),
     occurred_at: at,
     dedupe_key: dedupeKey("visit", v.site_key, v.anon_id, v.day),
     title: `${who} viewed ${v.pages} page${v.pages === 1 ? "" : "s"} on ${v.domain}`,

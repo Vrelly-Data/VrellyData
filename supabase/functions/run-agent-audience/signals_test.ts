@@ -6,7 +6,7 @@ import { type Counters, personKey, planPage, runSignalsSource, toPushContact } f
 
 const USER = "00000000-0000-4000-8000-0000000000r1";
 const sig = (id: string, over: Partial<CandidateSignal> = {}): CandidateSignal => ({
-  id, source_key: "openfda_510k", vertical: "medical_device", signal_type: "510k_cleared",
+  id, type: "fda_clearance", markets: ["medical_device"],
   occurred_at: "2026-09-27T12:00:00Z", title: `Acme ${id} cleared K1`, url: `https://fda.example/${id}`, score: 80,
   company_name: `Acme ${id}`, company_domain: `${id}.com`, person_name: null, person_title: null,
   city: null, state: "TX", country: "US", ...over,
@@ -77,7 +77,10 @@ Deno.test("custom fields: every pushed contact carries title, company, LinkedIn,
   assertEquals(c.company_name, "Acme");
   assertEquals(c.linkedin_url, "https://linkedin.com/in/ann");
   assertEquals([c.city, c.state, c.country], ["Austin", "TX", "US"]);
-  assertEquals(c.custom_fields, { signal_type: "510k_cleared", signal_title: "Acme a cleared K1", signal_date: "2026-09-27", signal_url: "https://fda.example/a" });
+  assertEquals(c.custom_fields, { signal_type: "fda_clearance", signal_title: "Acme a cleared K1", signal_date: "2026-09-27", signal_url: "https://fda.example/a" });
+  // High Intent pushes the public type and the client-safe title, never an evidence URL.
+  const hi = toPushContact(person("ann@acme.com"), sig("h", { type: "high_intent", title: "High intent: Ann Lee, CEO at Acme", url: null }));
+  assertEquals(hi.custom_fields, { signal_type: "high_intent", signal_title: "High intent: Ann Lee, CEO at Acme", signal_date: "2026-09-27", signal_url: "" });
   assert("prospect_id" in c && !("apollo_person_id" in c));
 });
 
@@ -118,7 +121,7 @@ function deps(free: FreeResolution[]): ResolverDeps {
 }
 
 const counters = (): Counters => ({ searched: 0, enriched: 0, credits_spent: 0, pushed: 0, skipped_duplicate: 0, failed: 0 });
-const filters = { verticals: ["medical_device"], persona: { job_titles: ["CEO"] }, use_apollo: false };
+const filters = { types: ["fda_clearance"], persona: { job_titles: ["CEO"] }, use_apollo: false };
 
 Deno.test("run: pushes with signal context, records pushed + no_people, marks the team", async () => {
   const { supabase, calls } = stubDb([[sig("a"), sig("b")]]);
@@ -139,7 +142,7 @@ Deno.test("run: pushes with signal context, records pushed + no_people, marks th
   });
   assertEquals(r.status, "success");
   assertEquals(pushed.length, 1);
-  assertEquals((pushed[0].custom_fields as Record<string, string>).signal_type, "510k_cleared");
+  assertEquals((pushed[0].custom_fields as Record<string, string>).signal_type, "fda_clearance");
   assertEquals(ctr.pushed, 1);
   const mark = calls.find((c) => c.fn === "signals_mark_audience_used")!;
   assertEquals(mark.args.p_rows, [
@@ -182,7 +185,7 @@ Deno.test("run: invalid filters fail before any database call", async () => {
   const { supabase, calls } = stubDb([]);
   const r = await runSignalsSource({
     supabase, supabaseUrl: "http://x", agentApiKey: "k", userId: USER,
-    audience: { id: "aud", agent_config_id: "cfg", filters: { verticals: ["medical_device"] } }, runId: "run-1", allowance: 10,
+    audience: { id: "aud", agent_config_id: "cfg", filters: { types: ["fda_clearance"] } }, runId: "run-1", allowance: 10,
     signalIds: null, selections: null, counters: counters(), deps: deps([]),
     push: () => Promise.resolve({ ok: true as const, body: {} }),
   });

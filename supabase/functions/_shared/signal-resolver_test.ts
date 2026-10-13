@@ -7,7 +7,7 @@ import {
 } from "./signal-resolver.ts";
 
 const sig = (id: string, over: Partial<CandidateSignal> = {}): CandidateSignal => ({
-  id, source_key: "openfda_510k", vertical: "medical_device", signal_type: "510k_cleared",
+  id, type: "fda_clearance", markets: ["medical_device"],
   occurred_at: "2026-09-27T00:00:00Z", title: `Acme ${id} cleared K1`, url: "https://fda.example/K1", score: 80,
   company_name: `Acme ${id}`, company_domain: null, person_name: null, person_title: null,
   city: null, state: "TX", country: "US", ...over,
@@ -253,7 +253,7 @@ Deno.test("two signals at one company: searched and bought once", async () => {
 Deno.test("visibility: a signal the SQL refused is never resolved", async () => {
   // resolveFree returns nothing for 'pe' (not visible to this user).
   const { deps, log } = fakeDeps({ free: [], refused: 1 });
-  const o = await resolveSignals([sig("pe", { vertical: "private_equity" })], { mode: "run", compiled: compiled(), budget: 100 }, deps);
+  const o = await resolveSignals([sig("pe", { type: "high_intent", markets: ["private_equity"] })], { mode: "run", compiled: compiled(), budget: 100 }, deps);
   assertEquals(o.resolved, []);
   assertEquals(o.refused, 1);
   assertEquals(log.search, []);
@@ -274,7 +274,10 @@ Deno.test("helpers: emailAtDomain, passesUsRules, custom fields", () => {
   assert(!passesUsRules("a@beta.co.uk", null));
   assert(!passesUsRules("a@beta.com", "Canada"));
   assertEquals(signalCustomFields(sig("a")), {
-    signal_type: "510k_cleared", signal_title: "Acme a cleared K1", signal_date: "2026-09-27", signal_url: "https://fda.example/K1",
+    signal_type: "fda_clearance", signal_title: "Acme a cleared K1", signal_date: "2026-09-27", signal_url: "https://fda.example/K1",
   });
+  // High Intent: the public key, whatever form the type arrives in.
+  assertEquals(signalCustomFields({ ...sig("a"), type: "high_intent" }).signal_type, "high_intent");
+  assertEquals(signalCustomFields({ ...sig("a"), type: "positive_response" }).signal_type, "high_intent");
   assertEquals(signalCustomFields({ ...sig("a"), url: null }).signal_url, "");
 });

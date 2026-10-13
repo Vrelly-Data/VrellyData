@@ -1,15 +1,19 @@
 // Signals — shared types and presentation helpers for the admin tab and the
 // client Agent → Signals view. Data access lives in src/hooks/useSignals.ts;
 // every count/aggregate comes from SQL functions (signals_overview,
-// signals_feed, signals_admin_source_stats), never from paging rows here.
+// signals_feed, signals_breakdown, signals_admin_source_stats), never from
+// paging rows here. Type / market vocabulary: ./signalCatalog.ts.
 
 export type SignalStatus = 'new' | 'reviewed' | 'dismissed' | 'pushed';
 
+/**
+ * A row as signals_feed returns it. `type` is the PUBLIC key (high_intent, …).
+ * The admin-only fields are present only for platform admins.
+ */
 export type SignalRow = {
   id: string;
-  source_key: string;
-  vertical: string;
-  signal_type: string;
+  type: string;
+  markets: string[];
   occurred_at: string;
   company_name: string | null;
   company_domain: string | null;
@@ -20,22 +24,54 @@ export type SignalRow = {
   city: string | null;
   state: string | null;
   country: string | null;
+  country_code: string | null;
+  industry: string | null;
+  seniority: string | null;
+  company_size: string | null;
   title: string;
   url: string | null;
   score: number;
   payload: Record<string, unknown>;
-  visibility: 'admin' | 'all_clients' | 'team';
   team_status: SignalStatus;
   status_updated_at: string | null;
   created_at: string;
+  // admin only
+  signal_type?: string;
+  source_key?: string;
+  visibility?: 'admin' | 'all_clients' | 'team';
+  team_id?: string | null;
+  team_name?: string | null;
+  enrichment?: Record<string, unknown>;
+  admin_detail?: Record<string, unknown> | null;
 };
 
-export type VerticalCount = { vertical: string; today: number; d7: number; d30: number; total: number; new: number };
+/** Per-type counts (public type key). */
+export type TypeCount = { type: string; today: number; d7: number; d30: number; total: number; new: number };
+
+export type BreakdownItem = { value: string; count: number };
+export type SignalBreakdown = {
+  total: number;
+  industry: BreakdownItem[];
+  seniority: BreakdownItem[];
+  title: BreakdownItem[];
+  state: BreakdownItem[];
+  country: BreakdownItem[];
+  company_size: BreakdownItem[];
+  platform?: BreakdownItem[];
+  campaign?: BreakdownItem[];
+};
+
+export type SignalSettings = { team_id: string | null; country: string; default_market: string | null; is_admin: boolean };
+
+export type TeamSignalSettings = {
+  team_id: string; name: string; default_market: string | null; country: string | null; apollo_enrich: boolean; high_intent: number;
+};
 
 export type SignalSource = {
   id: string;
   key: string;
-  vertical: string;
+  signal_type: string;
+  default_markets: string[];
   name: string;
   kind: 'api' | 'internal' | 'pixel';
   cadence: 'hourly' | 'daily' | 'realtime';
@@ -68,42 +104,38 @@ export type SourceStats = { source_key: string; total: number; today: number; d7
 
 export type SignalSite = { site_key: string; team_id: string; domain: string; is_active: boolean; created_at: string };
 
+/** signals_feed / signals_breakdown p_filters (all optional; see the migration). */
 export type SignalFilters = {
-  vertical: string;
+  type?: string | null;
+  markets?: string[] | null;
   from?: string | null;
   to?: string | null;
-  minScore?: number | null;
+  min_score?: number | null;
   status?: SignalStatus | null;
   state?: string | null;
   country?: string | null;
+  include_unknown_country?: boolean;
   search?: string | null;
-  sourceKey?: string | null;
+  // breakdown clicks (exact; '(unknown)' matches blanks)
+  industry?: string | null;
+  seniority?: string | null;
+  title?: string | null;
+  company_size?: string | null;
+  breakdown_state?: string | null;
+  breakdown_country?: string | null;
+  // admin only (ignored for clients)
+  platform?: string | null;
+  campaign?: string | null;
+  source_key?: string | null;
 };
 
-// Known verticals get a friendly label; a new vertical (just a new
-// signal_sources row) still shows, title-cased from its key.
-const VERTICAL_LABELS: Record<string, string> = {
-  private_equity: 'Private equity',
-  medical_device: 'Medical devices',
-  saas_hiring: 'SaaS hiring',
-  github: 'GitHub',
-  web_visitors: 'Website visitors',
-};
-
-export function verticalLabel(v: string): string {
-  return VERTICAL_LABELS[v] ?? v.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
+/** Drops empty values so the SQL sees only real filters. */
+export function compactFilters(f: SignalFilters): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(f).filter(([, v]) =>
+    v !== null && v !== undefined && v !== '' && !(Array.isArray(v) && v.length === 0)));
 }
 
-const VERTICAL_ORDER = ['medical_device', 'saas_hiring', 'github', 'private_equity', 'web_visitors'];
-export function sortVerticals<T extends { vertical: string }>(rows: T[]): T[] {
-  const rank = (v: string) => {
-    const i = VERTICAL_ORDER.indexOf(v);
-    return i === -1 ? VERTICAL_ORDER.length : i;
-  };
-  return [...rows].sort((a, b) => rank(a.vertical) - rank(b.vertical) || a.vertical.localeCompare(b.vertical));
-}
-
-export const VISIBILITY_LABEL: Record<SignalRow['visibility'], string> = {
+export const VISIBILITY_LABEL: Record<'admin' | 'all_clients' | 'team', string> = {
   admin: 'Admin only',
   all_clients: 'All clients',
   team: 'Your team',

@@ -603,7 +603,8 @@ export interface SignalPreviewPerson {
 
 export interface SignalPreviewSignal {
   signal: {
-    id: string; vertical: string; signal_type: string; occurred_at: string; title: string;
+    /** Public type key (high_intent, fda_clearance, …). */
+    id: string; type: string; markets?: string[]; occurred_at: string; title: string;
     url: string | null; score: number; company_name: string | null; company_domain: string | null;
     state: string | null;
   };

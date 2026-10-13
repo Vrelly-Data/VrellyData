@@ -9,7 +9,7 @@ const handler = await loadHandler(new URL("./index.ts", import.meta.url).href);
 
 const USER = "00000000-0000-4000-8000-0000000000c1";
 const AUD = "aud-cf";
-const fields = { signal_type: "510k_cleared", signal_title: "Acme cleared K261234", signal_date: "2026-09-27", signal_url: "https://fda.example/K261234" };
+const fields = { signal_type: "fda_clearance", signal_title: "Acme cleared K261234", signal_date: "2026-09-27", signal_url: "https://fda.example/K261234" };
 
 function db() {
   return new FakeSupabase({
@@ -82,7 +82,7 @@ Deno.test({
     assertEquals(r.rec.providerCalls.filter((c) => c.url.endsWith("/v3/custom-fields") && c.method === "GET").length, 1);
     const patch = r.rec.providerCalls.find((c) => c.method === "PATCH")!;
     assertEquals((patch.body as Row).customFields, [
-      { name: "signal_type", value: "510k_cleared" },
+      { name: "signal_type", value: "fda_clearance" },
       { name: "signal_title", value: "Acme cleared K261234" },
       { name: "signal_date", value: "2026-09-27" },
       { name: "signal_url", value: "https://fda.example/K261234" },
