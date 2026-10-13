@@ -21,7 +21,7 @@
  */
 
 /** Persisted in agent_audiences.source; mirrored by that column's CHECK. */
-export type AudienceSourceId = 'apollo' | 'vrelly' | 'clay' | 'ai';
+export type AudienceSourceId = 'apollo' | 'vrelly' | 'signals' | 'clay' | 'ai';
 
 /**
  * How a source is actually reached.
@@ -120,6 +120,19 @@ export const AUDIENCE_SOURCES: Readonly<Record<AudienceSourceId, AudienceSource>
     ],
   },
 
+  signals: {
+    id: 'signals',
+    label: 'Signals',
+    description: 'People at companies showing a buying signal (FDA clearances, hiring, GitHub, site visits). Vrelly first, free; Apollo only for companies with nobody found, within your monthly cap.',
+    available: true,
+    // Nothing to reveal by hand: the run enriches Apollo candidates itself,
+    // and the preview shows the estimated credits before anything is pushed.
+    requiresReveal: false,
+    costsCredits: true,
+    transport: { kind: 'edge-function', search: 'signal-audience-preview' },
+    unsupportedFilters: [],
+  },
+
   clay: {
     id: 'clay',
     label: 'Clay',
@@ -158,9 +171,9 @@ export const NEW_AUDIENCE_SOURCE: AudienceSourceId = 'vrelly';
  * agent_audiences.filters_version per source — each source stores filters in
  * its own vocabulary, and a CHECK constraint ties the two together.
  */
-export const FILTERS_VERSION: Partial<Record<AudienceSourceId, number>> = { apollo: 1, vrelly: 2 };
+export const FILTERS_VERSION: Partial<Record<AudienceSourceId, number>> = { apollo: 1, vrelly: 2, signals: 3 };
 
-export const SOURCE_ORDER: readonly AudienceSourceId[] = ['vrelly', 'apollo', 'clay', 'ai'];
+export const SOURCE_ORDER: readonly AudienceSourceId[] = ['vrelly', 'signals', 'apollo', 'clay', 'ai'];
 
 /**
  * Resolve a stored value to a source.

@@ -48,6 +48,7 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { normalizeEmailKey, normalizeLinkedInUrl } from "../_shared/lead-dedup.ts";
+import { cleanCustomFields } from "./custom_fields.ts";
 
 const allowedOrigins = [
   Deno.env.get("ALLOWED_ORIGIN") || "https://vrelly.com",
@@ -81,7 +82,17 @@ interface InboundContact {
   city?: string | null;
   state?: string | null;
   country?: string | null;
+  /**
+   * Signals source: the signal behind this contact (signal_type, signal_title,
+   * signal_date, signal_url), so copy can reference it. Smartlead takes them in
+   * the lead's custom_fields; Reply.io gets them PATCHed onto the contact
+   * before it is moved into the sequence, and a failed write releases the
+   * claim rather than enrolling someone whose merge fields would render blank.
+   * Absent for Apollo and Vrelly contacts, whose pushes are unchanged.
+   */
+  custom_fields?: Record<string, string> | null;
 }
+
 
 const clean = (v: unknown): string | null => {
   const s = typeof v === "string" ? v.trim() : "";
@@ -334,6 +345,7 @@ Deno.serve(async (req) => {
       const title = clean(c.title);
       const company = clean(c.company_name);
       const city = clean(c.city), state = clean(c.state), country = clean(c.country);
+      const extraFields = cleanCustomFields(c.custom_fields);
       let externalRef: string | null = null;
       let pushError: string | null = null;
 
@@ -356,7 +368,9 @@ Deno.serve(async (req) => {
                   ? { location: [city, state, country].filter(Boolean).join(", ") }
                   : {}),
                 ...(clean(c.company_domain) ? { website: clean(c.company_domain) } : {}),
-                ...(title ? { custom_fields: { job_title: title } } : {}),
+                ...(title || extraFields
+                  ? { custom_fields: { ...(extraFields ?? {}), ...(title ? { job_title: title } : {}) } }
+                  : {}),
               }],
               // Conservative, matching add-to-smartlead-campaign: we respect
               // dedup, blocklists and unsubscribes rather than overriding them.
@@ -441,6 +455,21 @@ Deno.serve(async (req) => {
             }
           } else {
             pushError = `Reply.io create ${createRes.status}: ${(await createRes.text().catch(() => "")).slice(0, 200)}`;
+          }
+
+          if (contactId !== null && !pushError && extraFields) {
+            // Same {name, value} shape send-agent-reply writes custom_message
+            // with. BEFORE the move: the sequence's first step may send at once.
+            const cf = await fetch(`${REPLY_API_V3}/contacts/${contactId}`, {
+              method: "PATCH",
+              headers: authH,
+              body: JSON.stringify({
+                customFields: Object.entries(extraFields).map(([name, value]) => ({ name, value })),
+              }),
+            });
+            if (!cf.ok) {
+              pushError = `Reply.io custom fields ${cf.status}: ${(await cf.text().catch(() => "")).slice(0, 200)}`;
+            }
           }
 
           if (contactId !== null && !pushError) {

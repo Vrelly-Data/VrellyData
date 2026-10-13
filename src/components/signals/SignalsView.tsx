@@ -9,7 +9,6 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
 import {
@@ -19,6 +18,7 @@ import { SIGNALS_PAGE_SIZE, useSetSignalStatus, useSignalsFeed, useSignalsOvervi
 import { SignalDetailSheet } from './SignalDetailSheet';
 import { AdminSourcesPanel, VerticalSourcesAdmin } from './AdminSourcesPanel';
 import { PixelSitesPanel } from './PixelSitesPanel';
+import { BuildAudienceDialog } from './BuildAudienceDialog';
 
 type Mode = 'admin' | 'client';
 
@@ -104,6 +104,7 @@ function VerticalPanel({ counts, mode }: { counts: VerticalCount; mode: Mode }) 
   const [page, setPage] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [detail, setDetail] = useState<SignalRow | null>(null);
+  const [building, setBuilding] = useState(false);
   const [draft, setDraft] = useState({ from: '', to: '', minScore: 'any', status: 'open', state: '', country: '', search: '' });
   const [applied, setApplied] = useState(draft);
 
@@ -168,17 +169,9 @@ function VerticalPanel({ counts, mode }: { counts: VerticalCount; mode: Mode }) 
               <Button size="sm" variant="outline" disabled={!selected.size || setStatus.isPending} onClick={() => mark([...selected], 'dismissed')}>
                 Dismiss{selected.size ? ` (${selected.size})` : ''}
               </Button>
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    {/* span: a disabled button doesn't fire hover events */}
-                    <span tabIndex={0}>
-                      <Button size="sm" disabled className="gap-1"><Sparkles className="h-3.5 w-3.5" /> Build audience from these</Button>
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent>Coming soon: turn signals into an Agent audience with contact enrichment.</TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
+              <Button size="sm" className="gap-1" disabled={!selected.size} onClick={() => setBuilding(true)}>
+                <Sparkles className="h-3.5 w-3.5" /> Build audience from these{selected.size ? ` (${selected.size})` : ''}
+              </Button>
             </div>
           </CardTitle>
           <div className="grid grid-cols-2 md:grid-cols-7 gap-2 pt-2">
@@ -282,6 +275,7 @@ function VerticalPanel({ counts, mode }: { counts: VerticalCount; mode: Mode }) 
       </Card>
 
       <SignalDetailSheet signal={detail} onClose={() => setDetail(null)} onMark={(status) => detail && mark([detail.id], status)} busy={setStatus.isPending} />
+      <BuildAudienceDialog open={building} onOpenChange={setBuilding} signals={rows.filter((r) => selected.has(r.id))} />
     </>
   );
 }
