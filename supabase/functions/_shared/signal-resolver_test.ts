@@ -66,7 +66,7 @@ function fakeDeps(opts: {
 }
 
 const compiled = (extra: Record<string, unknown> = {}) =>
-  compileSignalAudience({ persona: { job_titles: ["CEO"] }, max_per_company: 2, ...extra });
+  compileSignalAudience({ persona: { job_titles: ["CEO"] }, max_per_company: 2, use_apollo: true, ...extra });
 
 const free = (id: string, people: ReturnType<typeof vrellyPerson>[], domain: string | null = null, derived: string | null = null): FreeResolution => ({
   signal_id: id, company_key: domain || derived ? `d:${domain ?? derived}` : null, domain, derived_domain: derived, people,
@@ -189,7 +189,7 @@ Deno.test("persona: Apollo's fuzzy titles are re-checked as whole words BEFORE p
   });
   await resolveSignals([sig("b")], {
     mode: "run", budget: 100,
-    compiled: compileSignalAudience({ persona: { job_titles: ["CEO"], exclude_job_titles: ["Assistant"] } }),
+    compiled: compileSignalAudience({ persona: { job_titles: ["CEO"], exclude_job_titles: ["Assistant"] }, use_apollo: true }),
   }, deps);
   // p1 excluded word, p2 not a whole-word match, p3 has no email
   assertEquals(log.enrich, [["p4"]]);
@@ -219,13 +219,21 @@ Deno.test("guards: an enriched email off the company domain, or abroad, is not u
   assertEquals(o.credits_spent, 2); // spent, honestly reported
 });
 
+Deno.test("default: a new audience (use_apollo absent) never calls Apollo", async () => {
+  const { deps, log } = fakeDeps({ free: [free("b", [], "beta.com")], search: () => [searchPerson("p1", "CEO")] });
+  const o = await resolveSignals([sig("b")], { mode: "run", compiled: compileSignalAudience({ persona: { job_titles: ["CEO"] } }), budget: 100 }, deps);
+  assertEquals(o.resolved[0].apollo, "disabled");
+  assertEquals(log.search, []);
+  assertEquals(log.enrich, []);
+});
+
 Deno.test("no domain, disabled, department-only: Apollo is skipped with the reason", async () => {
   const { deps, log } = fakeDeps({ free: [free("a", [], null, null), free("b", [], "beta.com")] });
   const o1 = await resolveSignals([sig("a")], { mode: "run", compiled: compiled(), budget: 100 }, deps);
   assertEquals(o1.resolved[0].apollo, "no_domain");
   const o2 = await resolveSignals([sig("b")], { mode: "run", compiled: compiled({ use_apollo: false }), budget: 100 }, deps);
   assertEquals(o2.resolved[0].apollo, "disabled");
-  const o3 = await resolveSignals([sig("b")], { mode: "run", compiled: compileSignalAudience({ persona: { departments: ["Sales"] } }), budget: 100 }, deps);
+  const o3 = await resolveSignals([sig("b")], { mode: "run", compiled: compileSignalAudience({ persona: { departments: ["Sales"] }, use_apollo: true }), budget: 100 }, deps);
   assertEquals(o3.resolved[0].apollo, "persona_unsupported");
   assertEquals(log.search, []);
 });

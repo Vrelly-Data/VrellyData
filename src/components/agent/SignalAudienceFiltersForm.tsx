@@ -124,8 +124,8 @@ export function SignalAudienceFiltersForm(
           </div>
           <div className="space-y-2">
             <label className="flex items-center gap-2 text-sm">
-              <Switch checked={value.use_apollo !== false} onCheckedChange={(v) => set('use_apollo', v)} />
-              Apollo fallback (paid)
+              <Switch checked={value.use_apollo === true} onCheckedChange={(v) => set('use_apollo', v)} />
+              Apollo fallback (paid, off by default)
             </label>
             <label className="flex items-center gap-2 text-sm">
               <Switch checked={value.us_only !== false} onCheckedChange={(v) => set('us_only', v)} />
@@ -134,8 +134,9 @@ export function SignalAudienceFiltersForm(
           </div>
         </div>
         <p className="text-xs text-muted-foreground">
-          Vrelly database first (free), then the person named on the signal. Apollo is used only for companies where
-          nobody was found, needs a job title or seniority, and counts against your monthly Apollo credit cap.
+          Vrelly database first (free), then the person named on the signal. With the Apollo fallback on, Apollo is used
+          only for companies where nobody was found, needs a job title or seniority, and counts against your monthly
+          Apollo credit cap.
         </p>
       </section>
     </div>

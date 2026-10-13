@@ -379,7 +379,9 @@ export function SignalsPreviewDialog(
                     ? selectedPending > 0
                       ? `${selectedPending} of them come from Apollo and cost up to one credit each.`
                       : 'No Apollo credits are spent.'
-                    : 'Companies with nobody in Vrelly may be enriched on Apollo, up to your monthly cap.'}
+                    : result?.apollo_enabled
+                    ? 'Companies with nobody in Vrelly may be enriched on Apollo, up to your monthly cap.'
+                    : 'Apollo fallback is off for this audience — no credits are spent.'}
                 </p>
                 <p>This cannot be undone. Dedup is client-wide, so a pushed person is never offered to another audience.</p>
               </div>

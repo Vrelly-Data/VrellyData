@@ -37,7 +37,8 @@ export const SIGNAL_VERTICAL_OPTIONS = [
 ];
 
 export const DEFAULT_SIGNAL_FILTERS: SignalAudienceFilters = {
-  recency_days: 30, min_score: 0, max_per_company: 2, use_apollo: true, us_only: true, persona: {},
+  // Apollo (paid) is opt-in per audience.
+  recency_days: 30, min_score: 0, max_per_company: 2, use_apollo: false, us_only: true, persona: {},
 };
 
 /** The server requires someone to reach: a title, a seniority or a department. */

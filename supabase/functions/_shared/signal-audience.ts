@@ -50,7 +50,7 @@ export interface SignalAudienceFilters {
   persona?: SignalPersona;
   /** People per company. Default 2, at most 10. */
   max_per_company?: number;
-  /** Fall back to Apollo (paid) for companies nobody was found at. Default true. */
+  /** Fall back to Apollo (paid) for companies nobody was found at. Default FALSE: opt in per audience. */
   use_apollo?: boolean;
   /** Apply the US rules (#107). Default true. */
   us_only?: boolean;
@@ -149,7 +149,8 @@ export function normalizeSignalFilters(raw: unknown): Required<Pick<SignalAudien
     recency_days: int("recency_days", o.recency_days, DEFAULT_RECENCY_DAYS, 1, MAX_RECENCY_DAYS),
     min_score: int("min_score", o.min_score, 0, 0, 100),
     max_per_company: int("max_per_company", o.max_per_company, DEFAULT_PER_COMPANY, 1, MAX_PER_COMPANY),
-    use_apollo: o.use_apollo === undefined ? true : o.use_apollo === true,
+    // Paid fallback is opt-in: absent means off.
+    use_apollo: o.use_apollo === true,
     us_only: o.us_only === undefined ? true : o.us_only === true,
   };
   if (verticals.length) out.verticals = verticals;

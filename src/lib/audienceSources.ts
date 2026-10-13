@@ -123,7 +123,7 @@ export const AUDIENCE_SOURCES: Readonly<Record<AudienceSourceId, AudienceSource>
   signals: {
     id: 'signals',
     label: 'Signals',
-    description: 'People at companies showing a buying signal (FDA clearances, hiring, GitHub, site visits). Vrelly first, free; Apollo only for companies with nobody found, within your monthly cap.',
+    description: 'People at companies showing a buying signal (FDA clearances, hiring, GitHub, site visits). Vrelly first, free; optional Apollo fallback (off by default) for companies with nobody found.',
     available: true,
     // Nothing to reveal by hand: the run enriches Apollo candidates itself,
     // and the preview shows the estimated credits before anything is pushed.

@@ -10,7 +10,7 @@ Deno.test("filters: defaults filled in, empty lists dropped", () => {
   assertEquals(f.recency_days, 30);
   assertEquals(f.min_score, 0);
   assertEquals(f.max_per_company, 2);
-  assertEquals(f.use_apollo, true);
+  assertEquals(f.use_apollo, false); // paid fallback is opt-in
   assertEquals(f.us_only, true);
   assertEquals(f.fda, undefined);
 });
@@ -63,7 +63,7 @@ Deno.test("compile: persona — whole-word titles, seniority expanded, Apollo te
 });
 
 Deno.test("compile: a department-only persona cannot use the Apollo fallback", () => {
-  const c = compileSignalAudience({ persona: { departments: ["Regulatory"] } });
+  const c = compileSignalAudience({ persona: { departments: ["Regulatory"] }, use_apollo: true });
   assertEquals(c.apollo, null);
 });
 
