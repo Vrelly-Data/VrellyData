@@ -1,7 +1,8 @@
 // Real I/O for _shared/signal-enrichment.ts.
 //
 //   free lookups   signals_hi_free_lookups (prospects by email, by domain;
-//                  the person's other inference rows) — one call per batch
+//                  the person's other inference rows) — one call per chunk of
+//                  FREE_LOOKUP_CHUNK signals (the caller chunks)
 //   team opt-in    signals_hi_team_apollo (teams.signals_apollo_enrich + the
 //                  team's agent config / user)
 //   budget         readApolloBudget — the same monthly cap and ledger the

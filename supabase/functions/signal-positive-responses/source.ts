@@ -222,7 +222,7 @@ export async function enrichPositiveResponses(ctx: SourceContext): Promise<{ det
       enrich_queue: targets.length, enriched: applied, free_fields_filled: summary.free_filled,
       apollo_records: summary.apollo_records, apollo_matched: summary.apollo_matched,
       apollo_credits: summary.credits_spent, apollo_insufficient_credits: summary.insufficient_credits,
-      inference_rows_written_back: writtenBack,
+      inference_rows_written_back: writtenBack, free_chunks_failed: summary.free_chunks_failed,
     },
     error: errors.length ? errors.join("; ").slice(0, 1000) : null,
   };

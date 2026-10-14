@@ -164,6 +164,32 @@ Deno.test("signals Apollo already finished are not sent again; no identifier →
   assertEquals(out.results.map((r) => r.apollo_status), [null, "no_identifier"]);
 });
 
+Deno.test("free lookups run in chunks of 250; a failed chunk is logged and skipped, the others still go on", async () => {
+  const targets = Array.from({ length: 600 }, (_, i) => target(`s${i}`));
+  const log = newLog();
+  const deps = fakeDeps({ byEmail: { "s0@acme.io": { industry: "Banking" }, "s599@acme.io": { industry: "Banking" } } }, log);
+  const free = deps.freeLookups;
+  let n = 0;
+  deps.freeLookups = (part) => (++n === 2 ? Promise.reject(new Error("canceling statement due to statement timeout")) : free(part));
+  const err = console.error;
+  console.error = () => {};
+  const r = await enrichHighIntent(targets, deps).finally(() => (console.error = err));
+  assertEquals(log.calls.filter((c) => c.startsWith("free:")), ["free:250", "free:100"]);
+  assertEquals(r.free_chunks_failed, 1);
+  assertEquals(r.errors, ["free lookups chunk 2/3 (250 signals): canceling statement due to statement timeout"]);
+  // The failed chunk's signals (s250–s499) are not applied, so they stay queued.
+  assertEquals(r.results.length, 350);
+  assert(!r.results.some((x) => x.signal_id === "s250" || x.signal_id === "s499"));
+  assertEquals([r.results[0].values.industry, r.results[349].values.industry], ["Banking", "Banking"]);
+});
+
+Deno.test("free lookups: every chunk fine → no errors", async () => {
+  const log = newLog();
+  const r = await enrichHighIntent(Array.from({ length: 501 }, (_, i) => target(`s${i}`)), fakeDeps({}, log));
+  assertEquals(log.calls.filter((c) => c.startsWith("free:")), ["free:250", "free:250", "free:1"]);
+  assertEquals([r.free_chunks_failed, r.errors.length, r.results.length], [0, 0, 501]);
+});
+
 Deno.test("helpers: personal-mail domains are never company domains; sizes bucketed; location missing = no state and no country", () => {
   assertEquals(lookupDomain({ company_domain: null, email: "x@gmail.com" }), null);
   assertEquals(lookupDomain({ company_domain: "www.Acme.io", email: "x@gmail.com" }), "acme.io");
