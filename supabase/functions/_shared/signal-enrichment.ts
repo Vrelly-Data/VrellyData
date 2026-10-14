@@ -35,6 +35,8 @@ export type Provenance = "signal" | "prospects_email" | "prospects_domain" | "in
 export const APOLLO_CHUNK = 10;
 /** Most Apollo records one run may try to buy, across all teams. */
 export const APOLLO_MAX_PER_RUN = 50;
+/** Signals per signals_hi_free_lookups call; a failed chunk is retried next run. */
+export const FREE_LOOKUP_CHUNK = 250;
 
 export const PERSONAL_MAIL_DOMAINS = new Set([
   "gmail.com", "googlemail.com", "yahoo.com", "yahoo.co.uk", "ymail.com", "hotmail.com", "hotmail.co.uk", "outlook.com",
@@ -248,6 +250,8 @@ export interface EnrichSummary {
   apollo_matched: number;
   credits_spent: number;
   insufficient_credits: boolean;
+  /** Free-lookup chunks that failed; their signals are left out of `results` (still queued). */
+  free_chunks_failed: number;
   errors: string[];
 }
 
@@ -255,21 +259,38 @@ export interface EnrichSummary {
 export async function enrichHighIntent(
   targets: EnrichTarget[],
   deps: EnrichDeps,
-  opts: { apolloMaxPerRun?: number } = {},
+  opts: { apolloMaxPerRun?: number; freeChunk?: number } = {},
 ): Promise<EnrichSummary> {
   const errors: string[] = [];
   const summary: EnrichSummary = {
-    results: [], free_filled: 0, apollo_records: 0, apollo_matched: 0, credits_spent: 0, insufficient_credits: false, errors,
+    results: [], free_filled: 0, apollo_records: 0, apollo_matched: 0, credits_spent: 0, insufficient_credits: false,
+    free_chunks_failed: 0, errors,
   };
   if (!targets.length) return summary;
 
-  // ---- 1–3: free, for everyone, in one batch of lookups
-  const lk = await deps.freeLookups(targets);
-  const staged = targets.map((t) => {
-    const r = applyFree(t, lk);
-    summary.free_filled += Object.keys(r.filled).length;
-    return { t, ...r };
-  });
+  // ---- 1–3: free, for everyone, in chunks of lookups. A failed chunk is
+  // logged and skipped (its signals stay queued for the next run); the rest go on.
+  const size = Math.max(1, opts.freeChunk ?? FREE_LOOKUP_CHUNK);
+  const chunks = Math.ceil(targets.length / size);
+  const staged: Array<{ t: EnrichTarget } & ReturnType<typeof applyFree>> = [];
+  for (let c = 0; c < chunks; c++) {
+    const part = targets.slice(c * size, (c + 1) * size);
+    let lk: FreeLookups;
+    try {
+      lk = await deps.freeLookups(part);
+    } catch (e) {
+      const msg = `free lookups chunk ${c + 1}/${chunks} (${part.length} signals): ${e instanceof Error ? e.message : e}`;
+      console.error(`[signal-enrichment] ${msg}`);
+      errors.push(msg);
+      summary.free_chunks_failed++;
+      continue;
+    }
+    for (const t of part) {
+      const r = applyFree(t, lk);
+      summary.free_filled += Object.keys(r.filled).length;
+      staged.push({ t, ...r });
+    }
+  }
 
   // ---- 4: Apollo, only where still needed and the team opted in
   const teamIds = [...new Set(staged.filter((s) => s.t.team_id && !s.t.apollo_done && needsApollo(s.values)).map((s) => s.t.team_id!))];
