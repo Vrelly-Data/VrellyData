@@ -1,3 +1,5 @@
+import { useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Loader2, Radio } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
@@ -6,6 +8,9 @@ import { LiveEventCard } from '@/components/admin/inference/LiveEventCard';
 import { CaptureHealthPanel } from '@/components/admin/inference/CaptureHealthPanel';
 import { CaptureSkipsAlert } from '@/components/admin/inference/CaptureSkipsAlert';
 import { ApolloCreditAlert } from '@/components/admin/inference/ApolloCreditAlert';
+import { EnrichmentHealthCard } from '@/components/admin/inference/EnrichmentHealthCard';
+import { LiveFeedFilterBar } from '@/components/admin/inference/LiveFeedFilterBar';
+import { filtersFromParams, filtersToParams, type LiveFeedFilters } from '@/lib/liveFeedFilters';
 
 const MODE_LABEL: Record<FeedMode, string> = {
   connecting: 'Connecting… (polling every 15s)',
@@ -26,7 +31,11 @@ function Counter({ title, value, footnote }: { title: string; value: React.React
 }
 
 export function LiveFeedSection() {
-  const { mode, feed, counters } = useLiveFeed();
+  // Filters live in the URL (lf_*), so a filtered feed can be shared or reloaded.
+  const [params, setParams] = useSearchParams();
+  const filters = useMemo(() => filtersFromParams(params), [params]);
+  const setFilters = (f: LiveFeedFilters) => setParams(filtersToParams(f, params), { replace: true });
+  const { mode, feed, counters } = useLiveFeed(filters);
   const c = counters.data;
   const cards = feed.data ?? [];
 
@@ -68,12 +77,16 @@ export function LiveFeedSection() {
         </CardContent>
       </Card>
 
+      <EnrichmentHealthCard />
+
+      <LiveFeedFilterBar filters={filters} onChange={setFilters} />
+
       {feed.error ? (
         <p className="text-sm text-destructive">Failed to load the live feed: {(feed.error as Error).message}</p>
       ) : feed.isLoading ? (
         <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
       ) : cards.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No live replies captured yet.</p>
+        <p className="text-sm text-muted-foreground">No live replies match these filters.</p>
       ) : (
         <div className="space-y-3">
           {cards.map((card) => (
