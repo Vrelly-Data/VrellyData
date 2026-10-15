@@ -13,11 +13,17 @@ Deno.test("daily: due at the next day's tick even though the last run started ju
   assertEquals(isDue("daily", "2026-10-08T13:47:00.621Z", Date.parse("2026-10-09T13:47:00.037Z")), true);
 });
 
-Deno.test("daily: not due again the same day, nor a few hours later", () => {
+Deno.test("daily: not due again the same UTC day", () => {
   assertEquals(isDue("daily", "2026-10-09T13:47:00.621Z", Date.parse("2026-10-09T14:47:00Z")), false);
-  assertEquals(isDue("daily", "2026-10-09T13:47:00.621Z", Date.parse("2026-10-10T08:00:00Z")), false);
-  // An hourly dispatcher must not run it an hour early either.
-  assertEquals(isDue("daily", "2026-10-09T13:47:00.621Z", Date.parse("2026-10-10T12:47:00Z")), false);
+  assertEquals(isDue("daily", "2026-10-09T13:47:00.621Z", Date.parse("2026-10-09T23:59:59Z")), false);
+  assertEquals(isDue("daily", "2026-10-15T00:05:00Z", Date.parse("2026-10-15T13:47:00Z")), false);
+});
+
+Deno.test("daily: due if it has not run yet today, however recent yesterday's run was", () => {
+  // Regression 2026-10-15: manual run 19:40 UTC the day before made the 13:47 auto-add skip.
+  assertEquals(isDue("daily", "2026-10-14T19:40:00Z", Date.parse("2026-10-15T13:47:00.040Z")), true);
+  assertEquals(isDue("daily", "2026-10-14T23:59:59Z", Date.parse("2026-10-15T13:47:00Z")), true);
+  assertEquals(isDue("daily", "not a date", Date.parse("2026-10-15T13:47:00Z")), true);
 });
 
 Deno.test("weekly / monthly keep their period; never-run is due; manual/unknown never", () => {
