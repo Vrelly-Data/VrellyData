@@ -200,6 +200,9 @@ verify_jwt = false
 [functions.signal-positive-responses]
 verify_jwt = false
 
+[functions.enrich-inference-events]
+verify_jwt = false
+
 [functions.signal-openfda-510k]
 verify_jwt = false
 

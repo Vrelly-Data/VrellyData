@@ -12,6 +12,7 @@ import {
   SourceFilter,
 } from '@/lib/inferenceAnalytics';
 import { LiveEvent, buildLiveCards, isFullyEnriched, num, startOfToday, startOfWeek } from '@/lib/liveFeed';
+import { type LiveFeedFilters, cardMatches, dateBounds, hasCardFilters } from '@/lib/liveFeedFilters';
 
 // inference_events / inference_deductions are not in the generated Supabase types.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -133,8 +134,10 @@ export type FeedMode = 'connecting' | 'realtime' | 'polling';
 const LIVE_SELECT =
   'id,team_id,person_key,event_type,channel,occurred_at,source,intent,full_name,job_title,company_name,industry,company_size,city,state,seniority,campaign_name,copy_fingerprint,subject,metadata';
 const FEED_LIMIT = 80;
+// Platform / category filters apply to merged cards, so fetch a wider window to still fill the page.
+const FEED_WINDOW = 600;
 
-export function useLiveFeed() {
+export function useLiveFeed(filters: LiveFeedFilters) {
   const queryClient = useQueryClient();
   const [mode, setMode] = useState<FeedMode>('connecting');
 
@@ -160,15 +163,24 @@ export function useLiveFeed() {
   const refetchInterval = mode === 'realtime' ? false : 15_000;
 
   const feed = useQuery({
-    queryKey: ['inference_live', 'feed'],
+    queryKey: ['inference_live', 'feed', filters],
     refetchInterval,
+    placeholderData: (previous) => previous,
     queryFn: async () => {
-      const { data, error } = await onlyLive(from('inference_events').select(LIVE_SELECT))
-        .in('event_type', ['replied', 'classified'])
+      // Team, channel and dates in the query (RLS already limits a client user to their own team).
+      let q = onlyLive(from('inference_events').select(LIVE_SELECT)).in('event_type', ['replied', 'classified']);
+      if (filters.team) q = q.eq('team_id', filters.team);
+      if (filters.channel) q = q.eq('channel', filters.channel);
+      const { gte, lt } = dateBounds(filters);
+      if (gte) q = q.gte('occurred_at', gte);
+      if (lt) q = q.lt('occurred_at', lt);
+      const { data, error } = await q
         .order('occurred_at', { ascending: false })
-        .limit(FEED_LIMIT);
+        .limit(hasCardFilters(filters) ? FEED_WINDOW : FEED_LIMIT);
       if (error) throw new Error(error.message);
-      return buildLiveCards((data ?? []) as LiveEvent[]);
+      return buildLiveCards((data ?? []) as LiveEvent[])
+        .filter((c) => cardMatches(c, filters))
+        .slice(0, FEED_LIMIT);
     },
   });
 
@@ -376,6 +388,54 @@ export function useApolloCreditAlerts(days = 7) {
       const { data, error } = await (supabase.rpc as any)('admin_apollo_credit_alerts', { p_days: days });
       if (error) throw new Error(error.message);
       return (Array.isArray(data) ? data : []) as ApolloCreditAlert[];
+    },
+  });
+}
+
+// -------- Live Feed: team filter options (admins: every team with replies; clients: their own) --------
+export function useFeedTeams() {
+  return useQuery({
+    queryKey: ['inference_feed_teams'],
+    staleTime: 10 * 60_000,
+    queryFn: async (): Promise<Array<{ id: string; name: string }>> => {
+      const { data, error } = await (supabase.rpc as AnyQuery)('inference_feed_teams');
+      if (error) throw new Error(error.message);
+      return (data ?? []) as Array<{ id: string; name: string }>;
+    },
+  });
+}
+
+// -------- Enrichment health (enrich-inference-events) --------
+export type EnrichmentGroup = {
+  grp: 'interested' | 'other' | 'not_interested';
+  n: number;
+  enriched: number;
+  step: number;
+  industry: number;
+  size: number;
+  title: number;
+  state: number;
+  timezone: number;
+};
+export type EnrichmentHealth = {
+  days: number;
+  replies: number;
+  enriched: number;
+  groups: EnrichmentGroup[];
+  apollo_credits_today: number;
+  waiting: number;
+  failed: number;
+  last_run_at: string | null;
+};
+
+export function useEnrichmentHealth() {
+  return useQuery({
+    queryKey: ['inference_live', 'enrichment_health'],
+    refetchInterval: 60_000,
+    queryFn: async (): Promise<EnrichmentHealth> => {
+      const { data, error } = await (supabase.rpc as AnyQuery)('admin_inference_enrichment_health', { p_days: 7 });
+      if (error) throw new Error(error.message);
+      return data as EnrichmentHealth;
     },
   });
 }

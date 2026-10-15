@@ -1,6 +1,7 @@
 // Pure shaping for the Admin → Inference Live Feed: one card per reply, enriched with its
 // classification (which carries the intent), plus a per-card completeness check.
 import { cleanSubject } from '@/lib/inferenceAnalytics';
+import { type Platform, platformOfEvent } from '@/lib/liveFeedFilters';
 
 export type LiveEvent = {
   id: string;
@@ -43,6 +44,7 @@ export type LiveCard = {
   channel: string;
   intent: string | null;
   sources: string[];
+  platform: Platform | null; // from the reply row; null for a classification on its own
   name: string | null;
   title: string | null;
   company: string | null;
@@ -88,6 +90,7 @@ function buildCard(kind: LiveCard['kind'], primary: LiveEvent, cls?: LiveEvent):
     channel: primary.channel,
     intent: first(text(primary.intent), cls ? text(cls.intent) : null),
     sources: [...new Set([primary.source, cls?.source].filter(Boolean) as string[])],
+    platform: platformOfEvent(primary.source, primary.metadata) ?? (cls ? platformOfEvent(cls.source, cls.metadata) : null),
     name: pick((e) => e.full_name),
     title: pick((e) => e.job_title),
     company: pick((e) => e.company_name),

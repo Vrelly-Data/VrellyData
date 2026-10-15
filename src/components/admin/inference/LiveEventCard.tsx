@@ -5,6 +5,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { fmtHours } from '@/lib/inferenceAnalytics';
 import { COMPLETENESS_FIELDS, COMPLETENESS_LABELS, LiveCard } from '@/lib/liveFeed';
+import { PLATFORM_LABELS } from '@/lib/liveFeedFilters';
 
 function IntentBadge({ intent }: { intent: string | null }) {
   if (!intent) return <Badge variant="outline" className="text-muted-foreground">unclassified</Badge>;
@@ -39,6 +40,7 @@ export function LiveEventCard({ card }: { card: LiveCard }) {
             {card.channel === 'linkedin' ? <Linkedin className="h-3 w-3" /> : <Mail className="h-3 w-3" />}
             {card.channel}
           </Badge>
+          {card.platform && <Badge variant="outline">{PLATFORM_LABELS[card.platform]}</Badge>}
           <IntentBadge intent={card.intent} />
           {card.kind === 'classification' && (
             <span className="text-[11px] text-muted-foreground">classification (no reply event in view)</span>

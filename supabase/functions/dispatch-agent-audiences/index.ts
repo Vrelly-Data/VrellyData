@@ -13,7 +13,7 @@
 //                               destination is set — a scheduled run has nobody
 //                               to ask which campaign to use
 //     cadence  <> 'manual'      manual audiences are never scheduled
-//     due by cadence            daily = 24h since last_run_at, weekly = 7d
+//     due by cadence            daily = no run yet today (UTC day), weekly = 7d
 //     consecutive_failures < 3  else it is auto-paused instead of retried
 //
 // is_active cannot become true by accident. It defaults false, NO code path in
@@ -61,11 +61,22 @@ const MAX_CONSECUTIVE_FAILURES = 3;
  */
 export const DUE_GRACE_MS = 15 * 60_000;
 
-/** Pure: is an audience with this cadence and last run due at `now`? */
+/**
+ * Pure: is an audience with this cadence and last run due at `now`?
+ *
+ * daily = it has not run yet today (UTC calendar day). A 24h-since-last-run test
+ * let any off-schedule run push the next one out: a manual run at 19:40 UTC on
+ * 2026-10-14 made the 13:47 tick on 2026-10-15 skip (17h later). The dispatcher
+ * fires once a day (13:47 UTC), so "not yet today" runs it at that tick.
+ */
 export function isDue(cadence: string, lastRunAt: string | null | undefined, now: number): boolean {
   const hours = CADENCE_HOURS[cadence];
   if (!hours) return false;
   const lastMs = lastRunAt ? Date.parse(lastRunAt) : 0;
+  if (cadence === "daily") {
+    if (!Number.isFinite(lastMs)) return true;
+    return new Date(lastMs).toISOString().slice(0, 10) < new Date(now).toISOString().slice(0, 10);
+  }
   return now - lastMs >= hours * 3_600_000 - DUE_GRACE_MS;
 }
 
