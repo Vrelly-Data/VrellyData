@@ -21,6 +21,7 @@ import {
 import { SignalDetailSheet } from './SignalDetailSheet';
 import { AdminSourcesPanel, TeamSettingsPanel, TypeSourcesAdmin } from './AdminSourcesPanel';
 import { PixelSitesPanel } from './PixelSitesPanel';
+import { SignalInputsPanel } from './SignalInputsPanel';
 import { BuildAudienceDialog } from './BuildAudienceDialog';
 import { BreakdownPanel, type BreakdownKey } from './BreakdownPanel';
 
@@ -122,6 +123,9 @@ export function SignalsView({ mode }: { mode: Mode }) {
                   </TabsTrigger>
                 );
               })}
+              <TabsTrigger value="signal_inputs" className="gap-2" title="Choose what Vrelly watches for: hiring, GitHub, medical/FDA, your website">
+                Signal Inputs
+              </TabsTrigger>
             </TabsList>
             {SIGNAL_TYPES.map((t) => (
               <TabsContent key={t.key} value={t.key} className="space-y-4">
@@ -130,6 +134,9 @@ export function SignalsView({ mode }: { mode: Mode }) {
                   : <TypePanel info={t} counts={counts.get(t.key) ?? ZERO(t.key)} mode={mode} scope={scope} />)}
               </TabsContent>
             ))}
+            <TabsContent value="signal_inputs" className="space-y-4">
+              {active === 'signal_inputs' && <SignalInputsPanel mode={mode} />}
+            </TabsContent>
           </Tabs>
         </>
       )}
