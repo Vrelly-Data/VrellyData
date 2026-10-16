@@ -14,6 +14,9 @@
 export const SIGNAL_TYPES = [
   "positive_response",
   "fda_clearance",
+  "fda_recall",
+  "fda_registration",
+  "clinical_trial",
   "hiring",
   "website_visit",
   "product_launch",
@@ -29,6 +32,9 @@ export const COMING_SOON_TYPES: readonly SignalType[] = ["linkedin_post_keyword"
 export const PUBLIC_TYPE_KEY: Readonly<Record<SignalType, string>> = {
   positive_response: "high_intent",
   fda_clearance: "fda_clearance",
+  fda_recall: "fda_recall",
+  fda_registration: "fda_registration",
+  clinical_trial: "clinical_trial",
   hiring: "hiring",
   website_visit: "website_visit",
   product_launch: "product_launch",
@@ -39,6 +45,9 @@ export const PUBLIC_TYPE_KEY: Readonly<Record<SignalType, string>> = {
 export const PUBLIC_TYPE_LABEL: Readonly<Record<SignalType, string>> = {
   positive_response: "High Intent",
   fda_clearance: "FDA clearance",
+  fda_recall: "FDA recalls",
+  fda_registration: "FDA listings",
+  clinical_trial: "Device trials",
   hiring: "Hiring",
   website_visit: "Website visit",
   product_launch: "Product launch",

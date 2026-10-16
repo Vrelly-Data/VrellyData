@@ -9,7 +9,7 @@
  */
 
 export type SignalTypeKey =
-  | 'high_intent' | 'fda_clearance' | 'hiring' | 'website_visit' | 'product_launch'
+  | 'high_intent' | 'fda_clearance' | 'fda_recall' | 'fda_registration' | 'clinical_trial' | 'hiring' | 'website_visit' | 'product_launch'
   | 'linkedin_post_keyword' | 'fast_growth';
 
 export interface SignalTypeInfo {
@@ -23,7 +23,10 @@ export interface SignalTypeInfo {
 /** Tab order. */
 export const SIGNAL_TYPES: SignalTypeInfo[] = [
   { key: 'high_intent', label: 'High Intent', description: 'People showing strong buying intent toward your offer.' },
-  { key: 'fda_clearance', label: 'FDA clearance', description: 'Companies that just received an FDA 510(k) clearance.' },
+  { key: 'fda_clearance', label: 'FDA clearance', description: 'FDA 510(k) clearances, PMA approvals, De Novo grants and Breakthrough authorizations.' },
+  { key: 'clinical_trial', label: 'Device trials', description: 'New interventional medical-device trials on ClinicalTrials.gov.' },
+  { key: 'fda_recall', label: 'FDA recalls', description: 'Medical-device recalls posted by the FDA.' },
+  { key: 'fda_registration', label: 'FDA listings', description: 'Devices newly listed with the FDA (registrations & listings).' },
   { key: 'hiring', label: 'Hiring', description: 'Companies posting new roles on their job boards.' },
   { key: 'website_visit', label: 'Website visit', description: 'Visitors to your own website (your pixel).' },
   { key: 'product_launch', label: 'Product launch', description: 'New products and releases from software companies.' },

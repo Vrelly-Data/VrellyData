@@ -212,6 +212,9 @@ verify_jwt = false
 [functions.signal-github-activity]
 verify_jwt = false
 
+[functions.signal-inputs-run]
+verify_jwt = false
+
 [functions.signal-web-visitors]
 verify_jwt = false
 

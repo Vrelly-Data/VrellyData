@@ -42,7 +42,8 @@ Deno.serve(async (req) => {
       const res = await fetch(`${supabaseUrl}/functions/v1/${s.function_name}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-agent-key": agentKey },
-        body: "{}",
+        // Sources that serve several writers (signal-inputs-run) need to know which one is due.
+        body: JSON.stringify({ source_key: s.key }),
         signal: AbortSignal.timeout(140_000),
       });
       const out = await res.json().catch(() => null);
