@@ -3,7 +3,7 @@
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   type ApolloResult, type ApplyRow, type EnrichDeps, type FreeData, type LogRow, PermanentError, parseLocation,
-  type QueueRow, runEnrichment, type SiblingRow, TransientError,
+  nextUtcMidnight, type QueueRow, runEnrichment, type SiblingRow, TransientError,
 } from "./enrich.ts";
 
 const NOW = Date.parse("2026-10-14T20:00:00Z");
@@ -125,30 +125,81 @@ Deno.test("Apollo: only for missing fields; never for someone already tried; one
   assert(!apolloCalls.flat().some((x) => x.email === "tried@acme.io"));
 });
 
-Deno.test("Apollo 422 insufficient credits: stop Apollo for the run, still save the free data, no row fails", async () => {
+const MIDNIGHT = "2026-10-15T00:00:00.000Z"; // the next UTC midnight after NOW
+const complete = { industry: "Retail", company_size: "11-50", job_title: "CFO", seniority: "vp", city: "Austin", state: "Texas", country: "United States" };
+
+Deno.test("Apollo 422 insufficient credits: stop Apollo; rows still needing it wait for midnight, the rest finish", async () => {
   const rows = Array.from({ length: 15 }, (_, i) => row(`p${i}`));
   const { d, applied, logs, apolloCalls } = deps({
-    free: { p3: { people: { industry: "Retail" } } },
+    free: { p3: { people: complete } },
     apollo: (det) => ({ matches: det.map(() => null), credits: 0, insufficient: true, error: null }),
   });
   const s = await runEnrichment(rows, d, opts);
   assertEquals(apolloCalls.length, 1);
-  assertEquals([s.apollo_insufficient_credits, s.enriched, s.errors], [true, 15, 0]);
+  assertEquals([s.apollo_insufficient_credits, s.enriched, s.apollo_deferred, s.errors], [true, 1, 14, 0]);
   assert(logs.some((l) => l.step === "apollo" && l.status === "apollo_insufficient_credits"));
   assertEquals(applied.find((a) => a.id === "p3")!.cols.industry, "Retail");
-  assertEquals(applied.find((a) => a.id === "p3")!.fill.apollo_matched, undefined, "not tried → may be tried later");
+  const w = applied.find((a) => a.id === "p0")!;
+  assertEquals(w.set, { apollo_pending: true, enrichment_next_at: MIDNIGHT });
+  assertEquals(w.fill.apollo_matched, undefined, "not tried → tried after midnight");
 });
 
-Deno.test("Apollo daily cap: never past the cap across runs", async () => {
+Deno.test("Apollo daily cap: never past the cap; who it did not reach waits for the next UTC midnight, un-enriched", async () => {
   const rows = Array.from({ length: 30 }, (_, i) => row(`p${i}`));
-  const { d, apolloCalls, logs } = deps({
+  rows.push(row("full"));
+  const { d, applied, apolloCalls, logs } = deps({
     creditsToday: 295,
+    free: { full: { people: complete } },
     apollo: (det) => ({ matches: det.map(() => apolloPerson("CFO")), credits: det.length, insufficient: false, error: null }),
   });
   const s = await runEnrichment(rows, d, opts);
-  assertEquals(apolloCalls.map((c) => c.length), [5]);
-  assertEquals(s.apollo_cap_reached, true);
+  assertEquals(apolloCalls.map((c) => c.length), [5], "5 credits left: one call of 5, nobody skipped past");
+  assertEquals([s.apollo_cap_reached, s.enriched, s.apollo_deferred], [true, 6, 25]);
   assert(logs.some((l) => l.status === "daily_cap_reached"));
+  for (const id of ["p0", "p4"]) assertEquals(applied.find((a) => a.id === id)!.fill.apollo_matched, true);
+  for (const id of ["p5", "p29"]) {
+    const a = applied.find((x) => x.id === id)!;
+    assertEquals(a.set, { apollo_pending: true, enrichment_next_at: MIDNIGHT });
+    assertEquals([a.set.enriched_at, Object.keys(a.cols).length], [undefined, 0]);
+  }
+  assert(typeof applied.find((a) => a.id === "full")!.set.enriched_at === "string", "no Apollo needed → finishes");
+  assertEquals(nextUtcMidnight(Date.parse("2026-10-14T23:59:59Z")), MIDNIGHT);
+});
+
+Deno.test("Apollo priority: interested, then other, then not interested, whatever the queue order", async () => {
+  const rows = [
+    row("n1", { intent: "not_interested", priority: 2 }), row("o1", { intent: null, priority: 1 }),
+    row("i1", { priority: 0 }), row("n2", { intent: "not_interested", priority: 2 }), row("i2", { priority: 0 }),
+  ];
+  const { d, applied, apolloCalls } = deps({
+    creditsToday: 297,
+    apollo: (det) => ({ matches: det.map(() => apolloPerson("CFO")), credits: det.length, insufficient: false, error: null }),
+  });
+  await runEnrichment(rows, d, opts);
+  assertEquals(apolloCalls[0].map((x) => x.email), ["i1@acme.io", "i2@acme.io", "o1@acme.io"]);
+  for (const id of ["n1", "n2"]) assertEquals(applied.find((a) => a.id === id)!.set.apollo_pending, true);
+});
+
+Deno.test("Apollo cut off by the run deadline: left for the next run, nothing written", async () => {
+  let t = NOW;
+  const { d, applied } = deps({});
+  d.now = () => t;
+  d.apolloCreditsToday = () => {
+    t = NOW + 200_000; // the deadline passes before the first Apollo call
+    return Promise.resolve(0);
+  };
+  const s = await runEnrichment([row("a")], d, opts);
+  assertEquals([s.enriched, s.deferred, applied.length], [0, 1, 0]);
+});
+
+Deno.test("re-queued row (apollo_pending, already enriched): Apollo runs, the flag clears", async () => {
+  const r = row("a", { metadata: { provider: "reply_io", provider_thread_id: "t-a", enriched_at: "2026-10-13T00:00:00Z", apollo_pending: true } });
+  const { d, applied, apolloCalls } = deps({
+    apollo: (det) => ({ matches: det.map(() => apolloPerson("CFO")), credits: det.length, insufficient: false, error: null }),
+  });
+  await runEnrichment([r], d, opts);
+  assertEquals(apolloCalls.length, 1);
+  assertEquals([applied[0].fill.apollo_matched, applied[0].set.apollo_pending, applied[0].cols.industry], [true, false, "Software"]);
 });
 
 Deno.test("transient provider error → retry with backoff, 'failed' after 5; permanent → step skipped, row still enriched", async () => {
@@ -181,6 +232,21 @@ Deno.test("classified rows take their reply's step/timing; wait while the reply 
   const w = deps({ siblings: new Map([["c", sib]]) });
   const s = await runEnrichment([cls], w.d, opts);
   assertEquals([s.deferred, w.applied.length], [1, 0]);
+
+  // the reply waits for Apollo until midnight: the classified row waits with it (no re-queue every run)
+  const later = deps({ siblings: new Map([["c", { ...sib, metadata: { apollo_pending: true, enrichment_next_at: MIDNIGHT } }]]) });
+  const s2 = await runEnrichment([cls], later.d, opts);
+  assertEquals([s2.deferred, later.applied[0].set], [1, { enrichment_next_at: MIDNIGHT }]);
+});
+
+Deno.test("classified row in the same run as its reply shares the reply's one Apollo lookup (and its deferral)", async () => {
+  const reply = row("r", { priority: 0 });
+  const cls = row("c", { source: "classify_reply", event_type: "classified", person_key: "r@acme.io", email: "r@acme.io", metadata: {} });
+  const sib: SiblingRow = { id: "r", occurred_at: reply.occurred_at, metadata: {}, campaign_external_id: null, campaign_name: null, subject: null, copy_fingerprint: null };
+  const { d, applied, apolloCalls } = deps({ creditsToday: 300, siblings: new Map([["c", sib]]) });
+  const s = await runEnrichment([reply, cls], d, opts);
+  assertEquals([apolloCalls.length, s.apollo_deferred], [0, 2]);
+  for (const id of ["r", "c"]) assertEquals(applied.find((a) => a.id === id)!.set.apollo_pending, true);
 });
 
 Deno.test("HeyReach location strings", () => {

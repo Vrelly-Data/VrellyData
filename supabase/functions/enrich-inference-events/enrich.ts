@@ -22,6 +22,12 @@
 // A transient provider failure (429 / 5xx / timeout) is a row error: the row is
 // retried with backoff (5, 10, 20, 40 min) and marked 'failed' after 5. A
 // permanent one (404, no key, no ids) only skips that step.
+//
+// Apollo order is priority (interested, other, not interested). When the daily
+// cap or Apollo's credits run out, the rows still needing Apollo are NOT
+// enriched: they get apollo_pending = true and enrichment_next_at = the next
+// UTC midnight, and the queue takes apollo_pending rows at any age. Rows the
+// run deadline cut off are left for the next run. Everyone else finishes.
 
 import {
   apolloPersonFields, APOLLO_WORTHY, countryForState, matchReplyStep, normalizeCountry, normalizeSeniority,
@@ -127,6 +133,14 @@ export interface RunSummary {
   apollo_credits: number;
   apollo_insufficient_credits: boolean;
   apollo_cap_reached: boolean;
+  /** Rows left for Apollo after the next UTC midnight (cap or credits ran out). */
+  apollo_deferred: number;
+}
+
+/** The next UTC midnight after `ms`, when the daily Apollo cap resets. */
+export function nextUtcMidnight(ms: number): string {
+  const d = new Date(ms);
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1)).toISOString();
 }
 
 const text = (v: unknown): string | null => {
@@ -302,7 +316,7 @@ function stillMissing(v: Fields): boolean {
 export async function runEnrichment(queue: QueueRow[], deps: EnrichDeps, opts: RunOptions): Promise<RunSummary> {
   const summary: RunSummary = {
     queued: queue.length, enriched: 0, deferred: 0, errors: 0, failed: 0, apollo_records: 0, apollo_matched: 0,
-    apollo_credits: 0, apollo_insufficient_credits: false, apollo_cap_reached: false,
+    apollo_credits: 0, apollo_insufficient_credits: false, apollo_cap_reached: false, apollo_deferred: 0,
   };
   if (!queue.length) return summary;
   const logs: LogRow[] = [];
@@ -409,6 +423,14 @@ export async function runEnrichment(queue: QueueRow[], deps: EnrichDeps, opts: R
     const fromRun = s ? stagedById.get(s.id) : undefined;
     // The reply is still waiting (queued but not processed this run, or not enriched yet): wait for it.
     const sibInWindow = s ? deps.now() - new Date(s.occurred_at).getTime() < 30 * 86_400_000 : false;
+    // The reply waits for Apollo until a later time: wait with it instead of re-queuing every run.
+    const sibNext = Date.parse(String(s?.metadata?.enrichment_next_at ?? ""));
+    if (s && !fromRun && !s.metadata?.enriched_at && Number.isFinite(sibNext) && sibNext > deps.now()) {
+      summary.deferred++;
+      errorRows.push({ id: row.id, fill: {}, set: { enrichment_next_at: new Date(sibNext).toISOString() }, cols: {} });
+      logs.push({ event_id: row.id, step: "sibling", status: "deferred" });
+      continue;
+    }
     if (s && !fromRun && !s.metadata?.enriched_at && s.metadata?.enrichment_status !== "failed" && (queuedIds.has(s.id) || sibInWindow)) {
       summary.deferred++;
       logs.push({ event_id: row.id, step: "sibling", status: "deferred" });
@@ -457,18 +479,28 @@ export async function runEnrichment(queue: QueueRow[], deps: EnrichDeps, opts: R
     apolloFor.set(pk, { details: d, rows: [s] });
   }
   const apolloOrg = new Map<string, Fields>();
+  // Rows Apollo did not reach: id → enrichment_next_at (null = just the next run).
+  const apolloWait = new Map<string, string | null>();
   if (apolloFor.size) {
     let used = await deps.apolloCreditsToday();
-    const people = [...apolloFor.values()];
-    for (let i = 0; i < people.length; i += APOLLO_BATCH) {
-      if (deps.now() > opts.deadlineMs) break;
+    const prio = (p: { rows: Staged[] }) => Math.min(...p.rows.map((s) => s.row.priority ?? 1));
+    const people = [...apolloFor.values()].sort((a, b) => prio(a) - prio(b)); // stable: queue order within a priority
+    let stopAt = -1;
+    let until: string | null = null;
+    for (let i = 0; i < people.length;) {
+      if (deps.now() > opts.deadlineMs) {
+        stopAt = i;
+        break;
+      }
       const left = opts.apolloDailyCap - used;
       if (left <= 0) {
         summary.apollo_cap_reached = true;
         logs.push({ event_id: null, step: "apollo", status: "daily_cap_reached" });
+        [stopAt, until] = [i, nextUtcMidnight(deps.now())];
         break;
       }
       const batch = people.slice(i, i + Math.min(APOLLO_BATCH, left));
+      i += batch.length;
       let res: ApolloResult;
       try {
         res = await deps.apolloMatch(batch.map((b) => b.details));
@@ -479,6 +511,7 @@ export async function runEnrichment(queue: QueueRow[], deps: EnrichDeps, opts: R
       if (res.insufficient) {
         summary.apollo_insufficient_credits = true;
         logs.push({ event_id: null, step: "apollo", status: "apollo_insufficient_credits" });
+        [stopAt, until] = [i - batch.length, nextUtcMidnight(deps.now())];
         break;
       }
       if (res.error) {
@@ -507,11 +540,23 @@ export async function runEnrichment(queue: QueueRow[], deps: EnrichDeps, opts: R
         });
       });
     }
+    if (stopAt >= 0) for (const p of people.slice(stopAt)) for (const s of p.rows) apolloWait.set(s.row.id, until);
   }
 
   // ---- 4. geography, time zone, save
   const applyRows: ApplyRow[] = [...errorRows];
   for (const s of staged) {
+    if (apolloWait.has(s.row.id)) {
+      const next = apolloWait.get(s.row.id);
+      if (next) {
+        applyRows.push({ id: s.row.id, fill: {}, set: { apollo_pending: true, enrichment_next_at: next }, cols: {} });
+        logs.push({ event_id: s.row.id, step: "apollo", status: "deferred" });
+        summary.apollo_deferred++;
+      } else {
+        summary.deferred++;
+      }
+      continue;
+    }
     const geo: Fields = { city: s.values.city, state: s.values.state, country: s.values.country };
     firstFill(geo, s.provider, GEO_KEYS);
     firstFill(geo, apolloOrg.get(s.row.id), GEO_KEYS);
@@ -545,7 +590,10 @@ export async function runEnrichment(queue: QueueRow[], deps: EnrichDeps, opts: R
 
     applyRows.push({
       id: s.row.id, fill, cols,
-      set: { enriched_at: new Date(deps.now()).toISOString(), enrichment_version: ENRICHMENT_VERSION },
+      set: {
+        enriched_at: new Date(deps.now()).toISOString(), enrichment_version: ENRICHMENT_VERSION,
+        ...(s.row.metadata?.apollo_pending === true ? { apollo_pending: false } : {}),
+      },
     });
     logs.push({ event_id: s.row.id, step: "done", status: "enriched" });
     summary.enriched++;
