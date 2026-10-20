@@ -14,6 +14,8 @@ import { isStaleProspectMessage } from '../_shared/stale.ts';
 import { decideSurfaceAndClassify, buildSurfaceUpdateFields } from '../_shared/surface.ts';
 import { listEnabledCampaignIds, normalizeCampaignId, numericCampaignIds, recordCaptureScopeSkips, type CaptureSkipRecord } from '../_shared/capture-scope.ts';
 import { HEYREACH_DRAFTING_ENV, heyreachClassifyGate, isHeyReachDraftingEnabled } from '../_shared/heyreach-drafting.ts';
+import { heyReachRepliedEventsFromChatroom, writeHeyReachRepliedEvent, type ChatroomMessage } from '../_shared/heyreach-inference.ts';
+import { detectLanguageCode } from '../_shared/language.ts';
 import {
   applyScope,
   canonicalScope,
@@ -74,6 +76,19 @@ async function itemDb<T>(label: string, signal: AbortSignal, run: (signal: Abort
 // one GetConversationsV2 page each, and records replies from the last 14 days
 // in capture_scope_skips. Read-only towards HeyReach.
 const RECAPTURE_MAX_LOOKBACK_DAYS = 14;
+
+// ── Inference warehouse ('replied' inference_events rows) ───────────────────
+// heyreach-webhook was the only HeyReach writer, so replies the poller found
+// (most of them) never reached Admin → Inference. The poller now writes the same
+// row through the same shared helper (_shared/heyreach-inference.ts), keyed and
+// near-duplicate-checked so webhook + poller never record one reply twice.
+// Additive only: written after the lead save, best-effort, never throws, and
+// nothing about drafting, sending, classification or capture scope changes.
+// Only prospect messages from the last INFERENCE_MAX_AGE_DAYS are recorded, so
+// a baseline walk over old history does not flood the warehouse.
+const INFERENCE_MAX_AGE_DAYS = 30;
+const INFERENCE_MAX_PER_CONVERSATION = 5;
+const INFERENCE_DB_TIMEOUT_MS = 4_000;
 const PROBE_CAMPAIGNS_PER_RUN = 3;
 const PROBE_LOOKBACK_DAYS = 14;
 const PROBE_MIN_REMAINING_MS = 20_000;
@@ -207,7 +222,7 @@ Deno.serve(async (req) => {
     // lookbackDays (≤14), processed by the same per-conversation capture as
     // the walk. No walk/baseline state is read or written, and no probe runs.
     const reqBody = await req.json().catch(() => ({})) as {
-      mode?: string; integrationId?: string; campaignIds?: unknown[]; lookbackDays?: number;
+      mode?: string; integrationId?: string; campaignIds?: unknown[]; lookbackDays?: number; offset?: number;
     };
     const isAgent = !!agentKey && agentKey === expectedKey;
     const recapture = isAgent && reqBody?.mode === 'recapture' && reqBody.integrationId && Array.isArray(reqBody.campaignIds)
@@ -217,6 +232,22 @@ Deno.serve(async (req) => {
           lookbackDays: Math.min(RECAPTURE_MAX_LOOKBACK_DAYS, Math.max(1, Number(reqBody.lookbackDays) || RECAPTURE_MAX_LOOKBACK_DAYS)),
         }
       : null;
+    // Inference backfill (x-agent-key only): the 'replied' inference rows for
+    // the last lookbackDays (≤30) of capture-enabled conversations, through the
+    // same helper and dedupe as the live path. Writes ONLY inference_events: no
+    // agent_leads, no classify-reply, no walk/baseline state, no probe.
+    const inferenceBackfill = isAgent && !recapture && reqBody?.mode === 'inference_backfill'
+      ? {
+          integrationId: reqBody.integrationId ? String(reqBody.integrationId) : null,
+          lookbackDays: Math.min(INFERENCE_MAX_AGE_DAYS, Math.max(1, Number(reqBody.lookbackDays) || INFERENCE_MAX_AGE_DAYS)),
+          // resume a run that hit the time budget (one integration at a time)
+          offset: Math.max(0, Math.floor(Number(reqBody.offset) || 0)),
+        }
+      : null;
+    const inferenceCounts = { written: 0, duplicate: 0, skipped: 0, error: 0, conversations: 0, chatroomFailures: 0 };
+    if (inferenceBackfill) {
+      console.log(`[poll-heyreach-inbox] INFERENCE BACKFILL integration=${inferenceBackfill.integrationId ?? 'all'} lookbackDays=${inferenceBackfill.lookbackDays}`);
+    }
     if (recapture) {
       console.log(`[poll-heyreach-inbox] RECAPTURE integration=${recapture.integrationId} campaigns=${recapture.campaignIds.size} lookbackDays=${recapture.lookbackDays}`);
     }
@@ -269,6 +300,9 @@ Deno.serve(async (req) => {
     }
     if (recapture) {
       query = query.eq('id', recapture.integrationId);
+    }
+    if (inferenceBackfill?.integrationId) {
+      query = query.eq('id', inferenceBackfill.integrationId);
     }
 
     const { data: integrations, error: intError } = await query;
@@ -430,7 +464,7 @@ Deno.serve(async (req) => {
           const reason = scopeResult.ok ? 'none_enabled' : scopeResult.reason;
           // Nothing enabled is exactly where replies vanish: still probe the
           // capture-off campaigns (not on lookup_error, not in recapture).
-          if (!recapture && reason === 'none_enabled' && remaining() > PROBE_MIN_REMAINING_MS) {
+          if (!recapture && !inferenceBackfill && reason === 'none_enabled' && remaining() > PROBE_MIN_REMAINING_MS) {
             try {
               const probe = await probeCaptureOffHeyReach(supabase, { id: String(integration.id), team_id: String(integration.team_id) }, apiKey);
               probeCampaigns += probe.probed;
@@ -474,6 +508,34 @@ Deno.serve(async (req) => {
             );
           }
         }
+        // 'replied' inference rows for one conversation's GetChatroom messages.
+        // deno-lint-ignore no-explicit-any
+        const recordInference = async (convo: any, messages: ChatroomMessage[], maxAgeDays: number) => {
+          const profile = convo.correspondentProfile || {};
+          const rows = heyReachRepliedEventsFromChatroom(
+            {
+              teamId: integration.team_id ?? null,
+              agentConfigId: agentConfig.id,
+              conversationId: convo.id == null ? null : String(convo.id),
+              linkedinUrl: sanitizeLinkedinUrlForStorage(profile.profileUrl || '') ?? null,
+              externalId: convo.id == null ? null : String(convo.id),
+              fullName: [profile.firstName, profile.lastName].filter(Boolean).join(' ') || null,
+              jobTitle: profile.position || profile.headline || null,
+              company: profile.companyName || null,
+              campaignExternalId: null, // GetConversationsV2 carries no campaign
+              extraMetadata: { writer: 'poll-heyreach-inbox' },
+            },
+            messages,
+            { maxAgeDays, nowMs: Date.now(), limit: INFERENCE_MAX_PER_CONVERSATION, detectLanguage: detectLanguageCode },
+          );
+          for (const row of rows) {
+            const r = await writeHeyReachRepliedEvent(supabase, row, 'insert', {
+              signal: AbortSignal.timeout(INFERENCE_DB_TIMEOUT_MS),
+              log: 'poll-heyreach-inbox',
+            });
+            inferenceCounts[r]++;
+          }
+        };
         const deps = {
             async fetchPage(offset: number, limit: number, signal: AbortSignal, phase: Phase) {
               const res = await fetch(`${HEYREACH_API}/inbox/GetConversationsV2`, {
@@ -592,6 +654,7 @@ Deno.serve(async (req) => {
 
                 // Fetch full chatroom messages
                 let replyThread: { role: string; content: string; timestamp: string; channel: string }[] = [];
+                let chatroomMessages: ChatroomMessage[] = [];
                 try {
                   const chatroomRes = await fetch(
                     `${HEYREACH_API}/inbox/GetChatroom/${linkedInAccountId}/${conversationId}`,
@@ -607,6 +670,7 @@ Deno.serve(async (req) => {
                   if (chatroomRes.ok) {
                     const chatroom = await chatroomRes.json();
                     const messages = chatroom.messages || [];
+                    chatroomMessages = messages;
 
                     replyThread = messages.map((msg: { sender?: string; body?: string; createdAt?: string }) => ({
                       role: msg.sender === 'ME' ? 'sender' : 'prospect',
@@ -759,6 +823,15 @@ Deno.serve(async (req) => {
                   }
                 }
 
+                // Inference warehouse: additive, after the lead save, never throws.
+                if (savedRow) {
+                  try {
+                    await recordInference(convo, chatroomMessages, INFERENCE_MAX_AGE_DAYS);
+                  } catch (e) {
+                    console.warn('[poll-heyreach-inbox] inference write threw (non-fatal):', e instanceof Error ? e.message : String(e));
+                  }
+                }
+
                 // Log the gate decision for observability
                 console.log(`[poll-heyreach-inbox] gate: stale=${stale} ts=${newestProspectTs ?? 'null'} willClassify=${decision.willClassify} drafting=${draftingEnabled ? 'on' : 'off'}`);
 
@@ -867,6 +940,57 @@ Deno.serve(async (req) => {
           continue;
         }
 
+        if (inferenceBackfill) {
+          // Newest-first through the capture-enabled conversations until older
+          // than the lookback. Inference rows only; no state is saved.
+          const cutoffMs = Date.now() - inferenceBackfill.lookbackDays * 86400_000;
+          let offset = inferenceBackfill.integrationId ? inferenceBackfill.offset : 0;
+          let complete = false;
+          const limit = 100;
+          backfillLoop: while (remaining() > DEFAULT_PAGER_OPTIONS.minRemainingForNextPageMs) {
+            const page = await deps.fetchPage(offset, limit, AbortSignal.timeout(30_000), 'head');
+            const items = Array.isArray(page?.items) ? page.items : [];
+            if (items.length === 0) { complete = true; break; }
+            for (const convo of items) {
+              const lastAt = Date.parse(convo?.lastMessageAt ?? '');
+              if (Number.isFinite(lastAt) && lastAt < cutoffMs) { complete = true; break backfillLoop; }
+              inferenceCounts.conversations++;
+              try {
+                const res = await fetch(`${HEYREACH_API}/inbox/GetChatroom/${convo.linkedInAccountId}/${convo.id}`, {
+                  headers: { 'X-API-KEY': apiKey, 'Accept': 'application/json' },
+                  signal: AbortSignal.timeout(DEFAULT_PAGER_OPTIONS.itemFetchTimeoutMs),
+                });
+                if (!res.ok) throw new Error(`getchatroom_${res.status}`);
+                const chatroom = await res.json();
+                await recordInference(convo, chatroom?.messages || [], inferenceBackfill.lookbackDays);
+              } catch (e) {
+                inferenceCounts.chatroomFailures++;
+                console.warn(`[poll-heyreach-inbox] inference backfill: conversation ${convo?.id} failed:`, e instanceof Error ? e.message : String(e));
+              }
+              await new Promise((resolve) => setTimeout(resolve, 200));
+            }
+            // a page is finished before the budget is checked again, so the
+            // next run resumes at a page boundary
+            offset += items.length;
+            if (typeof page?.totalCount === 'number' && offset >= page.totalCount) { complete = true; break; }
+          }
+          console.log(`[poll-heyreach-inbox] inference backfill integration ${integration.id}: complete=${complete} nextOffset=${offset} ${JSON.stringify(inferenceCounts)}`);
+          perIntegration.push({
+            integrationId: integration.id,
+            stopReason: complete ? 'end_of_list' : 'time_budget',
+            // deno-lint-ignore no-explicit-any
+            ...({ inferenceNextOffset: complete ? null : offset } as any),
+            pagesFetched: Math.ceil(offset / limit),
+            conversationsProcessed: inferenceCounts.conversations,
+            failures: inferenceCounts.chatroomFailures,
+            walkStartedAt: null,
+            walkOffset: null,
+            baselineStartedAt: (integration?.heyreach_poll_state?.baselineStartedAt as string) ?? null,
+            headScan: { items: 0, failures: 0, elapsedMs: 0, stopReason: 'skipped_budget' },
+          });
+          continue;
+        }
+
         const tickOpts = { ...DEFAULT_PAGER_OPTIONS, runBudgetMs: remaining() };
         // deno-lint-ignore no-explicit-any
         const walker = await tickWithHeadScan<any>(deps, stateIn, tickOpts);
@@ -955,6 +1079,7 @@ Deno.serve(async (req) => {
         headScan: headScanTotal,
         perIntegration,
         integrations: integrations?.length ?? 0,
+        inference: inferenceCounts,
         skipped: {
           noText: walkCounts.skippedNoText,
           senderMe: walkCounts.skippedSenderMe,

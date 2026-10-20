@@ -7,6 +7,7 @@ import { findLeadByNormalizedLinkedIn } from "../_shared/agent-leads-lookup.ts";
 import { decideSurfaceAndClassify, buildSurfaceUpdateFields } from "../_shared/surface.ts";
 import { checkCaptureGate, isRecordableSkip, normalizeCampaignId, recordCaptureScopeSkips } from "../_shared/capture-scope.ts";
 import { HEYREACH_DRAFTING_ENV, heyreachClassifyGate, isHeyReachDraftingEnabled } from "../_shared/heyreach-drafting.ts";
+import { buildHeyReachRepliedEvent, newestThreadTimestamp, writeHeyReachRepliedEvent } from "../_shared/heyreach-inference.ts";
 
 // HeyReach reply webhooks carry the campaign as a nested object
 // (campaign: { id: <number>, name }). A flat top-level campaignId is accepted
@@ -77,23 +78,8 @@ function sameMessage(a: ThreadEntry, b: ThreadEntry): boolean {
   return Math.abs(at - bt) <= MERGE_TS_TOLERANCE_MS;
 }
 
-// Newest message timestamp in a thread, as an ISO string, or null when the
-// thread is empty or carries no parseable timestamp. Deliberately the same
-// quantity poll-heyreach-inbox derives for its resurface gate (a max over the
-// thread, not the last array element), so the watermark this webhook writes and
-// the value the poller compares against are computed identically.
-function newestThreadTimestamp(thread: ThreadEntry[]): string | null {
-  let bestMs = Number.NEGATIVE_INFINITY;
-  let best: string | null = null;
-  for (const e of thread ?? []) {
-    const ms = new Date(e?.timestamp ?? "").getTime();
-    if (Number.isFinite(ms) && ms > bestMs) {
-      bestMs = ms;
-      best = new Date(ms).toISOString();
-    }
-  }
-  return best;
-}
+// newestThreadTimestamp: shared with poll-heyreach-inbox (_shared/heyreach-inference.ts),
+// so the watermark, the inference key and the poller agree on the same value.
 
 function mergeReplyThreads(
   canonical: ThreadEntry[],
@@ -608,64 +594,34 @@ Deno.serve(async (req) => {
           (email && email.trim() ? email.trim().toLowerCase() : "") ||
           (linkedinUrlForKey && linkedinUrlForKey.trim() ? linkedinUrlForKey.trim() : "") ||
           (externalId ?? "");
-        const occurredAt = newestThreadTimestamp(thread);
-        const stableId = conversationId && occurredAt ? `${conversationId}:${occurredAt}` : null;
         // Inbound reply text — last message content from recent_messages (already normalized above)
         const lastMsg = (Array.isArray((event as { recent_messages?: unknown }).recent_messages)
           ? ((event as { recent_messages: any[] }).recent_messages)
           : []);
         const inboundText = lastMsg?.length ? String(lastMsg[lastMsg.length - 1]?.message ?? "") : "";
         const externalMessageId = lastMsg?.length ? (lastMsg[lastMsg.length - 1]?.id ?? null) : null;
-        const lang = detectLanguageCode(inboundText);
-        if (personKey && stableId) {
+        // Shared with poll-heyreach-inbox: same row, same key, near-duplicate check.
+        const inferenceRow = buildHeyReachRepliedEvent({
+          teamId: integration.team_id,
+          agentConfigId,
+          conversationId,
+          thread,
+          email,
+          linkedinUrl: linkedinUrlForKey ?? null,
+          externalId,
+          fullName,
+          jobTitle,
+          company,
+          campaignExternalId,
+          replyText: inboundText,
+          externalMessageId,
+          leadCategory,
+          language: detectLanguageCode(inboundText),
+          extraMetadata,
+        });
+        if (personKey && inferenceRow) {
           const writes: Array<Promise<unknown>> = [];
-          writes.push(
-            (supabase.from("inference_events").upsert(
-              {
-                team_id: integration.team_id,
-                agent_config_id: agentConfigId,
-                person_key: personKey,
-                email: email ? email.trim().toLowerCase() : null,
-                linkedin_url: linkedinUrlForKey ?? null,
-                full_name: fullName || null,
-                job_title: jobTitle || null,
-                company_name: company || null,
-                channel: "linkedin",
-                campaign_external_id: campaignExternalId || null,
-                campaign_name: null,
-                sequence_step_type: null,
-                copy_fingerprint: null,
-                subject: null,
-                event_type: "replied",
-                intent: null,
-                is_objection: null,
-                pipeline_stage: "replied",
-                disposition_tag: null,
-                occurred_at: occurredAt,
-                source: "heyreach_webhook",
-                source_row_id: stableId,
-                metadata: {
-                  provider: "heyreach",
-                  lead_category: leadCategory,
-                  reply_text: inboundText,
-                  reply_language_code: lang.code,
-                  reply_language_method: lang.method,
-                  external_message_id: externalMessageId,
-                  conversation_id: conversationId,
-                  // Normalized provider ids
-                  provider_thread_id: conversationId,
-                  provider_message_id: externalMessageId,
-                  ...extraMetadata,
-                }
-              },
-              // @ts-ignore onConflict supports column-list; partial unique index handles non-null source_row_id
-              { onConflict: "source,source_row_id,event_type" }
-            ).then(({ error }) => {
-              if (error) {
-                console.warn("[heyreach-webhook] inference_events upsert error (non-fatal):", error);
-              }
-            })) as unknown as Promise<unknown>
-          );
+          writes.push(writeHeyReachRepliedEvent(supabase, inferenceRow, "upsert", { log: "heyreach-webhook" }));
           // Optional additive people upsert (non-fatal)
           writes.push(
             // @ts-ignore onConflict supports column-list
