@@ -207,7 +207,8 @@ Deno.serve(async (req) => {
           .select("sync_status")
           .eq("id", targetIntegrationId)
           .single();
-        if ((row?.sync_status || "").toLowerCase() === "syncing") {
+        const current = (row?.sync_status || "").toLowerCase();
+        if (current === "syncing" || current === "pending") {
           await serviceClient
             .from("outbound_integrations")
             .update({
@@ -231,7 +232,8 @@ Deno.serve(async (req) => {
           .select("sync_status")
           .eq("id", targetIntegrationId)
           .single();
-        if ((row?.sync_status || "").toLowerCase() === "syncing") {
+        const current = (row?.sync_status || "").toLowerCase();
+        if (current === "syncing" || current === "pending") {
           await serviceClient
             .from("outbound_integrations")
             .update({ sync_status: "error", sync_error: msg, updated_at: new Date().toISOString() })
@@ -819,6 +821,14 @@ Deno.serve(async (req) => {
         // Connect-time error marking (if applicable)
         if (integ?.id) await recordSyncErrorIfSyncing(String(integ.id), msg);
         results.push({ id: String(integ?.id ?? ""), team_id: String(integ?.team_id ?? ""), ok: false, error: msg });
+      }
+      // Ensure finalize is attempted for each integration that succeeded
+      try {
+        if (integ?.id) {
+          await finalizeSyncingStatus(String(integ.id));
+        }
+      } catch {
+        // non-fatal
       }
       // Gentle pacing between integrations to avoid provider rate spikes
       await sleep(250);
