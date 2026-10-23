@@ -19,7 +19,7 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { type FetchResult, runSignalSource, signalsCors, upsertSignals } from "../_shared/signals.ts";
-import { familyOfWriter, type InputFamily, missingFilters, normalizeFilters, WRITERS } from "./filters.ts";
+import { familyOfWriter, type InputFamily, missingFilters, normalizeFilters, WRITERS, writersForInput } from "./filters.ts";
 import { type AdapterResult, type InputRow, runAdapter } from "./sources.ts";
 
 const json = (body: unknown, status = 200) =>
@@ -93,7 +93,7 @@ Deno.serve(async (req) => {
     const sample: AdapterResult["sample"] = [];
     const bySource: Record<string, unknown> = {};
     const errors: string[] = [];
-    for (const w of WRITERS[family]) {
+    for (const w of writersForInput(family, f)) {
       const r = await runAdapter(w, input, f, {
         fetchFn: fetch, now: Date.now(), preview: true, config: configOf(w), apolloKey, githubToken,
         apolloCreditsLeft: Math.max(0, dailyCap - used),
@@ -116,7 +116,7 @@ Deno.serve(async (req) => {
   if (mode === "run") {
     const { data: row } = await supabase.from("signal_inputs").select("*").eq("id", body?.input_id).maybeSingle();
     if (!row || !canUse(row.team_id)) return json({ error: "Signal Input not found" }, 404);
-    writers = WRITERS[row.source_key as InputFamily];
+    writers = writersForInput(row.source_key as InputFamily, normalizeFilters(row.source_key as InputFamily, row.filters));
     inputs = [row];
   } else if (mode === "dispatch") {
     if (caller.by !== "dispatcher" && !caller.admin) return json({ error: "Unauthorized" }, 401);
@@ -133,6 +133,8 @@ Deno.serve(async (req) => {
 
   const results: Record<string, unknown>[] = [];
   for (const writer of writers) {
+    // Only the inputs that need this writer (a medical input runs the writers of its selected sources).
+    const writerInputs = inputs.filter((i) => writersForInput(i.source_key, normalizeFilters(i.source_key, i.filters)).includes(writer));
     const perInput: Record<string, Record<string, unknown>> = {};
     let credits = 0;
     const fetcher = async (): Promise<FetchResult> => {
@@ -140,7 +142,7 @@ Deno.serve(async (req) => {
       let fetched = 0;
       const errors: string[] = [];
       const used = writer === "input_hiring" ? await apolloCreditsToday(supabase) : 0;
-      for (const input of inputs) {
+      for (const input of writerInputs) {
         const f = normalizeFilters(input.source_key, input.filters);
         const missing = missingFilters(input.source_key, f);
         if (missing) {
@@ -166,7 +168,7 @@ Deno.serve(async (req) => {
       }
       return {
         signals, fetched, error: errors.length ? errors.join("; ").slice(0, 1000) : null,
-        detail: { inputs: inputs.length, apollo_credits: credits },
+        detail: { inputs: writerInputs.length, apollo_credits: credits },
       };
     };
     // The daily run goes through the shared pipeline (run log, health strip,
@@ -176,6 +178,7 @@ Deno.serve(async (req) => {
     if (mode === "dispatch") {
       summary = await runSignalSource({ supabase, sourceKey: writer, fetcher, triggeredBy: caller.by });
     } else {
+      const startedAt = new Date().toISOString();
       const r = await fetcher();
       try {
         const c = await upsertSignals(supabase, writer, r.signals);
@@ -185,7 +188,7 @@ Deno.serve(async (req) => {
       }
       // Logged (without touching the source's schedule) so Apollo credits count toward the daily cap.
       await supabase.from("signal_runs").insert({
-        source_key: writer, triggered_by: `${caller.by}:run_now`, status: summary.status,
+        source_key: writer, triggered_by: `${caller.by}:run_now`, status: summary.status, started_at: startedAt,
         finished_at: new Date().toISOString(), fetched: r.fetched, inserted: summary.inserted, updated: summary.updated,
         error: summary.error, detail: { ...(r.detail ?? {}), input_id: inputs[0]?.id ?? null },
       });
@@ -195,10 +198,13 @@ Deno.serve(async (req) => {
 
     // Per-input result on the input row (what the Signal Inputs card shows).
     const at = new Date().toISOString();
-    for (const input of inputs) {
+    for (const input of writerInputs) {
       const r = perInput[input.id] ?? { status: summary.status === "skipped" ? "skipped" : "success", matched: 0, error: summary.skipped ?? null };
       const { data: cur } = await supabase.from("signal_inputs").select("last_run").eq("id", input.id).maybeSingle();
-      const lastRun = { ...((cur?.last_run as Record<string, unknown>) ?? {}), [writer]: { at, ...r } };
+      // Keep only the writers this input still uses (a source unticked later drops out of its card).
+      const keep = writersForInput(input.source_key, normalizeFilters(input.source_key, input.filters));
+      const prev = Object.fromEntries(Object.entries((cur?.last_run as Record<string, unknown>) ?? {}).filter(([k]) => keep.includes(k)));
+      const lastRun = { ...prev, [writer]: { at, ...r } };
       const statuses = Object.values(lastRun).map((x) => String((x as Record<string, unknown>).status));
       const overall = statuses.includes("failed") ? (statuses.every((s) => s === "failed") ? "failed" : "partial")
         : statuses.includes("partial") ? "partial" : statuses.every((s) => s === "skipped") ? "skipped" : "success";

@@ -1,9 +1,9 @@
 // Signal Inputs: filter normalization, upstream request shapes, matching, mappers.
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { missingFilters, normalizeGithub, normalizeHiring, normalizeMedical } from "./filters.ts";
+import { missingFilters, normalizeGithub, normalizeHiring, normalizeMedical, writersForInput } from "./filters.ts";
 import {
   type AdapterCtx, apolloJobLocations, apolloSearchBody, fdaClauses, githubQueries, type InputRow, locationMatches,
-  openFdaUrl, parseBreakthroughTable, runHiring, runMedical, titleMatches,
+  openFdaUrl, parseBreakthroughTable, runGithub, runHiring, runMedical, titleMatches,
 } from "./sources.ts";
 
 const NOW = Date.parse("2026-10-16T12:00:00Z");
@@ -36,6 +36,13 @@ Deno.test("filters: bounded, de-duplicated, invalid values dropped", () => {
   assertEquals([g.topics, g.orgs, g.min_stars, g.activity], [["clinical-trials"], ["ok-org"], 0, "created"]);
   const m = normalizeMedical({ sources: ["510k", "nope", "clinical_trials"], product_codes: ["hrs", "TOOLONG"] });
   assertEquals([m.sources, m.product_codes, m.within_days], [["510k", "clinical_trials"], ["HRS"], 30]);
+});
+
+Deno.test("writersForInput: a medical input runs only the writers of its selected sources", () => {
+  assertEquals(writersForInput("medical", normalizeMedical({ sources: ["510k", "clinical_trials"] })), ["input_fda_clearance", "input_clinical_trial"]);
+  assertEquals(writersForInput("medical", normalizeMedical({ sources: ["pma", "denovo", "breakthrough"] })), ["input_fda_clearance"]);
+  assertEquals(writersForInput("medical", normalizeMedical({})), ["input_fda_clearance"]);
+  assertEquals(writersForInput("hiring", normalizeHiring({ job_titles: ["CMO"] })), ["input_hiring"]);
 });
 
 Deno.test("hiring: Apollo search body uses the job-posting filters, job locations lowercased", () => {
@@ -106,6 +113,25 @@ Deno.test("github: query qualifiers; one query per topic", () => {
     `"clinical trial" OR edc org:acme stars:>=5 created:>=2026-09-16 fork:false archived:false topic:clinical-trials`,
     `"clinical trial" OR edc org:acme stars:>=5 created:>=2026-09-16 fork:false archived:false topic:healthcare`,
   ]);
+});
+
+Deno.test("github: organizations only pages past personal repos (3 pages without a token) and counts org repos", async () => {
+  const repo = (id: number, type: string) => ({ id, full_name: `o${id}/r`, html_url: `https://github.com/o${id}/r`, stargazers_count: 0,
+    created_at: "2026-10-10T00:00:00Z", owner: { login: `o${id}`, type } });
+  const page = (n: number) => Array.from({ length: 100 }, (_, i) => repo(n * 1000 + i, i < 2 ? "Organization" : "User"));
+  const { fn, calls } = fakeFetch([[/api\.github\.com\/search\/repositories/, (url) => ({
+    total_count: 485, items: page(Number(new URL(url).searchParams.get("page"))) })]]);
+  const gh: InputRow = { ...input, source_key: "github" };
+  const f = normalizeGithub({ keywords: ["clinical trial"], owner: "org" });
+  const run = await runGithub(gh, f, ctx(fn));
+  assertEquals([calls.length, run.signals.length, run.total], [3, 6, 6]);
+  assert(calls.every((c) => c.url.includes("per_page=100")));
+  assertEquals(run.detail, { queries: 1, authenticated: false, scanned: 300, github_total: 485 });
+  assert(run.signals.every((s) => s.company_name?.startsWith("o")));
+  const prev = await runGithub(gh, f, ctx(fakeFetch([[/api\.github\.com/, (url) => ({ total_count: 485, items: page(Number(new URL(url).searchParams.get("page"))) })]]).fn, { preview: true }));
+  assertEquals([prev.total, prev.signals.length, prev.sample.length], [6, 5, 5]);
+  const any = await runGithub(gh, normalizeGithub({ keywords: ["clinical trial"] }), ctx(fakeFetch([[/api\.github\.com/, () => ({ total_count: 485, items: page(1).slice(0, 50) })]]).fn));
+  assertEquals([any.total, any.signals.length], [485, 50]);
 });
 
 Deno.test("openFDA: clauses per endpoint, spaces as '+'", () => {

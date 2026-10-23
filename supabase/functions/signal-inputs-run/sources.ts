@@ -281,44 +281,66 @@ export async function runGithub(input: InputRow, f: GithubFilters, ctx: AdapterC
   const perPage = ctx.preview ? 5 : Math.min(100, Number(ctx.config.max_results ?? 50));
   const headers: Record<string, string> = { Accept: "application/vnd.github+json", "User-Agent": "vrelly-signals", "X-GitHub-Api-Version": "2022-11-28" };
   if (ctx.githubToken) headers.Authorization = `Bearer ${ctx.githubToken}`;
+  // Repository search has no owner-type qualifier, so "organizations only" is
+  // filtered here. Org repos are a few percent of results and rarely starred
+  // (2026-10-23: 9 of the top 300 for "clinical trial", all 0 stars), so for
+  // that filter we page through up to 3 pages of 100 (5 with a token;
+  // unauthenticated search allows 10 requests a minute) and report the org
+  // repos found as the total, not GitHub's count of every repo. A preview
+  // counts across all those pages and returns 5.
+  const orgOnly = f.owner === "org";
+  const pageSize = orgOnly ? 100 : perPage;
+  const maxPages = orgOnly ? (ctx.githubToken ? 5 : 3) : 1;
+  const keepMax = orgOnly && ctx.preview ? Infinity : perPage;
   const seen = new Set<number>();
-  for (const q of githubQueries(f, ctx.now)) {
-    const url = `https://api.github.com/search/repositories?q=${encodeURIComponent(q)}&sort=stars&order=desc&per_page=${perPage}`;
-    const r = await getJson(ctx, url, { headers });
-    if (!r.ok) {
-      out.error = `GitHub search HTTP ${r.status}${r.status === 403 || r.status === 429 ? " (rate limited — set GITHUB_TOKEN)" : ""}: ${r.text}`;
-      break;
-    }
-    out.total += Number(r.body?.total_count ?? 0);
-    for (const repo of (r.body?.items ?? []) as GhRepo[]) {
-      if (!repo.id || seen.has(repo.id)) continue;
-      seen.add(repo.id);
-      out.fetched++;
-      const at = toIso(f.activity === "pushed" ? repo.pushed_at : repo.created_at);
-      if (!at || !repo.full_name) continue;
-      if (f.owner === "org" && repo.owner?.type !== "Organization") continue;
-      const stars = Number(repo.stargazers_count ?? 0);
-      const isOrg = repo.owner?.type === "Organization";
-      out.signals.push(base(input, {
-        signal_type: "product_launch",
-        markets: ["saas"],
-        occurred_at: at,
-        dedupe_key: dedupeKey(`in:${input.id}:gh`, repo.id),
-        title: `${f.activity === "pushed" ? "Active" : "New"} GitHub repo: ${repo.full_name}${repo.description ? ` — ${collapseSpaces(repo.description)}` : ""}`.slice(0, 500),
-        url: repo.html_url ?? null,
-        score: clampScore(40 + Math.round(Math.log10(stars + 1) * 15)),
-        company_name: isOrg ? repo.owner?.login ?? null : null,
-        company_domain: normalizeDomain(repo.homepage ?? null),
-        payload: {
-          repo: repo.full_name, stars, language: repo.language ?? null, topics: repo.topics ?? [],
-          description: collapseSpaces(repo.description ?? null), owner_type: repo.owner?.type ?? null,
-          created_at: repo.created_at ?? null, pushed_at: repo.pushed_at ?? null,
-        },
-      }));
+  let scanned = 0, githubTotal = 0;
+  queries: for (const q of githubQueries(f, ctx.now)) {
+    let kept = 0;
+    for (let page = 1; page <= maxPages && kept < keepMax; page++) {
+      const url = `https://api.github.com/search/repositories?q=${encodeURIComponent(q)}&sort=stars&order=desc&per_page=${pageSize}&page=${page}`;
+      const r = await getJson(ctx, url, { headers });
+      if (!r.ok) {
+        out.error = `GitHub search HTTP ${r.status}${r.status === 403 || r.status === 429 ? " (rate limited — set GITHUB_TOKEN)" : ""}: ${r.text}`;
+        break queries;
+      }
+      const items = (r.body?.items ?? []) as GhRepo[];
+      if (page === 1) githubTotal += Number(r.body?.total_count ?? 0);
+      scanned += items.length;
+      for (const repo of items) {
+        if (kept >= keepMax) break;
+        if (!repo.id || seen.has(repo.id)) continue;
+        seen.add(repo.id);
+        out.fetched++;
+        const at = toIso(f.activity === "pushed" ? repo.pushed_at : repo.created_at);
+        if (!at || !repo.full_name) continue;
+        if (orgOnly && repo.owner?.type !== "Organization") continue;
+        kept++;
+        const stars = Number(repo.stargazers_count ?? 0);
+        const isOrg = repo.owner?.type === "Organization";
+        out.signals.push(base(input, {
+          signal_type: "product_launch",
+          markets: ["saas"],
+          occurred_at: at,
+          dedupe_key: dedupeKey(`in:${input.id}:gh`, repo.id),
+          title: `${f.activity === "pushed" ? "Active" : "New"} GitHub repo: ${repo.full_name}${repo.description ? ` — ${collapseSpaces(repo.description)}` : ""}`.slice(0, 500),
+          url: repo.html_url ?? null,
+          score: clampScore(40 + Math.round(Math.log10(stars + 1) * 15)),
+          company_name: isOrg ? repo.owner?.login ?? null : null,
+          company_domain: normalizeDomain(repo.homepage ?? null),
+          payload: {
+            repo: repo.full_name, stars, language: repo.language ?? null, topics: repo.topics ?? [],
+            description: collapseSpaces(repo.description ?? null), owner_type: repo.owner?.type ?? null,
+            created_at: repo.created_at ?? null, pushed_at: repo.pushed_at ?? null,
+          },
+        }));
+      }
+      if (items.length < pageSize) break;
     }
   }
+  out.total = orgOnly ? out.signals.length : githubTotal;
+  if (ctx.preview) out.signals = out.signals.slice(0, 5);
   out.sample = out.signals.slice(0, 5).map((s) => toSample(s, `${(s.payload as Record<string, unknown>).stars} stars`));
-  out.detail = { queries: githubQueries(f, ctx.now).length, authenticated: !!ctx.githubToken };
+  out.detail = { queries: githubQueries(f, ctx.now).length, authenticated: !!ctx.githubToken, scanned, github_total: githubTotal };
   return out;
 }
 

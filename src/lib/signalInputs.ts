@@ -144,6 +144,7 @@ export function filterSummary(family: InputFamily, f: InputFilters): string {
       g.topics.length ? `topics ${join(g.topics)}` : null,
       g.orgs.length ? `orgs ${join(g.orgs)}` : null,
       g.min_stars ? `≥ ${g.min_stars}★` : null,
+      g.owner === 'org' ? 'organizations only' : null,
       `${g.activity === 'pushed' ? 'active' : 'created'} ≤ ${g.within_days}d`,
     ].filter(Boolean).join(' · ');
   }

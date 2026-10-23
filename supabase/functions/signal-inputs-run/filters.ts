@@ -59,6 +59,12 @@ export const WRITERS: Record<InputFamily, string[]> = {
   github: ["input_github"],
   medical: ["input_fda_clearance", "input_fda_recall", "input_fda_registration", "input_clinical_trial"],
 };
+/** The writers an input actually needs: a medical input only runs the writers of its selected sources. */
+export function writersForInput(family: InputFamily, f: HiringFilters | GithubFilters | MedicalFilters): string[] {
+  if (family !== "medical") return WRITERS[family] ?? [];
+  const need = new Set((f as MedicalFilters).sources.map((s) => MEDICAL_WRITER[s]));
+  return WRITERS.medical.filter((w) => need.has(w));
+}
 export function familyOfWriter(writer: string): InputFamily | null {
   for (const [f, ws] of Object.entries(WRITERS)) if (ws.includes(writer)) return f as InputFamily;
   return null;
