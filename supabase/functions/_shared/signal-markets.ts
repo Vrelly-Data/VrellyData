@@ -89,6 +89,9 @@ export function assignMarkets(i: MarketInput): Market[] {
   const orOther = (xs: Market[]): Market[] => (xs.length ? uniq(xs) : ["other"]);
   switch (i.signal_type) {
     case "fda_clearance":
+    case "fda_recall":
+    case "fda_registration":
+    case "clinical_trial":
       return ["medical_device"];
     case "product_launch":
       return ["saas"];
