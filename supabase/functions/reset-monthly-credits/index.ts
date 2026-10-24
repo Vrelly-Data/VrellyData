@@ -21,6 +21,30 @@ Deno.serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  // Security gate (2026-10-21): reject anonymous callers. Allows a valid user JWT,
+  // the service role key, or the internal x-agent-key. Logic below is unchanged.
+  {
+    const _auth = req.headers.get('Authorization') || '';
+    const _bearer = _auth.startsWith('Bearer ') ? _auth.slice(7) : '';
+    const _svc = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
+    const _agentKey = Deno.env.get('AGENT_API_KEY') || '';
+    const _xAgent = req.headers.get('x-agent-key') || '';
+    let _ok = (!!_svc && _bearer === _svc) || (!!_agentKey && _xAgent === _agentKey);
+    if (!_ok && _bearer) {
+      try {
+        const _r = await fetch(`${Deno.env.get('SUPABASE_URL')}/auth/v1/user`, {
+          headers: { Authorization: `Bearer ${_bearer}`, apikey: Deno.env.get('SUPABASE_ANON_KEY') || '' },
+        });
+        if (_r.ok) { const _u = await _r.json(); _ok = !!_u?.id; }
+      } catch (_e) { _ok = false; }
+    }
+    if (!_ok) {
+      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+  }
+
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL');
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
